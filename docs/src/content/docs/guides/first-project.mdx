@@ -1,0 +1,53 @@
+---
+title: Your first project
+description: Create an authoritative project, run the sample and package it.
+---
+
+After [building Engine](../../developing/working-on-gargantuan/), open
+`samples/FirstCompleteGame` in a compatible Studio build or run it from the
+Engine repository root:
+
+```sh
+build/gargantuan --project=samples/FirstCompleteGame
+```
+
+Use `build\gargantuan.exe` on Windows. The [sample README](../../../../../samples/FirstCompleteGame/README.md)
+documents controls, assets, gameplay and bounded acceptance proofs.
+
+## Create an authoring project
+
+Use Studio's New Project command with a **nonexistent destination directory**
+whose parent exists. Engine's `CreateProject` constructs a DataModel and
+required Workspace, persists `.gargantuan/project.instance.json` and publishes
+revision 1. It adds no starter parts, scripts or asset templates. Existing
+directories, even empty ones, are rejected rather than overwritten.
+
+The [creation contract](../../../../../devdocs/CurrentArchitecture/ProjectCreation.md)
+defines Engine behavior. Studio UX and Native Host are owned by the
+[Studio repository](https://github.com/GantriaEngine/gargantuan-studio).
+Use Studio and Engine versions qualified together.
+
+Create a Script through authoritative editor commands and try the
+[Instance example](../../api/instances-and-services/) in Play. Source edits,
+dirty state, Save and Undo/Redo belong to EditorHost. Studio text buffers are
+drafts until the source command succeeds. Play creates an isolated runtime
+DataModel; Stop discards gameplay changes and returns to authoring.
+
+## Package the sample
+
+From the repository root, choose a new output directory:
+
+```sh
+build/gargantuan-packager build --project samples/FirstCompleteGame --output packages/FirstCompleteGame --configuration Release
+build/gargantuan-packager validate packages/FirstCompleteGame
+```
+
+Append `.exe` to the packager on Windows. Launch the generated
+`packages/FirstCompleteGame/GargantuanPlayer` (`.exe` on Windows). Packages own
+runtime modules, shaders, assets, dependencies and notices; the source checkout
+and Studio are not required after packaging.
+
+Packaging and local Play do not certify online identity, provider deployment,
+physical F1 or every GPU. See [networking](../../developing/current-networking/)
+and the original [sample receipt](../../../../../devdocs/Validation/FirstCompleteGame.md)
+for each proof's exact scope.

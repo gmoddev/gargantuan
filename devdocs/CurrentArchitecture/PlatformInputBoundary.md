@@ -139,28 +139,23 @@ movement, jump, orbit, and Look actions. Binding policy is not part of the host
 adapter and the low-level UserInputService route remains public. See
 [Player runtime](PlayerRuntime.md) for exact API and lifecycle semantics.
 
-The Studio Play viewport uses this same semantic boundary. Avalonia supplies
-pointer-button transitions and uncaptured absolute motion. Once the camera's
-relative-pointer `HostCommand` returns through EditorHost, the supported Windows
-Studio host reads physical relative mouse motion from `WM_INPUT`; it forwards
-those raw X/Y deltas as `PointerMoveEvent.Delta` without reconstructing them from
-cursor positions, clamping them to the viewport, or warping the cursor. The
-position carried beside a captured move remains the fixed capture anchor and
-does not determine motion. Pre-activation raw packets are discarded.
-
-Studio owns the focused Play viewport capture and its forwarding lifecycle.
-Capture and pending motion are cleared on RMB up, viewport or window focus loss,
-Stop, unexpected runtime exit, viewport failure, session disposal, or host
-disconnect. Re-entry establishes a new capture generation with no retained
-delta. EditorHost and `PlaySession` receive only semantic host events; engine
-services and gameplay code do not know about Avalonia coordinates, Win32 raw
-input, cursor boundaries, or capture implementation.
+The Studio Play viewport uses this same semantic Engine boundary. The active
+Studio application uses LUI for native input, focus and capture; its Luau
+application and Host own forwarding lifecycle. EditorHost and `PlaySession`
+receive only the closed semantic `HostEvent` subset. Engine services and gameplay
+code do not depend on Studio widget coordinates, raw platform input, cursor
+boundaries, or capture implementation. The former Avalonia/`WM_INPUT` adapter
+description applied to the frozen legacy Studio source and is not a current
+LUI implementation contract. See the Studio-owned
+[LUI migration decision](https://github.com/gmoddev/gargantuan-studio/blob/main/devdocs/AcceptedArchitecture/LuiPrimaryMigration.md)
+and [active architecture](https://github.com/gmoddev/gargantuan-studio/blob/main/ARCHITECTURE.md)
+for current source and qualification.
 
 Pen host adaptation, candidate-list/advanced IME policy, gamepad
-publication/default bindings, persisted remapping, non-Windows Studio
-relative-pointer backends, and multi-window architecture are not part of this
-boundary. SDL touch and preedit adaptation are implemented, but physical
-phone/tablet behavior has not been validated.
+publication/default bindings, persisted remapping, and non-Windows Studio
+relative-pointer behavior require separate qualification. SDL touch and preedit
+adaptation are implemented, but physical phone/tablet behavior has not been
+validated.
 
 ## Coupling audit
 

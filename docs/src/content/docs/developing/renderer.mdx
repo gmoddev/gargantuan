@@ -1,0 +1,104 @@
+---
+title: Renderer
+description: Integrated renderer ownership, features, and limits at main 2a4c1d2.
+---
+
+This page describes the integrated renderer at main commit
+`2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f`. The [render publication
+contract](../render-extraction/) is the boundary between authoritative runtime
+state and rendering. [Core invariants](../../../../../docs/invariants/Core.md)
+forbid render passes from traversing or mutating the DataModel.
+
+```text
+DataModel changes -> RenderDirtyAccumulator -> RenderPublisher
+    -> immutable RenderPublication -> renderer-owned RenderProjection
+    -> SDL GPU resources and passes
+```
+
+The runtime publishes after simulation and `PreRender` on Main, then draws
+synchronously. EditorHost owns a separate publication consumer and CPU projection
+for headless picking; its offscreen GPU capture consumes the same values.
+`RenderSnapshot` remains complete-state compatibility and recovery input. A
+publication carries exact sequence/base IDs, complete frame state, sorted object
+operations, mesh and texture lifecycle, optional complete UI, diagnostics, and
+animation pose updates. It contains no live Instance or GPU pointers. Invalid
+deltas are rejected; a failed SDL projection or resource application clears
+derived state and requires a full resync. See
+[`RenderPublication.hpp`](../../../../../include/gargantuan/render/RenderPublication.hpp),
+[`RenderProjection.cpp`](../../../../../src/render/RenderProjection.cpp), and
+[`Renderer.cpp`](../../../../../src/render/Renderer.cpp).
+
+## Current backend and scene
+
+`BaseRenderer` accepts immutable publications and exposes a small capability
+result: graphical output and GPU skinning. The production renderer is
+`SDLRenderer`; its public header hides SDL GPU handles behind a private backend.
+SDL owns primitive/dynamic mesh buffers, textures, skin palettes, shaders,
+pipelines, and render targets. The pass order is shadow, Sky/background, opaque
+world, then GUI. The editor viewport returns pixels and generational `ObjectId`
+values, never native GPU handles. The optional Filament target is an experimental
+benchmark selected by a separate CMake configuration; it is not the runtime
+backend. See the [backend boundary](../../../../../devdocs/CurrentArchitecture/RendererBackendBoundary.md),
+[`SDLRenderer.hpp`](../../../../../include/gargantuan/render/SDLRenderer.hpp),
+and [Foundation 2C decision](../../../../../devdocs/CurrentArchitecture/RendererFoundation2C.md).
+
+Canonical AssetService mesh and Image revisions become generation-safe render
+identities and owned immutable data. SDL keeps device-local residency. Static
+mesh topology is uploaded once; bounded deformable vertex ranges update the
+persistent mesh. Animation poses carry a renderer-neutral skin palette. SDL
+reports GPU skinning support, while the publication contract also supports a
+CPU fallback. The projected scene remains disposable and keyed by `ObjectId`.
+There is no generic RHI, render thread, or backend selection at runtime.
+
+## Materials, lighting, and depth
+
+The publication material value includes base-color factor/texture, optional
+normal texture, metallic and roughness factors, opacity mode and cutoff,
+double-sided state, and per-primitive ranges. The integrated SDL opaque shader
+actually samples the base-color texture, applies the factor and masked cutoff,
+and selects front-face culling or a double-sided pipeline. It carries metallic,
+roughness, and normal texture data through the neutral seam, but its fragment
+shader does not use those fields for PBR or normal mapping. Transparent objects
+use the current alpha-blended opaque pass; no depth-sorted transparent scene is
+claimed. The shadow pass draws every visible `CastShadow` mesh as an unmasked
+silhouette, including masked and transparent materials; it does not sample
+material alpha for cutout shadows. Check
+[`OpaquePass.cpp`](../../../../../src/render/passes/OpaquePass.cpp),
+[`opaque.frag`](../../../../../assets/shaders/opaque.frag), and
+[`ShadowPass.cpp`](../../../../../src/render/passes/ShadowPass.cpp).
+
+One canonical `Lighting` service supplies ambient color, derived directional
+sun, exposure multiplier, simple distance fog, and fallback environment color.
+One effective direct-child `Sky` supplies six coherent square Image faces; an
+invalid edit may retain that same Sky's last-known-good complete set. SDL uses
+one fixed directional D32 shadow map, with no cascades or local lights. World
+color receives an ACES-style curve before the GUI pass. Offscreen output uses
+`R8G8B8A8_UNORM`; the windowed renderer queries SDL for the swapchain format.
+Neither path establishes an end-to-end linear/sRGB or HDR output contract.
+Runtime and editor
+scene depth use checked D32 with conventional zero-to-one projection; see the
+[KI-008 qualification](../../../../../devdocs/Validation/RendererDepthKI008.md).
+The [environment contract](../../../../../devdocs/CurrentArchitecture/EnvironmentLightingFoundation1.md)
+and [`RenderEnvironment.hpp`](../../../../../include/gargantuan/render/RenderEnvironment.hpp)
+own the details.
+
+## Integrated and pending work
+
+| Capability | Integrated main at `2a4c1d2` | Separate work or limit |
+| --- | --- | --- |
+| Publication and recovery | Immutable deltas, exact bases, full resync, renderer-owned projection; resource-application failure requires resync | Device-loss fault injection and general GPU-device recovery are not established |
+| Geometry and residency | Primitive, imported mesh, texture, deformable-range and skin-palette resources | No general GPU residency-demand or eviction policy for material mips |
+| Materials | Base-color sampling, masks, per-primitive values, double-sided mode | Normal mapping, PBR lighting, packed metallic-roughness, correct transparent sorting are absent |
+| Environment | One sun, six-face Sky, ambient, fog, exposure, fixed shadow map | Local lights, IBL/probes, HDR color pipeline, cascades and spot shadows are absent |
+| Submission | Persistent projection, individual object/primitive draws | General rigid instancing, batch submission and scene-wide culling are absent |
+
+The isolated `integration/engine-foundations-3-6` commit
+`4b32a822a26492907005ce18c3b1045550bfce86` contains Renderer Foundations
+3–5 and Runtime 6 material for prospective integration. Its experiments and
+qualification receipts do not establish behavior in this main revision. Compare
+the branches by exact source SHA before promoting any of those claims.
+
+For production tests, start with
+[`RendererPublicationTests.cpp`](../../../../../tests/RendererPublicationTests.cpp),
+[`RendererDepthTests.cpp`](../../../../../tests/RendererDepthTests.cpp), and
+[`EnvironmentLightingBenchmark.cpp`](../../../../../tests/EnvironmentLightingBenchmark.cpp).

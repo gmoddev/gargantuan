@@ -1,0 +1,34 @@
+---
+title: Networking and persistence
+description: Bounded Remote events and functions, authority, replication, and saved Instance state.
+---
+
+Game remotes work only in an explicitly configured client/server session with a bound `RemoteManager` and a published, visible Remote instance. **Local Studio Play has no peer topology.** Creating a Remote alone does not create a connection. Put shared remotes in a replicated service such as `ReplicatedStorage` through project authoring, then run a real client/server session. The [server](https://github.com/gmoddev/Gargantuan/blob/main/docs/examples/remote-server.luau) and [client](https://github.com/gmoddev/Gargantuan/blob/main/docs/examples/remote-client.luau) examples show event direction.
+
+## Remote events
+
+`RemoteEvent`, `UnreliableRemoteEvent`, and `UnreliableSequencedRemoteEvent` inherit `RemoteEventBase`:
+
+| API | Caller | Arguments / behavior |
+| --- | --- | --- |
+| `FireServer(...RemoteValue)` | Client | Sends to its active server. |
+| `FireClient(PeerSlot, PeerGeneration, ...RemoteValue)` | Server | Sends to one provisional connection identity. |
+| `FireAllClients(...RemoteValue)` | Server | Submits independently to eligible peers. |
+| `OnServerEvent:Connect(Callback)` | Server | Callback receives read-only peer context, then arguments. |
+| `OnClientEvent:Connect(Callback)` | Client | Callback receives arguments only. |
+
+`RemoteEvent` is reliable and ordered; `UnreliableRemoteEvent` is best effort and unordered; `UnreliableSequencedRemoteEvent` is best effort, newest wins for state-like updates. A peer context contains `Slot`, `Generation`, and `Epoch`. It represents a current connection and must not be treated as `PlayerId` or durable authentication identity. `FireClient` takes slot and generation, not a `Player` object. Wrong domain, absent connection, unpublished Remote, invisible object reference, invalid arguments, or rejected admission can raise an error. A successful send call means accepted for scheduling, not proof that the recipient ran its handler.
+
+## Remote functions
+
+`RemoteFunction` exposes `InvokeServer(...RemoteValue)`, `InvokeServerWithTimeout(TimeoutSeconds, ...)`, `InvokeClient(PeerSlot, PeerGeneration, ...)`, and `InvokeClientWithTimeout(PeerSlot, PeerGeneration, TimeoutSeconds, ...)`. Client code installs `SetClientHandler(Callback)`; server code installs `SetServerHandler(Callback)`. The server handler receives peer context first. Invocation suspends **only the calling coroutine**; other scripts and frames can continue. A successful response returns the handler's values. A terminal failure returns `nil, Status, Message` where Status includes `timeout`, `cancelled`, `disconnected`, `remote_error`, `protocol_rejected`, or `resource_rejected`. Caller-selected timeouts must be finite and in `(0, 30]` seconds; the default deadline is 10 seconds. Handlers are runtime-session state, not saved properties.
+
+Remote arguments and return values are scalar `nil`, boolean, finite number, bounded UTF-8 string, supported value datatypes (`Vector2`, `Vector3`, `Color3`, `UDim`, `UDim2`, `CFrame`, `EnumItem`), or a visible live `Instance` reference. Tables and arbitrary userdata are not supported as Remote arguments. There are at most 32 arguments, a 16 KiB string limit, and a 256 KiB frame ceiling. The manager also enforces per-peer/per-Remote rates, in-flight limits, and bounded queues. Use small semantic messages; let replication carry ordinary world state. Server handlers must validate gameplay intent and derive authority from server-side state, not from payloads or connection numbering.
+
+## Replication and saved state
+
+The authoritative server DataModel, its committed change journal, per-peer replication view, and wire scheduling are distinct. `ReplicatedStorage` is a shared replicated container; it is not a general publish-any-object authority escape. Some properties in declarations carry `replicated = true`; this does not make every property, service, or runtime resource automatically visible to every peer. Visibility, materialization, schema compatibility, and server authority still apply. An object reference in a Remote is accepted only if it is visible and materialized for that peer.
+
+Properties marked `serializable = true` in class declarations participate in engine-owned save/package semantics when their Instance is eligible. `Archivable` and class policy matter. Attribute, tag, extension, and custom class semantic state have their own bounded serialization rules. Transient input state, active connections, running scripts, animation tracks, sound voices, physics bodies, and GPU resources are not persisted runtime handles. The public service declarations do **not** contain a gameplay `DataStore`, HTTP persistence service, or generic `game:Save()` / `game:Load()` method. `Instance:Clone()` creates an in-session detached semantic copy; it is not durable storage. Project/package persistence is owned by native authoring and loading paths, subject to schema and authority validation.
+
+For exact network behavior see `devdocs/CurrentArchitecture/NetworkingContracts.md`, `BasicClientReplication.md`, and the later Character/Remote foundation documents. These contracts describe narrower implemented slices than a general multiplayer platform.

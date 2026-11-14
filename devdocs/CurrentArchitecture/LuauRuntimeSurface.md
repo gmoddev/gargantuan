@@ -34,9 +34,10 @@ in native code does not make an unlisted API available to scripts.
   Connect, Once, and Wait callbacks retain that context as well.
 - The sandboxed standard Luau libraries are opened by the matching Luau VM.
 - Registered constructors/globals are `Axes`, `CFrame`, `Color3`, `Enum`,
-  `Instance`, `Random`, `Signal`, `TweenInfo`, `UDim`, `Vector2`, and `Vector3`.
-  `EnumItem`, `Rect`, and signal connections are supported values but do not have
-  standalone constructor globals.
+  `Instance`, `Random`, `RaycastParams`, `Signal`, `TweenInfo`, `UDim`, `UDim2`,
+  `Vector2`, and `Vector3`. `AnimationTrack`, `EnumItem`, `Rect`, and signal
+  connections are supported values but do not have standalone constructor
+  globals.
 
 `print`/`warn` format nil, booleans, numbers, strings, native `Vector3`, and
 bounded type labels for Instances, EnumItems, other userdata, tables, functions,
@@ -123,9 +124,21 @@ nullable `Character`, load/reset/remove methods, and character lifecycle signals
 `KinematicCharacter` exposes the root, position, velocity, ground/floor state,
 and capsule dimensions used by replaceable controllers.
 
-`Workspace:MoveKinematicCapsule` is the current scripted world query. It returns
-only bounded owned value data for collision resolution. There is no broad
-raycast/overlap/filter surface yet.
+`Workspace:MoveKinematicCapsule` returns bounded owned collision-resolution
+data. `Workspace` also exposes `Raycast`, sphere/capsule/box casts, and
+`GetPartsInSphere`, `GetPartsInCapsule`, and `GetPartsInBox`. These queries
+accept optional `RaycastParams` filtering, flush pending body changes, and
+return bounded owned hit or overlap values. See `PhysicsQueryFoundation1.md`
+and the current declarations in `assets/classes/WorldRoot.luau` for signatures
+and limits.
+
+`AssetService` exposes `ResolveAsset`, `IsAssetAvailable`, and
+`GetAssetMetadata` for bounded canonical catalog lookup. A skinned `MeshPart`
+may directly contain an `Animator`; `Animator:LoadAnimation` creates a
+runtime-only `AnimationTrack` from a compatible available Animation asset.
+The track's playback controls and properties are native userdata bindings in
+`src/animation/AnimationTrack.cpp`. Neither lookup nor track playback grants
+raw asset bytes, filesystem access, or a persistent animation handle.
 
 The executable carries engine-shipped `DefaultActionMap`,
 `DefaultCharacterRuntime`, `DefaultLocomotion`, and `DefaultCamera` Luau modules. They start in a
@@ -151,9 +164,9 @@ this inventory makes no general gameplay networking guarantee.
 
 ## Major intentional gaps
 
-Final multiplayer Players behavior, animation, a broader RunService API,
+Final multiplayer Players behavior, a broader RunService API,
 TweenService service semantics, gamepad action sources,
-DataStore/HTTP services, assets, debugger/profiler/LSP, full module
+DataStore/HTTP services, debugger/profiler/LSP, full module
 configuration, edit-mode orbit/pan/zoom/focus, and broad gameplay service
 compatibility remain outside the current surface. Humanoid compatibility is
 permanently excluded: canonical `Character` plus narrow native primitives and

@@ -1,151 +1,40 @@
 ---
-title: Roblox Deviations
-description: Non-exhaustive list of all deviations from Roblox done in Gargantuan.
+title: Porting from Roblox
+description: Familiar APIs with Engine-defined behavior and explicit compatibility limits.
 ---
 
-import { Aside } from "@astrojs/starlight/components"
+Gargantuan is an independent runtime. A Roblox game is not expected to run
+unchanged. Check each class, service, asset and authority assumption against
+the [API reference](../../api/) and current source declarations.
 
-Gargatuan aims to bring a balance of Roblox familiarity while cleansing
-technical debt and poor API decisions. Most games written using modern Roblox
-APIs will run fine.
+## Implemented conventions
 
-For Roblox developers looking to port their games into Gargantuan, this is a
-non-exhaustive list of all deviations from Roblox done in Gargantuan.
+- Obtain Workspace with `game:GetService("Workspace")`; do not assume a
+  `workspace` global.
+- Runtime scripts use `Script` and its execution context. Do not assume
+  `LocalScript`, `BaseScript` or `Humanoid` supplies Roblox behavior.
+  The current actor model is `Character` with Engine-shipped player policy
+  and explicit native motion authority.
+- Signals and connections have Engine-specific bindings and teardown behavior.
+  See [Instance APIs](../../api/instances-and-services/).
+- Import assets through the Engine pipeline. Roblox `rbxassetid://`
+  identifiers are not canonical Engine identities. See
+  [assets and rendering](../../api/world-and-rendering/).
+- Studio plugins use the Studio-owned bounded boundary; gameplay Luau receives
+  no ambient editor-authoring capability.
 
-## Roblox Compatibility Mode
+## Old compatibility examples
 
-<Aside type="caution">
-	Not yet implemented as of August 5th, 2026. This is however a prerequisite
-	to Gargantuan Studio and the general 0.1 release, so it will be implemented
-	soon.
-</Aside>
+`src/Main.cpp` parses `--enable_roblox_compat`, but parsing a flag does not prove
+a general compatibility layer. The previously documented `--compat-roblox`
+flag, `project.config.json` compatibility toggle and promise of complete API
+parity are not supported contracts.
 
-Gargantuan provides a Roblox compatibility mode which alters several APIs to
-match Roblox, eliminating all API deviations.
+Use [runtime schema](../../developing/runtime-schema/) for the frozen PreRun
+custom-class/extension model. The old `InstanceClass.new` registration sketch
+is not an implemented gameplay API. Use [native networking](../../developing/current-networking/)
+and actual [persistence boundaries](../../api/networking-and-persistence/)
+instead of assuming Roblox platform services exist.
 
-Enable it in your `project.config.json`:
-
-```json
-{
-	"name": "My Gargantuan Game",
-	"compatibility": {
-		"roblox": {
-			"enabled": true
-		}
-	}
-}
-```
-
-Or, enable it in the player CLI using the `compat-roblox` flag:
-
-```sh
-gargantuan --compat-roblox --script=src/Main.luau
-```
-
-## API Deviations
-
-- The typenames for `RBXScriptSignal` and `RBXScriptConnection` are renamed to
-  `Signal` and `SignalConnection`:
-
-	```luau
-	local connection = game.Destroying:Connect(function() end);
-
-	-- with roblox compatibility disabled:
-	print(typeof(game.Destroying)) --> "Signal"
-	print(typeof(connection)) --> "SignalConnection"
-
-	-- with roblox compatibility enabled:
-	print(typeof(game.Destroying)) --> "RBXScriptSignal"
-	print(typeof(connection)) --> "RBXScriptConnection"
-
-	-- note that the Signal runtime global stays constant regardless if
-	-- roblox compatibility is enabled
-	local signal = Signal.new<<string>>()
-	```
-
-	It is possible to write code that is compatible with both Gargantuan and
-	Roblox, regardless of the ROblox compatibility mode being enabled:
-
-	```luau
-	-- typenames will return "Signal" and "SignalConnection" in Gargantuan, but
-	-- "RBXScriptSignal" and "RBXScriptConnection" in Roblox
-
-	local signalTypeName = typeof(game.Destroying)
-
-	local connection = game.Destroying:Connect(function() end);
-	local connectionTypeName = typeof(signal)
-	connection:Disconnect()
-
-	-- now you can use them!
-	-- you can choose to use Roblox or Gargantuan's signal type definition
-	local function validate(x: SignalConnection)
-		if typeof(x) == connectionTypeName then
-			-- ...
-		end
-	end
-	```
-
-## Design Deviations
-
-- There is no `workspace` global. Import `game:GetService("Workspace")`
-  yourself.
-- Likewise, there is no `plugin` global. Import
-  `script:FindFirstAncestorOfClass("Plugin")` yourself.
-- Many Roblox deprecated APIs, such as `Instance:isA`, has been unimplemented in
-  Gargantuan. You may find old Roblox codebases being harder to port.
-- Roblox-based asset paths such as `rbxassetid://` will not work inside
-  Gargantuan. Include assets yourself inside the project's directory, then
-  refer to it using `project://` paths.
-
-    - The [`rbx-to-gargantuan`](https://github.com/godmothersfire/rbx-to-gargantuan)
-      toolchain will attempt to fetch Roblox assets, as well provide new
-      builtin assets for your game to use.
-    - Tools like Asphalt and Tungsten are redundant as Gargantuan synchronizes
-      assets directly from your project via the filesystem.
-
-- Packages are unimplemented. Use `FileLink` to synchronize your packages.
-- `task.cancel` and `coroutine.close` cannot be interspersed with `task` library
-  threads and Lua coroutines. This restriction may be lifted by the 0.1 release.
-- `BaseScript`, `LocalScript`, and `Enum.RunContext.Legacy` have been
-  unimplemented due to redundancy:
-
-	```luau
-	local script = Instance.new("Script")
-	print(script:IsA("BaseScript")) --> false
-	print(script:IsA("Script")) --> true
-	print(script:IsA("LuaSourceContainer")) --> true
-	print(Enum.RunContext:GetEnumItems()) --> { Enum.RunContext.Client, Enum.RunContext.Server }
-
-	-- this will now error, as Gargantuan does not use LocalScripts
-	Instance.new("LocalScript")
-	````
-
-- Several Roblox features are unimplemented from Gargantuan, including the
-  player controller, gears, CoreGui, et al. so games can implement their own
-  systems such as chat and avatars as deemed fit. Gargantuan provides preset
-  models for you to use as a baseline. You may also reimplement features from
-  scratch using the `InstanceClass` data type:
-
-    ```luau
-    -- TODO: gotta design this to support C++ and Luau classes
-    local CharacterStatus = InstanceClass.new("CharacterStatus")
-    CharacterStatus.Properties = { ... }
-    CharacterStatus.Methods = { ... }
-    CharacterStatus:Register()
-
-    local status = Instance.new("CharacterStatus")
-    status.Parent = Players.LocalPlayer.Character
-    ```
-
-    It's recommended to write a type definition file for your declared classes:
-
-    ```luau
-    declare extern type CharacterStatus: Instance
-        Health: number
-        -- ...
-    end
-    ```
-
-    Gargantuan will not add a `Humanoid` compatibility aggregate. The canonical
-    gameplay actor is `Character`; game-specific health, combat, traversal, and
-    locomotion state should be composed as narrow game-owned systems.
+The [first complete game](../../../../../samples/FirstCompleteGame/README.md)
+shows integrated Scripts, canonical assets, Character control, GUI and packaging.

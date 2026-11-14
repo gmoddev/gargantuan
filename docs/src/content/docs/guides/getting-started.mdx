@@ -1,0 +1,46 @@
+---
+title: Start with Gargantuan
+description: Capabilities, platform coverage and the Engine, Studio and Node relationship.
+---
+
+Gargantuan combines a native C++23 engine with Luau gameplay scripts. A
+DataModel owns the live Instance hierarchy. Services provide world, player,
+input, asset and other runtime behavior through explicit authority boundaries.
+It is experimental; familiar Roblox names do not establish compatibility.
+
+## Integrated capabilities and limits
+
+Current mainline includes validated mutation, generation-safe identities,
+frozen schema, project persistence/history, isolated Play, rigid Box3D and
+deformable XPBD physics, SDL GPU rendering, canonical assets, animation, audio,
+retained GUI, player policy and bounded networking. Runtime role and build
+options constrain availability; a declaration alone does not prove every use.
+
+Windows x64 Release is the primary required native CI configuration. Ubuntu
+24.04 Clang 19 has a separate required headless ASan/UBSan gate. Neither certifies
+all graphics drivers or physical networks. macOS lacks a required CI gate.
+See [build and run](../../developing/working-on-gargantuan/) for prerequisites.
+
+## Choose a component
+
+| Component | Responsibility |
+| --- | --- |
+| Engine | Authoritative runtime/project state, physics, rendering, scripts and EditorHost |
+| Studio | LUI editor UX backed by Native Host and public Engine EditorHost protocol |
+| Gargantuan Node | Optional online services through explicit provider contracts |
+
+Local/offline Engine execution needs no Node deployment. Studio has its own
+source and integration pins. Read [Engine, Studio and Node](../../developing/engine-studio-node/)
+before combining builds.
+
+## First steps
+
+1. [Build the source](../../developing/working-on-gargantuan/).
+2. Run `assets/examples/baseplate.luau` or open [your first project](../first-project/).
+3. Use the [API reference](../../api/) and checked examples with their required runtime context.
+
+Renderer Foundations 3–5 and Runtime 6 are pending integration into this guide's
+recorded baseline. Branch evidence does not describe mainline behavior.
+Physical network/provider and F1 claims retain their own source/contract scope.
+Consult [known issues](../../../../../KNOWN_ISSUES.md), [renderer limits](../../developing/renderer/)
+and [network qualification](../../developing/current-networking/) before deployment.

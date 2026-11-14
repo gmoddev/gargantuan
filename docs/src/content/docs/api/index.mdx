@@ -1,0 +1,29 @@
+---
+title: Luau API reference
+description: Verified entry points for runtime scripts, services, world objects, input, assets, and remotes.
+---
+
+This reference describes the **implemented runtime Luau surface** at the integrated `main` revision. It is a practical guide to common calls, not a promise of Roblox API compatibility or a complete generated member list. Class and service declarations are in `assets/classes/*.luau` and `assets/services/*.luau`; native methods and datatype bindings also need their C++ implementations. A declaration commented out in those files is not an API.
+
+| Start with | For |
+| --- | --- |
+| [Instances and services](./instances-and-services/) | `game`, `Instance.new`, hierarchy, signals, attributes, tags, and script lifecycle |
+| [Datatypes and globals](./datatypes-and-globals/) | VM constructors, returned value types, `task`, `require`, and diagnostics |
+| [Class and service catalog](./declaration-catalog/) | Complete mechanically extracted declarative members and source locations |
+| [World and rendering](./world-and-rendering/) | Parts, physics queries, camera, lighting, and frame events |
+| [Input, GUI, and media](./input-gui-and-media/) | Players, actions, GUI, assets, animation, and sound |
+| [Networking and persistence](./networking-and-persistence/) | Remotes, client/server direction, replicated state, and saved state |
+
+## Runtime setup
+
+Place a `Script` in the project through Studio authoring, set its `RunContext` to the appropriate `Server` or `Client` value, and run a Play or packaged session. `game` is that session's `DataModel`; `game:GetService("Workspace")` and direct canonical service access use the same lazy singleton. `Instance.new("Part")` returns a detached object. Set `Parent` to adopt it into the session's graph. See [the Instance example](https://github.com/gmoddev/Gargantuan/blob/main/docs/examples/part-and-tags.luau) for a server-side pattern.
+
+Runtime scripts have DataModel read/mutation and bounded network capabilities. They do not receive filesystem, process, Studio editor, schema-definition, or viewport privileges. Native property and method dispatch enforce the context. The live graph is owned by Main; worker jobs and the renderer do not grant scripts another mutation path. `task.spawn`, `task.defer`, `task.delay`, `task.wait`, and signal callbacks retain the registering script's context.
+
+`print(...)` and `warn(...)` produce bounded diagnostics. Use a prefix such as `[Gameplay:Spawn]` to make them searchable. Use `pcall` around calls that may fail from invalid input, unavailable assets, or exhausted limits when your game can recover.
+
+## Scope of this reference
+
+The engine also registers `Axes`, `CFrame`, `Color3`, `Enum`, `Random`, `RaycastParams`, `Signal`, `TweenInfo`, `UDim`, `UDim2`, `Vector2`, and `Vector3` globals. Their exact constructor and method surface is defined by `src/scripting/Lib*.cpp` and datatype bindings. `AnimationTrack`, `EnumItem`, `Rect`, and signal connections can be returned as values without separate constructor globals. See [datatypes and globals](./datatypes-and-globals/) for the native registration map and the [declaration catalog](./declaration-catalog/) for class and service members; neither implies every Roblox API exists.
+
+For implementation evidence and constraints, see `devdocs/CurrentArchitecture/LuauRuntimeSurface.md`, `ScriptSecurity.md`, and the subsystem contracts linked from [AI contribution guidance](../meta/agents/). Current source and tests take precedence over older prose when they differ.

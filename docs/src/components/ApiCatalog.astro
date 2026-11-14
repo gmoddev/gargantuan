@@ -1,0 +1,31 @@
+---
+import Api from "../data/PublicApi.json";
+const Total = Api.Classes.reduce((Count, Definition) => Count + Definition.Properties.length + Definition.Methods.length + Definition.Signals.length, 0);
+const Link = (Source) => `https://github.com/gmoddev/gargantuan/blob/main/${Source}`;
+---
+<p>{Api.Classes.length} class/service declarations and {Total} declared members.
+  Inherited members remain on their declaring class. Expand a class to inspect
+  its exact declaration metadata. This catalog preserves type expressions and
+  permission fields; native bindings and tests establish executable behavior.</p>
+{Api.Classes.map(Definition => (
+  <details id={Definition.Name}>
+    <summary><strong>{Definition.Name}</strong> — {Definition.Kind}{Definition.Abstract ? " (abstract)" : ""}</summary>
+    <p>{Definition.Description}</p>
+    <p>Extends: <code>{Definition.Extends || "none"}</code>. Service policy: <code>{Definition.ServicePolicy}</code>.
+      <a href={Link(Definition.Source)}> Owning declaration</a>.</p>
+    {["Properties", "Methods", "Signals"].map(Section => Definition[Section].length > 0 && (
+      <section>
+        <h3>{Definition.Name}: {Section}</h3>
+        {Definition[Section].map(Member => (
+          <details>
+            <summary><code>{Member.Name}</code></summary>
+            <p>{Member.Description || "See native implementation and owning declaration."}</p>
+            <dl>{Object.entries(Member).filter(([Key]) => !["Name", "Description"].includes(Key)).map(([Key, Value]) => (
+              <><dt>{Key}</dt><dd><code>{String(Value)}</code></dd></>
+            ))}</dl>
+          </details>
+        ))}
+      </section>
+    ))}
+  </details>
+))}

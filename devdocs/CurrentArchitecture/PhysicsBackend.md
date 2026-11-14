@@ -180,9 +180,10 @@ primitive admission or any residency-demand policy.
 
 Generated setters commit authoritative Instance state and then fire their normal
 property signal. For a tracked `BasePart`, `WorldRoot` observes `CFrame`, `Size`,
-`Anchored`, `CanCollide`, `CanTouch`, and `Shape` and records only a dirty neutral
-body intent. It does not call Box3D from the setter callback.
-
+`Anchored`, `Kinematic`, `CanCollide`, `CanTouch`, `CollisionGroup`,
+`CollisionMask`, `LinearDamping`, `AngularDamping`, `GravityScale`,
+`SleepEnabled`, `MovingBodyCCD`, and `Shape` where present. It records only a
+dirty neutral body intent and does not call Box3D from the setter callback.
 For MeshPart, it also observes `Mesh` and `CollisionMode`.
 
 At the beginning of `StepPhysics`, on Main and before any Box3D step,
@@ -266,14 +267,16 @@ Instance.
 
 ## Queries
 
-The two active gameplay queries are `Workspace:Raycast(Origin, Direction,
-Params?)` and `Workspace:MoveKinematicCapsule(Position, Radius, Height,
-Translation, Velocity)`. `WorldRoot` flushes pending body changes before either
-query and passes only neutral requests to `PhysicsWorld`. Returned Luau values
-own copied semantic results and contain no body handle or borrowed backend
-memory. See [Physics Query Foundation 1](PhysicsQueryFoundation1.md) for the
-raycast API, filter, identity, ordering, timing, limits, LOS integration, and
-benchmark evidence.
+Gameplay exposes `Workspace:Raycast(Origin, Direction, Params?)`, sphere,
+capsule, and box casts, and sphere, capsule, and box overlap queries. The
+separate `Workspace:MoveKinematicCapsule(Position, Radius, Height,
+Translation, Velocity)` supplies bounded character collision resolution.
+`WorldRoot` flushes pending body changes before each query and passes only
+neutral requests to `PhysicsWorld`. Returned Luau values own copied semantic
+results and contain no body handle or borrowed backend memory. See
+[Physics Query Foundation 1](PhysicsQueryFoundation1.md) for exact public
+signatures, filtering, ordering, timing, limits, and LOS integration; the
+implementation is in `WorldRoot.cpp` and `Box3DAdvancedQueries.inl`.
 
 The Box3D adapter uses `b3World_CollideMover`, `b3SolvePlanes`,
 `b3World_CastMover`, and `b3ClipVector`. It resolves contact planes toward the
@@ -292,8 +295,10 @@ physics/query boundary.
 This primitive supplies collision authority rather than movement policy. The
 engine-shipped Luau controller decides gravity integration, walk speed, floor
 slope acceptance, jump/air-jump rules, and bounded step attempts. A replacement
-controller can call the same method directly. Shape casts, overlap APIs,
-moving-platform metadata, and soft-body query participation are not implemented.
+controller can call the same method directly. Moving-platform metadata and
+soft-body query participation are not implemented. Shape casts translate a
+fixed orientation and ignore initial overlap; an overlap query is required to
+inspect an initially intersecting shape.
 
 ## Failure and lifetime behavior
 
