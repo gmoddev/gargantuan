@@ -368,6 +368,8 @@ def Check(Arguments: argparse.Namespace) -> int:
         WriteJson(ReportPath, {"LegacyFindings": Legacy, "CurrentFindings": Errors})
     elif not ReportPath.exists() or json.loads(Read(ReportPath)).get("LegacyFindings") != Legacy:
         Errors.append({"Path": "LinkFindings.json", "Reason": "Historical link findings changed; repair links or review --report update", "Target": "non-current documents"})
+        for Finding in Legacy:
+            print(f"[Docs:HistoricalLink] {Finding['Path']}: {Finding['Reason']}: {Finding['Target']}")
     for Error in Errors:
         print(f"[Docs:Integrity] {Error['Path']}: {Error['Reason']}: {Error['Target']}")
     print(f"[Docs:Integrity] {len(Paths)} documents, {len(Api['Classes'])} declarations, {len(Errors)} errors, {len(Legacy)} retained non-current link findings")
