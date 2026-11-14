@@ -79,6 +79,7 @@ namespace gargantuan {
 		SDL_GPUTexture *ShadowMapTexture = nullptr;
 		SDL_GPUSampler *ShadowSampler = nullptr;
 		std::vector<std::unique_ptr<SDLRenderPass>> RenderPasses;
+		std::vector<SDLPassPhase> RenderPassPhases;
 		std::unique_ptr<SDLMeshCache> MeshResources;
 		std::unique_ptr<SDLInstanceGpuCache> InstanceResources;
 		std::unique_ptr<SDLTextureCache> TextureResources;
@@ -179,6 +180,8 @@ namespace gargantuan {
 				throw std::runtime_error(std::format("Failed to query renderer window size: {}", SDL_GetError()));
 			Resize(InitialWidth, InitialHeight);
 
+			State->RenderPasses.reserve(GetSDLRenderPassConstructors().size());
+			State->RenderPassPhases.reserve(GetSDLRenderPassConstructors().size());
 			for (const auto &Definition : GetSDLRenderPassConstructors()) {
 				if (Definition.Target == SDLPassTarget::Resolve && !State->HdrSceneEnabled) continue;
 				if (State->RemainingShaderCreationFailures > 0) {
@@ -195,6 +198,7 @@ namespace gargantuan {
 					throw std::runtime_error("[Render:Pipeline] injected pipeline creation failure");
 				}
 				State->RenderPasses.push_back(std::move(Pass));
+				State->RenderPassPhases.push_back(Definition.Phase);
 			}
 		} catch (...) {
 			Destroy();
@@ -227,6 +231,7 @@ namespace gargantuan {
 		}
 		for (auto &Pass : State->RenderPasses) if (Pass) Pass->Destroy(State->Gpu);
 		State->RenderPasses.clear();
+		State->RenderPassPhases.clear();
 		if (State->Gpu) State->ShadowResources.Destroy(State->Gpu);
 		if (State->Gpu) State->MaterialSamplers.Destroy(State->Gpu);
 		if (State->ColorTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->ColorTexture);
@@ -428,12 +433,11 @@ namespace gargantuan {
 					Frame.EnableInstancing = false;
 				}
 			}
-			const auto &Definitions = GetSDLRenderPassConstructors();
 			for (std::size_t Index = 0; Index < State->RenderPasses.size(); ++Index) {
 				const auto PassStart = Clock::now();
 				if (auto *Recorded = State->RenderPasses[Index]->Draw(State->Gpu, Frame)) SDL_EndGPURenderPass(Recorded);
 				const auto Elapsed = Nanoseconds(Clock::now() - PassStart);
-				switch (Definitions[Index].Phase) {
+				switch (State->RenderPassPhases[Index]) {
 					case SDLPassPhase::Shadow: State->Metrics.LastShadowRecordingNanoseconds += Elapsed; break;
 					case SDLPassPhase::Sky: State->Metrics.LastSkyRecordingNanoseconds += Elapsed; break;
 					case SDLPassPhase::Opaque: State->Metrics.LastOpaqueRecordingNanoseconds += Elapsed; break;

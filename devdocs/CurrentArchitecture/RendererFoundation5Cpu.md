@@ -54,6 +54,10 @@ Whole-pass and projection validation/mutation clocks are coarse boundaries.
 The first twelve phase columns (shadow classification through command acquire)
 are populated with profiling on and off. Only the six nested object-path
 columns and object counters require `--sdl-profile=on`.
+Runtime pass timings retain the phase of each constructed pass. Direct SDR
+omits the HDR resolve, so its resolve recording time is zero and GUI recording
+remains in the GUI phase. The real-Part primitive GPU check verifies HDR and
+forced-SDR phase attribution; these clocks remain host recording measurements.
 The projection remains renderer-owned derived state, and failed publication
 preflight still leaves it unchanged.
 

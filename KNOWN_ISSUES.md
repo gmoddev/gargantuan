@@ -4,6 +4,26 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+## KI-RND-002: Invalid asset-mesh change tails can leave publisher work pending
+
+- Status: Open; pre-existing on main before Renderer Foundation 3.
+- Area: Non-authoritative RenderPublisher asset-mesh change validation/recovery.
+- Source: `src/render/RenderPublisher.cpp`, `SetAssetMeshChanges`.
+
+The method validates and mutates its mesh map and pending lists in one loop.
+A valid mesh followed by an out-of-range mesh index throws after the first
+mesh has already entered both structures. A corrected immediate retry then
+hits the one-coherent-change-set guard; a full publication can expose the
+accepted prefix of the rejected set. Main's DataModel authority is unaffected,
+but the consumer's failure/retry behavior is not atomic. AssetService callers
+normally supply validated data; no malformed production input is demonstrated
+by this static review. The affected code predates this integration (August 23
+and August 29 commits) and is not a squash regression.
+
+Resolution requires staging/validating the complete replacement before a
+nonthrowing commit, with invalid-tail, retry, allocation-failure and full-resync
+tests. Keep this separate from the source-preserving foundation consolidation.
+
 ## KI-RUN-001: Dense authoritative mutation remains a CPU scalability ceiling
 
 - Status: Verified measured limitation; bounded Runtime 6 integration qualified.

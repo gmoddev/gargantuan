@@ -74,6 +74,8 @@ jobs:
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_depth_tests \
             --contiguous-instancing --output=../renderer-evidence/contiguous-instancing) 2>&1 | tee renderer-evidence/contiguous-instancing.log || failed=1
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_depth_tests \
+            --primitive-instancing) 2>&1 | tee renderer-evidence/primitive-instancing.log || failed=1
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_depth_tests \
             --scene-envelope-pixels --output=../renderer-evidence/scene-envelope) 2>&1 | tee renderer-evidence/scene-envelope.log || failed=1
           (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_ibl_gpu_tests) \
             2>&1 | tee renderer-evidence/ibl.log || failed=1

@@ -100,6 +100,17 @@ void CheckPrimitivePartInstancing() {
 		Renderer.Draw(Publication);
 		Renderer.WaitForIdle();
 		const auto Metrics = Renderer.GetMetrics();
+		if (Metrics.LastGuiRecordingNanoseconds == 0 ||
+			(Metrics.LastResolveRecordingNanoseconds > 0) != (Metrics.HdrSceneBytes > 0))
+			throw std::runtime_error("HDR/fallback pass recording metrics have incorrect phase attribution");
+		SDLRenderer SdrRenderer({800, 600}, {.Offscreen = true, .WaitForGpuCompletion = true,
+			.DebugDevice = false, .EnableHdrScene = false});
+		SdrRenderer.Draw(Publication);
+		SdrRenderer.WaitForIdle();
+		const auto SdrMetrics = SdrRenderer.GetMetrics();
+		if (SdrMetrics.FramesSubmitted != 1 || SdrMetrics.HdrSceneBytes != 0 ||
+			SdrMetrics.LastResolveRecordingNanoseconds != 0 || SdrMetrics.LastGuiRecordingNanoseconds == 0)
+			throw std::runtime_error("SDR GUI recording was attributed to an absent resolve pass");
 		if (Metrics.FramesSubmitted != 1 || Metrics.FullResyncs != 1 ||
 			Metrics.ContiguousInstancedDrawCalls < 1 || Metrics.InstancedObjects < Parts.size())
 			throw std::runtime_error(std::string(Names[ShapeIndex]) + " Parts did not form a native instance batch");

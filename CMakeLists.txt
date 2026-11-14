@@ -724,6 +724,20 @@ if(BUILD_TESTING)
 			-P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyRuntimeShaders.cmake
 	)
 	set_tests_properties(gargantuan_packaged_shaders PROPERTIES LABELS "build;shader;packaging")
+	add_test(NAME gargantuan_distribution_shaders
+		COMMAND ${CMAKE_COMMAND}
+			-DGARGANTUAN_SHADER_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders
+			-DGARGANTUAN_SHADER_RUNTIME_DIR=$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution/shaders
+			-P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyRuntimeShaders.cmake
+	)
+	set_tests_properties(gargantuan_distribution_shaders PROPERTIES LABELS "build;shader;packaging")
+	add_test(NAME gargantuan_server_distribution_shaders
+		COMMAND ${CMAKE_COMMAND}
+			-DGARGANTUAN_SHADER_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders
+			-DGARGANTUAN_SHADER_RUNTIME_DIR=$<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution/shaders
+			-P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyRuntimeShaders.cmake
+	)
+	set_tests_properties(gargantuan_server_distribution_shaders PROPERTIES LABELS "build;shader;packaging")
 	if(GARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE)
 		if(MSVC AND MSVC_VERSION LESS 1950)
 			message(FATAL_ERROR "The pinned Glaze prototype requires MSVC 19.50 or newer")

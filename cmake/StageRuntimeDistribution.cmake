@@ -146,10 +146,13 @@ foreach(GARGANTUAN_SHADER
 	ibl_convolve.frag.spv
 	ibl_fullscreen.vert.spv
 	ibl_source.frag.spv
+	opaque-instanced.vert.spv
+	opaque-portable.frag.spv
 	opaque.frag.spv
 	opaque.vert.spv
 	scene-resolve.frag.spv
 	scene-resolve.vert.spv
+	shadow-instanced.vert.spv
 	shadow-opaque.frag.spv
 	shadow.frag.spv
 	shadow.vert.spv

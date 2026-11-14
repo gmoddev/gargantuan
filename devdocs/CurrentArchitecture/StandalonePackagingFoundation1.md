@@ -234,6 +234,13 @@ Runtime modules, font, and shaders resolve only under executable-relative
 `runtime/` and `shaders/`. There is no parent/build/source fallback. Linux uses
 `$ORIGIN` and macOS uses `@loader_path` for adjacent shared libraries.
 
+The canonical distribution stages all 18 Foundation 3–6 SPIR-V outputs,
+including the non-cube-array portable material fragment and opt-in instanced
+vertex shaders. Distribution shader verification checks this executable-local
+set separately from the build directory; package tests reject missing manifest
+members before publishing an output. This does not change package schema or
+enable instancing by default.
+
 ## UserDataRoot
 
 Runtime-writable state is outside the package. `SDL_GetPrefPath("Gargantuan",
