@@ -819,6 +819,14 @@ if(BUILD_TESTING)
 		GARGANTUAN_ASSET_TEST_FONT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/vendor/sdl_ttf/external/harfbuzz/perf/fonts/Roboto-Regular.ttf"
 		GARGANTUAN_ASSET_TEST_PNG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/github/ross.png"
 	)
+	add_custom_command(TARGET gargantuan_asset_foundation_tests POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:gargantuan_asset_foundation_tests>/test-fixtures"
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/vendor/sdl_ttf/external/harfbuzz/perf/fonts/Roboto-Regular.ttf"
+			"$<TARGET_FILE_DIR:gargantuan_asset_foundation_tests>/test-fixtures/Roboto-Regular.ttf"
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/assets/github/ross.png"
+			"$<TARGET_FILE_DIR:gargantuan_asset_foundation_tests>/test-fixtures/ross.png"
+	)
 	add_executable(gargantuan_asset_foundation_benchmark "tests/AssetFoundationBenchmark.cpp")
 	target_link_libraries(gargantuan_asset_foundation_benchmark PRIVATE gargantuan_core nlohmann_json)
 	target_compile_definitions(gargantuan_asset_foundation_benchmark PRIVATE
@@ -838,9 +846,28 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_audio_foundation_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_renderer_publication_tests "tests/RendererPublicationTests.cpp")
 	target_link_libraries(gargantuan_renderer_publication_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_renderer_instance_record_tests "tests/RendererInstanceRecordCacheTests.cpp")
+	target_include_directories(gargantuan_renderer_instance_record_tests PRIVATE
+		"${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/src")
+	target_link_libraries(gargantuan_renderer_instance_record_tests PRIVATE glm::glm)
+	add_test(NAME gargantuan_renderer_instance_records COMMAND gargantuan_renderer_instance_record_tests)
+	set_tests_properties(gargantuan_renderer_instance_records PROPERTIES LABELS "renderer;runtime;headless" TIMEOUT 30)
 	add_executable(gargantuan_environment_lighting_benchmark "tests/EnvironmentLightingBenchmark.cpp")
 	target_link_libraries(gargantuan_environment_lighting_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_ibl_reference_tests "tests/EnvironmentLightingReferenceTests.cpp")
+	add_executable(gargantuan_reflection_probe_tests "tests/ReflectionProbeSemanticsTests.cpp")
+	target_link_libraries(gargantuan_reflection_probe_tests PRIVATE glm::glm)
+	target_include_directories(gargantuan_reflection_probe_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+	add_test(NAME gargantuan_reflection_probe_reference COMMAND gargantuan_reflection_probe_tests)
+	add_executable(gargantuan_directional_cascade_numerics_tests "tests/DirectionalCascadeNumericsTests.cpp")
+	target_link_libraries(gargantuan_directional_cascade_numerics_tests PRIVATE glm::glm)
+	target_include_directories(gargantuan_directional_cascade_numerics_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/src")
+	add_test(NAME gargantuan_directional_cascade_numerics COMMAND gargantuan_directional_cascade_numerics_tests)
+	add_executable(gargantuan_spot_shadow_atlas_tests "tests/SpotShadowAtlasTests.cpp")
+	target_link_libraries(gargantuan_spot_shadow_atlas_tests PRIVATE gargantuan_core)
+	target_include_directories(gargantuan_spot_shadow_atlas_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/vendor/sdl/include")
+	add_test(NAME gargantuan_spot_shadow_atlas COMMAND gargantuan_spot_shadow_atlas_tests)
+	set_tests_properties(gargantuan_reflection_probe_reference PROPERTIES LABELS "renderer;environment")
 	target_link_libraries(gargantuan_ibl_reference_tests PRIVATE glm::glm)
 	add_test(NAME gargantuan_ibl_reference COMMAND gargantuan_ibl_reference_tests)
 	set_tests_properties(gargantuan_ibl_reference PROPERTIES LABELS "renderer;environment")
@@ -1278,6 +1305,19 @@ if(BUILD_TESTING)
 	if(GARGANTUAN_BUILD_RENDERER_BENCHMARKS)
 		add_executable(gargantuan_renderer_benchmark "tests/RendererBenchmark.cpp")
 		target_link_libraries(gargantuan_renderer_benchmark PRIVATE gargantuan_core)
+		option(GARGANTUAN_BUILD_RENDERER_ALLOCATION_PROBE "Build opt-in renderer C++ allocation attribution executable" OFF)
+		if(GARGANTUAN_BUILD_RENDERER_ALLOCATION_PROBE)
+			add_executable(gargantuan_renderer_allocation_benchmark
+				"tests/RendererBenchmark.cpp" "tests/BenchmarkAllocationProbe.cpp")
+			target_compile_definitions(gargantuan_renderer_allocation_benchmark PRIVATE
+				GARGANTUAN_BENCHMARK_ALLOCATION_PROBE=1)
+			target_link_libraries(gargantuan_renderer_allocation_benchmark PRIVATE gargantuan_core)
+			add_executable(gargantuan_renderer_allocation_probe_tests
+				"tests/BenchmarkAllocationProbe.cpp" "tests/BenchmarkAllocationProbeTests.cpp")
+			target_compile_features(gargantuan_renderer_allocation_probe_tests PRIVATE cxx_std_17)
+			add_test(NAME gargantuan_renderer_allocation_probe
+				COMMAND gargantuan_renderer_allocation_probe_tests)
+		endif()
 		add_executable(gargantuan_renderer_foundation2_benchmark "tests/RendererFoundation2Benchmark.cpp")
 		target_link_libraries(gargantuan_renderer_foundation2_benchmark PRIVATE gargantuan_core)
 		add_executable(gargantuan_renderer_foundation2_gpu_benchmark "tests/RendererFoundation2GpuBenchmark.cpp")
@@ -1293,6 +1333,12 @@ if(BUILD_TESTING)
 			gargantuan_shaders gargantuan_packager gargantuan_runtime_distribution)
 		add_executable(gargantuan_editor_viewport_smoke "tests/EditorViewportSmoke.cpp")
 		add_executable(gargantuan_ibl_gpu_tests "tests/ImageBasedLightingGpuTests.cpp")
+		add_executable(gargantuan_reflection_probe_gpu_tests "tests/ReflectionProbeGpuTests.cpp")
+		target_link_libraries(gargantuan_reflection_probe_gpu_tests PRIVATE gargantuan_core)
+		add_dependencies(gargantuan_reflection_probe_gpu_tests gargantuan_shaders)
+		add_executable(gargantuan_shadow_foundation5_gpu_tests "tests/ShadowFoundation5GpuTests.cpp")
+		target_link_libraries(gargantuan_shadow_foundation5_gpu_tests PRIVATE gargantuan_core)
+		add_dependencies(gargantuan_shadow_foundation5_gpu_tests gargantuan_shaders)
 		target_link_libraries(gargantuan_ibl_gpu_tests PRIVATE gargantuan_core)
 		add_dependencies(gargantuan_ibl_gpu_tests gargantuan_shaders)
 		add_executable(gargantuan_renderer_depth_tests "tests/RendererDepthTests.cpp")

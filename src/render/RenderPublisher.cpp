@@ -8,12 +8,14 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/DeformableBody.hpp"
 #include "gargantuan/classes/LocalLight.hpp"
+#include "gargantuan/classes/ReflectionProbe.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Sky.hpp"
 #include "gargantuan/classes/SpotLight.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/environment/EnvironmentSemantics.hpp"
+#include "gargantuan/environment/ReflectionProbeSemantics.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Lighting.hpp"
@@ -67,7 +69,8 @@ namespace gargantuan {
 				!Equal(Left.Fog.Color, Right.Fog.Color) || Left.Fog.Start != Right.Fog.Start ||
 				Left.Fog.End != Right.Fog.End || Left.Sky.has_value() != Right.Sky.has_value() ||
 				Left.LocalLights != Right.LocalLights || Left.EnvironmentRotation != Right.EnvironmentRotation ||
-				Left.IblIntensity != Right.IblIntensity || Left.ToneMapping != Right.ToneMapping)
+				Left.IblIntensity != Right.IblIntensity || Left.ToneMapping != Right.ToneMapping ||
+				Left.ReflectionProbes != Right.ReflectionProbes || Left.DirectionalShadows != Right.DirectionalShadows)
 				return false;
 			if (!Left.Sky) return true;
 			if (Left.Sky->FaceDimension != Right.Sky->FaceDimension) return false;
@@ -363,6 +366,9 @@ namespace gargantuan {
 			if (Publication.EnvironmentChanged && Publication.Frame.Environment.LocalLights)
 				Result = AddBounded(Result, MultiplyBounded(Publication.Frame.Environment.LocalLights->size(),
 					sizeof(RenderLocalLightState)));
+			if (Publication.EnvironmentChanged && Publication.Frame.Environment.ReflectionProbes)
+				Result = AddBounded(Result, MultiplyBounded(Publication.Frame.Environment.ReflectionProbes->size(),
+					sizeof(RenderReflectionProbeState)));
 			Result = AddBounded(Result, MultiplyBounded(Publication.Creates.size(), sizeof(RenderObjectCreate)));
 			Result = AddBounded(Result, MultiplyBounded(Publication.Updates.size(), sizeof(RenderObjectUpdate)));
 			Result = AddBounded(Result, MultiplyBounded(Publication.Removes.size(), sizeof(RenderObjectRemove)));
@@ -425,11 +431,81 @@ namespace gargantuan {
 		if (Dirty) Dirty->ReleaseConsumer(DirtyConsumer);
 	}
 
+	std::shared_ptr<const std::vector<RenderReflectionProbeState>> RenderPublisher::BuildReflectionProbes(
+		const WorldRoot &World, std::vector<RenderExtractionDiagnostic> &Diagnostics
+	) {
+		const auto Model = World.GetDataModel();
+		const auto Service = Model ? Model->FindService("AssetService") : std::nullopt;
+		const auto Assets = Service ? std::dynamic_pointer_cast<AssetService>(*Service) : nullptr;
+		std::vector<RenderReflectionProbeState> Probes;
+		Probes.reserve(std::min(World.GetReflectionProbes().size(), MaximumRenderReflectionProbes));
+		// Source lookup is bounded even when a world contains many incomplete
+		// authoring placeholders. Only coherent probes consume the publication cap.
+		constexpr std::size_t MaximumInspectedProbes = MaximumRenderReflectionProbes * 8;
+		std::size_t Inspected = 0;
+		for (const auto &[Id, WeakProbe] : World.GetReflectionProbes()) {
+			const auto Probe = WeakProbe.lock();
+			if (!Probe || Probe->GetDestroyed() || Probe->IsDestroying() || !Probe->GetProbeEnabled()) continue;
+			if (Inspected++ == MaximumInspectedProbes) {
+				Diagnostics.push_back({RenderExtractionIssue::PublicationOverflow, Id,
+					"[Environment:ReflectionProbe] World exceeds the 256 probe source inspection limit"});
+				break;
+			}
+			auto Pose = Probe->GetProbeCFrame();
+			auto Parent = Probe->GetParent();
+			std::shared_ptr<BasePart> Owner;
+			while (Parent && !dynamic_cast<const WorldRoot *>(Parent->get())) {
+				if (!Owner) Owner = std::dynamic_pointer_cast<BasePart>(*Parent);
+				Parent = (*Parent)->GetParent();
+			}
+			if (!Parent || Parent->get() != &World) continue;
+			if (Owner) {
+				LocalLightOwners.insert(Owner->GetObjectId());
+				Pose = Owner->GetRenderCFrame() * Pose;
+			}
+			RenderReflectionProbeState State{
+				.Object = Id, .Position = Pose.Position, .Rotation = Pose.Rotation,
+				.HalfSize = Probe->GetProbeSize() * 0.5f, .CaptureOffset = Probe->GetProbeCaptureOffset(),
+				.BlendDistance = Probe->GetProbeBlendDistance(), .Intensity = Probe->GetProbeIntensity(),
+				.Priority = Probe->GetProbePriority(), .BoxProjection = Probe->GetProbeBoxProjection(),
+			};
+			const std::array References{Probe->GetProbePositiveX(), Probe->GetProbeNegativeX(), Probe->GetProbePositiveY(),
+				Probe->GetProbeNegativeY(), Probe->GetProbePositiveZ(), Probe->GetProbeNegativeZ()};
+			bool Valid = Assets != nullptr;
+			for (std::size_t Face = 0; Valid && Face < References.size(); ++Face) {
+				const auto Record = Assets->GetAsset(References[Face]);
+				const auto *Image = Record && Record->Asset ? std::get_if<ImportedImage>(Record->Asset.get()) : nullptr;
+				const auto Resource = Record && Record->Kind == AssetKind::Image && Image && Image->Width == Image->Height &&
+					(Record->State == AssetState::Ready || Record->State == AssetState::Stale) ?
+					Assets->ResolveImage(References[Face]) : std::nullopt;
+				if (!Resource || (State.Source.FaceDimension && State.Source.FaceDimension != Resource->Width) ||
+					Resource->Width != Resource->Height) { Valid = false; break; }
+				State.Source.FaceDimension = Resource->Width;
+				State.Source.Faces[Face] = {Resource->Texture, Resource->ContentRevision};
+			}
+			if (Valid && IsValidReflectionProbe(State)) {
+				if (Probes.size() == MaximumRenderReflectionProbes) {
+					Diagnostics.push_back({RenderExtractionIssue::PublicationOverflow, Id,
+						"[Environment:ReflectionProbe] World exceeds the 32 coherent probe publication limit"});
+					break;
+				}
+				Probes.push_back(State);
+			}
+			else Diagnostics.push_back({RenderExtractionIssue::InvalidEnvironment, Id,
+				"[Environment:ReflectionProbe] Incoherent source or invalid influence pose; using other probes and global Sky"});
+		}
+		if (Probes.empty()) return nullptr;
+		if (PublishedEnvironment.ReflectionProbes && *PublishedEnvironment.ReflectionProbes == Probes)
+			return PublishedEnvironment.ReflectionProbes;
+		return std::make_shared<const std::vector<RenderReflectionProbeState>>(std::move(Probes));
+	}
+
 	RenderEnvironmentState RenderPublisher::BuildEnvironmentState(
 		const WorldRoot &World, std::vector<RenderExtractionDiagnostic> &Diagnostics
 	) {
 		RenderEnvironmentState Result;
 		LocalLightOwners.clear();
+		Result.ReflectionProbes = BuildReflectionProbes(World, Diagnostics);
 		std::vector<RenderLocalLightState> Lights;
 		const auto &Members = World.GetLocalLights();
 		Lights.reserve(std::min(Members.size(), MaximumRenderLocalLights));
@@ -475,6 +551,8 @@ namespace gargantuan {
 				.Color = static_cast<glm::vec3>(Light->GetLightColor()),
 				.Intensity = Light->GetLightIntensity(),
 				.Range = Light->GetLightRange(),
+				.ShadowEnabled = Light->GetLightShadows(),
+				.ShadowPriority = Light->GetLightShadowPriority(),
 			};
 			if (const auto *Spot = dynamic_cast<const SpotLight *>(Light.get())) {
 				const auto Angles = Spot->GetLightConeAngles();
@@ -507,6 +585,8 @@ namespace gargantuan {
 		Result.EnvironmentColor = static_cast<glm::vec3>(LightingValue->GetEnvironmentColor());
 		Result.EnvironmentRotation = LightingValue->GetEnvironmentRotation();
 		Result.IblIntensity = LightingValue->GetIblIntensity();
+		Result.DirectionalShadows.CascadeCount = static_cast<std::uint32_t>(LightingValue->GetShadowCascadeCount());
+		Result.DirectionalShadows.Distance = LightingValue->GetShadowDistance();
 		Result.ToneMapping = LightingValue->GetToneMapping() == Enums::ToneMappingMode::Reinhard ?
 			RenderToneMapping::Reinhard : RenderToneMapping::Filmic;
 		Result.Fog = {
@@ -641,9 +721,10 @@ namespace gargantuan {
 		std::unordered_map<RenderTextureIdentity, RenderTextureUpdate, RenderTextureIdentityHash> LastUpdates;
 		TouchedTextures.reserve(Creates.size() + Updates.size() + Removes.size());
 		for (const auto &Create : Creates) {
-			const auto Expected = static_cast<std::size_t>(Create.Width) * Create.Height * 4;
+			const auto PixelBytes = GetRenderTexturePixelBytes(Create.Format);
+			const auto Expected = static_cast<std::size_t>(Create.Width) * Create.Height * PixelBytes;
 			if (!Create.Texture.IsValid() || Create.Revision == 0 || Create.Width == 0 || Create.Height == 0 ||
-				Create.Format != RenderTextureFormat::Rgba8Unorm || !Create.Pixels || Create.Pixels->size() != Expected ||
+				PixelBytes == 0 || !Create.Pixels || Create.Pixels->size() != Expected ||
 				NextTextures.contains(Create.Texture))
 				throw std::invalid_argument("Render publisher rejects an invalid or duplicate UI texture creation");
 			NextTextures.emplace(Create.Texture, PublishedTexture{
@@ -653,18 +734,19 @@ namespace gargantuan {
 		}
 		for (const auto &Update : Updates) {
 			auto Existing = NextTextures.find(Update.Texture);
-			const auto Expected = static_cast<std::size_t>(Update.Width) * Update.Height * 4;
+			const auto PixelBytes = Existing == NextTextures.end() ? 0u : GetRenderTexturePixelBytes(Existing->second.Format);
+			const auto Expected = static_cast<std::size_t>(Update.Width) * Update.Height * PixelBytes;
 			if (Existing == NextTextures.end() || Update.Revision <= Existing->second.Revision ||
 				Update.X > Existing->second.Width || Update.Y > Existing->second.Height ||
 				Update.Width > Existing->second.Width - Update.X || Update.Height > Existing->second.Height - Update.Y ||
-				!Update.Pixels || Update.Pixels->size() != Expected)
+				PixelBytes == 0 || !Update.Pixels || Update.Pixels->size() != Expected)
 				throw std::invalid_argument("Render publisher rejects an invalid UI texture update");
 			auto Pixels = std::make_shared<std::vector<std::uint8_t>>(*Existing->second.Pixels);
 			for (std::uint32_t Row = 0; Row < Update.Height; ++Row) {
-				const auto SourceOffset = static_cast<std::size_t>(Row) * Update.Width * 4;
+				const auto SourceOffset = static_cast<std::size_t>(Row) * Update.Width * PixelBytes;
 				const auto DestinationOffset =
-					(static_cast<std::size_t>(Update.Y + Row) * Existing->second.Width + Update.X) * 4;
-				std::copy_n(Update.Pixels->data() + SourceOffset, static_cast<std::size_t>(Update.Width) * 4,
+					(static_cast<std::size_t>(Update.Y + Row) * Existing->second.Width + Update.X) * PixelBytes;
+				std::copy_n(Update.Pixels->data() + SourceOffset, static_cast<std::size_t>(Update.Width) * PixelBytes,
 					Pixels->data() + DestinationOffset);
 			}
 			Existing->second.Revision = Update.Revision;

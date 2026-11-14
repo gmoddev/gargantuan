@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gargantuan/render/RenderProjection.hpp"
+#include "render/sdl/SDLShadowResources.hpp"
 
 #include <SDL3/SDL_gpu.h>
 
@@ -10,12 +11,14 @@
 
 namespace gargantuan {
 	struct SDLRendererMetrics;
+	class SDLSpotShadowAtlas;
 
 	class SDLLocalLightGrid final {
 	  public:
 		explicit SDLLocalLightGrid(SDL_GPUDevice *Device) : Gpu(Device) {}
 		void Destroy();
-		void Prepare(const RenderFrameState &Frame, SDLRendererMetrics *Metrics);
+		void Prepare(const RenderFrameState &Frame, SDLRendererMetrics *Metrics,
+			const SDLSpotShadowAtlas *Atlas = nullptr);
 		[[nodiscard]] std::array<SDL_GPUBuffer *, 2> GetBuffers() const { return {Lights.GpuBuffer, Tiles.GpuBuffer}; }
 		[[nodiscard]] glm::vec4 GetUniforms() const {
 			return {static_cast<float>(VisibleCount), static_cast<float>(Columns), static_cast<float>(TilePixels), 0.0f};
@@ -33,6 +36,11 @@ namespace gargantuan {
 			glm::vec4 ColorIntensity;
 			glm::vec4 ShapeInner;
 		};
+		struct ShadowBinding {
+			ObjectId Light;
+			std::uint32_t LayerPlusOne = 0;
+			bool operator==(const ShadowBinding &) const = default;
+		};
 
 		void Release(Buffer &Value);
 		void Upload(Buffer &Value, SDL_GPUCopyPass *Pass, const void *Data, std::uint32_t Size,
@@ -44,6 +52,7 @@ namespace gargantuan {
 		std::vector<GpuLight> PackedLights;
 		std::vector<std::uint32_t> TileWords;
 		std::shared_ptr<const std::vector<RenderLocalLightState>> LastLights;
+		std::array<ShadowBinding, MaximumShadowedSpotlights> LastShadowBindings{};
 		glm::dmat4 LastClip{1.0};
 		glm::vec3 LastCamera{0.0f};
 		std::uint32_t Width = 0;

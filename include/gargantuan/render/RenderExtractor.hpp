@@ -131,6 +131,8 @@ namespace gargantuan {
 			const WorldRoot &World,
 			std::vector<RenderExtractionDiagnostic> &Diagnostics
 		);
+		[[nodiscard]] std::shared_ptr<const std::vector<RenderReflectionProbeState>> BuildReflectionProbes(
+			const WorldRoot &World, std::vector<RenderExtractionDiagnostic> &Diagnostics);
 
 		RenderExtractor FullExtractor;
 		RenderDirtyAccumulator *Dirty = nullptr;

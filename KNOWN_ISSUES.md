@@ -4,6 +4,20 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+## KI-RND-001: Optional instancing has workload-dependent CPU and frame tails
+
+- Status: Verified experimental limitation; ordinary drawing remains default.
+- Area: `src/render/passes/OpaquePass.cpp`, instance record/update preparation.
+- Evidence: [Foundation 5 qualification](devdocs/Validation/RendererFoundation5Qualification.md).
+
+Final same-binary physical A/B/B/A controls reduce static 50K world draws to 98
+and improve submission on both adapters. Fully dynamic 50K frame P95 worsens on
+both; AMD half-culled and several fallback cases also regress. Neither draw
+reduction nor an isolated cache microprobe establishes universal performance.
+Keep native instancing opt-in with conservative fallback. Default promotion
+requires a revised candidate/update path that preserves exact ordering and
+lifetime gates and independently improves the affected native frame tails.
+
 ## KI-PHY-001: Legacy WeldConstraint does not capture endpoint offsets
 
 - Status: Verified inherited limitation; unchanged by the physics expansion.

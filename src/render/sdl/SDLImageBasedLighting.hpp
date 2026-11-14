@@ -35,6 +35,8 @@ namespace gargantuan {
 			const std::optional<RenderSkyState> &Sky, SDLTextureCache &Textures, SDLRendererMetrics *Metrics
 		);
 		void Destroy();
+		[[nodiscard]] bool IsPreparationPending() const { return PreparationFence != nullptr; }
+		[[nodiscard]] bool PollPreparation() { return CanBuildSky(); }
 
 	  private:
 		struct SkyKey {

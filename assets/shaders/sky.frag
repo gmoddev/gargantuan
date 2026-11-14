@@ -11,6 +11,8 @@ layout(set = 3, binding = 0) uniform SkyUniforms {
     vec4 LookExposure;
     vec4 EnvironmentColorHasSky;
     vec4 SceneFlags;
+    vec4 LinearFaceFlags0;
+    vec4 LinearFaceFlags1;
 } sky;
 
 layout(set = 2, binding = 0) uniform sampler2D PositiveX;
@@ -20,16 +22,24 @@ layout(set = 2, binding = 3) uniform sampler2D NegativeY;
 layout(set = 2, binding = 4) uniform sampler2D PositiveZ;
 layout(set = 2, binding = 5) uniform sampler2D NegativeZ;
 
-vec3 ReadSky(sampler2D FaceTexture, vec2 UV) {
-    if (sky.SceneFlags.x < 0.5) return texture(FaceTexture, UV).rgb;
+vec3 ReadSky(sampler2D FaceTexture, vec2 UV, float LinearSource) {
+    if (sky.SceneFlags.x < 0.5 && LinearSource < 0.5) return texture(FaceTexture, UV).rgb;
     ivec2 MaxPixel = textureSize(FaceTexture, 0) - 1;
     vec2 Pixel = UV * vec2(MaxPixel + 1) - 0.5;
     ivec2 Corner = ivec2(floor(Pixel));
     vec2 Weight = fract(Pixel);
-    vec3 A = SrgbToLinear(texelFetch(FaceTexture, clamp(Corner, ivec2(0), MaxPixel), 0).rgb);
-    vec3 B = SrgbToLinear(texelFetch(FaceTexture, clamp(Corner + ivec2(1, 0), ivec2(0), MaxPixel), 0).rgb);
-    vec3 C = SrgbToLinear(texelFetch(FaceTexture, clamp(Corner + ivec2(0, 1), ivec2(0), MaxPixel), 0).rgb);
-    vec3 D = SrgbToLinear(texelFetch(FaceTexture, clamp(Corner + 1, ivec2(0), MaxPixel), 0).rgb);
+    vec3 A = texelFetch(FaceTexture, clamp(Corner, ivec2(0), MaxPixel), 0).rgb;
+    vec3 B = texelFetch(FaceTexture, clamp(Corner + ivec2(1, 0), ivec2(0), MaxPixel), 0).rgb;
+    vec3 C = texelFetch(FaceTexture, clamp(Corner + ivec2(0, 1), ivec2(0), MaxPixel), 0).rgb;
+    vec3 D = texelFetch(FaceTexture, clamp(Corner + 1, ivec2(0), MaxPixel), 0).rgb;
+    if (LinearSource < 0.5) {
+        A = SrgbToLinear(A); B = SrgbToLinear(B);
+        C = SrgbToLinear(C); D = SrgbToLinear(D);
+    } else {
+        // Preserve float32 source radiance while bounding the half-float scene target.
+        A = clamp(A, vec3(0.0), vec3(65504.0)); B = clamp(B, vec3(0.0), vec3(65504.0));
+        C = clamp(C, vec3(0.0), vec3(65504.0)); D = clamp(D, vec3(0.0), vec3(65504.0));
+    }
     return mix(mix(A, B, Weight.x), mix(C, D, Weight.x), Weight.y);
 }
 
@@ -41,32 +51,32 @@ vec3 sampleSky(vec3 direction) {
         major = absoluteDirection.x;
         if (direction.x >= 0.0) {
             face = vec2(-direction.z, -direction.y) / major;
-            return ReadSky(PositiveX, face * 0.5 + 0.5);
+            return ReadSky(PositiveX, face * 0.5 + 0.5, sky.LinearFaceFlags0.x);
         }
         face = vec2(direction.z, -direction.y) / major;
-        return ReadSky(NegativeX, face * 0.5 + 0.5);
+        return ReadSky(NegativeX, face * 0.5 + 0.5, sky.LinearFaceFlags0.y);
     }
     if (absoluteDirection.y >= absoluteDirection.z) {
         major = absoluteDirection.y;
         if (direction.y >= 0.0) {
             face = vec2(direction.x, direction.z) / major;
-            return ReadSky(PositiveY, face * 0.5 + 0.5);
+            return ReadSky(PositiveY, face * 0.5 + 0.5, sky.LinearFaceFlags0.z);
         }
         face = vec2(direction.x, -direction.z) / major;
-        return ReadSky(NegativeY, face * 0.5 + 0.5);
+        return ReadSky(NegativeY, face * 0.5 + 0.5, sky.LinearFaceFlags0.w);
     }
     major = absoluteDirection.z;
     if (direction.z >= 0.0) {
         face = vec2(direction.x, -direction.y) / major;
-        return ReadSky(PositiveZ, face * 0.5 + 0.5);
+        return ReadSky(PositiveZ, face * 0.5 + 0.5, sky.LinearFaceFlags1.x);
     }
     face = vec2(-direction.x, -direction.y) / major;
-    return ReadSky(NegativeZ, face * 0.5 + 0.5);
+    return ReadSky(NegativeZ, face * 0.5 + 0.5, sky.LinearFaceFlags1.y);
 }
 
 void main() {
     vec3 color = sky.EnvironmentColorHasSky.w > 0.5
         ? sampleSky(EnvironmentSampleDirection(normalize(ViewRay), sky.SceneFlags.yz)) : sky.EnvironmentColorHasSky.rgb;
     if (sky.SceneFlags.x < 0.5) color = ToneMapScene(color, sky.LookExposure.w, sky.SceneFlags.w > 0.5);
-    OutputColor = vec4(color, 1.0);
+    OutputColor = vec4(clamp(color, vec3(0.0), vec3(65504.0)), 1.0);
 }

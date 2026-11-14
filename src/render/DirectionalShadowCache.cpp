@@ -1,9 +1,10 @@
 // Copyright (c) 2026 Team Fireworks
 // This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was distributed with this
+// License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, you can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "render/sdl/SDLDirectionalShadowCache.hpp"
+#include "render/sdl/SDLShadowCasterCoverage.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -14,6 +15,9 @@ namespace gargantuan {
 		enum class Coverage { None, Solid, AlphaTexture };
 
 		Coverage GetCoverage(const RenderMaterialState &Material) {
+			// The depth pass casts Transparent materials as solid geometry for
+			// Foundation 4 compatibility. Authors can opt out with CastShadow.
+			// Glass attenuation and colored transmission are not modeled here.
 			if (Material.OpacityMode != RenderOpacityMode::Masked) return Coverage::Solid;
 			if (Material.BaseColorFactor.a < Material.AlphaCutoff) return Coverage::None;
 			return Material.BaseColorTexture ? Coverage::AlphaTexture : Coverage::Solid;
@@ -61,38 +65,85 @@ namespace gargantuan {
 			Invalidate();
 			return;
 		}
-		if (!Committed || !Committed->SunEnabled) return;
-		if (!Committed->HasCasters) {
-			const auto BecomesCaster = [](const auto &Object) { return IsCaster(Object); };
-			if (std::ranges::any_of(Publication.Creates, BecomesCaster) ||
-				std::ranges::any_of(Publication.Updates, BecomesCaster)) Invalidate();
-			return;
-		}
+		if (std::ranges::none_of(Slots, [](const auto &Slot) {
+			return Slot.Committed && Slot.Committed->SunEnabled;
+		})) return;
 		const auto &Objects = Before.GetObjects();
 		const auto Find = [&](ObjectId Object) -> const RenderProjectedObject * {
 			const auto Found = Objects.find(Object);
 			return Found == Objects.end() ? nullptr : &Found->second;
 		};
-		const auto WasCaster = [&](const auto &Change) {
-			const auto *Previous = Find(Change.Object);
-			return Previous && IsCaster(*Previous);
+		const auto IncomingCaster = [&](ObjectId Id) {
+			return std::ranges::any_of(Publication.Creates,
+				[&](const auto &Create) { return Create.Item.Object == Id && IsCaster(Create); }) ||
+				std::ranges::any_of(Publication.Updates,
+					[&](const auto &Update) { return Update.Object == Id && IsCaster(Update); });
 		};
-		if (std::ranges::any_of(Publication.Creates, [](const auto &Create) { return IsCaster(Create); }) ||
-			std::ranges::any_of(Publication.Removes, WasCaster) ||
-			std::ranges::any_of(Publication.Updates, [&](const auto &Update) {
-				return ShadowObjectChanged(Find(Update.Object), Update);
-			}) || std::ranges::any_of(Publication.AnimationPoseUpdates, WasCaster) ||
-			std::ranges::any_of(Publication.AnimationPoseRemoves, WasCaster) ||
-			std::ranges::any_of(Publication.MeshVertexUpdates, [&](const auto &Update) { return Meshes.contains(Update.Mesh); }) ||
-			std::ranges::any_of(Publication.MeshRemoves, [&](const auto &Remove) { return Meshes.contains(Remove.Mesh); }) ||
-			std::ranges::any_of(Publication.TextureUpdates, [&](const auto &Update) { return Masks.contains(Update.Texture); }) ||
-			std::ranges::any_of(Publication.TextureRemoves, [&](const auto &Remove) { return Masks.contains(Remove.Texture); }))
-			Invalidate();
+		const bool PoseCasterChanged = std::ranges::any_of(Publication.AnimationPoseUpdates,
+			[&](const auto &Pose) {
+				const auto *Previous = Find(Pose.Object);
+				return (Previous && IsCaster(*Previous)) || IncomingCaster(Pose.Object);
+			}) || std::ranges::any_of(Publication.AnimationPoseRemoves,
+			[&](const auto &Pose) {
+				const auto *Previous = Find(Pose.Object);
+				return Previous && IsCaster(*Previous);
+			});
+		bool DeformableCasterChanged = false;
+		if (!Publication.MeshVertexUpdates.empty()) {
+			std::unordered_set<RenderMeshIdentity, RenderMeshIdentityHash> EditedMeshes;
+			for (const auto &Update : Publication.MeshVertexUpdates) EditedMeshes.insert(Update.Mesh);
+			DeformableCasterChanged = std::ranges::any_of(Objects, [&](const auto &Entry) {
+				return IsCaster(Entry.second) && Entry.second.Mesh && EditedMeshes.contains(*Entry.second.Mesh);
+			}) || std::ranges::any_of(Publication.Creates, [&](const auto &Create) {
+				return IsCaster(Create) && Create.Mesh && EditedMeshes.contains(*Create.Mesh);
+			}) || std::ranges::any_of(Publication.Updates, [&](const auto &Update) {
+				return IsCaster(Update) && Update.Mesh && EditedMeshes.contains(*Update.Mesh);
+			});
+		}
+		const bool UnboundedCasterChange = PoseCasterChanged || DeformableCasterChanged;
+		for (auto &Slot : Slots) {
+			if (!Slot.Committed || !Slot.Committed->SunEnabled) continue;
+			const auto &Matrix = Slot.Committed->Matrix;
+			const auto Relevant = [&](const auto &Object) {
+				return IsCaster(Object) && (!Slot.CascadeMode ||
+					SDLShadowCasterMayAffect(Before, Object.Item, Object.Mesh, Matrix, 256,
+						Slot.Committed->Origin));
+			};
+			const auto WasRelevant = [&](ObjectId Object) {
+				const auto *Previous = Find(Object);
+				return Previous && Relevant(*Previous);
+			};
+			if (!Slot.Committed->HasCasters) {
+				if (UnboundedCasterChange || std::ranges::any_of(Publication.Creates, Relevant) ||
+					std::ranges::any_of(Publication.Updates, Relevant)) {
+					Slot.Committed.reset();
+					Slot.CommittedPoses.clear();
+				}
+				continue;
+			}
+			const bool Changed = UnboundedCasterChange || std::ranges::any_of(Publication.Creates, Relevant) ||
+				std::ranges::any_of(Publication.Removes, [&](const auto &Remove) { return WasRelevant(Remove.Object); }) ||
+				std::ranges::any_of(Publication.Updates, [&](const auto &Update) {
+					return ShadowObjectChanged(Find(Update.Object), Update) &&
+						(WasRelevant(Update.Object) || Relevant(Update));
+				}) ||
+				std::ranges::any_of(Publication.MeshRemoves,
+					[&](const auto &Remove) { return Slot.Meshes.contains(Remove.Mesh); }) ||
+				std::ranges::any_of(Publication.TextureUpdates,
+					[&](const auto &Update) { return Slot.Masks.contains(Update.Texture); }) ||
+				std::ranges::any_of(Publication.TextureRemoves,
+					[&](const auto &Remove) { return Slot.Masks.contains(Remove.Texture); });
+			if (Changed) {
+				Slot.Committed.reset();
+				Slot.CommittedPoses.clear();
+			}
+		}
 	}
 
 	bool SDLDirectionalShadowCache::Restore(
 		const RenderEnvironmentState &Environment, const SDL_GPUTexture *Target, glm::mat4 &Matrix
 	) const {
+		const auto &Committed = Slots[0].Committed;
 		const bool SunEnabled = Environment.SunIntensity > 0.0f;
 		if (!Committed || Committed->Target != Target || Committed->SunEnabled != SunEnabled ||
 			(SunEnabled && Committed->SunDirection != Environment.SunDirection)) return false;
@@ -100,37 +151,111 @@ namespace gargantuan {
 		return true;
 	}
 
+	bool SDLDirectionalShadowCache::RestoreCascade(std::uint32_t Index,
+		const RenderEnvironmentState &Environment, const SDL_GPUTexture *Target,
+		const glm::mat4 &ExpectedMatrix, glm::mat4 &Matrix, glm::vec3 Origin) const {
+		if (Index >= MaximumDirectionalCascades) return false;
+		const auto &Committed = Slots[Index].Committed;
+		const bool SunEnabled = Environment.SunIntensity > 0.0f;
+		if (!Committed || !Slots[Index].CascadeMode || Committed->Target != Target ||
+			Committed->SunEnabled != SunEnabled || Committed->Matrix != ExpectedMatrix ||
+			Committed->Origin != Origin ||
+			(SunEnabled && Committed->SunDirection != Environment.SunDirection)) return false;
+		Matrix = Committed->Matrix;
+		return true;
+	}
+
+	bool SDLDirectionalShadowCache::HasCascadeCasters(std::uint32_t Index) const {
+		return Index < MaximumDirectionalCascades && Slots[Index].Committed && Slots[Index].Committed->HasCasters;
+	}
+	bool SDLDirectionalShadowCache::HasLegacyCasters() const {
+		return !Slots[0].CascadeMode && Slots[0].Committed && Slots[0].Committed->HasCasters;
+	}
+
 	void SDLDirectionalShadowCache::BeginRecording() {
-		Invalidate();
-		Meshes.clear();
-		Masks.clear();
-		DependenciesOverflow = false;
+		BeginCascadeRecording(0);
+		Slots[0].CascadeMode = false;
 	}
 
-	void SDLDirectionalShadowCache::DependOnMesh(RenderMeshIdentity Mesh) {
-		TrackDependency(Meshes, Mesh, DependenciesOverflow);
+	void SDLDirectionalShadowCache::BeginCascadeRecording(std::uint32_t Index) {
+		if (Index >= MaximumDirectionalCascades) return;
+		auto &Slot = Slots[Index];
+		Slot.Committed.reset();
+		Slot.Recorded.reset();
+		Slot.Meshes.clear();
+		Slot.Masks.clear();
+		Slot.Objects.clear();
+		Slot.CommittedPoses.clear();
+		Slot.RecordingPoses.clear();
+		Slot.DependenciesOverflow = false;
+		Slot.CascadeMode = true;
 	}
 
-	void SDLDirectionalShadowCache::DependOnMask(RenderTextureIdentity Texture) {
-		TrackDependency(Masks, Texture, DependenciesOverflow);
+	void SDLDirectionalShadowCache::DependOnMesh(RenderMeshIdentity Mesh) { DependOnMesh(0, Mesh); }
+	void SDLDirectionalShadowCache::DependOnMask(RenderTextureIdentity Texture) { DependOnMask(0, Texture); }
+	void SDLDirectionalShadowCache::DependOnMesh(std::uint32_t Index, RenderMeshIdentity Mesh) {
+		if (Index < MaximumDirectionalCascades)
+			TrackDependency(Slots[Index].Meshes, Mesh, Slots[Index].DependenciesOverflow);
+	}
+	void SDLDirectionalShadowCache::DependOnMask(std::uint32_t Index, RenderTextureIdentity Texture) {
+		if (Index < MaximumDirectionalCascades)
+			TrackDependency(Slots[Index].Masks, Texture, Slots[Index].DependenciesOverflow);
+	}
+	void SDLDirectionalShadowCache::DependOnObject(std::uint32_t Index, ObjectId Object) {
+		if (Index < MaximumDirectionalCascades)
+			TrackDependency(Slots[Index].Objects, Object, Slots[Index].DependenciesOverflow);
+	}
+	void SDLDirectionalShadowCache::RecordPose(std::uint32_t Index, ObjectId Object, std::uint64_t Revision) {
+		if (Index >= MaximumDirectionalCascades || Revision == 0) return;
+		auto &Slot = Slots[Index];
+		if (Slot.RecordingPoses.size() >= MAX_DEPENDENCIES_PER_KIND && !Slot.RecordingPoses.contains(Object)) {
+			Slot.DependenciesOverflow = true;
+			return;
+		}
+		MergeSDLShadowPoseRevision(Slot.RecordingPoses, Object, Revision);
+	}
+	void SDLDirectionalShadowCache::MergeCommittedPoses(std::uint32_t Index,
+		SDLShadowPoseRevisions &Destination) const {
+		if (Index < MaximumDirectionalCascades && Slots[Index].Committed)
+			MergeSDLShadowPoseRevisions(Destination, Slots[Index].CommittedPoses);
 	}
 
 	void SDLDirectionalShadowCache::FinishRecording(
 		const RenderEnvironmentState &Environment, const SDL_GPUTexture *Target, const glm::mat4 &Matrix,
 		bool AllCastersResident, bool HasCasters
 	) {
-		if (AllCastersResident && !DependenciesOverflow)
-			Recorded = CachedMap{Target, Environment.SunDirection, Matrix, Environment.SunIntensity > 0.0f, HasCasters};
+		FinishCascadeRecording(0, Environment, Target, Matrix, AllCastersResident, HasCasters);
+	}
+
+	void SDLDirectionalShadowCache::FinishCascadeRecording(std::uint32_t Index,
+		const RenderEnvironmentState &Environment, const SDL_GPUTexture *Target, const glm::mat4 &Matrix,
+		bool AllCastersResident, bool HasCasters, glm::vec3 Origin) {
+		if (Index >= MaximumDirectionalCascades) return;
+		auto &Slot = Slots[Index];
+		if (AllCastersResident && !Slot.DependenciesOverflow)
+			Slot.Recorded = CachedMap{Target, Environment.SunDirection, Matrix, Origin,
+				Environment.SunIntensity > 0.0f, HasCasters};
 	}
 
 	bool SDLDirectionalShadowCache::OnFrameSubmitted() {
-		if (!Recorded) return false;
-		Committed = std::exchange(Recorded, std::nullopt);
-		return true;
+		bool Built = false;
+		for (auto &Slot : Slots) {
+			if (Slot.Recorded) {
+				Slot.Committed = std::exchange(Slot.Recorded, std::nullopt);
+				Slot.CommittedPoses = std::move(Slot.RecordingPoses);
+				Built = true;
+			}
+			Slot.RecordingPoses.clear();
+		}
+		return Built;
 	}
 
 	void SDLDirectionalShadowCache::Invalidate() {
-		Committed.reset();
-		Recorded.reset();
+		for (auto &Slot : Slots) {
+			Slot.Committed.reset();
+			Slot.Recorded.reset();
+			Slot.CommittedPoses.clear();
+			Slot.RecordingPoses.clear();
+		}
 	}
 }

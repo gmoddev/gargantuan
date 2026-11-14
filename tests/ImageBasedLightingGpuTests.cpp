@@ -12,7 +12,9 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/packing.hpp>
 
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -46,7 +48,9 @@ namespace {
 		SDLRendererMetrics Metrics;
 		SDLTextureCache Cache;
 		SDLImageBasedLighting Lighting;
-		explicit CacheFixture(SDL_GPUDevice *Gpu) : Cache(Gpu, &Metrics), Lighting(Gpu) {}
+		explicit CacheFixture(SDL_GPUDevice *Gpu, std::uint64_t MaterialBudget = 128ull * 1024 * 1024,
+			std::uint64_t SourceBudget = 128ull * 1024 * 1024)
+			: Cache(Gpu, &Metrics, MaterialBudget, SourceBudget), Lighting(Gpu) {}
 		~CacheFixture() {
 			Lighting.Destroy();
 			Cache.Destroy();
@@ -63,6 +67,18 @@ namespace {
 				if (Face == 5) (*Pixels)[Offset + 2] = 128;
 			}
 		}
+		return Pixels;
+	}
+
+	std::shared_ptr<const std::vector<std::uint8_t>> HdrFacePixels(float Radiance) {
+		auto Pixels = std::make_shared<std::vector<std::uint8_t>>();
+		Pixels->reserve(FACE_SIZE * FACE_SIZE * 16);
+		for (std::size_t Pixel = 0; Pixel < FACE_SIZE * FACE_SIZE; ++Pixel)
+			for (const float Channel : {Radiance, Radiance * 0.5f, Radiance * 0.25f, 1.0f}) {
+				const auto Bits = std::bit_cast<std::uint32_t>(Channel);
+				for (unsigned Byte = 0; Byte < 4; ++Byte)
+					Pixels->push_back(static_cast<std::uint8_t>(Bits >> (Byte * 8)));
+			}
 		return Pixels;
 	}
 
@@ -208,6 +224,194 @@ namespace {
 		Require(AfterRestart.Enabled && Fixture.Metrics.IblBuilds == 4, "renderer-owned IBL resources can be recreated from residency");
 		CheckSharp(AfterRestart, 2);
 		CheckLargestSource(Gpu.get(), Fixture, Recreated);
+		if (SDL_GPUTextureSupportsFormat(Gpu.get(), SDL_GPU_TEXTUREFORMAT_R32G32B32A32_FLOAT,
+			SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_SAMPLER)) {
+			RenderPublication HdrPublication{.FullResync = true};
+			RenderSkyState HdrSky{.FaceDimension = FACE_SIZE};
+			for (std::size_t Face = 0; Face < 6; ++Face) {
+				const RenderTextureIdentity Identity{Face + 500, 1};
+				HdrPublication.TextureCreates.push_back({Identity, 1, FACE_SIZE, FACE_SIZE,
+					RenderTextureFormat::Rgba32Float, HdrFacePixels(10000.0f)});
+				HdrSky.Faces[Face] = {Identity, 1};
+			}
+			Fixture.Cache.ApplyPublication(HdrPublication);
+			const auto HdrLighting = Recreated.Prepare(HdrSky, Fixture.Cache, &Fixture.Metrics);
+			Require(HdrLighting.Enabled, "HDR faces prepare image-based lighting");
+			for (std::uint32_t Level = 0; Level <= 6; ++Level) {
+				const auto Texel = ReadTexel(Gpu.get(), HdrLighting.Reflections.texture, 4, Level,
+					std::max(0u, (64u >> Level) / 2), std::max(0u, (64u >> Level) / 2));
+				Require(std::isfinite(Texel.r) && std::isfinite(Texel.g) && std::isfinite(Texel.b) &&
+					std::abs(Texel.r - 10000.0f) < 25.0f && std::abs(Texel.g - 5000.0f) < 15.0f,
+					"HDR reflection mip retains finite linear radiance above SDR white");
+			}
+			const auto HdrDiffuse = ReadTexel(Gpu.get(), HdrLighting.Irradiance.texture, 4, 0, 8, 8);
+			Require(std::isfinite(HdrDiffuse.r) && std::abs(HdrDiffuse.r - 10000.0f) < 25.0f,
+				"HDR diffuse irradiance remains finite at high radiance");
+			RenderPublication ExtremePublication{.FullResync = true};
+			RenderSkyState ExtremeSky{.FaceDimension = FACE_SIZE};
+			for (std::size_t Face = 0; Face < 6; ++Face) {
+				const RenderTextureIdentity Identity{Face + 550, 1};
+				ExtremePublication.TextureCreates.push_back({Identity, 1, FACE_SIZE, FACE_SIZE,
+					RenderTextureFormat::Rgba32Float, HdrFacePixels(1.0e20f)});
+				ExtremeSky.Faces[Face] = {Identity, 1};
+			}
+			Fixture.Cache.ApplyPublication(ExtremePublication);
+			const auto ExtremeLighting = Recreated.Prepare(ExtremeSky, Fixture.Cache, &Fixture.Metrics);
+			Require(ExtremeLighting.Enabled, "finite float32 radiance above half-float range prepares IBL");
+			for (std::uint32_t Level = 0; Level <= 6; ++Level) {
+				const auto Texel = ReadTexel(Gpu.get(), ExtremeLighting.Reflections.texture, 4, Level,
+					std::max(0u, (64u >> Level) / 2), std::max(0u, (64u >> Level) / 2));
+				Require(std::isfinite(Texel.r) && std::isfinite(Texel.g) && std::isfinite(Texel.b) &&
+					std::abs(Texel.r - 65504.0f) < 64.0f && std::abs(Texel.g - 65504.0f) < 64.0f,
+					"extreme canonical radiance clamps before every half-float reflection level");
+			}
+			const auto ExtremeDiffuse = ReadTexel(Gpu.get(), ExtremeLighting.Irradiance.texture, 4, 0, 8, 8);
+			Require(std::isfinite(ExtremeDiffuse.r) && std::abs(ExtremeDiffuse.r - 65504.0f) < 64.0f,
+				"extreme canonical radiance clamps before half-float diffuse convolution");
+		}
+		{
+			constexpr std::uint32_t Dimension = 1024;
+			auto Pixels = std::make_shared<const std::vector<std::uint8_t>>(
+				static_cast<std::size_t>(Dimension) * Dimension * 4, 128);
+			RenderPublication LargeTextures{.FullResync = true};
+			for (std::uint64_t Index = 0; Index < 5; ++Index)
+				LargeTextures.TextureCreates.push_back({{600 + Index, 1}, 1, Dimension, Dimension,
+					RenderTextureFormat::Rgba8Unorm, Pixels});
+			Fixture.Cache.ApplyPublication(LargeTextures);
+			Require(Fixture.Cache.GetBaseUploadStagingBytes() <= 16ull * 1024 * 1024 &&
+				Fixture.Cache.GetBaseUploadStagingEvictions() > 0,
+				"completed bulk upload trims long-lived base staging to the residency budget");
+			auto *Resident = Fixture.Cache.Find({600, 1});
+			RenderPublication ReimportTexture;
+			ReimportTexture.TextureUpdates.push_back({{600, 1}, 2, 0, 0, Dimension, Dimension, Pixels});
+			Fixture.Cache.ApplyPublication(ReimportTexture);
+			Require(Resident && Fixture.Cache.Find({600, 1}) == Resident &&
+				Fixture.Cache.GetBaseUploadStagingBytes() <= 16ull * 1024 * 1024,
+				"evicted upload staging is rebuilt without evicting the resident GPU texture");
+		}
+		if (SDL_GPUTextureSupportsFormat(Gpu.get(), SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB,
+			SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_SAMPLER)) {
+			constexpr std::uint32_t SourceDimension = 256;
+			constexpr std::uint64_t SourceBytes = SourceDimension * SourceDimension * 4ull;
+			constexpr RenderTextureIdentity FirstSource{900, 1}, LateSource{932, 1};
+			CacheFixture SourcePressure(Gpu.get(), 128ull * 1024 * 1024, 32 * SourceBytes);
+			RenderPublication BulkSources{.FullResync = true};
+			for (std::uint64_t Index = 0; Index < 33; ++Index)
+				BulkSources.TextureCreates.push_back({{900 + Index, 1}, 1, SourceDimension, SourceDimension,
+					RenderTextureFormat::Rgba8Unorm,
+					std::make_shared<const std::vector<std::uint8_t>>(SourceBytes, static_cast<std::uint8_t>(Index))});
+			SourcePressure.Cache.ApplyPublication(BulkSources);
+			Require(SourcePressure.Cache.GetMaterialSourceBytes() == SourcePressure.Cache.GetMaterialSourceBudget() &&
+				SourcePressure.Cache.GetMaterialSourceRehydrates() == 0,
+				"thirty-three full images initially retain exactly thirty-two sources under the scaled source budget");
+			auto *LateBase = SourcePressure.Cache.Find(LateSource);
+			Require(SourcePressure.Cache.FindMaterialTexture(LateSource, true).Texture == LateBase,
+				"late material demand samples its resident base until source promotion and mip upload");
+			SourcePressure.Cache.ApplyPublication(RenderPublication{});
+			const auto LateView = SourcePressure.Cache.FindMaterialTexture(LateSource, true);
+			Require(LateView.Texture != LateBase && LateView.NativeSrgb && LateView.HasMipmaps &&
+				SourcePressure.Cache.GetMaterialSourceEvictions() == 1 &&
+				SourcePressure.Cache.GetMaterialSourceRehydrates() == 1 &&
+				SourcePressure.Cache.GetMaterialSourceBytes() == SourcePressure.Cache.GetMaterialSourceBudget(),
+				"late visible image displaces an undemanded source and gains a bounded native mip view");
+			BulkSources.TextureCreates.clear(); // The evicted first backing now expires.
+			const auto RehydratesBeforePartial = SourcePressure.Cache.GetMaterialSourceRehydrates();
+			RenderPublication PartialSource;
+			PartialSource.TextureUpdates.push_back({FirstSource, 2, 0, 0, 1, 1,
+				std::make_shared<const std::vector<std::uint8_t>>(
+					std::initializer_list<std::uint8_t>{0, 0, 255, 255})});
+			SourcePressure.Cache.ApplyPublication(PartialSource);
+			Require(SourcePressure.Cache.FindMaterialTexture(FirstSource, true).Texture ==
+				SourcePressure.Cache.Find(FirstSource) &&
+				SourcePressure.Cache.GetMaterialSourceRehydrates() == RehydratesBeforePartial,
+				"partial update never reconstructs a new revision from expired old source bytes");
+			RenderPublication FullSource;
+			FullSource.TextureUpdates.push_back({FirstSource, 3, 0, 0, SourceDimension, SourceDimension,
+				std::make_shared<const std::vector<std::uint8_t>>(SourceBytes, 192)});
+			SourcePressure.Cache.ApplyPublication(FullSource);
+			(void)SourcePressure.Cache.FindMaterialTexture(FirstSource, true);
+			SourcePressure.Cache.ApplyPublication(RenderPublication{});
+			Require(SourcePressure.Cache.FindMaterialTexture(FirstSource, true).Texture !=
+				SourcePressure.Cache.Find(FirstSource) &&
+				SourcePressure.Cache.GetMaterialSourceBytes() <= SourcePressure.Cache.GetMaterialSourceBudget(),
+				"complete source replacement restores mips after an unrehydratable partial update");
+			CacheFixture PartialPressure(Gpu.get(), 128ull * 1024 * 1024, SourceBytes);
+			constexpr RenderTextureIdentity PartialA{940, 1}, PartialB{941, 1};
+			RenderPublication RetainedBacking{.FullResync = true};
+			RetainedBacking.TextureCreates.push_back({PartialA, 1, SourceDimension, SourceDimension,
+				RenderTextureFormat::Rgba8Unorm,
+				std::make_shared<const std::vector<std::uint8_t>>(SourceBytes, 64)});
+			RetainedBacking.TextureCreates.push_back({PartialB, 1, SourceDimension, SourceDimension,
+				RenderTextureFormat::Rgba8Unorm,
+				std::make_shared<const std::vector<std::uint8_t>>(SourceBytes, 128)});
+			PartialPressure.Cache.ApplyPublication(RetainedBacking);
+			(void)PartialPressure.Cache.FindMaterialTexture(PartialB, true);
+			PartialPressure.Cache.ApplyPublication(RenderPublication{});
+			PartialPressure.Cache.ApplyPublication(RenderPublication{});
+			RenderPublication PatchRetained;
+			PatchRetained.TextureUpdates.push_back({PartialA, 2, 0, 0, 1, 1,
+				std::make_shared<const std::vector<std::uint8_t>>(
+					std::initializer_list<std::uint8_t>{255, 0, 0, 255})});
+			PartialPressure.Cache.ApplyPublication(PatchRetained);
+			(void)PartialPressure.Cache.FindMaterialTexture(PartialA, true);
+			PartialPressure.Cache.ApplyPublication(RenderPublication{});
+			Require(PartialPressure.Cache.FindMaterialTexture(PartialA, true).Texture !=
+				PartialPressure.Cache.Find(PartialA) &&
+				PartialPressure.Cache.GetMaterialSourceRehydrates() >= 2 &&
+				PartialPressure.Cache.GetMaterialSourceBytes() <= PartialPressure.Cache.GetMaterialSourceBudget(),
+				"partial update rebuilds from a live exact-revision backing without crossing the source budget");
+			RenderPublication SourceResync{.FullResync = true};
+			SourceResync.TextureCreates.push_back({{942, 1}, 1, SourceDimension, SourceDimension,
+				RenderTextureFormat::Rgba8Unorm,
+				std::make_shared<const std::vector<std::uint8_t>>(SourceBytes, 192)});
+			PartialPressure.Cache.ApplyPublication(SourceResync);
+			Require(!PartialPressure.Cache.Find(PartialA) && !PartialPressure.Cache.Find(PartialB) &&
+				PartialPressure.Cache.GetMaterialSourceBytes() == SourceBytes,
+				"full resync releases old source handles and resets exact source byte accounting");
+			constexpr std::uint32_t Dimension = 256;
+			constexpr RenderTextureIdentity A{700, 1}, B{701, 1};
+			CacheFixture Pressure(Gpu.get(), 400000);
+			auto Pixels = std::make_shared<const std::vector<std::uint8_t>>(
+				static_cast<std::size_t>(Dimension) * Dimension * 4, 255);
+			RenderPublication Sources{.FullResync = true};
+			Sources.TextureCreates.push_back({A, 1, Dimension, Dimension, RenderTextureFormat::Rgba8Unorm, Pixels});
+			Sources.TextureCreates.push_back({B, 1, Dimension, Dimension, RenderTextureFormat::Rgba8Unorm, Pixels});
+			Pressure.Cache.ApplyPublication(Sources);
+			auto *BaseA = Pressure.Cache.Find(A);
+			Require(Pressure.Cache.FindMaterialTexture(A, true).Texture == BaseA,
+				"first material demand uses the resident base texture until upload admission");
+			(void)Pressure.Cache.FindMaterialTexture(B, true);
+			Pressure.Cache.ApplyPublication(RenderPublication{});
+			const auto FirstView = Pressure.Cache.FindMaterialTexture(A, true);
+			Require(FirstView.Texture != BaseA && FirstView.NativeSrgb && FirstView.HasMipmaps,
+				"first demanded color view gains native sRGB mips");
+			(void)Pressure.Cache.FindMaterialTexture(B, true);
+			Pressure.Cache.ApplyPublication(RenderPublication{});
+			(void)Pressure.Cache.FindMaterialTexture(B, true);
+			Pressure.Cache.ApplyPublication(RenderPublication{});
+			const auto Evicted = Pressure.Cache.FindMaterialTexture(A, true);
+			const auto SecondView = Pressure.Cache.FindMaterialTexture(B, true);
+			Require(Evicted.Texture == BaseA && !Evicted.NativeSrgb && SecondView.Texture != Pressure.Cache.Find(B) &&
+				SecondView.NativeSrgb && Pressure.Cache.GetMaterialViewEvictions() >= 1 &&
+				Pressure.Cache.GetMaterialViewBytes() <= Pressure.Cache.GetMaterialViewBudget(),
+				"cold view eviction preserves a defined base fallback and admits recent demand");
+			CacheFixture Scheduled(Gpu.get());
+			RenderPublication QueueSources{.FullResync = true};
+			auto SmallPixels = std::make_shared<const std::vector<std::uint8_t>>(4 * 4 * 4, 192);
+			for (std::uint64_t Index = 0; Index < 34; ++Index)
+				QueueSources.TextureCreates.push_back({{800 + Index, 1}, 1, 4, 4,
+					RenderTextureFormat::Rgba8Unorm, SmallPixels});
+			Scheduled.Cache.ApplyPublication(QueueSources);
+			for (std::uint64_t Index = 0; Index < 34; ++Index)
+				(void)Scheduled.Cache.FindMaterialTexture({800 + Index, 1}, true);
+			Scheduled.Cache.ApplyPublication(RenderPublication{});
+			Require(Scheduled.Cache.GetDeferredMaterialViewUploads() == 2,
+				"one publication admits at most 32 material mip views");
+			Scheduled.Cache.ApplyPublication(RenderPublication{});
+			for (std::uint64_t Index = 0; Index < 34; ++Index)
+				Require(Scheduled.Cache.FindMaterialTexture({800 + Index, 1}, true).NativeSrgb,
+					"deferred material views finish on a later publication without losing their base images");
+		}
 		std::cout << "[Render:IBLGpu] " << SDL_GetGPUDeviceDriver(Gpu.get()) << " rough red=" << Rough.r
 			<< " diffuse red=" << Positive.r << '/' << Negative.r << " BRDF=" << Brdf.r + Brdf.g << '\n';
 	}

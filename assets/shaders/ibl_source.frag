@@ -12,7 +12,10 @@ vec3 DecodeSrgb(vec3 Value) {
 }
 
 vec3 FetchRadiance(ivec2 Position, ivec2 Size) {
-    return DecodeSrgb(texelFetch(SkyFace, clamp(Position, ivec2(0), Size - 1), 0).rgb);
+    vec3 Value = texelFetch(SkyFace, clamp(Position, ivec2(0), Size - 1), 0).rgb;
+    // The canonical float image retains its full finite range. The derived
+    // source cube is half float, so bound each texel before filtering.
+    return Source.Dimensions.y > 0.5 ? clamp(Value, vec3(0.0), vec3(65504.0)) : DecodeSrgb(Value);
 }
 
 void main() {
@@ -42,5 +45,5 @@ void main() {
         Color = mix(mix(FetchRadiance(Base, Size), FetchRadiance(Base + ivec2(1, 0), Size), F.x),
             mix(FetchRadiance(Base + ivec2(0, 1), Size), FetchRadiance(Base + 1, Size), F.x), F.y);
     }
-    OutputColor = vec4(Color, 1.0);
+    OutputColor = vec4(clamp(Color, vec3(0.0), vec3(65504.0)), 1.0);
 }

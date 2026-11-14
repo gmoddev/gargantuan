@@ -4,6 +4,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
@@ -11,14 +12,21 @@
 #include "gargantuan/services/Workspace.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <memory>
 #include <numeric>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -66,7 +74,7 @@ namespace {
 			<< Breakdown.ClassificationMeanMs << ',' << Breakdown.AccumulatorMeanMs << ','
 			<< Breakdown.DirtyCaptureMeanMs << ',' << Breakdown.DirtyExpansionMeanMs << ','
 			<< Breakdown.FinalStateExtractionMeanMs << ',' << Breakdown.PublicationConstructionMeanMs << ','
-			<< Breakdown.PublisherReconciliationMeanMs << '\n';
+			<< Breakdown.PublisherReconciliationMeanMs << '\n' << std::flush;
 	}
 
 	void RunRigid(
@@ -75,22 +83,47 @@ namespace {
 		std::size_t ChangedPerFrame,
 		std::size_t WritesPerObject,
 		std::size_t Frames,
-		bool ProfileEnabled
+		bool ProfileEnabled,
+		std::uint32_t GroupWidth,
+		bool RendererOnly,
+		std::ofstream *Samples
 	) {
 		using namespace gargantuan;
 		ChangeJournal::Get().Clear();
 		RenderDirtyAccumulator::Get().Clear();
 		auto Game = std::make_shared<DataModel>();
 		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		// This benchmark variant measures renderer publication without constructing
+		// native rigid bodies during scene setup. Keep the existing backend alive
+		// locally; WorldRoot::CreatePartBody declines while Physics is moved from.
+		std::optional<PhysicsWorld> RetainedPhysics;
+		if (RendererOnly) {
+			RetainedPhysics.emplace(std::move(World->Physics));
+			if (World->Physics.IsValid() || !RetainedPhysics->IsValid())
+				throw std::runtime_error("renderer-only fixture did not detach its physics backend");
+		}
 		std::vector<std::shared_ptr<Part>> Parts;
 		Parts.reserve(Count);
+		std::vector<std::shared_ptr<Folder>> Groups;
+		if (GroupWidth != 0) {
+			Groups.reserve((Count + GroupWidth - 1) / GroupWidth);
+			for (std::size_t Index = 0; Index < Count; Index += GroupWidth) {
+				auto Group = std::make_shared<Folder>();
+				Group->SetParent(World);
+				Groups.push_back(std::move(Group));
+			}
+		}
 		const auto Side = static_cast<std::size_t>(std::ceil(std::sqrt(static_cast<double>(Count))));
 		for (std::size_t Index = 0; Index < Count; ++Index) {
 			auto Value = std::make_shared<Part>();
 			Value->SetCFrame(CFrame(glm::vec3(
 				static_cast<float>(Index % Side) * 2.0f, static_cast<float>(Index / Side) * 2.0f, 0.0f
 			)));
-			Value->SetParent(World);
+			if (GroupWidth == 0) Value->SetParent(World);
+			else Value->SetParent(Groups[Index / GroupWidth]);
+			// CreatePartBody normally populates World.Parts after native body
+			// admission. The renderer-only fixture must supply that same list.
+			if (RendererOnly) World->Parts.push_back(Value);
 			Parts.push_back(std::move(Value));
 		}
 		RenderPublisher Publisher;
@@ -100,6 +133,8 @@ namespace {
 		);
 		auto Initial = Publisher.Publish(*World, Camera, 1280, 720);
 		(void)Projection.Apply(*Initial);
+		if (Initial->Creates.size() != Count || Projection.GetObjects().size() != Count)
+			throw std::runtime_error("[Render:Foundation2Benchmark] Rigid fixture publication/object count mismatch");
 		auto &Dirty = RenderDirtyAccumulator::Get();
 		auto &Journal = ChangeJournal::Get();
 		Dirty.ResetProfile();
@@ -141,6 +176,9 @@ namespace {
 			const auto ApplyStart = Clock::now();
 			const auto Changes = Projection.Apply(*Publication);
 			Application.push_back(Milliseconds(Clock::now() - ApplyStart));
+			if (Publication->FullResync || Changes.Created != 0 || Changes.Removed != 0 ||
+				Changes.Updated != ChangedPerFrame || Projection.GetObjects().size() != Count)
+				throw std::runtime_error("[Render:Foundation2Benchmark] Rigid fixture delta count mismatch");
 			Creates += Changes.Created;
 			Updates += Changes.Updated;
 			Removes += Changes.Removed;
@@ -170,6 +208,22 @@ namespace {
 		}
 		Print(Name, Count, Frames, Accumulation, Generation, Application, Creates, Updates, Removes, UploadBytes, Count,
 			FullResyncs, Breakdown);
+		if (Samples) {
+			const auto Stage = [ProfileEnabled](const std::vector<double> &Values, std::size_t Frame) {
+				return ProfileEnabled ? std::to_string(Values[Frame]) : std::string("NA");
+			};
+			for (std::size_t Frame = 0; Frame < Frames; ++Frame) {
+				*Samples << Name << ',' << Count << ',' << Frame << ',' << GroupWidth << ','
+					<< RendererOnly << ',' << ProfileEnabled << ',' << ChangedPerFrame << ',' << WritesPerObject << ','
+					<< Accumulation[Frame] << ',' << Generation[Frame] << ',' << Application[Frame] << ','
+					<< Stage(DirtyCapture, Frame) << ',' << Stage(DirtyExpansion, Frame) << ','
+					<< Stage(FinalStateExtraction, Frame) << ',' << Stage(PublicationConstruction, Frame) << ','
+					<< Stage(PublisherReconciliation, Frame) << ",NA,NA,NA\n";
+			}
+			Samples->flush();
+			if (!*Samples) throw std::runtime_error("[Render:Foundation2Benchmark] Could not write frame samples");
+		}
+		if (RetainedPhysics) World->Physics = std::move(*RetainedPhysics);
 		Game->Destroy();
 	}
 
@@ -320,16 +374,49 @@ int main(int ArgumentCount, char **Arguments) {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		const std::size_t Frames = ArgumentCount > 1 ? std::stoull(Arguments[1]) : 30;
-		const bool ProfileEnabled = ArgumentCount > 2 && std::string_view(Arguments[2]) == "--profile";
-		if (Frames == 0) throw std::invalid_argument("frame count must be positive");
-		std::cout << "Scenario,Elements,Frames,DirtyAccumulationMeanMs,PublicationGenerationMeanMs,ProjectionApplyMeanMs,Creates,Updates,Removes,UploadBytes,DrawOrBatchCount,FullResyncs,PropertySetterOtherMeanMs,JournalMeanMs,ClassificationMeanMs,AccumulatorMeanMs,DirtyCaptureMeanMs,DirtyExpansionMeanMs,FinalStateExtractionMeanMs,PublicationConstructionMeanMs,PublisherReconciliationMeanMs\n";
-		for (const auto Count : {1000u, 10000u, 50000u}) RunRigid("static", Count, 0, 1, Frames, ProfileEnabled);
-		RunRigid("mostly-static", 50000, 500, 1, Frames, ProfileEnabled);
-		RunRigid("dynamic", 50000, 50000, 1, Frames, ProfileEnabled);
-		RunRigid("dynamic-redundant", 50000, 50000, 4, Frames, ProfileEnabled);
-		for (const auto Count : {4096u, 16384u, 65536u}) RunDeformable(Count, Frames);
-		RunGui(10000, Frames);
-		RunMixed(Frames);
+		if (Frames == 0 || Frames > 120) throw std::invalid_argument("frame count must be in [1,120]");
+		bool ProfileEnabled = false, RigidOnly = false, RendererOnly = false;
+		std::uint32_t GroupWidth = 0;
+		std::filesystem::path SamplesPath;
+		for (int Index = 2; Index < ArgumentCount; ++Index) {
+			const std::string_view Option(Arguments[Index]);
+			if (Option == "--profile") ProfileEnabled = true;
+			else if (Option == "--rigid-only") RigidOnly = true;
+			else if (Option == "--renderer-only") RendererOnly = true;
+			else if (Option.starts_with("--samples=")) {
+				if (!SamplesPath.empty()) throw std::invalid_argument("samples path may appear only once");
+				const auto Text = Option.substr(sizeof("--samples=") - 1);
+				if (Text.empty() || Text.size() > 240)
+					throw std::invalid_argument("samples path is empty or too long");
+				SamplesPath = std::filesystem::path(std::string(Text));
+			} else if (Option.starts_with("--group-width=")) {
+				if (GroupWidth != 0) throw std::invalid_argument("group width may appear only once");
+				const auto Text = Option.substr(sizeof("--group-width=") - 1);
+				const auto [End, Error] = std::from_chars(Text.data(), Text.data() + Text.size(), GroupWidth);
+				if (Error != std::errc{} || End != Text.data() + Text.size() ||
+					GroupWidth < 64 || GroupWidth > 4096)
+					throw std::invalid_argument("group width must be in [64,4096]");
+			} else throw std::invalid_argument("unknown semantic benchmark option");
+		}
+		std::ofstream SamplesFile;
+		if (!SamplesPath.empty()) {
+			if (std::filesystem::exists(SamplesPath))
+				throw std::invalid_argument("samples file must not already exist");
+			SamplesFile.open(SamplesPath, std::ios::out | std::ios::trunc);
+			if (!SamplesFile) throw std::runtime_error("could not open samples file");
+			SamplesFile << "Scenario,Elements,Frame,GroupWidth,RendererOnly,ProfileEnabled,ExpectedUpdates,WritesPerObject,DirtyAccumulationMs,PublicationGenerationMs,ProjectionApplyMs,DirtyCaptureMs,DirtyExpansionMs,FinalStateExtractionMs,PublicationConstructionMs,PublisherReconciliationMs,JournalMs,ClassificationMs,AccumulatorMs\n" << std::flush;
+		}
+		std::ofstream *Samples = SamplesPath.empty() ? nullptr : &SamplesFile;
+		std::cout << "Scenario,Elements,Frames,DirtyAccumulationMeanMs,PublicationGenerationMeanMs,ProjectionApplyMeanMs,Creates,Updates,Removes,UploadBytes,DrawOrBatchCount,FullResyncs,PropertySetterOtherMeanMs,JournalMeanMs,ClassificationMeanMs,AccumulatorMeanMs,DirtyCaptureMeanMs,DirtyExpansionMeanMs,FinalStateExtractionMeanMs,PublicationConstructionMeanMs,PublisherReconciliationMeanMs\n" << std::flush;
+		for (const auto Count : {1000u, 10000u, 50000u}) RunRigid("static", Count, 0, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples);
+		RunRigid("mostly-static", 50000, 500, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples);
+		RunRigid("dynamic", 50000, 50000, 1, Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples);
+		RunRigid("dynamic-redundant", 50000, 50000, 4, Frames, ProfileEnabled, GroupWidth, RendererOnly, Samples);
+		if (!RigidOnly) {
+			for (const auto Count : {4096u, 16384u, 65536u}) RunDeformable(Count, Frames);
+			RunGui(10000, Frames);
+			RunMixed(Frames);
+		}
 		return 0;
 	} catch (const std::exception &Error) {
 		std::cerr << "[Render:Foundation2Benchmark] " << Error.what() << '\n';

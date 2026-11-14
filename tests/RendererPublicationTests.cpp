@@ -10,7 +10,10 @@
 #include "gargantuan/classes/PointLight.hpp"
 #include "gargantuan/classes/Sky.hpp"
 #include "gargantuan/classes/SpotLight.hpp"
+#include "gargantuan/classes/ReflectionProbe.hpp"
 #include "gargantuan/environment/EnvironmentSemantics.hpp"
+#include "gargantuan/filesystem/DiskFilesystem.hpp"
+#include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
@@ -19,7 +22,10 @@
 #include "gargantuan/services/Workspace.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -80,6 +86,50 @@ namespace {
 				"incremental and full camera producers have identical explicit depth convention");
 		}
 		Game->Destroy();
+	}
+
+	void TestSceneEnvelopeLifecycle() {
+		using namespace gargantuan;
+		RenderProjection Projection;
+		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeFrame(),
+			.Creates = {{MakeItem({1, 1}, -10.0f)}, {MakeItem({2, 1}, 10.0f)}}};
+		(void)Projection.Apply(Initial);
+		Check(!Projection.GetSceneEnvelope().Envelope, "scene envelope waits for quiet publications");
+		RenderPublication Quiet{.Id = 2, .BaseId = 1, .Frame = MakeFrame()};
+		(void)Projection.Apply(Quiet);
+		Check(!Projection.GetSceneEnvelope().Envelope, "one quiet publication does not trigger a build");
+		Quiet.Id = 3; Quiet.BaseId = 2;
+		(void)Projection.Apply(Quiet);
+		const auto Built = Projection.GetSceneEnvelope();
+		Check(Built.Rebuilt && Built.Envelope && Built.Envelope->VisibleObjects == 2,
+			"static scene builds one complete envelope");
+		Check(Built.Envelope && Built.Envelope->Minimum.x < -10.5 && Built.Envelope->Maximum.x > 10.5,
+			"envelope covers transformed primitive corners");
+		Check(!Projection.GetSceneEnvelope().Rebuilt, "unchanged camera reuses the envelope");
+		RenderPublication Dynamic{.Id = 4, .BaseId = 3, .Frame = MakeFrame(),
+			.Updates = {{{1, 1}, RenderUpdateDomain::Transform, MakeItem({1, 1}, 100.0f)}}};
+		(void)Projection.Apply(Dynamic);
+		Check(!Projection.GetSceneEnvelope().Envelope, "transform update invalidates the envelope without rebuilding");
+		Quiet.Id = 5; Quiet.BaseId = 4; (void)Projection.Apply(Quiet);
+		Quiet.Id = 6; Quiet.BaseId = 5; (void)Projection.Apply(Quiet);
+		const auto Moved = Projection.GetSceneEnvelope();
+		Check(Moved.Envelope && Moved.Envelope->Maximum.x > 100.5,
+			"rebuild contains the latest object transform");
+		RenderPublication Hidden{.Id = 7, .BaseId = 6, .Frame = MakeFrame(),
+			.Updates = {{{1, 1}, RenderUpdateDomain::Visibility, MakeItem({1, 1}, 100.0f),
+				{}, {}, false}}};
+		(void)Projection.Apply(Hidden);
+		Check(!Projection.GetSceneEnvelope().Envelope, "visibility update invalidates the envelope");
+		Quiet.Id = 8; Quiet.BaseId = 7; (void)Projection.Apply(Quiet);
+		Quiet.Id = 9; Quiet.BaseId = 8; (void)Projection.Apply(Quiet);
+		const auto Visible = Projection.GetSceneEnvelope();
+		Check(Visible.Envelope && Visible.Envelope->VisibleObjects == 1 && Visible.Envelope->Maximum.x < 11.0,
+			"hidden objects are absent from the envelope and cull count");
+		RenderPublication Removed{.Id = 10, .BaseId = 9, .Frame = MakeFrame(), .Removes = {{{1, 1}}}};
+		(void)Projection.Apply(Removed);
+		Check(!Projection.GetSceneEnvelope().Envelope, "removal invalidates the envelope");
+		Projection.Clear();
+		Check(!Projection.GetSceneEnvelope().Envelope, "restart clears the cached envelope");
 	}
 
 	void TestProjectionOrderingAndIdentity() {
@@ -146,6 +196,98 @@ namespace {
 		Restart.Id = 50;
 		Restart.Creates = {{MakeItem({10, 1}, 4.0f)}, {MakeItem({11, 2})}};
 		Check(Restarted.Apply(Restart).Created == 2 && Restarted.GetSize() == 2, "a renderer restart accepts a deterministic full resync");
+	}
+
+	void TestCompactTraversalOrderAndLifecycle() {
+		using namespace gargantuan;
+		RenderProjection Projection;
+		const auto MirrorsMap = [&] {
+			const auto &Records = Projection.GetCompactTraversal();
+			Check(Records.size() == Projection.GetObjects().size(), "compact traversal covers every projected object");
+			auto Existing = Projection.GetObjects().begin();
+			for (const auto &Record : Records) {
+				if (Existing == Projection.GetObjects().end()) break;
+				Check(Record.Object == Existing->first && Record.Projected == &Existing->second,
+					"compact traversal retains exact map order and entry identity");
+				Check(Record.Pose == Projection.GetAnimationPose(Record.Object),
+					"compact traversal resolves the current animation pose");
+				Check(Record.MeshBounds == (Record.Projected->Mesh ?
+					Projection.GetMeshBounds(*Record.Projected->Mesh) : nullptr),
+					"compact traversal resolves the current mesh bounds");
+				++Existing;
+			}
+		};
+		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeFrame()};
+		Initial.Creates = {{MakeItem({10, 1})}, {MakeItem({11, 1})}};
+		(void)Projection.Apply(Initial);
+		MirrorsMap();
+		const auto *StableData = Projection.GetCompactTraversal().data();
+		std::unordered_map<ObjectId, RenderProjectedObject> LegacyOrder;
+		LegacyOrder.reserve(2);
+		LegacyOrder.emplace(ObjectId{10, 1}, RenderProjectedObject{MakeItem({10, 1})});
+		LegacyOrder.emplace(ObjectId{11, 1}, RenderProjectedObject{MakeItem({11, 1})});
+		LegacyOrder.reserve(LegacyOrder.size());
+		RenderPublication Move{.Id = 2, .BaseId = 1, .Frame = MakeFrame()};
+		Move.Updates.push_back({{10, 1}, RenderUpdateDomain::Transform, MakeItem({10, 1}, 4.0f)});
+		(void)Projection.Apply(Move);
+		Check(Projection.GetObjects().bucket_count() == LegacyOrder.bucket_count() &&
+			Projection.GetCompactTraversal().data() == StableData &&
+			Projection.GetItem({10, 1})->ModelMatrix[3].x == 4.0f,
+			"in-place transform updates follow legacy reserve and reuse traversal storage");
+		{
+			auto Actual = Projection.GetObjects().begin();
+			for (auto Expected = LegacyOrder.begin(); Expected != LegacyOrder.end(); ++Expected, ++Actual)
+				Check(Actual != Projection.GetObjects().end() && Actual->first == Expected->first,
+					"compact traversal preserves Foundation 4 map iteration after reserve");
+		}
+		MirrorsMap();
+		RenderPublication Grow{.Id = 3, .BaseId = 2, .Frame = MakeFrame()};
+		for (std::uint32_t Slot = 20; Slot < 200; ++Slot) Grow.Creates.push_back({MakeItem({Slot, 1})});
+		(void)Projection.Apply(Grow);
+		MirrorsMap();
+		RenderPublication Remove{.Id = 4, .BaseId = 3, .Frame = MakeFrame()};
+		Remove.Removes.push_back({{10, 1}});
+		(void)Projection.Apply(Remove);
+		MirrorsMap();
+		RenderPublication Invalid{.Id = 5, .BaseId = 4, .Frame = MakeFrame()};
+		Invalid.Updates.push_back({{10, 1}, RenderUpdateDomain::Transform, MakeItem({10, 1})});
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Invalid); },
+			"stale update rejects before compact traversal mutation");
+		MirrorsMap();
+		RenderPublication Resync{.Id = 100, .FullResync = true, .Frame = MakeFrame()};
+		Resync.Creates.push_back({MakeItem({90, 2})});
+		(void)Projection.Apply(Resync);
+		MirrorsMap();
+		const RenderMeshIdentity Mesh{7, 1};
+		auto Vertices = std::make_shared<const std::vector<RenderVertex>>(std::vector<RenderVertex>(3));
+		auto Indices = std::make_shared<const std::vector<std::uint32_t>>(std::vector<std::uint32_t>{0, 1, 2});
+		RenderPublication BindMesh{.Id = 101, .BaseId = 100, .Frame = MakeFrame()};
+		BindMesh.MeshCreates.push_back({Mesh, 1, 1, Vertices, Indices,
+			{glm::vec3(-1.0f), glm::vec3(1.0f)}});
+		BindMesh.Updates.push_back({{90, 2}, RenderUpdateDomain::Geometry, MakeItem({90, 2}), Mesh});
+		(void)Projection.Apply(BindMesh);
+		MirrorsMap();
+		const auto *StableBounds = Projection.GetCompactTraversal().front().MeshBounds;
+		RenderPublication MoveBounds{.Id = 102, .BaseId = 101, .Frame = MakeFrame()};
+		MoveBounds.MeshVertexUpdates.push_back({Mesh, 2, 0,
+			std::make_shared<const std::vector<RenderVertex>>(std::vector<RenderVertex>(1)),
+			{glm::vec3(-2.0f), glm::vec3(2.0f)}});
+		(void)Projection.Apply(MoveBounds);
+		Check(Projection.GetCompactTraversal().front().MeshBounds == StableBounds &&
+			StableBounds->Maximum.x == 2.0f,
+			"in-place mesh bounds updates retain a live compact traversal pointer");
+		const RenderMeshIdentity OtherMesh{8, 1};
+		RenderPublication Rebind{.Id = 103, .BaseId = 102, .Frame = MakeFrame()};
+		Rebind.MeshCreates.push_back({OtherMesh, 1, 1, Vertices, Indices,
+			{glm::vec3(-4.0f), glm::vec3(4.0f)}});
+		Rebind.Updates.push_back({{90, 2}, RenderUpdateDomain::Geometry, MakeItem({90, 2}), OtherMesh});
+		(void)Projection.Apply(Rebind);
+		MirrorsMap();
+		Check(Projection.GetCompactTraversal().front().MeshBounds == Projection.GetMeshBounds(OtherMesh) &&
+			Projection.GetCompactTraversal().front().MeshBounds->Maximum.x == 4.0f,
+			"mesh rebinding refreshes cached bounds identity");
+		Projection.Clear();
+		Check(Projection.GetCompactTraversal().empty(), "clearing projection retires compact traversal pointers");
 	}
 
 	void TestDeformableAndGuiContracts() {
@@ -266,6 +408,24 @@ namespace {
 			[&] { (void)Projection.Apply(InvalidTexture); },
 			"out-of-range texture updates are rejected atomically"
 		);
+
+		auto InvalidHdrPixels = std::make_shared<std::vector<std::uint8_t>>(16, 0);
+		const auto NanBits = std::bit_cast<std::uint32_t>(std::numeric_limits<float>::quiet_NaN());
+		for (unsigned Byte = 0; Byte < 4; ++Byte)
+			(*InvalidHdrPixels)[Byte] = static_cast<std::uint8_t>(NanBits >> (Byte * 8));
+		RenderPublication InvalidHdr{.Id = 6, .BaseId = 5, .Frame = MakeFrame()};
+		InvalidHdr.TextureCreates.push_back({{90, 1}, 1, 1, 1, RenderTextureFormat::Rgba32Float, InvalidHdrPixels});
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(InvalidHdr); },
+			"non-finite float texture radiance is rejected before GPU residency");
+		auto ExtremeHdrPixels = std::make_shared<std::vector<std::uint8_t>>(16, 0);
+		const auto ExtremeBits = std::bit_cast<std::uint32_t>(1000000.0f);
+		for (unsigned Byte = 0; Byte < 4; ++Byte)
+			(*ExtremeHdrPixels)[Byte] = static_cast<std::uint8_t>(ExtremeBits >> (Byte * 8));
+		RenderProjection ExtremeProjection;
+		RenderPublication ExtremeHdr{.Id = 1, .FullResync = true, .Frame = MakeFrame()};
+		ExtremeHdr.TextureCreates.push_back({{91, 1}, 1, 1, 1, RenderTextureFormat::Rgba32Float, ExtremeHdrPixels});
+		Check(ExtremeProjection.Apply(ExtremeHdr).TexturesCreated == 1,
+			"finite float radiance above half-float target range survives neutral projection");
 
 		RenderPublication TopologyChange{.Id = 6, .BaseId = 5, .Frame = MakeFrame()};
 		TopologyChange.MeshRemoves.push_back({{1, 1}});
@@ -538,6 +698,10 @@ namespace {
 			.Palette = {Skeleton, Palette},
 		});
 		const auto Changes = Projection.Apply(Initial);
+		Check(Projection.GetCompactTraversal().size() == 1 &&
+			Projection.GetCompactTraversal().front().Pose == Projection.GetAnimationPose(Object) &&
+			Projection.GetCompactTraversal().front().MeshBounds == Projection.GetMeshBounds(SourceMesh),
+			"compact traversal caches a coherent pose and source mesh bounds");
 		Check(Changes.AnimationPosesUpdated == 1 &&
 			Changes.PaletteUploadBytes == 2 * sizeof(RenderSkinPaletteEntry) &&
 			Projection.GetAnimationPose(Object) &&
@@ -640,11 +804,21 @@ namespace {
 			.Palette = {Skeleton, DeformedPalette},
 		});
 		(void)Projection.Apply(Deformed);
+		Check(Projection.GetCompactTraversal().size() == 1 &&
+			Projection.GetCompactTraversal().front().Pose == Projection.GetAnimationPose(Object) &&
+			Projection.GetCompactTraversal().front().Pose->PoseRevision == 2,
+			"existing pose updates retain a live compact traversal pointer");
 		Check(
 			Projection.BuildAnimationVisibilityFeedback(VisibleAnimationObjects, 1) &&
 				VisibleAnimationObjects == std::vector<ObjectId>{Object},
 			"GPU visibility bounds conservatively include palette deformation outside the bind-pose bounds"
 		);
+		RenderPublication RemovePose{.Id = 4, .BaseId = 3, .Frame = MakeFrame()};
+		RemovePose.AnimationPoseRemoves.push_back({Object});
+		(void)Projection.Apply(RemovePose);
+		Check(Projection.GetCompactTraversal().size() == 1 &&
+			Projection.GetCompactTraversal().front().Pose == nullptr,
+			"pose removal invalidates compact traversal without retaining a dangling pointer");
 	}
 
 	void TestEnvironmentLightingFoundation() {
@@ -855,6 +1029,191 @@ namespace {
 		);
 		Game->Destroy();
 	}
+	void TestRetainedUiTextureLifecycle() {
+		using namespace gargantuan;
+		const RenderTextureIdentity Texture{90, 1};
+		RenderUiBatch Batch;
+		Batch.Texture = Texture; Batch.Vertices.resize(3); Batch.Indices = {0, 1, 2};
+		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeFrame(), .UiChanged = true};
+		Initial.TextureCreates.push_back({Texture, 1, 1, 1, RenderTextureFormat::Rgba8Unorm,
+			std::make_shared<const std::vector<std::uint8_t>>(4, 255)});
+		Initial.SharedUi = std::make_shared<const RenderUiFrame>(RenderUiFrame{640, 360, 1.0f, {Batch}});
+		RenderProjection Projection;
+		(void)Projection.Apply(Initial);
+		RenderPublication Remove{.Id = 2, .BaseId = 1, .Frame = MakeFrame()};
+		Remove.TextureRemoves.push_back({Texture});
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Remove); },
+			"texture removal cannot strand a retained UI batch");
+		Check(Projection.GetLastPublicationId() == 1 && Projection.GetTextureCount() == 1 &&
+			Projection.GetUi().Batches.size() == 1, "rejected UI texture removal is atomic");
+		Remove.UiChanged = true;
+		Remove.Ui = {640, 360, 1.0f, {}};
+		(void)Projection.Apply(Remove);
+		Check(Projection.GetTextureCount() == 0 && Projection.GetUi().Batches.empty(),
+			"explicit UI teardown and texture removal commit together");
+	}
+
+	void TestReflectionProbeContracts() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto Probe = std::make_shared<ReflectionProbe>();
+		Probe->SetName("Local Environment Witness");
+		Probe->SetParent(World);
+		Probe->SetProbeSize({20, 10, 12});
+		Probe->SetProbeCFrame(CFrame(10, 2, -5));
+		Probe->SetProbeIntensity(2.0f);
+		Probe->SetProbePriority(3);
+		Check(World->GetReflectionProbes().contains(Probe->GetObjectId()), "probe enters scoped weak membership");
+		CheckThrows<std::invalid_argument>([&] { Probe->SetProbeCaptureOffset({11, 0, 0}); }, "capture origin must stay inside box");
+		CheckThrows<std::invalid_argument>([&] { Probe->SetProbeIntensity(std::numeric_limits<float>::quiet_NaN()); },
+			"probe rejects nonfinite radiance multiplier");
+		CheckThrows<std::invalid_argument>([&] { Probe->SetProbeCFrame(CFrame(glm::vec3(0), glm::mat3(2))); },
+			"probe rejects scaled orientation");
+		CheckThrows<std::invalid_argument>([&] { Probe->SetProbePositiveX("../local.hdr"); }, "probe source accepts asset references only");
+		auto Assets = std::dynamic_pointer_cast<AssetService>(Game->GetService("AssetService"));
+		const auto ProbeRoot = std::filesystem::temp_directory_path() /
+			("gargantuan-probe-publication-" + AssetId::New().ToString());
+		struct ProbeFixtureRoot final {
+			std::filesystem::path Path;
+			~ProbeFixtureRoot() {
+				std::error_code Error;
+				std::filesystem::remove_all(Path, Error);
+			}
+		} FixtureRoot{ProbeRoot};
+		std::filesystem::create_directories(ProbeRoot);
+		DiskFilesystem Filesystem(ProbeRoot);
+		SourceMount Mount(Filesystem);
+		const auto WriteProbeImage = [&](std::uint8_t Channel) {
+			std::vector<std::uint8_t> Bytes(54 + 4 * 4 * 4, 0);
+			const auto Write16 = [&](std::size_t Offset, std::uint16_t Value) {
+				for (unsigned Byte = 0; Byte < 2; ++Byte)
+					Bytes[Offset + Byte] = static_cast<std::uint8_t>(Value >> (Byte * 8));
+			};
+			const auto Write32 = [&](std::size_t Offset, std::uint32_t Value) {
+				for (unsigned Byte = 0; Byte < 4; ++Byte)
+					Bytes[Offset + Byte] = static_cast<std::uint8_t>(Value >> (Byte * 8));
+			};
+			Bytes[0] = 'B'; Bytes[1] = 'M';
+			Write32(2, static_cast<std::uint32_t>(Bytes.size()));
+			Write32(10, 54); Write32(14, 40); Write32(18, 4); Write32(22, 4);
+			Write16(26, 1); Write16(28, 32); Write32(34, 4 * 4 * 4);
+			for (std::size_t Pixel = 54; Pixel < Bytes.size(); Pixel += 4) {
+				Bytes[Pixel] = Channel; Bytes[Pixel + 1] = Channel;
+				Bytes[Pixel + 2] = Channel; Bytes[Pixel + 3] = 255;
+			}
+			std::ofstream File(ProbeRoot / "probe.bmp", std::ios::binary);
+			File.write(reinterpret_cast<const char *>(Bytes.data()), static_cast<std::streamsize>(Bytes.size()));
+			if (!File) throw std::runtime_error("[Render:PublicationTest] Could not write probe image fixture");
+		};
+		WriteProbeImage(96);
+		const auto ProbeImport = Assets->ImportProjectAsset(Mount, "probe.bmp", AssetKind::Image, "Probe Face");
+		if (!ProbeImport.Ok || !ProbeImport.Record) {
+			Check(false, "probe fixture imports a project image");
+			Game->Destroy();
+			return;
+		}
+		const auto ProbeReference = ProbeImport.Record->Reference.Value;
+		Probe->SetProbePositiveX(ProbeReference); Probe->SetProbeNegativeX(ProbeReference);
+		Probe->SetProbePositiveY(ProbeReference); Probe->SetProbeNegativeY(ProbeReference);
+		Probe->SetProbePositiveZ(ProbeReference); Probe->SetProbeNegativeZ(ProbeReference);
+		Check(!Assets->DeleteProjectAsset(ProbeReference).Ok,
+			"a probe's image reference prevents deleting its canonical asset group");
+		RenderPublisher ProbePublisher;
+		auto TextureChanges = Assets->DrainTextureChanges();
+		ProbePublisher.SetUiTextureChanges(std::move(TextureChanges.Creates),
+			std::move(TextureChanges.Updates), std::move(TextureChanges.Removes));
+		const auto FirstProbe = ProbePublisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(FirstProbe->Frame.Environment.ReflectionProbes &&
+			FirstProbe->Frame.Environment.ReflectionProbes->size() == 1,
+			"probe with six canonical image references publishes one local environment");
+		WriteProbeImage(128);
+		const auto ReimportedImage = Assets->ReimportProjectAsset(Mount, ProbeReference);
+		Check(ReimportedImage.Ok && ReimportedImage.Record &&
+			ReimportedImage.Record->Reference.Value == ProbeReference,
+			"probe face reimport preserves its image identity");
+		TextureChanges = Assets->DrainTextureChanges();
+		ProbePublisher.SetUiTextureChanges(std::move(TextureChanges.Creates),
+			std::move(TextureChanges.Updates), std::move(TextureChanges.Removes));
+		const auto ReimportedProbe = ProbePublisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(ReimportedProbe->EnvironmentChanged && ReimportedProbe->TextureUpdates.size() == 1 &&
+			ReimportedProbe->Frame.Environment.ReflectionProbes &&
+			ReimportedProbe->Frame.Environment.ReflectionProbes->front().Source.Faces[0].ContentRevision == 2,
+			"probe source reimport invalidates environment without changing the probe identity");
+		const std::string HdrHeader = "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 4 +X 4\n";
+		std::vector<std::uint8_t> HdrBytes(HdrHeader.begin(), HdrHeader.end());
+		for (unsigned Pixel = 0; Pixel < 16; ++Pixel)
+			HdrBytes.insert(HdrBytes.end(), {128, 64, 32, 137});
+		{
+			std::ofstream File(ProbeRoot / "probe.hdr", std::ios::binary);
+			File.write(reinterpret_cast<const char *>(HdrBytes.data()),
+				static_cast<std::streamsize>(HdrBytes.size()));
+			if (!File) throw std::runtime_error("[Render:PublicationTest] Could not write HDR probe fixture");
+		}
+		const auto HdrImport = Assets->ImportProjectAsset(Mount, "probe.hdr", AssetKind::Image, "HDR Probe Face");
+		if (HdrImport.Ok && HdrImport.Record) {
+			const auto HdrReference = HdrImport.Record->Reference.Value;
+			Probe->SetProbePositiveX(HdrReference);
+			auto LightingValue = std::dynamic_pointer_cast<Lighting>(Game->GetService("Lighting"));
+			auto MixedSky = std::make_shared<Sky>();
+			MixedSky->SetSkyboxPositiveX(HdrReference); MixedSky->SetSkyboxNegativeX(ProbeReference);
+			MixedSky->SetSkyboxPositiveY(ProbeReference); MixedSky->SetSkyboxNegativeY(ProbeReference);
+			MixedSky->SetSkyboxPositiveZ(ProbeReference); MixedSky->SetSkyboxNegativeZ(ProbeReference);
+			MixedSky->SetParent(LightingValue);
+			TextureChanges = Assets->DrainTextureChanges();
+			ProbePublisher.SetUiTextureChanges(std::move(TextureChanges.Creates),
+				std::move(TextureChanges.Updates), std::move(TextureChanges.Removes));
+			ProbePublisher.RequestFullResync();
+			const auto Mixed = ProbePublisher.Publish(*World, RenderCameraInput{}, 64, 64);
+			RenderProjection MixedProjection;
+			Check(Mixed->Frame.Environment.Sky && Mixed->Frame.Environment.ReflectionProbes &&
+				Mixed->Frame.Environment.ReflectionProbes->size() == 1 &&
+				std::ranges::any_of(Mixed->TextureCreates, [](const auto &Create) {
+					return Create.Format == RenderTextureFormat::Rgba32Float;
+				}) && MixedProjection.Apply(*Mixed).EnvironmentsUpdated == 1,
+				"mixed RGBA8/HDR cube faces retain their formats through publication and projection");
+			MixedSky->Destroy();
+		} else Check(false, "square HDR face imports for mixed-format cube publication");
+		Game->MarkPersistenceSubtreeArchivable();
+		std::shared_ptr<Instance> GameInstance = Game;
+		const auto Document = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, GameInstance);
+		std::istringstream SavedDocument(Document);
+		auto Saved = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, SavedDocument);
+		const auto Restored = Saved.Instance ? std::dynamic_pointer_cast<ReflectionProbe>(
+			Saved.Instance->FindFirstDescendant("Local Environment Witness")) : nullptr;
+		Check(Saved.Ok && Restored && Restored->GetProbeSize() == glm::vec3(20, 10, 12) &&
+			Restored->GetProbePriority() == 3 && Restored->GetProbeIntensity() == 2.0f, "probe generic schema persistence");
+		if (Saved.Instance) Saved.Instance->Destroy();
+		Probe->Destroy();
+		Check(World->GetReflectionProbes().empty(), "probe membership retires before identity reuse");
+		Check(Assets->DeleteProjectAsset(ProbeReference).Ok,
+			"probe image asset becomes deletable after the consumer is destroyed");
+		Game->Destroy();
+
+		RenderReflectionProbeState State;
+		State.Object = {7, 1};
+		State.Source.FaceDimension = 1;
+		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeFrame()};
+		for (std::size_t Face = 0; Face < 6; ++Face) {
+			const RenderTextureIdentity Texture{Face + 1, 1};
+			State.Source.Faces[Face] = {Texture, 1};
+			Initial.TextureCreates.push_back({Texture, 1, 1, 1, RenderTextureFormat::Rgba8Unorm,
+				std::make_shared<const std::vector<std::uint8_t>>(std::initializer_list<std::uint8_t>{255, 255, 255, 255})});
+		}
+		Initial.Frame.Environment.ReflectionProbes = std::make_shared<const std::vector<RenderReflectionProbeState>>(1, State);
+		RenderProjection Projection;
+		(void)Projection.Apply(Initial);
+		auto Invalid = Initial;
+		Invalid.Id = 2;
+		State.Source.Faces[0].ContentRevision = 2;
+		Invalid.Frame.Environment.ReflectionProbes = std::make_shared<const std::vector<RenderReflectionProbeState>>(1, State);
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Invalid); }, "probe cannot reference incoherent source revision");
+		Check(Projection.GetLastPublicationId() == 1 && Projection.GetFrame().Environment.ReflectionProbes ==
+			Initial.Frame.Environment.ReflectionProbes, "invalid probe preserves last accepted immutable publication");
+		Invalid = Initial; Invalid.Id = 2; Invalid.Frame.Environment.DirectionalShadows.CascadeCount = 5;
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Invalid); }, "cascade budget rejects before mutation");
+	}
+
 	void TestLocalLights() {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
@@ -970,6 +1329,63 @@ namespace {
 		}
 		Game->Destroy();
 	}
+
+	void TestReflectionProbePublicationBudget() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto Assets = std::dynamic_pointer_cast<AssetService>(Game->GetService("AssetService"));
+		const auto Face = Assets->RegisterMemoryImage("ProbeBudgetFace", 4, 4,
+			std::vector<std::uint8_t>(4 * 4 * 4, 255));
+		std::vector<std::shared_ptr<ReflectionProbe>> Probes;
+		for (std::size_t Index = 0; Index <= MaximumRenderReflectionProbes; ++Index) {
+			auto Probe = std::make_shared<ReflectionProbe>();
+			Probe->SetParent(World);
+			Probes.push_back(std::move(Probe));
+		}
+		const auto Valid = *std::ranges::max_element(Probes, {}, [](const auto &Probe) {
+			return Probe->GetObjectId();
+		});
+		Valid->SetProbePositiveX(Face); Valid->SetProbeNegativeX(Face);
+		Valid->SetProbePositiveY(Face); Valid->SetProbeNegativeY(Face);
+		Valid->SetProbePositiveZ(Face); Valid->SetProbeNegativeZ(Face);
+		RenderPublisher Publisher;
+		auto Changes = Assets->DrainTextureChanges();
+		Publisher.SetUiTextureChanges(std::move(Changes.Creates), std::move(Changes.Updates),
+			std::move(Changes.Removes));
+		const auto Publication = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(Publication->Frame.Environment.ReflectionProbes &&
+			Publication->Frame.Environment.ReflectionProbes->size() == 1 &&
+			Publication->Frame.Environment.ReflectionProbes->front().Object == Valid->GetObjectId(),
+			"incomplete probes do not consume the 32 coherent probe publication slots");
+		for (const auto &Probe : Probes) {
+			Probe->SetProbePositiveX(Face); Probe->SetProbeNegativeX(Face);
+			Probe->SetProbePositiveY(Face); Probe->SetProbeNegativeY(Face);
+			Probe->SetProbePositiveZ(Face); Probe->SetProbeNegativeZ(Face);
+		}
+		Publisher.RequestFullResync();
+		const auto Full = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(Full->Frame.Environment.ReflectionProbes &&
+			Full->Frame.Environment.ReflectionProbes->size() == MaximumRenderReflectionProbes &&
+			std::ranges::any_of(Full->Diagnostics, [](const auto &Diagnostic) {
+				return Diagnostic.Issue == RenderExtractionIssue::PublicationOverflow &&
+					Diagnostic.Message.find("coherent probe publication limit") != std::string::npos;
+			}), "coherent probe publication stays capped at 32 with a diagnostic");
+		Game->Destroy();
+
+		Game = std::make_shared<DataModel>();
+		World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		for (std::size_t Index = 0; Index <= MaximumRenderReflectionProbes * 8; ++Index)
+			std::make_shared<ReflectionProbe>()->SetParent(World);
+		RenderPublisher BoundedPublisher;
+		const auto Bounded = BoundedPublisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(!Bounded->Frame.Environment.ReflectionProbes &&
+			std::ranges::any_of(Bounded->Diagnostics, [](const auto &Diagnostic) {
+				return Diagnostic.Issue == RenderExtractionIssue::PublicationOverflow &&
+					Diagnostic.Message.find("source inspection limit") != std::string::npos;
+			}), "incomplete probe inspection has a finite diagnosed cap");
+		Game->Destroy();
+	}
 }
 
 static_assert(std::is_same_v<gargantuan::RenderPublicationPtr, std::shared_ptr<const gargantuan::RenderPublication>>);
@@ -979,13 +1395,18 @@ int main() {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		TestCameraDepthConvention();
+		TestSceneEnvelopeLifecycle();
 		TestProjectionOrderingAndIdentity();
+		TestCompactTraversalOrderAndLifecycle();
 		TestDeformableAndGuiContracts();
 		TestAnimationPaletteContracts();
 		TestIncrementalPublisher();
 		TestDirtyAccumulatorBoundsAndConsumers();
 		TestEnvironmentLightingFoundation();
 		TestLocalLights();
+		TestReflectionProbeContracts();
+		TestReflectionProbePublicationBudget();
+		TestRetainedUiTextureLifecycle();
 	} catch (const std::exception &Error) {
 		std::cerr << "[Render:PublicationTest] unexpected exception: " << Error.what() << '\n';
 		return 1;

@@ -4,13 +4,18 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/editor/EditorViewport.hpp"
+#include "gargantuan/Log.hpp"
+#include "gargantuan/render/SDLRenderer.hpp"
 
 #include "render/sdl/SDLDirectionalShadowCache.hpp"
+#include "render/sdl/SDLInstanceGpuCache.hpp"
 #include "render/sdl/SDLMaterialSamplers.hpp"
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
 #include "render/sdl/SDLSceneColor.hpp"
 #include "render/sdl/SDLSceneDepth.hpp"
+#include "render/sdl/SDLShadowResources.hpp"
+#include "render/sdl/SDLSpotShadowAtlas.hpp"
 #include "render/sdl/SDLSkinPaletteCache.hpp"
 #include "render/sdl/SDLTextureCache.hpp"
 
@@ -116,22 +121,34 @@ namespace gargantuan {
 		SDL_GPUTransferBuffer *DownloadBuffer = nullptr;
 		std::vector<std::unique_ptr<SDLRenderPass>> RenderPasses;
 		std::unique_ptr<SDLMeshCache> MeshResources;
+		std::unique_ptr<SDLInstanceGpuCache> InstanceResources;
+		bool EnableInstancing = false;
+		bool EnableSceneEnvelope = false;
+		bool UseContiguousInstancing = false;
+		bool UseSolidShadowDepth = true;
 		std::unique_ptr<SDLTextureCache> TextureResources;
 		SDLMaterialSamplers MaterialSamplers;
 		std::unique_ptr<SDLSkinPaletteCache> SkinPalettes;
 		RenderProjection Projection;
 		SDLDirectionalShadowCache ShadowCache;
+		SDLShadowResources ShadowResources;
+		SDLSpotShadowAtlas SpotShadowAtlas;
+		SDLRendererMetrics Metrics;
 		bool RequiresFullResync = false;
 		std::uint32_t RemainingPaletteUploadFailures = 0;
+		bool PostShadowFailure = false;
+		bool PostSkyFailure = false;
 		std::unordered_map<ObjectId, std::uint64_t> ShadowPoseRevisions;
 		std::vector<std::uint8_t> BgraPixels;
 
 		void InvalidatePublication() {
 			RequiresFullResync = true;
 			MeshResources->Destroy();
+			if (InstanceResources) InstanceResources->Destroy();
 			TextureResources->Destroy();
 			SkinPalettes->Destroy();
 			ShadowCache.Invalidate();
+			SpotShadowAtlas.Invalidate();
 			ShadowPoseRevisions.clear();
 			Projection.Clear();
 		}
@@ -139,10 +156,12 @@ namespace gargantuan {
 		void Destroy() {
 			if (Gpu) SDL_WaitForGPUIdle(Gpu);
 			if (MeshResources) { MeshResources->Destroy(); MeshResources.reset(); }
+			if (InstanceResources) { InstanceResources->Destroy(); InstanceResources.reset(); }
 			if (TextureResources) { TextureResources->Destroy(); TextureResources.reset(); }
 			if (SkinPalettes) { SkinPalettes->Destroy(); SkinPalettes.reset(); }
 			for (auto &Pass : RenderPasses) if (Pass) Pass->Destroy(Gpu);
 			RenderPasses.clear();
+			if (Gpu) ShadowResources.Destroy(Gpu);
 			if (Gpu) MaterialSamplers.Destroy(Gpu);
 			if (DownloadBuffer && Gpu) SDL_ReleaseGPUTransferBuffer(Gpu, DownloadBuffer);
 			if (ColorTexture && Gpu) SDL_ReleaseGPUTexture(Gpu, ColorTexture);
@@ -202,7 +221,8 @@ namespace gargantuan {
 		}
 	};
 
-	EditorViewportRenderer::EditorViewportRenderer(std::uint32_t Width, std::uint32_t Height, bool EnableHdrScene)
+	EditorViewportRenderer::EditorViewportRenderer(std::uint32_t Width, std::uint32_t Height,
+		bool EnableHdrScene, bool EnableInstancing, bool EnableSceneEnvelope, bool UseContiguousInstancing)
 		: State(std::make_unique<Backend>()) {
 		State->Width = Width;
 		State->Height = Height;
@@ -217,6 +237,15 @@ namespace gargantuan {
 			throw std::runtime_error(std::format("Failed to create viewport GPU device: {}", SDL_GetError()));
 		}
 		State->HdrSceneEnabled = EnableHdrScene && SupportsSDLHdrScene(State->Gpu);
+		State->EnableInstancing = EnableInstancing;
+		State->EnableSceneEnvelope = EnableSceneEnvelope;
+		State->UseContiguousInstancing = UseContiguousInstancing;
+		if (EnableInstancing) {
+			const auto SceneFormat = State->HdrSceneEnabled ? SDLHdrSceneFormat : ColorFormat;
+			const float OutputMode = SceneFormat == SDLHdrSceneFormat ? 2.0f :
+				SDLTargetEncodesSrgb(SceneFormat) ? 0.0f : 1.0f;
+			State->InstanceResources = std::make_unique<SDLInstanceGpuCache>(State->Gpu, OutputMode);
+		}
 		State->MeshResources = std::make_unique<SDLMeshCache>(State->Gpu);
 		State->TextureResources = std::make_unique<SDLTextureCache>(State->Gpu);
 		State->SkinPalettes = std::make_unique<SDLSkinPaletteCache>(State->Gpu, nullptr, &State->RemainingPaletteUploadFailures);
@@ -278,7 +307,10 @@ namespace gargantuan {
 		bool ApplyingNativeResources = false;
 		try {
 			State->ShadowCache.ApplyPublication(State->Projection, *Publication);
+			State->SpotShadowAtlas.ApplyPublication(State->Projection, *Publication);
 			(void)State->Projection.Apply(*Publication);
+			if (State->EnableInstancing && State->InstanceResources)
+				(void)State->InstanceResources->Apply(*Publication);
 			ApplyingNativeResources = true;
 			State->MeshResources->ApplyPublication(*Publication);
 			State->TextureResources->ApplyPublication(*Publication);
@@ -314,19 +346,48 @@ namespace gargantuan {
 		SDLFrameContext Frame(
 			State->Projection, *State->MeshResources, *State->SkinPalettes, State->ShadowCache, State->ShadowPoseRevisions);
 		Frame.Commands = Commands;
+		Frame.UseSolidShadowDepth = State->UseSolidShadowDepth;
+		Frame.Metrics = &State->Metrics;
 		Frame.SwapchainTexture = State->ColorTexture;
 		Frame.HdrSceneTexture = State->HdrSceneTexture;
 		Frame.DepthTexture = State->DepthTexture;
 		Frame.ShadowMapTexture = State->ShadowMapTexture;
 		Frame.ShadowSampler = State->ShadowSampler;
 		Frame.TextureResources = State->TextureResources.get();
+		Frame.InstanceResources = State->InstanceResources.get();
+		Frame.EnableInstancing = State->EnableInstancing && State->InstanceResources &&
+			State->InstanceResources->GetRecords().IsAvailable();
+		Frame.EnableSceneEnvelope = State->EnableSceneEnvelope;
+		Frame.UseContiguousInstancing = State->UseContiguousInstancing;
 		Frame.MaterialSamplers = &State->MaterialSamplers;
 		Frame.Width = State->Width;
 		Frame.Height = State->Height;
 		try {
-			for (auto &Pass : State->RenderPasses)
-				if (auto *Recorded = Pass->Draw(State->Gpu, Frame)) SDL_EndGPURenderPass(Recorded);
+			State->ShadowResources.PrepareFrame(State->Gpu, Frame, State->SpotShadowAtlas);
+			if (Frame.EnableInstancing) {
+				try { State->InstanceResources->Upload(Commands, nullptr); }
+				catch (const std::exception &Error) {
+					LOG_WARN(App, "[Renderer:Instances] Disabled optional viewport instancing: %s", Error.what());
+					State->InstanceResources->OnFrameAborted();
+					State->EnableInstancing = false;
+					Frame.EnableInstancing = false;
+				}
+			}
+			const auto &Definitions = GetSDLRenderPassConstructors();
+			for (std::size_t Index = 0; Index < State->RenderPasses.size(); ++Index) {
+				if (auto *Recorded = State->RenderPasses[Index]->Draw(State->Gpu, Frame)) SDL_EndGPURenderPass(Recorded);
+				if (State->PostShadowFailure && Definitions[Index].Phase == SDLPassPhase::Shadow) {
+					State->PostShadowFailure = false;
+					throw std::runtime_error("[Renderer:Shadow] injected post-shadow failure");
+				}
+				if (State->PostSkyFailure && Definitions[Index].Phase == SDLPassPhase::Sky) {
+					State->PostSkyFailure = false;
+					throw std::runtime_error("[Renderer:Probe] injected post-sky failure");
+				}
+			}
 		} catch (...) {
+			if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
+			for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
 			SDL_CancelGPUCommandBuffer(Commands);
 			throw;
 		}
@@ -334,6 +395,8 @@ namespace gargantuan {
 
 		auto *CopyPass = SDL_BeginGPUCopyPass(Commands);
 		if (!CopyPass) {
+			if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
+			for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
 			SDL_CancelGPUCommandBuffer(Commands);
 			throw std::runtime_error(std::format("Failed to begin viewport download: {}", SDL_GetError()));
 		}
@@ -344,13 +407,24 @@ namespace gargantuan {
 		SDL_DownloadFromGPUTexture(CopyPass, &Source, &Destination);
 		SDL_EndGPUCopyPass(CopyPass);
 		auto *Fence = SDL_SubmitGPUCommandBufferAndAcquireFence(Commands);
-		if (!Fence) throw std::runtime_error(std::format("Failed to submit viewport frame: {}", SDL_GetError()));
+		if (!Fence) {
+			if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
+			for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
+			throw std::runtime_error(std::format("Failed to submit viewport frame: {}", SDL_GetError()));
+		}
 		if (!SDL_WaitForGPUFences(State->Gpu, true, &Fence, 1)) {
 			SDL_ReleaseGPUFence(State->Gpu, Fence);
+			if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
+			for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
 			throw std::runtime_error(std::format("Failed to wait for viewport frame: {}", SDL_GetError()));
 		}
+		if (State->InstanceResources) State->InstanceResources->OnFrameSubmitted();
 		const auto ReadbackComplete = std::chrono::steady_clock::now();
-		(void)State->ShadowCache.OnFrameSubmitted();
+		if (State->ShadowCache.OnFrameSubmitted()) ++State->Metrics.ShadowMapBuilds;
+		++State->Metrics.FramesSubmitted;
+		State->ShadowResources.OnFrameSubmitted();
+		for (auto &Pass : State->RenderPasses) Pass->OnFrameSubmitted();
+		(void)State->SpotShadowAtlas.OnFrameSubmitted();
 		auto *Rgba = static_cast<const std::uint8_t *>(SDL_MapGPUTransferBuffer(State->Gpu, State->DownloadBuffer, false));
 		if (!Rgba) {
 			SDL_ReleaseGPUFence(State->Gpu, Fence);
@@ -396,5 +470,17 @@ namespace gargantuan {
 
 	void EditorViewportRenderer::InjectPaletteUploadFailureForTesting() {
 		State->RemainingPaletteUploadFailures = 1;
+	}
+	void EditorViewportRenderer::InjectPostShadowFailureForTesting() {
+		State->PostShadowFailure = true;
+	}
+	void EditorViewportRenderer::InjectPostSkyFailureForTesting() {
+		State->PostSkyFailure = true;
+	}
+	void EditorViewportRenderer::SetSolidShadowDepthExperimentForTesting(bool Enabled) {
+		if (State) State->UseSolidShadowDepth = Enabled;
+	}
+	SDLRendererMetrics EditorViewportRenderer::GetMetricsForTesting() const {
+		return State ? State->Metrics : SDLRendererMetrics{};
 	}
 }

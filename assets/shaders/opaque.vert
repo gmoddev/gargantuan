@@ -10,19 +10,7 @@ layout(location = 3) in vec2 VertexUV;
 layout(location = 4) in uvec4 VertexJoints;
 layout(location = 5) in vec4 VertexWeights;
 
-layout(set = 1, binding = 0) uniform WorldUniforms {
-    mat4 ViewMatrix;
-    mat4 ProjectionMatrix;
-    mat4 ShadowBiasMatrix;
-    vec4 SunDirectionIntensity;
-    vec4 AmbientExposure;
-    vec4 SunColorFogEnabled;
-    vec4 FogColorStart;
-    vec4 CameraPositionFogEnd;
-    vec4 EnvironmentLighting;
-    vec4 EnvironmentRotationTone;
-    vec4 LocalLighting;
-} world;
+#include "world-uniforms.glsl"
 
 layout(set = 1, binding = 1) uniform PartUniforms {
     mat4 ModelMatrix;

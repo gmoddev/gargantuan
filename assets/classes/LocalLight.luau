@@ -6,6 +6,23 @@ return c({
 	since = "0.5.0",
 	abstract = true,
 	properties = {
+		LightShadows = {
+			description = "Requests bounded dynamic shadows; unsupported or unadmitted lights remain unshadowed.",
+			type = t.Bool,
+			unmodified = "false",
+			serializable = true,
+			replicated = true,
+			category = "Shadows",
+		},
+		LightShadowPriority = {
+			description = "Priority within the finite local-shadow budget, with stable identity ties.",
+			type = t.Integer,
+			unmodified = "0",
+			range = { minimum = -1024, maximum = 1024 },
+			serializable = true,
+			replicated = true,
+			category = "Shadows",
+		},
 		LightEnabled = {
 			description = "Whether the emitter contributes to the world lighting.",
 			type = t.Bool,

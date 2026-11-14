@@ -4,8 +4,11 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/render/RenderProjection.hpp"
+#include "gargantuan/environment/ReflectionProbeSemantics.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <bit>
 #include <glm/geometric.hpp>
 #include <limits>
 #include <stdexcept>
@@ -87,6 +90,21 @@ namespace gargantuan {
 				!std::isfinite(Environment.IblIntensity) || Environment.IblIntensity < 0.0f || Environment.IblIntensity > 8.0f ||
 				(Environment.ToneMapping != RenderToneMapping::Filmic && Environment.ToneMapping != RenderToneMapping::Reinhard) ||
 				std::abs(glm::length(Environment.SunDirection) - 1.0f) > 1e-4f) return false;
+			const auto &Shadows = Environment.DirectionalShadows;
+			if (Shadows.CascadeCount > 4 || (Shadows.Resolution != 512 && Shadows.Resolution != 1024 && Shadows.Resolution != 2048) ||
+				!std::isfinite(Shadows.Distance) || Shadows.Distance < 1 || Shadows.Distance > 4096 ||
+				!std::isfinite(Shadows.SplitLambda) || Shadows.SplitLambda < 0 || Shadows.SplitLambda > 1 ||
+				!std::isfinite(Shadows.TransitionFraction) || Shadows.TransitionFraction < 0 || Shadows.TransitionFraction > 0.25f ||
+				!std::isfinite(Shadows.DepthBias) || Shadows.DepthBias < 0 || Shadows.DepthBias > 0.01f ||
+				!std::isfinite(Shadows.NormalBias) || Shadows.NormalBias < 0 || Shadows.NormalBias > 1) return false;
+			if (Environment.ReflectionProbes) {
+				if (Environment.ReflectionProbes->size() > MaximumRenderReflectionProbes) return false;
+				ObjectId Previous;
+				for (const auto &Probe : *Environment.ReflectionProbes) {
+					if (!IsValidReflectionProbe(Probe) || (Previous.IsValid() && Probe.Object <= Previous)) return false;
+					Previous = Probe.Object;
+				}
+			}
 			if (!Environment.Sky) return true;
 			if (Environment.Sky->FaceDimension == 0 || Environment.Sky->FaceDimension > 1024) return false;
 			for (const auto &Face : Environment.Sky->Faces)
@@ -118,20 +136,33 @@ namespace gargantuan {
 					!IsFinite(Light.Direction) || std::abs(glm::length(Light.Direction) - 1.0f) > 1.0e-4f ||
 					!IsUnitColor(Light.Color) || !std::isfinite(Light.Intensity) || Light.Intensity < 0.0f ||
 					Light.Intensity > MaximumLocalLightIntensity || !std::isfinite(Light.Range) ||
-					Light.Range < MinimumLocalLightRange || Light.Range > MaximumLocalLightRange) return false;
+					Light.Range < MinimumLocalLightRange || Light.Range > MaximumLocalLightRange ||
+					Light.ShadowPriority < -1024 || Light.ShadowPriority > 1024) return false;
 				Previous = Light.Object;
 			}
 			return true;
 		}
 
-		bool HasExactRgba8Bytes(
+		bool HasExactTextureBytes(
 			std::uint32_t Width,
 			std::uint32_t Height,
+			RenderTextureFormat Format,
 			const std::shared_ptr<const std::vector<std::uint8_t>> &Pixels
 		) {
-			if (Width == 0 || Height == 0 || !Pixels) return false;
-			const auto Expected = static_cast<std::uint64_t>(Width) * static_cast<std::uint64_t>(Height) * 4u;
-			return Expected <= std::numeric_limits<std::size_t>::max() && Pixels->size() == Expected;
+			const auto PixelBytes = GetRenderTexturePixelBytes(Format);
+			if (Width == 0 || Height == 0 || PixelBytes == 0 || !Pixels) return false;
+			const auto Expected = static_cast<std::uint64_t>(Width) * static_cast<std::uint64_t>(Height) * PixelBytes;
+			if (Expected > std::numeric_limits<std::size_t>::max() || Pixels->size() != Expected) return false;
+			if (Format == RenderTextureFormat::Rgba32Float) {
+				for (std::size_t Offset = 0; Offset < Pixels->size(); Offset += 4) {
+					std::uint32_t Bits = 0;
+					for (unsigned Byte = 0; Byte < 4; ++Byte)
+						Bits |= static_cast<std::uint32_t>((*Pixels)[Offset + Byte]) << (Byte * 8);
+					const auto Value = std::bit_cast<float>(Bits);
+					if (!std::isfinite(Value) || Value < 0.0f) return false;
+				}
+			}
+			return true;
 		}
 
 		bool ItemsEqual(const RenderItem &Left, const RenderItem &Right) {
@@ -142,6 +173,7 @@ namespace gargantuan {
 	}
 
 	RenderProjectionChanges RenderProjection::Apply(const RenderPublication &Publication) {
+		const auto ValidationStart = std::chrono::steady_clock::now();
 		if (Publication.Id == InvalidRenderPublicationId)
 			throw std::invalid_argument("Render projection requires a valid RenderPublication identity");
 		if (!Publication.FullResync && Publication.BaseId != LastPublicationId)
@@ -248,14 +280,18 @@ namespace gargantuan {
 				throw std::invalid_argument("Render publication contains an invalid or duplicate texture operation");
 		for (const auto &Create : Publication.TextureCreates) {
 			if (!Create.Texture.IsValid() || Create.Revision == 0 ||
-				Create.Format != RenderTextureFormat::Rgba8Unorm ||
-				!HasExactRgba8Bytes(Create.Width, Create.Height, Create.Pixels) ||
+				!HasExactTextureBytes(Create.Width, Create.Height, Create.Format, Create.Pixels) ||
 				!TouchedTextures.insert(Create.Texture).second)
 				throw std::invalid_argument("Render publication texture creation is invalid");
 		}
 		for (const auto &Update : Publication.TextureUpdates) {
+			RenderTextureFormat Format = RenderTextureFormat::Rgba8Unorm;
+			if (const auto Existing = Textures.find(Update.Texture); Existing != Textures.end()) Format = Existing->second.Format;
+			else if (const auto Created = std::ranges::find_if(Publication.TextureCreates, [&](const auto &Create) {
+				return Create.Texture == Update.Texture;
+			}); Created != Publication.TextureCreates.end()) Format = Created->Format;
 			if (!Update.Texture.IsValid() || Update.Revision == 0 ||
-				!HasExactRgba8Bytes(Update.Width, Update.Height, Update.Pixels) ||
+				!HasExactTextureBytes(Update.Width, Update.Height, Format, Update.Pixels) ||
 				!TouchedTextures.insert(Update.Texture).second)
 				throw std::invalid_argument("Render publication texture update is invalid");
 		}
@@ -286,6 +322,11 @@ namespace gargantuan {
 			for (const auto &Face : Publication.Frame.Environment.Sky->Faces)
 				if (!TextureMatchesSkyFace(Face, Publication.Frame.Environment.Sky->FaceDimension))
 					throw std::invalid_argument("Render publication Sky references an unavailable or incoherent texture");
+		if (Publication.Frame.Environment.ReflectionProbes)
+			for (const auto &Probe : *Publication.Frame.Environment.ReflectionProbes)
+				for (const auto &Face : Probe.Source.Faces)
+					if (!TextureMatchesSkyFace(Face, Probe.Source.FaceDimension))
+						throw std::invalid_argument("Render publication probe references an unavailable or incoherent texture");
 		const auto MaterialTexturesExist = [&](const RenderMaterialState &Material) {
 			return (!Material.BaseColorTexture || TextureExistsAfterPublication(*Material.BaseColorTexture)) &&
 				(!Material.NormalTexture || TextureExistsAfterPublication(*Material.NormalTexture)) &&
@@ -304,6 +345,9 @@ namespace gargantuan {
 		for (const auto &Update : Publication.Updates) if (!ObjectTexturesExist(Update))
 			throw std::invalid_argument("Render publication material references a texture without residency");
 		if (!Publication.FullResync && !Publication.TextureRemoves.empty()) {
+			if (!HasUiUpdate && Ui) for (const auto &Batch : Ui->Batches)
+				if (Batch.Texture && !TextureExistsAfterPublication(*Batch.Texture))
+					throw std::invalid_argument("Render publication removes a texture that remains referenced by retained UI");
 			for (const auto &[Object, Existing] : Entries) {
 				if (std::ranges::binary_search(TouchedObjectScratch, Object)) continue;
 				if (!MaterialTexturesExist(Existing.Material) ||
@@ -490,7 +534,31 @@ namespace gargantuan {
 			}
 		}
 
+		bool MeshBindingChanged = false;
+		if (CompactTraversalValid) for (std::size_t Index = 0; Index < Publication.Updates.size(); ++Index)
+			if (UpdatedEntryScratch[Index]->Mesh != Publication.Updates[Index].Mesh) {
+				MeshBindingChanged = true;
+				break;
+			}
+		const bool InvalidateCompactTraversal = CompactTraversalValid && (MeshBindingChanged ||
+			Publication.FullResync || !Publication.Creates.empty() ||
+			!Publication.Removes.empty() || !Publication.MeshCreates.empty() || !Publication.MeshRemoves.empty() ||
+			!Publication.AnimationPoseRemoves.empty() || std::ranges::any_of(Publication.AnimationPoseUpdates,
+				[&](const RenderAnimationPoseUpdate &Update) { return !AnimationPoses.contains(Update.Object); }));
+		const bool InvalidateSceneEnvelope = Publication.FullResync || !Publication.Creates.empty() ||
+			!Publication.Updates.empty() || !Publication.Removes.empty() || !Publication.MeshCreates.empty() ||
+			!Publication.MeshVertexUpdates.empty() || !Publication.MeshRemoves.empty() ||
+			!Publication.AnimationPoseUpdates.empty() || !Publication.AnimationPoseRemoves.empty();
 		RenderProjectionChanges Changes;
+		const auto MutationStart = std::chrono::steady_clock::now();
+		Changes.ValidationNanoseconds = static_cast<std::uint64_t>(
+			std::chrono::duration_cast<std::chrono::nanoseconds>(MutationStart - ValidationStart).count());
+		if (InvalidateCompactTraversal) CompactTraversalValid = false;
+		if (InvalidateSceneEnvelope) {
+			SceneEnvelope.reset();
+			SceneEnvelopeValid = false;
+			SceneEnvelopeQuietFrames = 0;
+		} else if (SceneEnvelopeQuietFrames < 2) ++SceneEnvelopeQuietFrames;
 		if (Publication.FullResync) {
 			Changes.Removed = Entries.size();
 			Changes.MeshesRemoved = Meshes.size();
@@ -503,7 +571,11 @@ namespace gargantuan {
 		}
 		for (const auto &Remove : Publication.Removes) { Entries.erase(Remove.Object); ++Changes.Removed; }
 		for (const auto &Remove : Publication.MeshRemoves) { Meshes.erase(Remove.Mesh); ++Changes.MeshesRemoved; }
+		// Preserve Foundation 4's reserve(size) call and its map iteration policy.
+		// Some standard libraries reorder nodes even when the bucket count stays
+		// the same. Node addresses survive, but the positional traversal does not.
 		Entries.reserve(Entries.size() + Publication.Creates.size());
+		CompactTraversalValid = false;
 		for (const auto &Create : Publication.Creates) {
 			Entries.emplace(Create.Item.Object, RenderProjectedObject{
 				Create.Item, Create.Mesh, Create.Material, Create.Visible, Create.Primitives
@@ -571,6 +643,8 @@ namespace gargantuan {
 		if (Publication.FullResync || Publication.EnvironmentChanged) ++Changes.EnvironmentsUpdated;
 		Frame = Publication.Frame;
 		LastPublicationId = Publication.Id;
+		Changes.MutationNanoseconds = static_cast<std::uint64_t>(
+			std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - MutationStart).count());
 		return Changes;
 	}
 
@@ -588,6 +662,10 @@ namespace gargantuan {
 		}
 
 		RenderProjectionChanges Changes;
+		CompactTraversalValid = false;
+		SceneEnvelope.reset();
+		SceneEnvelopeValid = false;
+		SceneEnvelopeQuietFrames = 0;
 		Entries.reserve(Snapshot.Items.size());
 		for (const auto &Item : Snapshot.Items) {
 			auto Existing = Entries.find(Item.Object);
@@ -624,6 +702,11 @@ namespace gargantuan {
 
 	void RenderProjection::Clear() noexcept {
 		UpdatedEntryScratch.clear();
+		CompactTraversal.clear();
+		CompactTraversalValid = false;
+		SceneEnvelope.reset();
+		SceneEnvelopeValid = false;
+		SceneEnvelopeQuietFrames = 0;
 		Entries.clear();
 		Meshes.clear();
 		Textures.clear();
@@ -636,6 +719,79 @@ namespace gargantuan {
 	const RenderItem *RenderProjection::GetItem(ObjectId Object) const {
 		const auto Existing = Entries.find(Object);
 		return Existing == Entries.end() ? nullptr : &Existing->second.Item;
+	}
+
+	RenderSceneEnvelopeResult RenderProjection::GetSceneEnvelope() const {
+		if (SceneEnvelopeValid) return {SceneEnvelope ? &*SceneEnvelope : nullptr};
+		if (SceneEnvelopeQuietFrames < 2) return {};
+		const auto Start = std::chrono::steady_clock::now();
+		SceneEnvelopeValid = true;
+		RenderSceneEnvelope Candidate;
+		Candidate.Minimum = glm::dvec3(std::numeric_limits<double>::infinity());
+		Candidate.Maximum = glm::dvec3(-std::numeric_limits<double>::infinity());
+		constexpr RenderBounds PrimitiveBounds{glm::vec3(-0.5f), glm::vec3(0.5f)};
+		bool Bounded = true;
+		for (const auto &[Object, Projected] : Entries) {
+			if (!Projected.Visible) continue;
+			if (AnimationPoses.contains(Object)) { Bounded = false; break; }
+			const RenderBounds *Bounds = &PrimitiveBounds;
+			if (Projected.Mesh) {
+				const auto Mesh = Meshes.find(*Projected.Mesh);
+				if (Mesh == Meshes.end() || Mesh->second.SkinInfluences) { Bounded = false; break; }
+				Bounds = &Mesh->second.Bounds;
+			}
+			const auto &Model = Projected.Item.ModelMatrix;
+			for (int Column = 0; Column < 4; ++Column)
+				for (int Axis = 0; Axis < 4; ++Axis)
+					if (std::abs(Model[Column][Axis]) > 1e7f) Bounded = false;
+			for (int Axis = 0; Axis < 3; ++Axis)
+				if (std::abs(Bounds->Minimum[Axis]) > 1e7f || std::abs(Bounds->Maximum[Axis]) > 1e7f)
+					Bounded = false;
+			if (!Bounded) break;
+			if (Model[0].w != 0.0f || Model[1].w != 0.0f || Model[2].w != 0.0f || Model[3].w != 1.0f) {
+				Bounded = false; break;
+			}
+			for (int Corner = 0; Corner < 8; ++Corner) {
+				const glm::dvec4 Local{
+					(Corner & 1) ? Bounds->Maximum.x : Bounds->Minimum.x,
+					(Corner & 2) ? Bounds->Maximum.y : Bounds->Minimum.y,
+					(Corner & 4) ? Bounds->Maximum.z : Bounds->Minimum.z, 1.0};
+				const glm::dvec3 World = glm::dvec3(glm::dmat4(Model) * Local);
+				for (int Axis = 0; Axis < 3; ++Axis) {
+					if (!std::isfinite(World[Axis])) { Bounded = false; break; }
+					// Covers the float matrix/corner operations in the ordinary culler.
+					const double Padding = 1e-4 * (1.0 + std::abs(World[Axis]));
+					Candidate.Minimum[Axis] = std::min(Candidate.Minimum[Axis], World[Axis] - Padding);
+					Candidate.Maximum[Axis] = std::max(Candidate.Maximum[Axis], World[Axis] + Padding);
+				}
+				if (!Bounded) break;
+			}
+			if (!Bounded) break;
+			++Candidate.VisibleObjects;
+		}
+		if (Bounded && Candidate.VisibleObjects) SceneEnvelope = Candidate;
+		else SceneEnvelope.reset();
+		return {SceneEnvelope ? &*SceneEnvelope : nullptr,
+			static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+				std::chrono::steady_clock::now() - Start).count()), true};
+	}
+
+	const std::vector<RenderProjectedTraversal> &RenderProjection::GetCompactTraversal() const {
+		if (CompactTraversalValid) return CompactTraversal;
+		// Apply invalidates positional order after the legacy map reserve. Reuse
+		// this bounded storage while rebuilding in the map's current order;
+		// no traversal reference remains live across a publication.
+		CompactTraversal.clear();
+		CompactTraversal.reserve(Entries.size());
+		for (const auto &[Object, Projected] : Entries) {
+			const auto Pose = AnimationPoses.find(Object);
+			const auto Mesh = Projected.Mesh ? Meshes.find(*Projected.Mesh) : Meshes.end();
+			CompactTraversal.push_back({Object, &Projected,
+				Pose == AnimationPoses.end() ? nullptr : &Pose->second,
+				Mesh == Meshes.end() ? nullptr : &Mesh->second.Bounds});
+		}
+		CompactTraversalValid = true;
+		return CompactTraversal;
 	}
 
 	const RenderAnimationPoseUpdate *RenderProjection::GetAnimationPose(ObjectId Object) const {

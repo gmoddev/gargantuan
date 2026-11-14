@@ -2,6 +2,8 @@
 
 #include "gargantuan/render/RenderProjection.hpp"
 #include "render/sdl/SDLImageBasedLighting.hpp"
+#include "render/sdl/SDLDirectionalCascadePlan.hpp"
+#include "render/sdl/SDLReflectionProbes.hpp"
 #include "render/sdl/SDLShader.hpp"
 
 #include <SDL3/SDL_gpu.h>
@@ -18,10 +20,20 @@ namespace gargantuan {
 	class SDLSkinPaletteCache;
 	class SDLTextureCache;
 	class SDLMaterialSamplers;
+	class SDLSpotShadowAtlas;
+	class SDLInstanceGpuCache;
 	struct SDLRendererMetrics;
 
 	struct SDLFrameContext {
 		bool EnableOpaqueGrouping = true;
+		bool ProfileDetailed = false;
+		bool UseCompactTraversal = false;
+		bool EnableInstancing = false;
+		bool EnableSceneEnvelope = false;
+		bool UseContiguousInstancing = false;
+		bool UseSolidShadowDepth = true;
+		bool SolidShadowDepthAttempted = false;
+		bool SolidShadowDepthActive = false;
 		SDLFrameContext(
 			const RenderProjection &RenderState,
 			SDLMeshCache &MeshResourcesValue,
@@ -35,14 +47,23 @@ namespace gargantuan {
 		SDLMeshCache &MeshResources;
 		SDLSkinPaletteCache &SkinPalettes;
 		SDLTextureCache *TextureResources = nullptr;
+		SDLInstanceGpuCache *InstanceResources = nullptr;
 		SDLMaterialSamplers *MaterialSamplers = nullptr;
 		SDLImageBasedLightingBindings EnvironmentLighting;
+		SDLReflectionProbeBindings ReflectionProbes;
 		SDLRendererMetrics *Metrics = nullptr;
 		SDL_GPUCommandBuffer *Commands = nullptr;
 		SDL_GPUTexture *SwapchainTexture = nullptr;
 		SDL_GPUTexture *HdrSceneTexture = nullptr;
 		SDL_GPUTexture *DepthTexture = nullptr;
 		SDL_GPUTexture *ShadowMapTexture = nullptr;
+		bool CascadedShadows = false;
+		bool CascadeHasCasters = false;
+		bool LegacyHasCasters = false;
+		SDL_GPUTexture *CascadeShadowTexture = nullptr;
+		SDLDirectionalCascadePlan CascadePlan;
+		SDL_GPUTexture *LocalShadowTexture = nullptr;
+		SDLSpotShadowAtlas *SpotShadowAtlas = nullptr;
 		SDL_GPUSampler *ShadowSampler = nullptr;
 		glm::mat4 ShadowMatrix{1.0f};
 		SDLDirectionalShadowCache &ShadowCache;
@@ -63,6 +84,8 @@ namespace gargantuan {
 
 		virtual ~SDLRenderPass() = default;
 		virtual SDL_GPURenderPass *Draw(SDL_GPUDevice *Gpu, SDLFrameContext &Context) = 0;
+		virtual void OnFrameSubmitted() {}
+		virtual void OnFrameAborted() {}
 		virtual void Resize(SDL_GPUDevice *, std::uint32_t, std::uint32_t) {}
 		virtual void Destroy(SDL_GPUDevice *Gpu);
 	};
@@ -80,9 +103,11 @@ namespace gargantuan {
 	using SDLRenderPassConstructor =
 		std::function<std::unique_ptr<SDLRenderPass>(SDL_GPUDevice *, SDL_GPUTextureFormat, SDLRendererMetrics *)>;
 	enum class SDLPassTarget { Scene, Output, Resolve };
+	enum class SDLPassPhase { Shadow, Sky, Opaque, Resolve, Gui };
 	struct SDLRenderPassDefinition {
 		SDLRenderPassConstructor Construct;
 		SDLPassTarget Target;
+		SDLPassPhase Phase;
 	};
 	[[nodiscard]] const std::vector<SDLRenderPassDefinition> &GetSDLRenderPassConstructors();
 }
