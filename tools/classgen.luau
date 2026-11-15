@@ -340,19 +340,17 @@ const function assembleImplFile(state: GenerationState)
 		end
 		output:untab():line("},")
 	end
-	output
-		:line(".Properties = {")
-		:tab()
-		:pushIndented(stringext.trim(state.definitionProperties:build()))
-		:newline()
+	output:line(".Properties = {"):tab()
+	const Properties = stringext.trim(state.definitionProperties:build())
+	if Properties ~= "" then output:pushIndented(Properties) end
+	output:newline()
 		:untab()
 		:pushIndented("},")
 		:newline()
-	output
-		:line(".Methods = {")
-		:tab()
-		:pushIndented(stringext.trim(state.definitionMethods:build()))
-		:newline()
+	output:line(".Methods = {"):tab()
+	const Methods = stringext.trim(state.definitionMethods:build())
+	if Methods ~= "" then output:pushIndented(Methods) end
+	output:newline()
 		:untab()
 		:pushIndented("},")
 		:newline()
