@@ -63,6 +63,24 @@ GargantuanRequireRejected(
 	"Player authenticated remote server without trust" "${GARGANTUAN_PLAYER}" "Authenticated join arguments are invalid"
 	--connect 192.0.2.10:46001 --join-proof-env GARGANTUAN_PLAYER_JOIN_PROOF_TEST
 )
+unset(ENV{GARGANTUAN_PLAYER_SERVER_KEY_TEST})
+GargantuanRequireRejected(
+	"Player missing remote server key" "${GARGANTUAN_PLAYER}" "Authenticated join arguments are invalid"
+	--connect 192.0.2.10:46001 --join-proof-env GARGANTUAN_PLAYER_JOIN_PROOF_TEST
+	--server-key-env GARGANTUAN_PLAYER_SERVER_KEY_TEST
+)
+set(ENV{GARGANTUAN_PLAYER_SERVER_KEY_TEST} "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+GargantuanRequireRejected(
+	"Player server key without proof" "${GARGANTUAN_PLAYER}" "Server identity arguments are invalid"
+	--connect 192.0.2.10:46001 --server-key-env GARGANTUAN_PLAYER_SERVER_KEY_TEST
+)
+set(ENV{GARGANTUAN_PLAYER_SERVER_KEY_TEST} "0000000000000000000000000000000000000000000000000000000000000000")
+GargantuanRequireRejected(
+	"Player zero remote server key" "${GARGANTUAN_PLAYER}" "Authenticated join arguments are invalid"
+	--connect 192.0.2.10:46001 --join-proof-env GARGANTUAN_PLAYER_JOIN_PROOF_TEST
+	--server-key-env GARGANTUAN_PLAYER_SERVER_KEY_TEST
+)
+unset(ENV{GARGANTUAN_PLAYER_SERVER_KEY_TEST})
 unset(ENV{GARGANTUAN_PLAYER_JOIN_PROOF_TEST})
 GargantuanRequireRejected(
 	"Player incomplete client farm" "${GARGANTUAN_PLAYER}" "client farm arguments are invalid"
