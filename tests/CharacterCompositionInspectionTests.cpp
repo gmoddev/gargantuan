@@ -166,7 +166,11 @@ int main() {
 		auto Limited = InspectCharacterComposition(CharacterValue, Assets, {2, 1, 1, 1});
 		Check(!Limited.Complete && !Limited.Valid && Limited.Issues.size() == 1 &&
 			Has(Limited, CharacterCompositionIssueCode::LimitReached),
-			"traversal and issue ceilings produce explicit incomplete result");
+			"traversal ceiling produces explicit incomplete result");
+		auto IssueLimited = InspectCharacterComposition(CharacterValue, Assets, {512, 128, 256, 1});
+		Check(!IssueLimited.Complete && !IssueLimited.Valid && IssueLimited.Issues.size() == 1 &&
+			Has(IssueLimited, CharacterCompositionIssueCode::LimitReached),
+			"diagnostic ceiling produces explicit incomplete result");
 		Rig->SetParent(WorkspaceValue);
 		auto Outside = InspectCharacterComposition(CharacterValue, Assets);
 		Check(Outside.Complete && !Outside.Valid &&
