@@ -642,6 +642,7 @@ namespace gargantuan {
 		}
 		if (Publication.FullResync || Publication.EnvironmentChanged) ++Changes.EnvironmentsUpdated;
 		Frame = Publication.Frame;
+		VisualAttachmentsComplete = Publication.VisualAttachmentsComplete;
 		LastPublicationId = Publication.Id;
 		Changes.MutationNanoseconds = static_cast<std::uint64_t>(
 			std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - MutationStart).count());
@@ -697,6 +698,7 @@ namespace gargantuan {
 		Frame.Environment = Snapshot.Environment;
 		++Changes.EnvironmentsUpdated;
 		Ui.reset();
+		VisualAttachmentsComplete = true;
 		return Changes;
 	}
 
@@ -713,6 +715,7 @@ namespace gargantuan {
 		AnimationPoses.clear();
 		LastPublicationId = InvalidRenderPublicationId;
 		Frame = {};
+		VisualAttachmentsComplete = true;
 		Ui.reset();
 	}
 

@@ -283,6 +283,8 @@ namespace gargantuan {
 		RenderPublicationId Id = InvalidRenderPublicationId;
 		RenderPublicationId BaseId = InvalidRenderPublicationId;
 		bool FullResync = false;
+		// False means bounded visual attachment extraction omitted the visual-only subset.
+		bool VisualAttachmentsComplete = true;
 		RenderFrameState Frame;
 		bool EnvironmentChanged = false;
 		std::vector<RenderObjectCreate> Creates;

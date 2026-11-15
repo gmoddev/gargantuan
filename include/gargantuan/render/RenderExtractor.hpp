@@ -8,16 +8,22 @@
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
 #include "gargantuan/render/RenderPublication.hpp"
 #include "gargantuan/render/RenderSnapshot.hpp"
+#include "gargantuan/datatypes/Signal.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <glm/glm.hpp>
 
 namespace gargantuan {
+	class AttachmentMesh;
+	class SemanticSpatialResolver;
 	class Camera;
 	class WorldRoot;
 
@@ -59,6 +65,9 @@ namespace gargantuan {
 		std::uint64_t FinalStateExtractionNanoseconds = 0;
 		std::uint64_t PublicationConstructionNanoseconds = 0;
 		std::uint64_t StateCacheReconciliationNanoseconds = 0;
+		// Full-resync-only scene discovery and incremental reverse-index work.
+		std::size_t VisualTraversalObjects = 0;
+		std::size_t VisualDependencyExpansions = 0;
 	};
 
 	class RenderPublisher final {
@@ -93,6 +102,7 @@ namespace gargantuan {
 			std::span<const RenderAnimationPoseState> Updates,
 			std::span<const RenderAnimationPoseRemove> Removes
 		);
+		void SetSpatialResolver(std::shared_ptr<SemanticSpatialResolver> Resolver);
 		[[nodiscard]] RenderPublicationId GetLastPublicationId() const { return LastPublicationId; }
 		[[nodiscard]] std::size_t GetPublishedObjectCount() const { return PublishedItems.size(); }
 		[[nodiscard]] std::size_t GetFullResyncCount() const { return FullResyncCount; }
@@ -100,6 +110,24 @@ namespace gargantuan {
 		[[nodiscard]] RenderPublisherProfile GetLastProfile() const { return LastProfile; }
 
 	  private:
+		static constexpr std::size_t MaximumVisualAttachments = 1024;
+		static constexpr std::size_t MaximumVisualTraversal = 131072;
+		static constexpr std::size_t MaximumVisualAncestry = 64;
+		static constexpr std::size_t MaximumVisualAssetDependencies = 258;
+		struct VisualDependency {
+			std::vector<ObjectId> Sources;
+			std::vector<std::string> Assets;
+			SignalConnection::Pointer PoseConnection;
+		};
+		void ClearVisualDependencies();
+		bool IndexVisual(const std::shared_ptr<AttachmentMesh> &Value);
+		void UnindexVisual(ObjectId Object);
+		std::weak_ptr<SemanticSpatialResolver> SpatialResolver;
+		std::unordered_map<ObjectId, VisualDependency> VisualDependencies;
+		std::unordered_map<ObjectId, std::vector<ObjectId>> VisualSourceDependents;
+		std::unordered_map<std::string, std::vector<ObjectId>> VisualAssetDependents;
+		std::uint64_t VisualAssetChangeSequence = 0;
+		bool VisualIncomplete = false;
 		struct PublishedDeformable {
 			RenderMeshIdentity Mesh;
 			std::uint64_t TopologyRevision = 0;

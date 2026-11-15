@@ -83,6 +83,7 @@ namespace gargantuan {
 		[[nodiscard]] std::size_t GetMeshCount() const { return Meshes.size(); }
 		[[nodiscard]] std::size_t GetTextureCount() const { return Textures.size(); }
 		[[nodiscard]] RenderPublicationId GetLastPublicationId() const { return LastPublicationId; }
+		[[nodiscard]] bool AreVisualAttachmentsComplete() const { return VisualAttachmentsComplete; }
 		[[nodiscard]] const RenderFrameState &GetFrame() const { return Frame; }
 		[[nodiscard]] const RenderUiFrame &GetUi() const {
 			static const RenderUiFrame Empty;
@@ -96,6 +97,7 @@ namespace gargantuan {
 
 	  private:
 		std::unordered_map<ObjectId, RenderProjectedObject> Entries;
+		bool VisualAttachmentsComplete = true;
 		struct MeshEntry {
 			std::uint64_t TopologyRevision = 0;
 			std::uint64_t VertexRevision = 0;

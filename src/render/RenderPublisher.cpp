@@ -7,6 +7,9 @@
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/DeformableBody.hpp"
+#include "gargantuan/classes/AttachmentMesh.hpp"
+#include "gargantuan/classes/Attachment.hpp"
+#include "gargantuan/classes/BasePart.hpp"
 #include "gargantuan/classes/LocalLight.hpp"
 #include "gargantuan/classes/ReflectionProbe.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
@@ -17,6 +20,7 @@
 #include "gargantuan/environment/EnvironmentSemantics.hpp"
 #include "gargantuan/environment/ReflectionProbeSemantics.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
+#include "gargantuan/runtime/SemanticSpatialResolver.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Lighting.hpp"
 
@@ -95,6 +99,15 @@ namespace gargantuan {
 		bool IsInWorld(const Instance &Value, const WorldRoot &World) {
 			auto Parent = Value.ParentReference.lock();
 			while (Parent) {
+				if (auto *Ancestor = dynamic_cast<WorldRoot *>(Parent.get())) return Ancestor == &World;
+				Parent = Parent->ParentReference.lock();
+			}
+			return false;
+		}
+
+		bool IsVisualInWorld(const Instance &Value, const WorldRoot &World) {
+			auto Parent = Value.ParentReference.lock();
+			for (std::size_t Depth = 0; Parent && Depth < SemanticSpatialResolver::MaximumAttachmentDepth; ++Depth) {
 				if (auto *Ancestor = dynamic_cast<WorldRoot *>(Parent.get())) return Ancestor == &World;
 				Parent = Parent->ParentReference.lock();
 			}
@@ -272,6 +285,144 @@ namespace gargantuan {
 			return ExtractedMeshPart{Item, Mesh->Mesh, PrimitiveStates->front().Material, PrimitiveStates};
 		}
 
+		std::optional<ExtractedMeshPart> ExtractAttachmentMesh(
+			const WorldRoot &World,
+			const std::shared_ptr<AttachmentMesh> &Visual,
+			const std::shared_ptr<SemanticSpatialResolver> &Spatial,
+			RenderExtractionDiagnostic &Diagnostic,
+			const RenderItem *Previous = nullptr
+		) {
+			const auto Object = Visual ? Visual->GetObjectId() : ObjectId{};
+			if (!Visual || Visual->GetDestroyed() || Visual->IsDestroying() ||
+				!Object.IsValid() || ObjectRegistry::Get().Lookup(Object).get() != Visual.get() ||
+				!IsVisualInWorld(*Visual, World)) {
+				Diagnostic = {RenderExtractionIssue::StaleObjectId, Object, "Skipped an unavailable AttachmentMesh"};
+				return std::nullopt;
+			}
+			if (!Visual->GetVisible()) return std::nullopt;
+			if (!Spatial) {
+				Diagnostic = {RenderExtractionIssue::InvalidTransform, Object, "AttachmentMesh has no semantic spatial resolver"};
+				return std::nullopt;
+			}
+			std::shared_ptr<BasePart> Owner;
+			std::vector<std::string> JointPaths;
+			auto Current = std::static_pointer_cast<Instance>(Visual);
+			for (std::size_t Depth = 0; Current && Depth < SemanticSpatialResolver::MaximumAttachmentDepth; ++Depth) {
+				if (auto Anchor = std::dynamic_pointer_cast<Attachment>(Current)) {
+					if (!Anchor->GetJointPath().empty()) JointPaths.push_back(Anchor->GetJointPath());
+				} else if (auto Part = std::dynamic_pointer_cast<BasePart>(Current)) {
+					Owner = std::move(Part);
+					break;
+				}
+				auto Parent = Current->GetParent();
+				Current = Parent ? *Parent : nullptr;
+			}
+			if (!Owner) {
+				Diagnostic = {RenderExtractionIssue::InvalidTransform, Object,
+					"AttachmentMesh has no bounded live BasePart socket owner"};
+				return std::nullopt;
+			}
+			auto WorldValue = World.GetDataModel();
+			const auto Service = WorldValue ? WorldValue->FindService("AssetService") : std::nullopt;
+			auto Assets = Service ? std::dynamic_pointer_cast<AssetService>(*Service) : nullptr;
+			if (!Assets) {
+				Diagnostic = {RenderExtractionIssue::UnsupportedGeometry, Object,
+					"AttachmentMesh has no canonical AssetService"};
+				return std::nullopt;
+			}
+			if (!JointPaths.empty()) {
+				const auto RigOwner = std::dynamic_pointer_cast<MeshPart>(Owner);
+				const auto Rig = RigOwner ? Assets->ResolveMeshResource(RigOwner->GetMesh()) : std::nullopt;
+				if (!Rig || !Rig->Value.Skeleton || !Rig->Value.Skeleton->Joints) {
+					Diagnostic = {RenderExtractionIssue::InvalidTransform, Object,
+						"AttachmentMesh joint socket has no available canonical skeleton"};
+					return std::nullopt;
+				}
+				for (const auto &Path : JointPaths)
+					if (!std::ranges::any_of(*Rig->Value.Skeleton->Joints,
+						[&](const ImportedSkeletonJoint &Joint) { return Joint.Path == Path; })) {
+						Diagnostic = {RenderExtractionIssue::InvalidTransform, Object,
+							"AttachmentMesh joint socket path is absent from the canonical skeleton"};
+						return std::nullopt;
+					}
+			}
+			const auto Socket = Spatial->ResolveAttachment(Visual);
+			if (!Socket || (!JointPaths.empty() && !Socket->Animated)) {
+				Diagnostic = {RenderExtractionIssue::InvalidTransform, Object,
+					"AttachmentMesh socket is unavailable or incompatible with the active rig"};
+				return std::nullopt;
+			}
+			const auto FrameMatrix = [](const CFrame &Frame) {
+				return glm::translate(glm::mat4(1.0f), Frame.Position) * glm::mat4(Frame.Rotation);
+			};
+			const auto OwnerSemantic = FrameMatrix(Owner->GetCFrame());
+			const auto OwnerPresentation = FrameMatrix(Owner->GetRenderCFrame());
+			const auto Model = OwnerPresentation * glm::inverse(OwnerSemantic) * Socket->Matrix *
+				glm::scale(glm::mat4(1.0f), Visual->GetSize());
+			const auto Inverse = Previous && Previous->ModelMatrix == Model
+				? Previous->InverseModelMatrix : glm::inverse(Model);
+			if (!IsFinite(Model) || !IsFinite(Inverse)) {
+				Diagnostic = {RenderExtractionIssue::InvalidTransform, Object,
+					"AttachmentMesh semantic or presentation transform is non-finite or singular"};
+				return std::nullopt;
+			}
+			const auto ColorValue = static_cast<glm::vec3>(Visual->GetColor());
+			const glm::vec4 Color(ColorValue, 1.0f - Visual->GetTransparency());
+			if (!IsFinite(Color)) {
+				Diagnostic = {RenderExtractionIssue::InvalidVisualState, Object,
+					"AttachmentMesh color or transparency is invalid"};
+				return std::nullopt;
+			}
+			const auto Mesh = Assets->ResolveMeshResource(Visual->GetMesh());
+			if (!Mesh || !Mesh->Value.Indices || Mesh->Value.Indices->empty() ||
+				Mesh->Value.Skeleton || Mesh->Value.SkinInfluences) {
+				Diagnostic = {RenderExtractionIssue::UnsupportedGeometry, Object,
+					"AttachmentMesh requires an available rigid Mesh asset"};
+				return std::nullopt;
+			}
+			const RenderItem Item{Object, RenderGeometry::Block, Model, Inverse, Color, Visual->GetCastShadow()};
+			auto ResolveMaterial = [&](std::string_view Reference) -> std::optional<RenderMaterialState> {
+				if (Reference.empty()) {
+					RenderMaterialState Default;
+					Default.BaseColorFactor *= Color;
+					if (Default.BaseColorFactor.a < 1.0f) Default.OpacityMode = RenderOpacityMode::Transparent;
+					return Default;
+				}
+				const auto Record = Assets->GetAsset(Reference);
+				if (!Record || Record->Kind != AssetKind::Material || !Assets->IsAvailable(Reference))
+					return std::nullopt;
+				auto Resolved = Assets->ResolveMaterial(Reference);
+				if (!Resolved) return std::nullopt;
+				auto Material = Resolved->RenderState;
+				Material.BaseColorFactor *= Color;
+				if (Material.OpacityMode == RenderOpacityMode::Opaque && Material.BaseColorFactor.a < 1.0f)
+					Material.OpacityMode = RenderOpacityMode::Transparent;
+				return Material;
+			};
+			auto Primitives = std::make_shared<std::vector<RenderPrimitiveMaterialState>>();
+			if (!Visual->GetMaterial().empty()) {
+				auto Material = ResolveMaterial(Visual->GetMaterial());
+				if (Material) Primitives->push_back({0, static_cast<std::uint32_t>(Mesh->Value.Indices->size()), *Material});
+			} else if (Mesh->Value.Primitives && !Mesh->Value.Primitives->empty()) {
+				Primitives->reserve(Mesh->Value.Primitives->size());
+				for (const auto &Primitive : *Mesh->Value.Primitives) {
+					const auto Reference = Primitive.Material
+						? AssetReference::FromAssetId(*Primitive.Material).Value : std::string{};
+					auto Material = ResolveMaterial(Reference);
+					if (!Material) break;
+					Primitives->push_back({Primitive.FirstIndex, Primitive.IndexCount, *Material});
+				}
+			} else if (auto Material = ResolveMaterial({}))
+				Primitives->push_back({0, static_cast<std::uint32_t>(Mesh->Value.Indices->size()), *Material});
+			if (Primitives->empty() || (Mesh->Value.Primitives && Visual->GetMaterial().empty() &&
+				Primitives->size() != Mesh->Value.Primitives->size())) {
+				Diagnostic = {RenderExtractionIssue::InvalidVisualState, Object,
+					"AttachmentMesh Material asset is missing or unavailable"};
+				return std::nullopt;
+			}
+			return ExtractedMeshPart{Item, Mesh->Mesh, Primitives->front().Material, Primitives};
+		}
+
 		struct ExtractedDeformable {
 			RenderItem Item;
 			RenderMeshIdentity Mesh;
@@ -446,7 +597,93 @@ namespace gargantuan {
 	}
 
 	RenderPublisher::~RenderPublisher() {
+		ClearVisualDependencies();
 		if (Dirty) Dirty->ReleaseConsumer(DirtyConsumer);
+	}
+
+	void RenderPublisher::SetSpatialResolver(std::shared_ptr<SemanticSpatialResolver> Resolver) {
+		if (SpatialResolver.lock() == Resolver) return;
+		SpatialResolver = std::move(Resolver);
+		RequestFullResync();
+	}
+
+	void RenderPublisher::ClearVisualDependencies() {
+		for (auto &[Object, Dependency] : VisualDependencies) {
+			(void)Object;
+			if (Dependency.PoseConnection) Dependency.PoseConnection->Disconnect();
+		}
+		VisualDependencies.clear();
+		VisualSourceDependents.clear();
+		VisualAssetDependents.clear();
+	}
+
+	void RenderPublisher::UnindexVisual(ObjectId Object) {
+		const auto Found = VisualDependencies.find(Object);
+		if (Found == VisualDependencies.end()) return;
+		if (Found->second.PoseConnection) Found->second.PoseConnection->Disconnect();
+		for (const auto Source : Found->second.Sources) {
+			if (auto Dependents = VisualSourceDependents.find(Source); Dependents != VisualSourceDependents.end()) {
+				std::erase(Dependents->second, Object);
+				if (Dependents->second.empty()) VisualSourceDependents.erase(Dependents);
+			}
+		}
+		for (const auto &Reference : Found->second.Assets) {
+			if (auto Dependents = VisualAssetDependents.find(Reference); Dependents != VisualAssetDependents.end()) {
+				std::erase(Dependents->second, Object);
+				if (Dependents->second.empty()) VisualAssetDependents.erase(Dependents);
+			}
+		}
+		VisualDependencies.erase(Found);
+	}
+
+	bool RenderPublisher::IndexVisual(const std::shared_ptr<AttachmentMesh> &Value) {
+		if (!Value || Value->GetDestroyed() || Value->IsDestroying()) return false;
+		const auto Object = Value->GetObjectId();
+		if (!Object.IsValid() || ObjectRegistry::Get().Lookup(Object).get() != Value.get()) return false;
+		UnindexVisual(Object);
+		if (VisualDependencies.size() >= MaximumVisualAttachments) return false;
+		VisualDependency Dependency;
+		Dependency.Sources.push_back(Object);
+		auto Parent = Value->GetParent();
+		bool OwnerFound = false;
+		for (std::size_t Depth = 0; Parent && *Parent && Depth < MaximumVisualAncestry; ++Depth) {
+			if (auto Anchor = std::dynamic_pointer_cast<Attachment>(*Parent))
+				Dependency.Sources.push_back(Anchor->GetObjectId());
+			if (auto Part = std::dynamic_pointer_cast<BasePart>(*Parent)) {
+				OwnerFound = true;
+				Dependency.Sources.push_back(Part->GetObjectId());
+				if (auto Rig = std::dynamic_pointer_cast<MeshPart>(Part))
+					if (!Rig->GetMesh().empty()) Dependency.Assets.push_back(Rig->GetMesh());
+				break;
+			}
+			Parent = (*Parent)->GetParent();
+		}
+		if (Parent && *Parent && !OwnerFound) return false;
+		if (!Value->GetMesh().empty()) Dependency.Assets.push_back(Value->GetMesh());
+		if (!Value->GetMaterial().empty()) Dependency.Assets.push_back(Value->GetMaterial());
+		else if (auto Model = Value->GetDataModel()) {
+			const auto Service = Model->FindService("AssetService");
+			if (auto Assets = Service ? std::dynamic_pointer_cast<AssetService>(*Service) : nullptr)
+				if (auto Mesh = Assets->ResolveMeshResource(Value->GetMesh());
+					Mesh && Mesh->Value.Primitives) {
+					if (Mesh->Value.Primitives->size() > AssetLimits::MaximumMeshSubmeshes) return false;
+					for (const auto &Primitive : *Mesh->Value.Primitives)
+						if (Primitive.Material)
+							Dependency.Assets.push_back(AssetReference::FromAssetId(*Primitive.Material).Value);
+				}
+		}
+		if (Dependency.Assets.size() > MaximumVisualAssetDependencies) return false;
+		Dependency.PoseConnection = Value->GetPropertyChangedSignal("WorldCFrame")->Connect(
+			[this, Object](std::monostate) {
+				if (Scope.IsValid()) Dirty->Mark(Scope, Object, RenderUpdateDomain::Transform);
+			}
+		);
+		for (const auto Source : Dependency.Sources)
+			VisualSourceDependents[Source].push_back(Object);
+		for (const auto &Reference : Dependency.Assets)
+			VisualAssetDependents[Reference].push_back(Object);
+		VisualDependencies.emplace(Object, std::move(Dependency));
+		return true;
 	}
 
 	std::shared_ptr<const std::vector<RenderReflectionProbeState>> RenderPublisher::BuildReflectionProbes(
@@ -908,6 +1145,9 @@ namespace gargantuan {
 		const auto Camera = BuildCamera(CameraInput, ViewportWidth, ViewportHeight);
 
 		if (PublishedWorld != &World || Scope != CurrentScope) {
+			ClearVisualDependencies();
+			VisualAssetChangeSequence = 0;
+			VisualIncomplete = false;
 			if (Scope.IsValid()) Dirty->ReleaseConsumer(DirtyConsumer, Scope);
 			PublishedWorld = &World;
 			Scope = CurrentScope;
@@ -928,6 +1168,7 @@ namespace gargantuan {
 		}
 
 		auto FullResync = [&]() -> RenderPublicationPtr {
+			ClearVisualDependencies();
 			auto Snapshot = FullExtractor.Extract(World, CameraInput, ViewportWidth, ViewportHeight);
 			auto Result = std::make_shared<RenderPublication>();
 			Result->Id = LastPublicationId + 1;
@@ -964,6 +1205,70 @@ namespace gargantuan {
 				Result->Creates.push_back({Extracted->Item, DisplayMesh, Extracted->Material, true,
 					Extracted->Primitives});
 				Replacement.emplace(Extracted->Item.Object, Extracted->Item);
+			}
+			// Discover visual-only socket meshes once per full resync. The limit is above
+			// the saved scene object bound and also bounds runtime-only scenes.
+			std::vector<std::shared_ptr<Instance>> Pending;
+			Pending.reserve(std::min(World.Children.size(), MaximumVisualTraversal));
+			if (World.Children.size() <= MaximumVisualTraversal)
+				for (const auto &Child : World.Children) Pending.push_back(Child);
+			std::vector<std::shared_ptr<AttachmentMesh>> Visuals;
+			std::size_t Visited = 1;
+			bool VisualOverflow = World.Children.size() > MaximumVisualTraversal;
+			while (!Pending.empty() && !VisualOverflow) {
+				auto Current = std::move(Pending.back());
+				Pending.pop_back();
+				if (!Current || ++Visited > MaximumVisualTraversal ||
+					Pending.size() + Current->Children.size() > MaximumVisualTraversal) {
+					VisualOverflow = true;
+					break;
+				}
+				if (auto Visual = std::dynamic_pointer_cast<AttachmentMesh>(Current)) {
+					if (Visuals.size() >= MaximumVisualAttachments) { VisualOverflow = true; break; }
+					Visuals.push_back(std::move(Visual));
+				}
+				for (auto It = Current->Children.rbegin(); It != Current->Children.rend(); ++It)
+					Pending.push_back(*It);
+			}
+			LastProfile.VisualTraversalObjects = Visited;
+			if (VisualOverflow) {
+				VisualIncomplete = true;
+				Result->VisualAttachmentsComplete = false;
+				Result->Diagnostics.push_back({RenderExtractionIssue::PublicationOverflow, {},
+					"AttachmentMesh discovery exceeded the bounded scene or visual limit; all visual attachments were omitted"});
+			} else {
+				std::ranges::sort(Visuals, {}, [](const auto &Value) { return Value->GetObjectId(); });
+				for (const auto &Visual : Visuals) {
+					if (!IndexVisual(Visual)) { VisualOverflow = true; break; }
+					RenderExtractionDiagnostic Diagnostic;
+					auto Extracted = ExtractAttachmentMesh(World, Visual, SpatialResolver.lock(), Diagnostic);
+					if (!Extracted) {
+						if (Visual->GetVisible()) Result->Diagnostics.push_back(std::move(Diagnostic));
+						continue;
+					}
+					Result->Creates.push_back({Extracted->Item, Extracted->Mesh,
+						Extracted->Material, true, Extracted->Primitives});
+					Replacement.emplace(Extracted->Item.Object, Extracted->Item);
+				}
+				if (VisualOverflow) {
+					VisualIncomplete = true;
+					Result->VisualAttachmentsComplete = false;
+					Result->Diagnostics.push_back({RenderExtractionIssue::PublicationOverflow, {},
+						"AttachmentMesh dependency index exceeded its bound; all visual attachments were omitted"});
+					for (const auto &Visual : Visuals) Replacement.erase(Visual->GetObjectId());
+					std::erase_if(Result->Creates, [&](const RenderObjectCreate &Create) {
+						return std::ranges::any_of(Visuals, [&](const auto &Visual) {
+							return Visual->GetObjectId() == Create.Item.Object;
+						});
+					});
+					ClearVisualDependencies();
+				}
+				else VisualIncomplete = false;
+			}
+			if (auto Model = World.GetDataModel()) {
+				const auto Service = Model->FindService("AssetService");
+				if (auto Assets = Service ? std::dynamic_pointer_cast<AssetService>(*Service) : nullptr)
+					VisualAssetChangeSequence = Assets->ReadChanges(VisualAssetChangeSequence).NextSequence;
 			}
 			std::vector<std::shared_ptr<DeformableBody>> OrderedDeformables;
 			OrderedDeformables.reserve(World.SoftBodies.size());
@@ -1045,6 +1350,20 @@ namespace gargantuan {
 		};
 
 		if (FullResyncRequested || DirtyBatch.FullResyncRequired) return FullResync();
+		std::vector<ObjectId> VisualAssetDirty;
+		if (auto Model = World.GetDataModel()) {
+			const auto Service = Model->FindService("AssetService");
+			if (auto Assets = Service ? std::dynamic_pointer_cast<AssetService>(*Service) : nullptr) {
+				auto Changes = Assets->ReadChanges(VisualAssetChangeSequence);
+				VisualAssetChangeSequence = Changes.NextSequence;
+				if (Changes.RescanRequired) return FullResync();
+				for (const auto &Change : Changes.Changes)
+					if (const auto Dependents = VisualAssetDependents.find(Change.Reference);
+						Dependents != VisualAssetDependents.end())
+						VisualAssetDirty.insert(VisualAssetDirty.end(),
+							Dependents->second.begin(), Dependents->second.end());
+			}
+		}
 
 		const auto ExpansionStart = ProfilingEnabled ? ProfileClock::now() : ProfileClock::time_point{};
 		std::vector<std::pair<ObjectId, RenderUpdateDomain>> DirtyObjects;
@@ -1052,6 +1371,7 @@ namespace gargantuan {
 		const bool HasHierarchyChanges = std::ranges::any_of(DirtyBatch.Records, [](const RenderDirtyRecord &Record) {
 			return HasRenderUpdateDomain(Record.Domains, RenderUpdateDomain::Hierarchy);
 		});
+		if (VisualIncomplete && (HasHierarchyChanges || !VisualAssetDirty.empty())) return FullResync();
 		if (!HasHierarchyChanges) {
 			for (const auto &Record : DirtyBatch.Records) DirtyObjects.emplace_back(Record.Object, Record.Domains);
 		} else {
@@ -1064,6 +1384,7 @@ namespace gargantuan {
 				auto AddRenderable = [&](const std::shared_ptr<Instance> &Candidate) {
 					if (!std::dynamic_pointer_cast<Part>(Candidate) &&
 						!std::dynamic_pointer_cast<MeshPart>(Candidate) &&
+						!std::dynamic_pointer_cast<AttachmentMesh>(Candidate) &&
 						!std::dynamic_pointer_cast<DeformableBody>(Candidate)) return;
 					const auto Object = Candidate->GetObjectId();
 					Expanded[Object] = Expanded[Object] | RenderUpdateDomain::Transform | RenderUpdateDomain::Material |
@@ -1075,6 +1396,24 @@ namespace gargantuan {
 			DirtyObjects.assign(Expanded.begin(), Expanded.end());
 			DirtyObjects.reserve(DirtyObjects.size() + PendingAnimationObjects.size());
 		}
+		for (const auto &Record : DirtyBatch.Records)
+			if (const auto Dependents = VisualSourceDependents.find(Record.Object);
+				Dependents != VisualSourceDependents.end())
+				for (const auto Object : Dependents->second) {
+					DirtyObjects.emplace_back(Object, Record.Domains | RenderUpdateDomain::Transform);
+					++LastProfile.VisualDependencyExpansions;
+				}
+		for (const auto Object : VisualAssetDirty)
+			DirtyObjects.emplace_back(Object, RenderUpdateDomain::Geometry | RenderUpdateDomain::Material);
+		std::ranges::sort(DirtyObjects, {}, &std::pair<ObjectId, RenderUpdateDomain>::first);
+		std::vector<std::pair<ObjectId, RenderUpdateDomain>> MergedDirty;
+		MergedDirty.reserve(DirtyObjects.size());
+		for (const auto &[Object, Domains] : DirtyObjects) {
+			if (!MergedDirty.empty() && MergedDirty.back().first == Object)
+				MergedDirty.back().second = MergedDirty.back().second | Domains;
+			else MergedDirty.emplace_back(Object, Domains);
+		}
+		DirtyObjects = std::move(MergedDirty);
 		if (!PendingAnimationObjects.empty()) {
 			std::ranges::sort(DirtyObjects, {}, &std::pair<ObjectId, RenderUpdateDomain>::first);
 			for (const auto Object : PendingAnimationObjects) {
@@ -1093,6 +1432,7 @@ namespace gargantuan {
 		auto Result = std::make_shared<RenderPublication>();
 		Result->Id = LastPublicationId + 1;
 		Result->BaseId = LastPublicationId;
+		Result->VisualAttachmentsComplete = !VisualIncomplete;
 		const bool EnvironmentDirty = !HasPublishedEnvironment || !PendingTextureCreates.empty() ||
 									  !PendingTextureUpdates.empty() || !PendingTextureRemoves.empty() ||
 								  std::ranges::any_of(DirtyBatch.Records, [&](const RenderDirtyRecord &Record) {
@@ -1123,7 +1463,42 @@ namespace gargantuan {
 			auto InstanceValue = ObjectRegistry::Get().Lookup(Object);
 			auto PartValue = std::dynamic_pointer_cast<Part>(InstanceValue);
 			auto MeshPartValue = std::dynamic_pointer_cast<MeshPart>(InstanceValue);
+			auto AttachmentMeshValue = std::dynamic_pointer_cast<AttachmentMesh>(InstanceValue);
 			auto DeformableValue = std::dynamic_pointer_cast<DeformableBody>(InstanceValue);
+			if (AttachmentMeshValue || VisualDependencies.contains(Object)) {
+				const bool InWorld = AttachmentMeshValue && !AttachmentMeshValue->GetDestroyed() &&
+					!AttachmentMeshValue->IsDestroying() && IsVisualInWorld(*AttachmentMeshValue, World);
+				if (!InWorld) {
+					UnindexVisual(Object);
+					if (Previous != PublishedItems.end()) Result->Removes.push_back({Object});
+					continue;
+				}
+				const bool RefreshIndex = !VisualDependencies.contains(Object) ||
+					HasRenderUpdateDomain(Domains, RenderUpdateDomain::Hierarchy) ||
+					HasRenderUpdateDomain(Domains, RenderUpdateDomain::Geometry) ||
+					HasRenderUpdateDomain(Domains, RenderUpdateDomain::Material);
+				if (RefreshIndex && !IndexVisual(AttachmentMeshValue)) {
+					VisualIncomplete = true;
+					Dirty->RequestFullResync(Scope, "AttachmentMesh dependency index exceeded its bound");
+					return FullResync();
+				}
+				RenderExtractionDiagnostic Diagnostic;
+				auto Extracted = ExtractAttachmentMesh(World, AttachmentMeshValue,
+					SpatialResolver.lock(), Diagnostic, Previous == PublishedItems.end() ? nullptr : &Previous->second);
+				if (!Extracted) {
+					if (AttachmentMeshValue->GetVisible()) Result->Diagnostics.push_back(std::move(Diagnostic));
+					if (Previous != PublishedItems.end()) Result->Removes.push_back({Object});
+					continue;
+				}
+				if (Previous == PublishedItems.end()) Result->Creates.push_back({
+					Extracted->Item, Extracted->Mesh, Extracted->Material, true, Extracted->Primitives
+				});
+				else Result->Updates.push_back({
+					Object, Domains, Extracted->Item, Extracted->Mesh,
+					Extracted->Material, true, Extracted->Primitives
+				});
+				continue;
+			}
 			if (DeformableValue) {
 				const bool ShouldRender = !DeformableValue->GetDestroyed() && !DeformableValue->IsDestroying() &&
 					IsInWorld(*DeformableValue, World);
