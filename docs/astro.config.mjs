@@ -17,6 +17,7 @@ export default defineConfig({
           { label: "Capabilities and platforms", slug: "guides/getting-started" },
           { label: "Build and run", slug: "developing/working-on-gargantuan" },
           { label: "Your first project", slug: "guides/first-project" },
+          { label: "Character authoring", slug: "guides/character-authoring" },
           { label: "Porting from Roblox", slug: "guides/roblox-deviations" },
         ] },
         { label: "Engine architecture", items: [

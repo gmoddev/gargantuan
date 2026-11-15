@@ -1,0 +1,133 @@
+---
+title: Character authoring
+description: Assemble a skinned Character, preview transitions, attach rigid visuals, and connect replaceable gameplay policy.
+---
+
+This guide describes the advanced creator feature under qualification. Use a
+Studio build pinned to the exact Engine source and runtime files recorded by
+its paired receipt. The Engine handshake must advertise `CharacterComposition`
+and `AnimationPreviewBlend`, both version 1; the schema must include
+`AttachmentMesh` for rigid accessories. The
+[capability matrix and qualification gates](../../../../../devdocs/AdvancedCreatorAuthoring/CapabilityMatrix.md)
+separate the integrated baseline, new implementation and pending native evidence.
+
+## Assemble the actor
+
+Create a project through Studio's New Project command. Import a skinned glTF or
+GLB through the asset tools, then inspect its canonical rig and compatible clip
+list. Skeleton topology is authored in the source asset. The importer accepts
+the existing bounded rig profile; exact skeleton compatibility determines which
+clips can play together.
+
+Use the Character tools to create a `Character` or `KinematicCharacter`. A
+Character is the semantic actor; KinematicCharacter supplies the existing
+capsule movement primitive. A logical Character can have a null root. For a
+visible skinned actor, create an imported MeshPart root and a direct Animator
+child of that MeshPart. Bind `Character.RootPart` to that descendant through
+the typed reference picker. Engine validates ownership and type before commit.
+
+Configure collision independently of visual topology. The shipped kinematic
+assembly uses an anchored, non-collidable visual root and a separate capsule
+query policy. Review `CapsuleRadius`, `CapsuleHeight` and the Character spawn
+transform. A skinned mesh does not supply deforming triangle collision. A rigid
+Part root remains a supported alternative.
+
+Inspect the Character composition before Play. The result reports the
+authoring hierarchy, canonical asset availability/revisions, Animator counts,
+collision facts and socket paths. Warnings are advisory. A null root is valid;
+`Complete = false` means the bounded inspection did not cover the whole graph.
+The public limits are 512 visited objects, 128 meshes, 256 attachments and
+128 issues. Inspection neither runs scripts nor evaluates a gameplay pose.
+
+## Preview clips and transitions
+
+Open the imported rig in animation preview. Select a joint to inspect its
+canonical path and overlay on the captured pose. Studio ties that overlay to
+the exact displayed frame, camera, dimensions and preview lifetime.
+
+Choose compatible Primary and Secondary clips. Each slot has independent
+play, pause, seek, loop and speed controls. A blend weight of zero selects the
+Primary pose; one selects Secondary; intermediate values blend their absolute
+TRS poses. Replacing a clip validates the new candidate before retiring the
+old one. Missing content or an incompatible rig leaves the previous selection
+available. Preview has no project history or saved active tracks.
+
+Root motion stays disabled in this disposable visual preview. Runtime movement
+and action requests still pass through Character/physics/server admission.
+The preview does not author new clip keys or markers. Timeline editing,
+canonical markers, additive layers, IK, cross-rig retargeting and motion warping
+have separate representation and qualification needs, recorded in the matrix.
+
+## Add appearance and socket variants
+
+Use Appearance to choose a rigid imported Mesh and optional Material. Select a
+canonical rig joint, or an existing Attachment, as the socket parent. The tool
+creates an `AttachmentMesh` through the schema-backed authoring boundary. Edit
+its inherited relative `CFrame`, `JointPath`, local `Size`, color and visibility
+through ordinary properties. It follows the semantic socket pose, including
+joint scale, without adding a physical body or another Character controller.
+
+Duplicate a visual to retain alternative appearances. The variant workflow
+switches the visibility of eligible siblings with one prepared property batch,
+one history action and an exact revision/scope. It requires each target's saved,
+editable, writable `Visible` property to advertise `AtomicBatchWritable`; the
+256-write limit is checked before submission. The saved hierarchy is the
+composition format, so save/load, runtime edits and structural replication use
+the existing graph and asset catalog.
+
+Unavailable assets or an unresolved joint omit a visual with diagnostics.
+After incompatible skeleton reimport, reauthor the socket explicitly before
+expecting a live binding. Canonical `JointPathExists` inspection alone does not
+prove that binding. See the
+[AttachmentMesh contract](../../../../../devdocs/CurrentArchitecture/AttachmentMesh.md)
+for publication/resource limits and asset retirement guards.
+
+## Connect input, animation and actions
+
+Gameplay tools expose the saved `Players.CharacterAutoLoads`,
+`DefaultControllerEnabled` and `DefaultCameraEnabled` policies. Engine
+establishes their persistent service root before the initial project revision;
+that establishment does not create runtime players or start controllers.
+Use the existing InputContext, InputAction and InputBinding tools for authored
+input and Play input inspection for live evaluator state. Runtime ActionMap
+bindings and `Workspace.CurrentCamera` are not saved writable authoring fields.
+
+The [project-owned examples](https://github.com/gmoddev/gargantuan/blob/main/docs/examples/README.md)
+provide an authored skinned template replacement policy, a three-state animation
+driver and a client/server action request pair. Author their ModuleScript and
+Script sources through Studio's retained source buffer and Commit Source.
+Draft Undo and authoritative Engine Undo have different owners. Set the
+script contexts and asset-reference attributes described by each example.
+
+Keep the three default Players switches enabled when using the template
+replacement example. The shipped policy creates the initial actor, then a
+server Script clones the authored template and assigns `Player.Character`.
+Cloning remaps the internal root reference; assigning the Character removes
+the old actor and publishes normal lifecycle signals. There can be a brief default
+Part-root actor before replacement. Keep gameplay scripts outside the template
+to avoid cloning another policy owner.
+
+The animation module chooses Idle, Move and Action in game Luau. Action
+presentation starts after `CharacterControlService.ActionResolved` reports
+acceptance, and returns to locomotion on `ActionEnded`. `RequestAction` returning
+true means submitted. The server's one action policy determines acceptance;
+registered translation/yaw still pass through collision-authoritative admission.
+A local Play session alone does not prove a real client/server topology.
+
+Add an InteractionPrompt, Attachment and Camera through the existing authoring
+tools as the game needs. Gameplay tools can navigate to nearby policy source;
+they do not install a hidden native gameplay state machine.
+
+## Save, reopen, run and package
+
+Save the authoritative project and reopen it before acceptance. Reconcile a
+fresh snapshot and discard identities, preview state and asynchronous replies
+from the old project scope. Play creates an isolated runtime; Stop returns to
+the saved authoring graph. Exercise movement, animation transitions, the socket
+visual and interaction policy, then inspect diagnostics and collision results.
+
+Package through the existing Engine package job and run the frozen standalone
+output. Its catalog must include the referenced rig, clips, materials and rigid
+accessories. Native GUI acceptance, real client/server action admission,
+packaged execution and resource/performance qualification are separate gates;
+unit fixtures and Luau model checks do not establish them.

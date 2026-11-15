@@ -47,6 +47,18 @@ class DocumentationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Documentation.Fields('{[Expression()] = true}')
 
+    def test_api_diagnostics_do_not_hide_invalid_method_calls(self):
+        with tempfile.TemporaryDirectory() as Temporary:
+            Folder = pathlib.Path(Temporary)
+            (Folder / "docs/examples").mkdir(parents=True)
+            Source = Folder / "docs/examples/character.luau"
+            Source.write_text('warn("[Character:Template] Missing setup")\nCharacter:Move(Vector3.zero)\nCharacter:MissingMethod()\n', encoding="utf8")
+            Api = {"Classes": [{"Name": "Character", "Extends": "Folder", "Properties": [],
+                                "Methods": [{"Name": "Move"}], "Signals": []}]}
+            with mock.patch.object(Documentation, "Root", Folder):
+                Findings = Documentation.ApiReferences([Source], Api)
+            self.assertEqual([Item["Target"] for Item in Findings], ["Character.MissingMethod"])
+
     def test_current_accepted_decisions_remain_normative(self):
         self.assertEqual(Documentation.Classify("docs/adr/D03.md", "status: accepted")[0], "Current")
         self.assertEqual(Documentation.Classify("docs/adr/D02.md", "status: historical-proposal")[0], "Historical")
