@@ -447,12 +447,16 @@ const function assembleFile(target: Target, inputFilepath: path.Pathlike)
 
 	if not isHeaderUpdated then
 		fs.writeStringToFile(headerOutput, assembleHeaderFile(state):build())
-		process.run({ "clang-format", "-i", path.format(headerOutput) })
+		if process.run({ "clang-format", "-i", path.format(headerOutput) }).exitcode ~= 0 then
+			error("[Tools:ClassGen] clang-format failed for generated header")
+		end
 	end
 
 	if not isImplUpdated then
 		fs.writeStringToFile(implOutput, assembleImplFile(state):build())
-		process.run({ "clang-format", "-i", path.format(implOutput) })
+		if process.run({ "clang-format", "-i", path.format(implOutput) }).exitcode ~= 0 then
+			error("[Tools:ClassGen] clang-format failed for generated implementation")
+		end
 	end
 end
 
