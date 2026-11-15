@@ -13,12 +13,17 @@
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/editor/EditorViewport.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
+#include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
+#include "gargantuan/network/ReplicaApplier.hpp"
+#include "gargantuan/network/ReplicationCoordinator.hpp"
+#include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/SemanticSpatialResolver.hpp"
+#include "gargantuan/runtime/Snapshot.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
@@ -74,6 +79,163 @@ namespace {
 		std::ofstream Output(Path, std::ios::binary);
 		Output << Value;
 		Check(static_cast<bool>(Output), "fixture write succeeded");
+	}
+
+	void TestStructuralReplication() {
+		using namespace gargantuan::network;
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto Owner = std::make_shared<Part>();
+		Owner->SetParent(World);
+		auto Socket = std::make_shared<Attachment>();
+		Socket->SetCFrame(CFrame(1.0f, 2.0f, 3.0f));
+		Socket->SetParent(Owner);
+		auto Visual = std::make_shared<AttachmentMesh>();
+		Visual->SetMesh("asset://00000000000000000000000000000001");
+		Visual->SetMaterial("asset://00000000000000000000000000000002");
+		Visual->SetJointPath("CustomRoot/Socket");
+		Visual->SetCFrame(CFrame(0.25f, 0.0f, 0.0f));
+		Visual->SetSize({1.0f, 2.0f, 3.0f});
+		Visual->SetColor(Color3(0.5f, 0.25f, 1.0f));
+		Visual->SetTransparency(0.4f);
+		Visual->SetVisible(false);
+		Visual->SetCastShadow(false);
+		Visual->SetParent(Socket);
+		const auto SnapshotValue = CaptureSnapshotObject(Visual);
+		for (const auto Name : {"CFrame", "JointPath", "Mesh", "Material", "Size",
+			"Color", "Transparency", "Visible", "CastShadow"})
+			Check(SnapshotValue.Properties.contains(Name),
+				"AttachmentMesh saved/replicated property is present in the native snapshot");
+		Check(!SnapshotValue.Properties.contains("WorldCFrame") &&
+			!SnapshotValue.Properties.contains("Archivable"),
+			"transient pose and nonreplicated authoring flags stay outside structural state");
+		ReplicationCoordinator Coordinator(Game);
+		const ConnectionId Peer{381, 1};
+		const auto Baseline = Coordinator.AddPeer(Peer, ReplicationEpoch(1));
+		Check(Baseline.Succeeded(), "AttachmentMesh structural baseline is produced");
+		const PreparedPublishReplication *PublishedVisual = nullptr;
+		for (const auto &Operation : Baseline.Frame->Operations)
+			if (const auto *Publish = std::get_if<PreparedPublishReplication>(&Operation.Intent);
+				Publish && Publish->Object == Visual->GetObjectId()) PublishedVisual = Publish;
+		Check(PublishedVisual && PublishedVisual->Template &&
+			PublishedVisual->Template->Publication.ClassName == "AttachmentMesh" &&
+			PublishedVisual->Template->Publication.Properties == SnapshotValue.Properties,
+			"structural baseline uses the generated class and only its replicated property values");
+		const auto Bytes = EncodeReplicationFrame(*Baseline.Frame);
+		Check(static_cast<bool>(Bytes), "AttachmentMesh baseline encodes through the existing wire protocol");
+		ReplicaApplier Replica;
+		Check(Replica.ApplyBytes(*Bytes).Succeeded(),
+			"AttachmentMesh baseline applies through the existing replica authority");
+		auto Remote = std::dynamic_pointer_cast<AttachmentMesh>(Replica.Resolve(Visual->GetObjectId()));
+		Check(Remote && Remote->GetMesh() == Visual->GetMesh() &&
+			Remote->GetMaterial() == Visual->GetMaterial() &&
+			Remote->GetJointPath() == Visual->GetJointPath() &&
+			Remote->GetCFrame().FuzzyEq(Visual->GetCFrame()) &&
+			Remote->GetSize() == Visual->GetSize() &&
+			static_cast<glm::vec3>(Remote->GetColor()) == static_cast<glm::vec3>(Visual->GetColor()) &&
+			Remote->GetTransparency() == Visual->GetTransparency() &&
+			Remote->GetVisible() == Visual->GetVisible() &&
+			Remote->GetCastShadow() == Visual->GetCastShadow() &&
+			Remote->GetParent() && *Remote->GetParent() == Replica.Resolve(Socket->GetObjectId()),
+			"replica reconstructs authored visual state and socket ancestry");
+		Visual->SetMesh("asset://00000000000000000000000000000003");
+		Visual->SetMaterial("");
+		Visual->SetVisible(true);
+		Visual->SetSize({2.0f, 2.0f, 2.0f});
+		Visual->SetTransparency(0.2f);
+		Visual->SetCastShadow(true);
+		Visual->SetJointPath("CustomRoot/OtherSocket");
+		const auto Updated = Coordinator.ProduceIncremental(Peer);
+		Check(Updated.Succeeded() && Replica.ApplyFrame(*Updated.Frame).Succeeded() &&
+			Remote->GetMesh() == Visual->GetMesh() && Remote->GetMaterial().empty() &&
+			Remote->GetVisible() && Remote->GetSize() == Visual->GetSize() &&
+			Remote->GetTransparency() == Visual->GetTransparency() && Remote->GetCastShadow() &&
+			Remote->GetJointPath() == Visual->GetJointPath(),
+			"authoritative visual and socket changes replicate incrementally");
+		Visual->SetParent(Owner);
+		const auto Reparented = Coordinator.ProduceIncremental(Peer);
+		Check(Reparented.Succeeded() && Replica.ApplyFrame(*Reparented.Frame).Succeeded() &&
+			Remote->GetParent() && *Remote->GetParent() == Replica.Resolve(Owner->GetObjectId()),
+			"structural reparenting retains the visual's replica identity");
+		Visual->Destroy();
+		const auto Removed = Coordinator.ProduceIncremental(Peer);
+		Check(Removed.Succeeded() && Replica.ApplyFrame(*Removed.Frame).Succeeded() &&
+			!Replica.Resolve(Visual->GetObjectId()),
+			"destroy removes the visual from the existing structural replica");
+	}
+
+	void TestAuthoredPackageBootstrap(const std::filesystem::path &Root) {
+		const auto ProjectRoot = Root / "package-project";
+		std::filesystem::create_directories(ProjectRoot / "assets");
+		WriteText(ProjectRoot / "assets" / "visual.obj",
+			"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+		DiskFilesystem Filesystem(ProjectRoot);
+		auto ProjectValue = Project::fromInit(&Filesystem, "Attachment Visual Package");
+		auto Game = ProjectValue.DeserializeGame();
+		Game->InitializeLoadedProjectRevision();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto Assets = std::dynamic_pointer_cast<AssetService>(Game->GetService("AssetService"));
+		SourceMount Mount(Filesystem);
+		const auto Imported = Assets->ImportProjectAsset(Mount, "assets/visual.obj", AssetKind::Mesh);
+		Check(Imported.Ok && Imported.Record, "authored project imports the accessory through AssetService");
+		auto CharacterValue = std::make_shared<Character>();
+		CharacterValue->SetName("PackageCharacter");
+		CharacterValue->SetArchivable(true);
+		CharacterValue->SetParent(World);
+		auto Owner = std::make_shared<Part>();
+		Owner->SetArchivable(true);
+		Owner->SetAnchored(true);
+		Owner->SetParent(CharacterValue);
+		CharacterValue->SetRootPart(Owner);
+		auto Socket = std::make_shared<Attachment>();
+		Socket->SetArchivable(true);
+		Socket->SetParent(Owner);
+		auto Visual = std::make_shared<AttachmentMesh>();
+		Visual->SetName("PackageVisual");
+		Visual->SetArchivable(true);
+		Visual->SetMesh(Imported.Record->Reference.Value);
+		Visual->SetMaterial("");
+		Visual->SetParent(Socket);
+		const auto SavedRevision = Game->GetAuthoritativeRevision();
+		ProjectValue.PersistGameAtomically(ProjectValue.CaptureGame(Game, SavedRevision));
+		auto ReopenedProject = Project::fromExisting(&Filesystem);
+		auto ReopenedGame = ReopenedProject.DeserializeGame();
+		ReopenedGame->InitializeLoadedProjectRevision();
+		auto ReopenedVisual = std::dynamic_pointer_cast<AttachmentMesh>(
+			ReopenedGame->FindFirstDescendant("PackageVisual"));
+		auto ReopenedAssets = std::dynamic_pointer_cast<AssetService>(
+			ReopenedGame->GetService("AssetService"));
+		Check(ReopenedVisual && ReopenedVisual->GetMesh() == Imported.Record->Reference.Value &&
+			ReopenedAssets && ReopenedAssets->ResolveMeshResource(ReopenedVisual->GetMesh()),
+			"saved authored project reopens with the visual and canonical Mesh record");
+		const auto Revision = ReopenedGame->GetAuthoritativeRevision();
+		const auto Payload = PackageBuilder::Capture(
+			ReopenedProject, ReopenedGame, Revision, Revision);
+		Check(!Payload.UnsavedChanges &&
+			Payload.ProjectJson.find("AttachmentMesh") != std::string::npos &&
+			std::ranges::none_of(Payload.ContentUnits, [](const auto &Unit) {
+				return Unit.Payload.find("AttachmentMesh") != std::string::npos;
+			}), "package capture keeps the visual in runtime bootstrap, outside static spatial units");
+		const auto RuntimeCatalog = nlohmann::ordered_json::parse(Payload.Assets.CatalogJson);
+		const auto CatalogEntry = std::ranges::find_if(RuntimeCatalog["Assets"], [&](const auto &Entry) {
+			return Entry.value("Reference", "") == ReopenedVisual->GetMesh() &&
+				Entry.value("Kind", "") == "Mesh";
+		});
+		Check(CatalogEntry != RuntimeCatalog["Assets"].end(),
+			"runtime package catalog includes the visual's canonical Mesh reference");
+		const auto ContentId = (*CatalogEntry)["ContentId"].get<std::string>();
+		Check(std::ranges::any_of(Payload.Assets.Artifacts, [&](const AssetArtifactFile &Artifact) {
+			return Artifact.Bytes && Artifact.RelativePath.find(ContentId) != std::string::npos;
+		}), "runtime package asset closure includes the visual's Mesh artifact");
+		std::istringstream BootstrapInput(Payload.ProjectJson);
+		const auto Bootstrap = InstanceSerialization::Deserialize(
+			InstanceSerialization::InstanceFormat::Json, BootstrapInput);
+		const auto BootstrapVisual = Bootstrap.Instance
+			? std::dynamic_pointer_cast<AttachmentMesh>(Bootstrap.Instance->FindFirstDescendant("PackageVisual"))
+			: nullptr;
+		Check(Bootstrap.Ok && BootstrapVisual &&
+			BootstrapVisual->GetMesh() == ReopenedVisual->GetMesh(),
+			"captured runtime bootstrap reconstructs the accessory's authored graph state");
 	}
 
 	void TestIncompatibleReimportFence(const std::filesystem::path &Root) {
@@ -175,6 +337,8 @@ int main() {
 	} CleanupValue{Root};
 	try {
 		BootstrapNativeRuntimeSchema();
+		TestStructuralReplication();
+		TestAuthoredPackageBootstrap(Root);
 		std::filesystem::create_directories(Root / "assets");
 		WriteText(Root / "assets" / "accessory.obj",
 			"v -0.5 -0.5 0\nv 0.5 -0.5 0\nv 0 0.5 0\nf 1 2 3\n");
