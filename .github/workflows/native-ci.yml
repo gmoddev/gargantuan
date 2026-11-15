@@ -137,28 +137,19 @@ jobs:
           version: 1.2.0
           cache: true
 
-      - name: Locate class-generator formatter
+      - name: Install pinned class-generator formatter
         shell: pwsh
         run: |
-          $ClangFormatCommand = Get-Command clang-format.exe -ErrorAction SilentlyContinue
-          $ClangFormatPath = if ($ClangFormatCommand) { $ClangFormatCommand.Source } else { $null }
-          if (-not $ClangFormatPath) {
-            $VsWhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-            if (Test-Path -LiteralPath $VsWhere -PathType Leaf) {
-              $Installation = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-              $VisualStudioLlvm = if ($Installation) { Join-Path $Installation 'VC\Tools\Llvm' } else { $null }
-              if ($VisualStudioLlvm -and (Test-Path -LiteralPath $VisualStudioLlvm)) {
-                $ClangFormatPath = Get-ChildItem -LiteralPath $VisualStudioLlvm -Filter clang-format.exe -File -Recurse |
-                  Select-Object -First 1 -ExpandProperty FullName
-              }
-            }
-          }
-          if (-not $ClangFormatPath) {
-            throw "clang-format is required by tools/classgen.luau but was not found on PATH or in Visual Studio's LLVM tools."
-          }
-          $ClangFormatDirectory = Split-Path -Parent $ClangFormatPath
+          $FormatterRoot = Join-Path $env:RUNNER_TEMP 'gargantuan-clang-format-21.1.8'
+          python -m pip install --no-deps --require-hashes --target $FormatterRoot -r tools/ci/clang-format-requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned class-generator formatter download failed' }
+          $ClangFormatDirectory = Join-Path $FormatterRoot 'clang_format/data/bin'
+          $ClangFormatPath = Join-Path $ClangFormatDirectory 'clang-format.exe'
           $ClangFormatDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           & $ClangFormatPath --version
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned class-generator formatter is unavailable' }
+          & $ClangFormatPath --style=file --dump-config | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned formatter rejects the repository configuration' }
 
       - name: Generate native class and reflection sources
         shell: pwsh
@@ -169,6 +160,8 @@ jobs:
             }
             $env:HOME = $env:USERPROFILE
           }
+          python tools/tests/ClassgenFormatterFailures.py
+          if ($LASTEXITCODE -ne 0) { throw 'Class generation formatter retry checks failed' }
           lute tools/classgen
           if ($LASTEXITCODE -ne 0) {
             throw "Class generation failed. Verify the pinned Lute installation and clang-format availability."
@@ -602,7 +595,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
             clang-19 \
-            clang-format \
             cmake \
             glslc \
             libfreetype-dev \
@@ -635,6 +627,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          FormatterRoot="$RUNNER_TEMP/gargantuan-clang-format-21.1.8"
+          python3 -m pip install --no-deps --require-hashes --target "$FormatterRoot" -r tools/ci/clang-format-requirements.txt
+          export PATH="$FormatterRoot/clang_format/data/bin:$PATH"
+          echo "$FormatterRoot/clang_format/data/bin" >> "$GITHUB_PATH"
+          clang-format --version
+          clang-format --style=file --dump-config > /dev/null
+          python3 tools/tests/ClassgenFormatterFailures.py
           lute tools/classgen
           lute tools/tests/DefaultOverrides
           test -f include/gargantuan/classes/generated/Instance.hpp
