@@ -147,8 +147,8 @@ code do not depend on Studio widget coordinates, raw platform input, cursor
 boundaries, or capture implementation. The former Avalonia/`WM_INPUT` adapter
 description applied to the frozen legacy Studio source and is not a current
 LUI implementation contract. See the Studio-owned
-[LUI migration decision](https://github.com/gmoddev/gargantuan-studio/blob/main/devdocs/AcceptedArchitecture/LuiPrimaryMigration.md)
-and [active architecture](https://github.com/gmoddev/gargantuan-studio/blob/main/ARCHITECTURE.md)
+[LUI migration decision](https://github.com/GantriaEngine/gargantuan-studio/blob/main/devdocs/AcceptedArchitecture/LuiPrimaryMigration.md)
+and [active architecture](https://github.com/GantriaEngine/gargantuan-studio/blob/main/ARCHITECTURE.md)
 for current source and qualification.
 
 Pen host adaptation, candidate-list/advanced IME policy, gamepad
