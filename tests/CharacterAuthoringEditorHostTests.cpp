@@ -83,7 +83,7 @@ int main() {
 		};
 		auto Error = [&](std::string Method, Json Parameters, std::string_view Code) {
 			auto Response = Call(std::move(Method), std::move(Parameters));
-			Check(Response.at("Ok") == false && Response.at("Error").at("Code") == Code,
+			Check(Response.at("Ok") == false && Response.at("Error").at("Code").get<std::string>() == Code,
 				"Wrong RPC rejection: " + Response.dump());
 		};
 
