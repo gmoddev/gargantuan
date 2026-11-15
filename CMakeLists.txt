@@ -702,6 +702,11 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+	add_executable(gargantuan_player_join_proof_tests "tests/PlayerJoinProofTests.cpp")
+	target_compile_features(gargantuan_player_join_proof_tests PRIVATE cxx_std_23)
+	target_include_directories(gargantuan_player_join_proof_tests PRIVATE "include" "src")
+	add_test(NAME gargantuan_player_join_proof COMMAND gargantuan_player_join_proof_tests)
+	set_tests_properties(gargantuan_player_join_proof PROPERTIES LABELS "runtime;host;admission;security" TIMEOUT 10)
 	add_test(NAME gargantuan_runtime_host_roles
 		COMMAND ${CMAKE_COMMAND}
 			-DGARGANTUAN_PLAYER=$<TARGET_FILE:gargantuan_player>
