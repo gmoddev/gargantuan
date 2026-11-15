@@ -24,7 +24,14 @@ local ResolutionConnection = Control.ActionResolved:Connect(function(Character, 
 		print("[Animation:Action] Server denied CreatorLunge")
 	end
 end)
-local BindingId = ActionMap:BindKey("CreatorLunge", Enum.KeyCode.F, 1, 0, false)
+local Bound, BindingId = pcall(function()
+	return ActionMap:BindKey("CreatorLunge", Enum.KeyCode.F, 1, 0, false)
+end)
+if not Bound or type(BindingId) ~= "number" or BindingId <= 0 then
+	ResolutionConnection:Disconnect()
+	warn("[Animation:Action] Could not bind CreatorLunge input:", BindingId)
+	return
+end
 local InputConnection = ActionMap.ActionBegan:Connect(function(ActionName)
 	if ActionName ~= "CreatorLunge" then return end
 	local Submitted, Result = pcall(function() return Control:RequestAction("CreatorLunge") end)
