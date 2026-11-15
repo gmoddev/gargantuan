@@ -380,7 +380,7 @@ def Author(Client: EditorClient, Project: Path, Sources: dict[str, str],
     VerifyParent(Wall, Workspace, "CreatorWall")
     for Object, Size, Position, Name in ((Floor, [40.0, 1.0, 40.0], [0.0, -0.5, 0.0], "CreatorFloor"),
                                          (Wall, [1.0, 4.0, 12.0], [4.0, 2.0, 0.0], "CreatorWall")):
-        Properties = by_id[json.dumps(Object, sort_keys=True)].get("Properties", {})
+        Properties = by_id[json.dumps(Object, sort_keys=True)].get("EditorProperties", {})
         Check(Properties.get("Size") == Wire("Vector3", Size) and
               Properties.get("CFrame") == CFrameAt(*Position) and
               Properties.get("Anchored") == Wire("Bool", True) and
