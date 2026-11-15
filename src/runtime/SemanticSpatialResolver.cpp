@@ -523,6 +523,14 @@ namespace gargantuan {
 		State->DirtyAttachments.insert(Object);
 	}
 
+	void SemanticSpatialResolver::ObserveAttachment(const std::shared_ptr<Attachment> &AttachmentValue) {
+		if (!State || State->ShutDown || !AttachmentValue || AttachmentValue->GetDestroyed() ||
+			AttachmentValue->IsDestroying()) return;
+		const auto Object = AttachmentValue->GetObjectId();
+		if (!Object.IsValid() || State->Entries.contains(Object)) return;
+		RegisterAttachment(AttachmentValue);
+	}
+
 	void SemanticSpatialResolver::PrepareAnimationRequirements() {
 		if (!State || State->ShutDown) return;
 		for (auto Iterator = State->DirtyAttachments.begin(); Iterator != State->DirtyAttachments.end();) {

@@ -21,9 +21,11 @@ accessory at a static fallback origin. Runtime pose changes, static owner
 `CFrame`/`Size`, ancestor changes, authored appearance changes, and canonical
 asset reimport dirty the visual through bounded reverse dependencies. Pose and
 presentation changes do not write the authored graph or history.
-The publisher registers the bounded ancestor Attachment chain when indexing a
-visual, so an editor resolver that discovers the visual lazily also observes
-parent socket offsets and joint-path changes. AssetService protects visual
+The publisher idempotently observes the bounded ancestor Attachment chain when
+indexing a visual, so an editor resolver that discovers the visual lazily also
+observes parent socket offsets and joint-path changes. Reindexing preserves
+the resolver's incompatible-skeleton binding fence; only an explicit authored
+socket change can reset that compatibility state. AssetService protects visual
 Mesh and explicit Material references from source-group deletion and generated
 child retirement until the visual releases them.
 

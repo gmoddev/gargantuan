@@ -684,7 +684,7 @@ namespace gargantuan {
 		// and JointPath signals invalidate the resolver's dependent entry.
 		if (auto Spatial = SpatialResolver.lock())
 			for (auto It = RequiredAnchors.rbegin(); It != RequiredAnchors.rend(); ++It)
-				Spatial->RegisterAttachment(*It);
+				Spatial->ObserveAttachment(*It);
 		Dependency.PoseConnection = Value->GetPropertyChangedSignal("WorldCFrame")->Connect(
 			[this, Object](std::monostate) {
 				if (Scope.IsValid()) Dirty->Mark(Scope, Object, RenderUpdateDomain::Transform);

@@ -75,6 +75,93 @@ namespace {
 		Output << Value;
 		Check(static_cast<bool>(Output), "fixture write succeeded");
 	}
+
+	void TestIncompatibleReimportFence(const std::filesystem::path &Root) {
+		const auto FenceRoot = Root / "fence";
+		std::filesystem::create_directories(FenceRoot / "assets");
+		std::filesystem::copy_file(Root / "assets" / "accessory.obj",
+			FenceRoot / "assets" / "accessory.obj");
+		std::ifstream Source(GARGANTUAN_ANIMATION_PREVIEW_FIXTURE, std::ios::binary);
+		auto RigSource = nlohmann::ordered_json::parse(Source);
+		WriteText(FenceRoot / "assets" / "fenced-rig.gltf", RigSource.dump());
+		DiskFilesystem Filesystem(FenceRoot);
+		SourceMount Mount(Filesystem);
+		auto Game = std::make_shared<DataModel>();
+		Game->Root = FenceRoot;
+		Game->Filesystem = &Filesystem;
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto Assets = std::dynamic_pointer_cast<AssetService>(Game->GetService("AssetService"));
+		const auto RigImport = Assets->ImportProjectAsset(Mount, "assets/fenced-rig.gltf", AssetKind::Mesh);
+		const auto AccessoryImport = Assets->ImportProjectAsset(Mount, "assets/accessory.obj", AssetKind::Mesh);
+		Check(RigImport.Ok && AccessoryImport.Ok && AccessoryImport.Record,
+			"compatibility fence fixtures import");
+		std::string RigReference;
+		for (const auto &Record : RigImport.Records)
+			if (Record.Kind == AssetKind::Mesh) RigReference = Record.Reference.Value;
+		Check(!RigReference.empty(), "compatibility fence fixture has a Mesh");
+		const auto OriginalRig = Assets->ResolveMeshResource(RigReference);
+		Check(OriginalRig && OriginalRig->Value.Skeleton,
+			"compatibility fence fixture has a canonical skeleton");
+		auto Rig = std::make_shared<MeshPart>();
+		Rig->SetMesh(RigReference);
+		Rig->SetAnchored(true);
+		Rig->SetCanCollide(false);
+		Rig->SetParent(World);
+		auto Socket = std::make_shared<Attachment>();
+		Socket->SetJointPath("BeaconRoot/BeaconTip");
+		Socket->SetParent(Rig);
+		auto Nested = std::make_shared<Attachment>();
+		Nested->SetCFrame(CFrame(0.2f, 0.0f, 0.0f));
+		Nested->SetParent(Socket);
+		auto Visual = std::make_shared<AttachmentMesh>();
+		Visual->SetMesh(AccessoryImport.Record->Reference.Value);
+		Visual->SetParent(Nested);
+		auto Spatial = std::make_shared<SemanticSpatialResolver>(Assets);
+		const auto IsBound = [&] {
+			const auto Resolved = Spatial->ResolveAttachment(Visual);
+			return Resolved && Resolved->Animated;
+		};
+		RenderPublisher Publisher;
+		Publisher.SetSpatialResolver(Spatial);
+		auto MeshChanges = Assets->DrainMeshChanges();
+		Publisher.SetAssetMeshChanges(std::move(MeshChanges.Creates), std::move(MeshChanges.Removes));
+		const auto Initial = Publisher.Publish(*World, RenderCameraInput{}, 640, 360);
+		Check(FindCreate(*Initial, Visual->GetObjectId()) && IsBound(),
+			"nested lazy socket binds to the original canonical skeleton");
+
+		// Keep the exact path while changing bind translation, which changes the
+		// skeleton compatibility identity without changing the socket spelling.
+		RigSource["nodes"][1]["translation"][1] = 1.25;
+		WriteText(FenceRoot / "assets" / "fenced-rig.gltf", RigSource.dump());
+		const auto Reimport = Assets->ReimportProjectAsset(Mount, RigReference);
+		const auto ChangedRig = Assets->ResolveMeshResource(RigReference);
+		Check(Reimport.Ok && ChangedRig && ChangedRig->Value.Skeleton &&
+			ChangedRig->Value.Skeleton->CompatibilityId != OriginalRig->Value.Skeleton->CompatibilityId,
+			"same-named joint reimport changes the canonical compatibility identity");
+		auto ReimportMeshes = Assets->DrainMeshChanges();
+		Publisher.SetAssetMeshChanges(std::move(ReimportMeshes.Creates), std::move(ReimportMeshes.Removes));
+		Spatial->Step();
+		const auto Incompatible = Publisher.Publish(*World, RenderCameraInput{}, 640, 360);
+		Check(std::ranges::any_of(Incompatible->Removes, [&](const RenderObjectRemove &Remove) {
+			return Remove.Object == Visual->GetObjectId();
+		}) && !IsBound(),
+			"incompatible reimport removes the visual instead of rebinding a same-named joint");
+		Visual->SetColor(Color3(0.5f, 0.5f, 0.5f));
+		Spatial->Step();
+		const auto MaterialRefresh = Publisher.Publish(*World, RenderCameraInput{}, 640, 360);
+		Check(!FindCreate(*MaterialRefresh, Visual->GetObjectId()) && !IsBound(),
+			"material reindex preserves the incompatible-skeleton fence");
+		Publisher.RequestFullResync();
+		const auto FullRefresh = Publisher.Publish(*World, RenderCameraInput{}, 640, 360);
+		Check(FullRefresh->FullResync && !FindCreate(*FullRefresh, Visual->GetObjectId()) && !IsBound(),
+			"full render resync preserves the incompatible-skeleton fence");
+		Socket->SetJointPath("");
+		Socket->SetJointPath("BeaconRoot/BeaconTip");
+		Spatial->Step();
+		const auto Reauthored = Publisher.Publish(*World, RenderCameraInput{}, 640, 360);
+		Check(FindCreate(*Reauthored, Visual->GetObjectId()) && IsBound(),
+			"explicit valid socket reauthoring permits binding to the new skeleton");
+	}
 }
 
 int main() {
@@ -451,6 +538,7 @@ int main() {
 		GuardVisual->Destroy();
 		Check(Assets->DeleteProjectAsset(Deletable.Record->Reference.Value).Ok,
 			"source group can be deleted after the visual is destroyed");
+		TestIncompatibleReimportFence(Root);
 		std::cout << "[Creator:AttachmentMesh] All focused checks passed\n";
 		return 0;
 	} catch (const std::exception &Error) {
