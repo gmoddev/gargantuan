@@ -317,7 +317,8 @@ namespace gargantuan {
 				auto Parent = Current->GetParent();
 				Current = Parent ? *Parent : nullptr;
 			}
-			if (!Owner) {
+			if (!Owner || Owner->GetDestroyed() || Owner->IsDestroying() ||
+				ObjectRegistry::Get().Lookup(Owner->GetObjectId()).get() != Owner.get()) {
 				Diagnostic = {RenderExtractionIssue::InvalidTransform, Object,
 					"AttachmentMesh has no bounded live BasePart socket owner"};
 				return std::nullopt;
