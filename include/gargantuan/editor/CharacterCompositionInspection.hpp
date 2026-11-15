@@ -59,7 +59,7 @@ namespace gargantuan {
 		ObjectId Object;
 		ObjectId OwnerMesh;
 		std::string JointPath;
-		bool JointResolved = false;
+		bool JointPathExists = false;
 	};
 
 	struct CharacterCompositionLimits {

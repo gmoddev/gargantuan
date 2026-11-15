@@ -107,7 +107,7 @@ int main() {
 			Valid.Meshes.size() == 1 && Valid.Meshes[0].Mesh.Reference == MeshReference &&
 			Valid.Meshes[0].Mesh.ContentRevision > 0 && Valid.Meshes[0].JointCount == 2 &&
 			Valid.Meshes[0].SkeletonCompatibilityId.IsValid() && Valid.Meshes[0].AnimatorCount == 1 &&
-			Valid.Attachments.size() == 1 && Valid.Attachments[0].JointResolved &&
+			Valid.Attachments.size() == 1 && Valid.Attachments[0].JointPathExists &&
 			Has(Valid, CharacterCompositionIssueCode::ClipCompatibilityNotAuthored),
 			"nonhumanoid skinned assembly returns bounded canonical identities and socket compatibility");
 		Check(World->GetAuthoritativeRevision() == Revision &&
@@ -117,7 +117,7 @@ int main() {
 
 		Socket->SetJointPath("BeaconRoot/Missing");
 		auto BadSocket = InspectCharacterComposition(CharacterValue, Assets);
-		Check(BadSocket.Complete && BadSocket.Valid && !BadSocket.Attachments[0].JointResolved &&
+		Check(BadSocket.Complete && BadSocket.Valid && !BadSocket.Attachments[0].JointPathExists &&
 			Has(BadSocket, CharacterCompositionIssueCode::JointPathUnavailable),
 			"unavailable joint is diagnosed without changing authored binding");
 		Socket->SetJointPath("BeaconRoot/BeaconTip");

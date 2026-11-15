@@ -263,9 +263,9 @@ namespace gargantuan {
 							Output.Add(CharacterCompositionIssueCode::JointPathWithoutSkeleton,
 								CharacterCompositionSeverity::Warning, Object, Entry.JointPath);
 						else {
-							Entry.JointResolved = std::ranges::any_of(*Imported->Skeleton->Joints,
+							Entry.JointPathExists = std::ranges::any_of(*Imported->Skeleton->Joints,
 								[&](const ImportedSkeletonJoint &Joint) { return Joint.Path == Entry.JointPath; });
-							if (!Entry.JointResolved) Output.Add(CharacterCompositionIssueCode::JointPathUnavailable,
+							if (!Entry.JointPathExists) Output.Add(CharacterCompositionIssueCode::JointPathUnavailable,
 									CharacterCompositionSeverity::Warning, Object, Entry.JointPath);
 						}
 					}
