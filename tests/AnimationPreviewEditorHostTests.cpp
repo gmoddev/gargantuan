@@ -6,11 +6,15 @@
 
 #include <SDL3/SDL.h>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
+#include <vector>
 
 int main(int ArgumentCount, char **Arguments) {
 	using namespace gargantuan;
@@ -59,6 +63,35 @@ int main(int ArgumentCount, char **Arguments) {
 			"Read-only inspector exposes hierarchy and three clips");
 		Check(Rig["Result"]["Joints"][1]["Path"] == "BeaconRoot/BeaconTip" && Rig["Result"]["Joints"][1]["Parent"] == 0,
 			"Inspector retains canonical joint paths and parents");
+		std::string PulseClip, LungeClip, StepClip;
+		for (const auto &Entry : Rig["Result"]["Clips"]) {
+			const auto Name = Entry["Name"].get<std::string>();
+			if (Name == "BeaconPulse") PulseClip = Entry["Reference"].get<std::string>();
+			if (Name == "BeaconLunge") LungeClip = Entry["Reference"].get<std::string>();
+			if (Name == "BeaconStep") StepClip = Entry["Reference"].get<std::string>();
+		}
+		Check(!PulseClip.empty() && !LungeClip.empty() && !StepClip.empty(), "Preview fixture contains three distinct clips");
+		std::ifstream FixtureInput(FixturePath, std::ios::binary);
+		std::string IncompatibleSource(std::istreambuf_iterator<char>{FixtureInput}, {});
+		const auto JointName = IncompatibleSource.find("BeaconTip");
+		Check(FixtureInput.is_open() && JointName != std::string::npos, "Fixture can be copied with a different skeleton path");
+		IncompatibleSource.replace(JointName, std::string("BeaconTip").size(), "BeaconFin");
+		{
+			std::ofstream OtherSource(Root / "assets" / "other-rig.gltf", std::ios::binary);
+			OtherSource << IncompatibleSource;
+			Check(static_cast<bool>(OtherSource), "Incompatible rig source is written");
+		}
+		Check(Call("ImportAsset", {{"Source", "assets/other-rig.gltf"}})["Ok"], "Import a distinct skeleton for negative preview checks");
+		auto CatalogWithOther = Call("GetAssetCatalog", {{"IncludeBuiltIns", false}});
+		std::string OtherMeshReference;
+		for (const auto &Asset : CatalogWithOther["Result"]["Assets"])
+			if (Asset["Kind"] == "Mesh" && Asset["Reference"] != Reference)
+				OtherMeshReference = Asset["Reference"].get<std::string>();
+		Check(!OtherMeshReference.empty(), "Distinct skeleton has a catalog Mesh");
+		auto OtherRig = Call("GetAnimationRig", {{"Reference", OtherMeshReference}});
+		Check(OtherRig["Ok"] && OtherRig["Result"]["SkeletonCompatibilityId"] != Rig["Result"]["SkeletonCompatibilityId"] &&
+			!OtherRig["Result"]["Clips"].empty(), "Distinct rig produces incompatible canonical clips");
+		const auto IncompatibleClip = OtherRig["Result"]["Clips"][0]["Reference"].get<std::string>();
 		const auto State = Call("GetProjectState", Json::object())["Result"];
 		auto Open = Call("OpenAnimationPreview", {{"Reference", Reference}});
 		Check(Open["Ok"], "Open native-only preview");
@@ -80,6 +113,114 @@ int main(int ArgumentCount, char **Arguments) {
 		Check(Reimported["Ok"] && Reimported["Result"]["MeshReference"] == Reference &&
 			Reimported["Result"]["SkeletonCompatibilityId"] == Rig["Result"]["SkeletonCompatibilityId"], "Compatible reimport preserves asset and skeleton identity");
 		Check(Call("SaveProject", Json::object())["Ok"], "Save imported canonical assets");
+		auto Rejects = [](auto &&Action) {
+			try { Action(); return false; }
+			catch (const std::exception &) { return true; }
+		};
+		std::shared_ptr<AnimationTrack> RetainedSecondary;
+		Json StateAfterExplicitReimport;
+		{
+			DiskFilesystem Filesystem(Root);
+			auto ProjectValue = Project::fromExisting(&Filesystem);
+			auto SourceWorld = ProjectValue.DeserializeGame();
+			auto Assets = std::dynamic_pointer_cast<AssetService>(SourceWorld->GetService("AssetService"));
+			AnimationPreview Scene(Assets->CaptureProjectAssets(), Reference);
+			Check(Rejects([&] { Scene.SelectClip(AnimationPreviewClipSlot::Secondary, LungeClip); }) &&
+				Rejects([&] { Scene.SetBlendWeight(0.5f); }), "Secondary and blend controls require a primary pair");
+			Scene.SelectClip(PulseClip);
+			Check(Scene.GetTrack() == Scene.GetTrack(AnimationPreviewClipSlot::Primary) &&
+				!Scene.GetTrack(AnimationPreviewClipSlot::Secondary) && Scene.GetBlendWeight() == 0.0f,
+				"Existing single-clip API remains primary-only");
+			Scene.SelectClip(AnimationPreviewClipSlot::Secondary, LungeClip);
+			Check(Scene.GetBlendWeight() == 0.5f && Scene.GetTrack()->GetWeight() == 0.5f &&
+				Scene.GetTrack(AnimationPreviewClipSlot::Secondary)->GetWeight() == 0.5f,
+				"Two compatible clips start as a balanced visual blend");
+			const auto OriginalPrimary = Scene.GetTrack();
+			const auto OriginalSecondary = Scene.GetTrack(AnimationPreviewClipSlot::Secondary);
+			Check(Rejects([&] { Scene.SelectClip(AnimationPreviewClipSlot::Secondary, "asset://00000000000000000000000000000000"); }) &&
+				Rejects([&] { Scene.SelectClip(AnimationPreviewClipSlot::Secondary, IncompatibleClip); }) &&
+				Rejects([&] { Scene.SelectClip(AnimationPreviewClipSlot::Primary, IncompatibleClip); }) &&
+				Scene.GetTrack() == OriginalPrimary && Scene.GetTrack(AnimationPreviewClipSlot::Secondary) == OriginalSecondary &&
+				Scene.GetBlendWeight() == 0.5f, "Missing or incompatible replacement retains the usable pair");
+			OriginalPrimary->SetTimePosition(0.5f);
+			OriginalSecondary->SetTimePosition(0.5f);
+			Scene.SetBlendWeight(0.0f);
+			const auto PrimaryPose = Scene.GetPose();
+			Check(PrimaryPose && PrimaryPose->JointModelTransforms, "Primary endpoint produces a pose");
+			const auto PrimaryRoot = glm::vec3(PrimaryPose->JointModelTransforms->at(0)[3]);
+			Scene.SetBlendWeight(1.0f);
+			const auto SecondaryPose = Scene.GetPose();
+			Check(SecondaryPose && SecondaryPose->JointModelTransforms, "Secondary endpoint produces a pose");
+			const auto SecondaryRoot = glm::vec3(SecondaryPose->JointModelTransforms->at(0)[3]);
+			Scene.SetBlendWeight(0.5f);
+			const auto MixedPose = Scene.GetPose();
+			Check(MixedPose && MixedPose->JointModelTransforms &&
+				glm::length(PrimaryRoot - SecondaryRoot) > 0.01f &&
+				glm::length(glm::vec3(MixedPose->JointModelTransforms->at(0)[3]) -
+					(PrimaryRoot + SecondaryRoot) * 0.5f) < 0.001f,
+				"Blend endpoints and midpoint affect canonical joint-model pose");
+			for (const auto BadWeight : {-0.01f, 1.01f, std::numeric_limits<float>::quiet_NaN()})
+				Check(Rejects([&] { Scene.SetBlendWeight(BadWeight); }) && Scene.GetBlendWeight() == 0.5f,
+					"Non-unit or non-finite weight leaves the blend unchanged");
+			OriginalSecondary->SetSpeed(1.5f);
+			OriginalSecondary->SetLooped(true);
+			Scene.SelectClip(AnimationPreviewClipSlot::Secondary, StepClip);
+			Check(Scene.GetTrack(AnimationPreviewClipSlot::Secondary)->GetSpeed() == 1.5f &&
+				Scene.GetTrack(AnimationPreviewClipSlot::Secondary)->GetLooped() &&
+				Scene.GetTrack(AnimationPreviewClipSlot::Secondary)->GetPlaybackState() == Enums::AnimationPlaybackState::Paused &&
+				Scene.GetBlendWeight() == 0.5f, "Replacing one slot preserves its controls and the blend weight");
+			for (int Index = 0; Index < 24; ++Index)
+				Scene.SelectClip(Index % 2 == 0 ? AnimationPreviewClipSlot::Primary : AnimationPreviewClipSlot::Secondary,
+					Index % 3 == 0 ? PulseClip : Index % 3 == 1 ? LungeClip : StepClip);
+			Check(Scene.GetTrack() && Scene.GetTrack(AnimationPreviewClipSlot::Secondary) && Scene.GetBlendWeight() == 0.5f,
+				"Repeated replacements do not exhaust the sixteen-track Animator bound");
+			const auto PrimaryBeforeReimport = Scene.GetTrack();
+			const auto SecondaryBeforeReimport = Scene.GetTrack(AnimationPreviewClipSlot::Secondary);
+			const auto ReimportDuringPreview = Call("ReimportAsset", {{"Reference", Reference}});
+			Check(ReimportDuringPreview["Ok"] && ReimportDuringPreview["Result"]["OperationSucceeded"],
+				"Source reimport succeeds while disposable preview owns an asset snapshot");
+			Scene.Step(0.0f);
+			Check(Scene.GetTrack() == PrimaryBeforeReimport &&
+				Scene.GetTrack(AnimationPreviewClipSlot::Secondary) == SecondaryBeforeReimport &&
+				Scene.GetPose().has_value() && Scene.GetBlendWeight() == 0.5f,
+				"Active preview pair remains usable across source reimport");
+			StateAfterExplicitReimport = Call("GetProjectState", Json::object())["Result"];
+			std::vector<std::shared_ptr<AnimationTrack>> HeldOldTracks;
+			bool CapacityRejected = false;
+			for (int Index = 0; Index < 24; ++Index) {
+				const auto PrimaryBefore = Scene.GetTrack();
+				const auto SecondaryBefore = Scene.GetTrack(AnimationPreviewClipSlot::Secondary);
+				HeldOldTracks.push_back(SecondaryBefore);
+				try { Scene.SelectClip(AnimationPreviewClipSlot::Secondary, Index % 2 ? PulseClip : StepClip); }
+				catch (const std::length_error &) {
+					CapacityRejected = true;
+					Check(Scene.GetTrack() == PrimaryBefore &&
+						Scene.GetTrack(AnimationPreviewClipSlot::Secondary) == SecondaryBefore &&
+						Scene.GetBlendWeight() == 0.5f, "Capacity rejection retains the previous pair and weight");
+					break;
+				}
+			}
+			Check(CapacityRejected, "Externally retained old tracks eventually reach the Animator bound");
+			Scene.GetTrack()->SetRootMotionEnabled(true);
+			Scene.GetTrack(AnimationPreviewClipSlot::Secondary)->SetRootMotionEnabled(true);
+			Scene.Step(0.0f);
+			Check(!Scene.GetTrack()->GetRootMotionEnabled() &&
+				!Scene.GetTrack(AnimationPreviewClipSlot::Secondary)->GetRootMotionEnabled(),
+				"Disposable preview never enables Character root motion");
+			RetainedSecondary = Scene.GetTrack(AnimationPreviewClipSlot::Secondary);
+			Scene.ClearSecondaryClip();
+			Check(!Scene.GetTrack(AnimationPreviewClipSlot::Secondary) && Scene.GetBlendWeight() == 0.0f &&
+				Scene.GetTrack()->GetWeight() == 1.0f &&
+				RetainedSecondary->GetPlaybackState() == Enums::AnimationPlaybackState::Stopped &&
+				Rejects([&] { Scene.SetBlendWeight(0.5f); }), "Clear restores single-clip state and stops the retired track");
+			Scene.ClearSecondaryClip();
+			SourceWorld->Destroy();
+		}
+		RetainedSecondary->Play();
+		Check(RetainedSecondary->GetPlaybackState() == Enums::AnimationPlaybackState::Stopped,
+			"Closing the preview invalidates retained secondary tracks");
+		Check(Call("GetProjectState", Json::object())["Result"] == StateAfterExplicitReimport,
+			"Two-clip preview controls and close do not mutate project state or history");
 		auto Second = Call("OpenAnimationPreview", {{"Reference", Reference}});
 		Check(Second["Ok"] && Second["Result"]["PreviewId"] != Id, "New preview receives fresh identity");
 		Check(Call("OpenProject", {{"Root", Root.generic_string()}})["Ok"], "Reopen project");
