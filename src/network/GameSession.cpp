@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <limits>
 #include <map>
@@ -48,6 +49,17 @@ namespace gargantuan::network {
 		constexpr std::uint32_t CharacterMagic = 0x52484347;
 		constexpr std::uint32_t RemoteMagic = 0x544d5247;
 		constexpr std::size_t MaximumGameSessionPollEventsPerCall = 128;
+		std::atomic<std::uint64_t> NextGameAdmissionRequestId{1};
+
+		std::uint64_t AllocateGameAdmissionRequestId() {
+			auto Current = NextGameAdmissionRequestId.load(std::memory_order_relaxed);
+			while (Current != 0) {
+				const auto Next = Current == std::numeric_limits<std::uint64_t>::max() ? 0 : Current + 1;
+				if (NextGameAdmissionRequestId.compare_exchange_weak(Current, Next,
+					std::memory_order_relaxed)) return Current;
+			}
+			return 0;
+		}
 
 		enum class PeerPhase : std::uint8_t { TransportConnected, BootstrapPending, Accepted, Ready };
 
@@ -177,7 +189,6 @@ namespace gargantuan::network {
 		std::uint64_t CurrentTick = 0;
 		std::uint64_t NextSessionEpoch = 1;
 		std::uint64_t NextReplicationEpoch = 1;
-		std::uint64_t NextAdmissionRequestId = 1;
 		std::map<ConnectionId, Peer> Peers;
 		std::optional<ConnectionId> PrimaryConnection;
 		std::optional<ConnectionId> StructuralFairnessCursor;
@@ -802,12 +813,13 @@ namespace gargantuan::network {
 				(void)OtherConnection;
 				Pending += OtherPeer.Admission != nullptr;
 			}
-			if (Pending >= MaximumPendingGameAdmissions || NextAdmissionRequestId == 0) {
+			const auto RequestId = Pending < MaximumPendingGameAdmissions ? AllocateGameAdmissionRequestId() : 0;
+			if (RequestId == 0) {
 				++Metrics.RejectedHandshakes;
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Game admission capacity reached");
 				return;
 			}
-			PeerValue.AdmissionRequestId = NextAdmissionRequestId++;
+			PeerValue.AdmissionRequestId = RequestId;
 			PeerValue.Admission = std::make_shared<AdmissionSlot>();
 			std::weak_ptr<AdmissionSlot> WeakSlot = PeerValue.Admission;
 			const GameAdmissionRequest Request{PeerValue.AdmissionRequestId, Connection, Nonce, *Proof};
@@ -842,7 +854,6 @@ namespace gargantuan::network {
 				if (Iterator == Peers.end() || !Iterator->second.Admission ||
 					Iterator->second.Phase != PeerPhase::TransportConnected) continue;
 				Iterator->second.Admission.reset();
-				Iterator->second.AdmissionRequestId = 0;
 				if (!Identity) {
 					++Metrics.RejectedHandshakes;
 					Reject(Connection, DisconnectReason::AuthenticationFailure, "Game admission denied");
@@ -1529,13 +1540,12 @@ namespace gargantuan::network {
 		void TearDownPeer(ConnectionId Connection) {
 			RecordPooledLifecycle(detail::PooledLifecyclePoint::PeerTeardown, Connection, DisconnectReason::LocalShutdown);
 			auto Iterator = Peers.find(Connection);
-			if (Iterator != Peers.end() && Iterator->second.Admission) {
-				{
+			if (Iterator != Peers.end() && Iterator->second.AdmissionRequestId != 0) {
+				if (Iterator->second.Admission) {
 					std::scoped_lock Lock(Iterator->second.Admission->Mutex);
 					Iterator->second.Admission->Closed = true;
 					Iterator->second.Admission->Result.reset();
 				}
-				Configuration.AdmissionProvider->Cancel(Iterator->second.AdmissionRequestId);
 			}
 			if (IsPooled()) {
 				// Closing is not a release. Purge first, reconcile the immutable
@@ -1592,6 +1602,8 @@ namespace gargantuan::network {
 				ClientKnownObjects.clear();
 				PrimaryConnection.reset();
 			}
+			if (PeerValue.AdmissionRequestId != 0)
+				Configuration.AdmissionProvider->Release(PeerValue.AdmissionRequestId);
 		}
 
 		void ObserveOrdinaryQueue(ConnectionId Connection, Peer &PeerValue, std::uint64_t Now) {

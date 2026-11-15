@@ -27,8 +27,10 @@ another thread and enter a one-result slot with no Engine pointer. GameSession
 processes that result only while the same generation-safe connection and session
 lifetime remain pending, before the existing bootstrap path. The peer count,
 pending admission count, frame length, and handshake time are bounded. Disconnect,
-timeout, Stop, and session failure close the slot and request provider
-cancellation. Late or duplicate completions cannot create a Player.
+timeout, Stop, and session failure close the slot and release the provider
+request. Successful peers retain that request ownership until disconnect or
+Stop. The provider's release is nonblocking and idempotent. Late or duplicate
+completions cannot create a Player.
 
 The provider contract defines verification ownership; it does not itself
 implement durable proof issuance or redemption. A private host adapter must bind

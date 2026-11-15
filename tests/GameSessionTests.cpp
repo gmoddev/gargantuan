@@ -608,7 +608,9 @@ namespace {
 			Completions.push_back(std::move(Completion));
 			return true;
 		}
-		void Cancel(std::uint64_t RequestId) noexcept override { Cancelled.push_back(RequestId); }
+		void Release(std::uint64_t RequestId) noexcept override {
+			if (ReleaseCount < Released.size()) Released[ReleaseCount++] = RequestId;
+		}
 		void Complete(std::size_t Index, std::optional<PlayerIdentity> Identity) {
 			if (Index < Completions.size()) Completions[Index](std::move(Identity));
 		}
@@ -617,7 +619,8 @@ namespace {
 		std::set<std::array<std::byte, GameAdmissionProofBytes>> SeenProofs;
 		std::vector<GameAdmissionRequest> Requests;
 		std::vector<GameAdmissionCompletion> Completions;
-		std::vector<std::uint64_t> Cancelled;
+		std::array<std::uint64_t, 16> Released{};
+		std::size_t ReleaseCount = 0;
 	};
 
 	std::array<std::byte, GameAdmissionProofBytes> TestAdmissionProof() {
@@ -815,11 +818,22 @@ namespace {
 			Check(PlayerValue && PlayerValue->GetAuthenticationIdentity() &&
 				*PlayerValue->GetAuthenticationIdentity() == PlayerIdentity{"test-provider", "account-1"},
 				"Player is created with the provider-qualified identity");
+			const auto RequestId = Provider->Requests[0].RequestId;
+			Fixture.Client.Stop();
+			for (int Index = 0; Index < 10 && !Fixture.ServerRuntime.Players->GetPlayers().empty(); ++Index) {
+				(void)Fixture.Network->Advance(2ms);
+				Fixture.Network->Pump();
+				(void)Fixture.Server.Poll();
+			}
+			Check(Fixture.ServerRuntime.Players->GetPlayers().empty() &&
+				std::ranges::count(Provider->Released, RequestId) == 1,
+				"accepted disconnect releases the provider request exactly once");
 		}
 		{
 			AdmissionFixture Replay(120, Provider);
 			for (int Index = 0; Index < 20 && Provider->Requests.size() < 2; ++Index) Replay.AdvanceTick();
 			Check(Provider->Requests.size() == 2 && Provider->Requests[1].Proof == Provider->Requests[0].Proof &&
+				Provider->Requests[1].RequestId != Provider->Requests[0].RequestId &&
 				Replay.ServerRuntime.Players->GetPlayers().empty() &&
 				Replay.Server.GetMetrics().RejectedHandshakes > 0,
 				"one-use provider replay denial never creates a DevelopmentLocal Player");
@@ -877,7 +891,7 @@ namespace {
 			Fixture.Provider->Complete(0, PlayerIdentity{"test-provider", "late-disconnect"});
 			Fixture.Server.Step(Fixture.Tick++);
 			Check(Fixture.ServerRuntime.Players->GetPlayers().empty() &&
-				std::ranges::find(Fixture.Provider->Cancelled, RequestId) != Fixture.Provider->Cancelled.end(),
+				std::ranges::count(Fixture.Provider->Released, RequestId) == 1,
 				"disconnect cancels verification and ignores stale approval after replacement");
 			Replacement.Stop();
 		}
@@ -889,8 +903,22 @@ namespace {
 			Fixture.Provider->Complete(0, PlayerIdentity{"test-provider", "late-stop"});
 			Fixture.Server.Step(Fixture.Tick++);
 			Check(Fixture.ServerRuntime.Players->GetPlayers().empty() &&
-				std::ranges::find(Fixture.Provider->Cancelled, RequestId) != Fixture.Provider->Cancelled.end(),
+				std::ranges::count(Fixture.Provider->Released, RequestId) == 1,
 				"Stop cancels verification and cannot resurrect a Player");
+		}
+		{
+			AdmissionFixture Fixture;
+			Fixture.AwaitRequest();
+			const auto RequestId = Fixture.Provider->Requests[0].RequestId;
+			Fixture.Provider->Complete(0, PlayerIdentity{"test-provider", "accepted-stop"});
+			Fixture.Server.Step(Fixture.Tick++);
+			Check(Fixture.ServerRuntime.Players->GetPlayers().size() == 1,
+				"accepted-stop fixture creates its Player only after approval");
+			Fixture.Server.Stop();
+			Fixture.Server.Stop();
+			Check(Fixture.ServerRuntime.Players->GetPlayers().empty() &&
+				std::ranges::count(Fixture.Provider->Released, RequestId) == 1,
+				"Stop releases an accepted provider request exactly once");
 		}
 		{
 			AdmissionFixture Fixture(3);
@@ -901,7 +929,7 @@ namespace {
 			Fixture.Server.Step(Fixture.Tick++);
 			Check(Fixture.Server.GetMetrics().HandshakeTimeouts == 1 &&
 				Fixture.ServerRuntime.Players->GetPlayers().empty() &&
-				std::ranges::find(Fixture.Provider->Cancelled, RequestId) != Fixture.Provider->Cancelled.end(),
+				std::ranges::count(Fixture.Provider->Released, RequestId) == 1,
 				"verification timeout cancels and rejects late approval before Player creation");
 		}
 	}

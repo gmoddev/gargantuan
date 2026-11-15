@@ -39,7 +39,7 @@ server acceptance with the wrong version or identity.
 
 The server negotiates limits and registers the connection before asking the
 provider. It allows at most 64 pending verifications among the existing
-512-peer bound. Each request carries a nonzero session-local request ID, the full
+512-peer bound. Each request carries a nonzero process-unique request ID, the full
 `ConnectionId` including generation, client nonce, and exact proof. A provider
 can answer inline or asynchronously with one `PlayerIdentity` or denial; refusal
 or exception denies. The GameSession thread validates provider identity syntax
@@ -47,10 +47,13 @@ before the existing Player, relevance, replication, and Character bootstrap.
 
 The existing bounded handshake tick deadline covers provider latency. Completion
 is processed after timeout checks, so timeout wins a same-tick race. Disconnect,
-timeout, Stop, and session failure close the completion slot and call `Cancel`.
+timeout, Stop, and session failure close the completion slot and call `Release`.
+The request ID remains owned by the peer after approval, so accepted disconnect
+and Stop also release the provider seat exactly once. The provider must make
+release nonblocking and idempotent, including for failed partial handshakes.
 The callback retains only a weak slot, never Engine or a session pointer. A
 late or duplicate callback cannot revive a peer or authorize a replacement
-generation. Provider implementation must keep cancellation nonblocking and
+generation. Provider implementation must keep release nonblocking and
 enforce proof audience, one use, current lease, and account provenance. Engine
 does not treat transport encryption or an opaque proof as identity by itself.
 

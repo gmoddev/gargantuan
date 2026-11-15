@@ -30,7 +30,9 @@ namespace gargantuan::network {
 		// A false return is an immediate denial. Completion may run on any thread,
 		// including inline, and must be called at most once for an accepted request.
 		[[nodiscard]] virtual bool Begin(GameAdmissionRequest Request, GameAdmissionCompletion Completion) = 0;
-		// Cancellation must not wait for a callback. Late callbacks are ignored.
-		virtual void Cancel(std::uint64_t RequestId) noexcept = 0;
+		// Release retires a pending or accepted request when its peer ends. It
+		// must be nonblocking and idempotent; any external cleanup may continue
+		// asynchronously. Late callbacks are ignored by GameSession.
+		virtual void Release(std::uint64_t RequestId) noexcept = 0;
 	};
 }
