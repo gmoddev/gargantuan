@@ -1403,6 +1403,9 @@ namespace gargantuan {
 		for (auto &[AnimatorObject, Tracked] : State->Animators) {
 			(void)AnimatorObject;
 			State->FireEnded(Tracked.TrackSnapshot);
+			// The snapshot belongs to this evaluation only. Retaining it until the
+			// next Step pins stopped tracks and defeats Animator's bounded reap.
+			Tracked.TrackSnapshot.clear();
 		}
 
 		std::erase_if(State->PoseRemoves, [&](const auto &Remove) {

@@ -169,6 +169,15 @@ int main(int ArgumentCount, char **Arguments) {
 				Scene.GetTrack(AnimationPreviewClipSlot::Secondary)->GetLooped() &&
 				Scene.GetTrack(AnimationPreviewClipSlot::Secondary)->GetPlaybackState() == Enums::AnimationPlaybackState::Paused &&
 				Scene.GetBlendWeight() == 0.5f, "Replacing one slot preserves its controls and the blend weight");
+			std::weak_ptr<AnimationTrack> UnheldRetiredTrack;
+			{
+				const auto Current = Scene.GetTrack(AnimationPreviewClipSlot::Secondary);
+				UnheldRetiredTrack = Current;
+				Scene.SelectClip(AnimationPreviewClipSlot::Secondary, PulseClip);
+			}
+			Scene.SelectClip(AnimationPreviewClipSlot::Secondary, LungeClip);
+			Check(UnheldRetiredTrack.expired(),
+				"A stopped, unheld preview track is reaped after its final pose step");
 			for (int Index = 0; Index < 24; ++Index)
 				Scene.SelectClip(Index % 2 == 0 ? AnimationPreviewClipSlot::Primary : AnimationPreviewClipSlot::Secondary,
 					Index % 3 == 0 ? PulseClip : Index % 3 == 1 ? LungeClip : StepClip);
