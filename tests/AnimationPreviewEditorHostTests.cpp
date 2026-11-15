@@ -223,6 +223,23 @@ int main(int ArgumentCount, char **Arguments) {
 				RetainedSecondary->GetPlaybackState() == Enums::AnimationPlaybackState::Stopped &&
 				Rejects([&] { Scene.SetBlendWeight(0.5f); }), "Clear restores single-clip state and stops the retired track");
 			Scene.ClearSecondaryClip();
+			{
+				AnimationPreview IdleScene(Assets->CaptureProjectAssets(), Reference);
+				IdleScene.SelectClip(PulseClip);
+				IdleScene.SelectClip(AnimationPreviewClipSlot::Secondary, LungeClip);
+				std::weak_ptr<AnimationTrack> StoppedSecondary;
+				{
+					const auto Secondary = IdleScene.GetTrack(AnimationPreviewClipSlot::Secondary);
+					StoppedSecondary = Secondary;
+					Secondary->Stop();
+				}
+				IdleScene.GetTrack()->Stop();
+				IdleScene.Step(0.0f);
+				IdleScene.ClearSecondaryClip();
+				IdleScene.SelectClip(StepClip);
+				Check(StoppedSecondary.expired(),
+					"Zero-active pose step releases retired tracks for the next selection");
+			}
 			SourceWorld->Destroy();
 		}
 		RetainedSecondary->Play();
