@@ -382,15 +382,11 @@ namespace gargantuan {
 			}
 			const RenderItem Item{Object, RenderGeometry::Block, Model, Inverse, Color, Visual->GetCastShadow()};
 			auto ResolveMaterial = [&](std::string_view Reference) -> std::optional<RenderMaterialState> {
-				if (Reference.empty()) {
-					RenderMaterialState Default;
-					Default.BaseColorFactor *= Color;
-					if (Default.BaseColorFactor.a < 1.0f) Default.OpacityMode = RenderOpacityMode::Transparent;
-					return Default;
+				if (!Reference.empty()) {
+					const auto Record = Assets->GetAsset(Reference);
+					if (!Record || Record->Kind != AssetKind::Material || !Assets->IsAvailable(Reference))
+						return std::nullopt;
 				}
-				const auto Record = Assets->GetAsset(Reference);
-				if (!Record || Record->Kind != AssetKind::Material || !Assets->IsAvailable(Reference))
-					return std::nullopt;
 				auto Resolved = Assets->ResolveMaterial(Reference);
 				if (!Resolved) return std::nullopt;
 				auto Material = Resolved->RenderState;
