@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gargantuan/network/GameAdmission.hpp"
+#include "gargantuan/network/Transport.hpp"
 
 #include <array>
 #include <cstdlib>
@@ -43,5 +44,12 @@ namespace gargantuan::host::detail {
 		}
 		if (Value[Proof.size() * 2] != '\0' || !Nonzero) return std::nullopt;
 		return Proof;
+	}
+
+	// The same bounded hex decoder reads a public GNS leaf key. It is never
+	// interpreted as a workload credential or an authority token.
+	[[nodiscard]] inline std::optional<network::TransportServerPublicKey> ReadPlayerServerPublicKey(
+		std::string_view EnvironmentName) {
+		return ReadPlayerJoinProof(EnvironmentName);
 	}
 }

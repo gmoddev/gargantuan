@@ -57,9 +57,16 @@ generation. Provider implementation must keep release nonblocking and
 enforce proof audience, one use, current lease, and account provenance. Engine
 does not treat transport encryption or an opaque proof as identity by itself.
 
+The native GNS transport can opt into one process-local Ed25519 server leaf key
+before opening a managed listener. It signs GNS's existing key-exchange
+handshake. The client requires an exact public key, rejects missing or wrong
+key material and non-AES-GCM cipher state before reporting Connected, and sends
+no GSES proof on that path. Engine does not export the private key. This is a
+live server process pin, not a certificate authority or a durable host identity.
+
 The generic server host can now be composed with one trusted admission provider
 and one managed lifecycle observer. It emits copied package identity, manifest
-digest, and bind endpoint only after package/content bootstrap and a listening
+digest, bind endpoint, and the actual GNS server public key only after package/content bootstrap and a listening
 GameSession. The observer supplies a cached authority/READY snapshot; the host
 does not poll the session until authority is current and the external READY
 acknowledgement is observed. Its readiness gate expires no later than six
@@ -69,7 +76,7 @@ drain request closes the session before
 Engine teardown, and the observer is notified before drain and after stop.
 The default official server remains DevelopmentLocal.
 
-The generic boundary is exercised by simulated-session tests. A private Node
-wrapper, durable proof redemption, client startup wiring, and real-client
-qualification remain separate work; the generic seam alone is not production
-hosting readiness.
+The generic boundary is exercised by simulated-session tests. Private Node
+binding of the live key into an authenticated ticket, durable proof redemption,
+and real separate-process client/server qualification remain required before
+non-loopback production hosting.

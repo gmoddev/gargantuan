@@ -623,6 +623,30 @@ namespace {
 		std::size_t ReleaseCount = 0;
 	};
 
+	class UntrustedServerTransport final : public IGameTransport {
+	  public:
+		explicit UntrustedServerTransport(std::shared_ptr<IGameTransport> Value) : Inner(std::move(Value)) {}
+		TransportOperationResult Start(const TransportStartConfiguration &Value) override { return Inner->Start(Value); }
+		TransportOperationResult Stop(DisconnectInfo Value) override { return Inner->Stop(std::move(Value)); }
+		TransportOperationResult Disconnect(ConnectionId Id, DisconnectInfo Value) override {
+			return Inner->Disconnect(Id, std::move(Value));
+		}
+		TransportOperationResult Send(const NetworkMessageIntent &Value) override {
+			++SentMessages;
+			return Inner->Send(Value);
+		}
+		std::size_t PollEvents(std::span<TransportEvent> Output) override { return Inner->PollEvents(Output); }
+		std::optional<std::size_t> GetAvailableDatagramBytes(ConnectionId Id) const override {
+			return Inner->GetAvailableDatagramBytes(Id);
+		}
+		std::optional<NetworkStatistics> GetStatistics(ConnectionId Id) const override {
+			return Inner->GetStatistics(Id);
+		}
+		std::size_t SentMessages = 0;
+	  private:
+		std::shared_ptr<IGameTransport> Inner;
+	};
+
 	std::array<std::byte, GameAdmissionProofBytes> TestAdmissionProof() {
 		std::array<std::byte, GameAdmissionProofBytes> Proof{};
 		for (std::size_t Index = 0; Index < Proof.size(); ++Index)
@@ -789,6 +813,9 @@ namespace {
 		auto NonLoopback = AuthenticatedConfiguration(GameSessionRole::Server, Provider);
 		NonLoopback.Endpoint = {"10.0.0.2", 27020};
 		Check(!NonLoopback.IsValid(), "a ticket provider alone cannot authorize an unauthenticated remote transport");
+		NonLoopback.RequireServerIdentity = true;
+		Check(NonLoopback.IsValid(), "remote authenticated server requires native listener identity");
+		NonLoopback.RequireServerIdentity = false;
 		NonLoopback.AllowInsecureDevelopmentNetwork = true;
 		Check(!NonLoopback.IsValid(), "authenticated hosting cannot use the development escape hatch");
 		NonLoopback.AdmissionProvider.reset();
@@ -796,6 +823,37 @@ namespace {
 		auto RemoteClient = AuthenticatedConfiguration(GameSessionRole::Client, Provider);
 		RemoteClient.Endpoint = {"10.0.0.2", 27020};
 		Check(!RemoteClient.IsValid(), "a valid ticket does not establish remote server identity");
+		TransportServerPublicKey ServerKey{};
+		ServerKey[0] = std::byte{1};
+		RemoteClient.ExpectedServerPublicKey = ServerKey;
+		Check(RemoteClient.IsValid(), "remote authenticated client requires an exact nonzero server key");
+		RemoteClient.ExpectedServerPublicKey = TransportServerPublicKey{};
+		Check(!RemoteClient.IsValid(), "zero server key cannot authorize remote authenticated admission");
+		{
+			auto Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
+			auto ServerWorld = std::make_shared<DataModel>();
+			HeadlessRenderer ServerRenderer{Vector2(64, 64)};
+			Engine ServerRuntime{ServerWorld, &ServerRenderer, nullptr,
+				EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}};
+			GameSession Server(Network->CreateTransport(),
+				AuthenticatedConfiguration(GameSessionRole::Server, Provider), &ServerRuntime);
+			auto ClientTransport = std::make_shared<UntrustedServerTransport>(Network->CreateTransport());
+			auto ClientConfiguration = AuthenticatedConfiguration(GameSessionRole::Client, Provider);
+			ClientConfiguration.ExpectedServerPublicKey = ServerKey;
+			GameSession Client(ClientTransport, ClientConfiguration);
+			ServerRuntime.ProcessService->Alive = true;
+			Check(Server.Start().Succeeded() && Client.Start().Succeeded(),
+				"server-key negative fixture starts both transports");
+			for (int Index = 0; Index < 12; ++Index) {
+				(void)Server.Poll();
+				(void)Client.Poll();
+			}
+			Check(ClientTransport->SentMessages == 0 && Provider->Requests.empty(),
+				"missing authenticated transport key sends no v2 proof or admission request");
+			(void)Client.Stop();
+			(void)Server.Stop();
+			ServerRuntime.Destroy();
+		}
 		auto MissingProof = AuthenticatedConfiguration(GameSessionRole::Client, Provider);
 		MissingProof.AdmissionProof.reset();
 		Check(!MissingProof.IsValid(), "authenticated client cannot silently send a v1 hello");

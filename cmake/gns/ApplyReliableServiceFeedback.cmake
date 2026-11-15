@@ -770,11 +770,42 @@ GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=
 	}
 
 	/// Called when we close the connection locally]=])
+GargantuanReplaceFeedback("\tinline bool BCryptKeysValid() const { return m_bCryptKeysValid; }" [=[	inline bool BCryptKeysValid() const { return m_bCryptKeysValid; }
+	bool GargantuanReadAuthenticatedServerKey(uint8 *Output) const;]=])
 GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_connections.cpp 724eb5215fd2ed66e691c4ac798405531b973e499f3aee26c8d9f101f6bd0ae9)
 GargantuanReplaceFeedback("#include \"steamnetworkingsockets_connections.h\"" "#include \"steamnetworkingsockets_connections.h\"\n#include \"NativeEgressWorker.hpp\"")
 GargantuanReplaceFeedback("#include \"NativeEgressWorker.hpp\"" "#include \"NativeEgressWorker.hpp\"\n#include \"ServiceTimingDiagnostics.hpp\"")
+GargantuanReplaceFeedback("\t// Generate a keypair\n\tCECSigningPrivateKey keyPrivate;\n\tCECSigningPublicKey keyPublic;\n\tCCrypto::GenerateSigningKeyPair( &keyPublic, &keyPrivate );" [=[	// Only the explicit managed server uses one process-local identity across
+	// its connections.  Ordinary unsigned certs remain per connection.
+	CECSigningPrivateKey keyPrivate;
+	CECSigningPublicKey keyPublic;
+	const bool bGargantuanStableServerKey = m_bConnectionInitiatedRemotely &&
+		m_pSteamNetworkingSocketsInterface->m_bGargantuanServerIdentityEnabled;
+	if ( bGargantuanStableServerKey )
+	{
+		if ( !m_pSteamNetworkingSocketsInterface->m_GargantuanServerIdentityKey.GetPublicKey( &keyPublic ) )
+		{
+			ConnectionState_ProblemDetectedLocally( k_ESteamNetConnectionEnd_Misc_Generic,
+				"Managed server identity unavailable" );
+			return;
+		}
+	}
+	else
+		CCrypto::GenerateSigningKeyPair( &keyPublic, &keyPrivate );]=])
+GargantuanReplaceFeedback("\tSetLocalCert( msgSignedCert, keyPrivate, true );" [=[	SetLocalCert( msgSignedCert, bGargantuanStableServerKey
+		? m_pSteamNetworkingSocketsInterface->m_GargantuanServerIdentityKey : keyPrivate, true );]=])
+GargantuanReplaceFeedback("void CSteamNetworkConnectionBase::CertRequestFailed(" [=[bool CSteamNetworkConnectionBase::GargantuanReadAuthenticatedServerKey(uint8 *Output) const
+{
+	if (!Output || !m_bCryptKeysValid || m_eNegotiatedCipher != k_ESteamNetworkingSocketsCipher_AES_256_GCM ||
+		m_msgCertRemote.key_type() != CMsgSteamDatagramCertificate_EKeyType_ED25519 ||
+		m_msgCertRemote.key_data().size() != 32) return false;
+	memcpy(Output, m_msgCertRemote.key_data().data(), 32);
+	return true;
+}
+
+void CSteamNetworkConnectionBase::CertRequestFailed(]=])
 GargantuanReplaceFeedback("\t// Fill out a message object\n\tCSteamNetworkingMessage *pMsg = CSteamNetworkingMessage::New( cbData );" [=[
 	GargantuanServiceTimingSpan GargantuanCopy(GargantuanServiceTimingPhase::ApiMessageCopy);
 	GargantuanCopy.SetResult(m_hConnectionSelf);
@@ -947,7 +978,7 @@ GargantuanReplaceFeedback("\t// Would we like to try to send some additional sta
 GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(csteamnetworkingsockets.cpp 2b260c05cc8c262e785387ea3d08eee74cc03b6eed00493e961a82c05dec5451)
-GargantuanReplaceFeedback("#include \"steamnetworkingsockets_connections.h\"" "#include \"steamnetworkingsockets_connections.h\"\n#include \"ServiceTimingDiagnostics.hpp\"")
+GargantuanReplaceFeedback("#include \"steamnetworkingsockets_connections.h\"" "#include \"steamnetworkingsockets_connections.h\"\n#include \"ServiceTimingDiagnostics.hpp\"\n#include \"ServerIdentity.hpp\"")
 GargantuanReplaceFeedback("inline CSteamNetworkConnectionBase *GetConnectionByHandleForAPI( HSteamNetConnection sock, ConnectionScopeLock &scopeLock, const char *pszLockTag )\n{" [=[inline CSteamNetworkConnectionBase *GetConnectionByHandleForAPI( HSteamNetConnection sock, ConnectionScopeLock &scopeLock, const char *pszLockTag )
 {
 	GargantuanServiceCallsiteSpan GargantuanLookup(GargantuanServiceCallsite::ApiLookup, sock);]=])
@@ -1156,6 +1187,38 @@ bool GargantuanReadResolvedNativeFeedback(ISteamNetworkingSockets *Interface, ui
 
 static CSteamNetworkListenSocketBase *GetListenSocketByHandle]=])
 GargantuanReplaceFeedback("\tpConn->APICloseConnection( nReason, pszDebug, bEnableLinger );\n\treturn true;" "\tpConn->APICloseConnection( nReason, pszDebug, bEnableLinger );\n\tif (auto *Result = GargantuanGetClosingFeedback()) pConn->GargantuanPopulateReliableServiceFeedback(*Result);\n\treturn true;")
+GargantuanReplaceFeedback("static CSteamNetworkListenSocketBase *GetListenSocketByHandle" [=[bool GargantuanEnableServerIdentity(ISteamNetworkingSockets *Interface,
+	GargantuanServerPublicKey &PublicKey)
+{
+	SteamNetworkingGlobalLock GlobalLock("GargantuanServerIdentityEnable");
+	auto *Sockets = static_cast<CSteamNetworkingSockets *>(Interface);
+	if (!Sockets || !Sockets->BInitted() || Sockets->m_bGargantuanServerIdentityEnabled ||
+		Sockets->BHasAnyConnections() || Sockets->BHasAnyListenSockets() ||
+		Sockets->m_msgSignedCert.has_cert()) return false;
+	CECSigningPublicKey Key;
+	CCrypto::GenerateSigningKeyPair(&Key, &Sockets->m_GargantuanServerIdentityKey);
+	if (!Sockets->m_GargantuanServerIdentityKey.IsValid() || Key.GetRawData(PublicKey.data()) != PublicKey.size()) return false;
+	Sockets->m_bGargantuanServerIdentityEnabled = true;
+	return true;
+}
+
+bool GargantuanReadAuthenticatedServerKey(ISteamNetworkingSockets *Interface,
+	uint32_t Handle, GargantuanServerPublicKey &PublicKey)
+{
+	SteamNetworkingGlobalLock GlobalLock("GargantuanServerIdentityRead");
+	ConnectionScopeLock Lock;
+	auto *Connection = GetConnectionByHandleForAPI(Handle, Lock, "GargantuanServerIdentityRead");
+	return Connection && Connection->m_pSteamNetworkingSocketsInterface == Interface &&
+		Connection->GargantuanReadAuthenticatedServerKey(PublicKey.data());
+}
+
+static CSteamNetworkListenSocketBase *GetListenSocketByHandle]=])
+GargantuanWriteFeedbackSource()
+
+GargantuanReadFeedbackSource(csteamnetworkingsockets.h 044456938b9105cc32c02d233ac4e606fa5704b3b0dbd22b061d4c2533049cc0)
+GargantuanReplaceFeedback("\tCECSigningPrivateKey m_keyPrivateKey;" [=[	CECSigningPrivateKey m_keyPrivateKey;
+	CECSigningPrivateKey m_GargantuanServerIdentityKey;
+	bool m_bGargantuanServerIdentityEnabled = false;]=])
 GargantuanWriteFeedbackSource()
 
 # Our checked arithmetic is compiled independently, with full project sanitizer

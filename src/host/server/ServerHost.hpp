@@ -42,6 +42,7 @@ namespace gargantuan::host {
 		PackageContentNamespace Package;
 		AssetContentId ContentManifestDigest;
 		network::TransportEndpoint Endpoint;
+		network::TransportServerPublicKey ServerPublicKey{};
 	};
 
 	struct ManagedServerSnapshot final {

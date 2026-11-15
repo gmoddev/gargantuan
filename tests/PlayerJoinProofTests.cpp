@@ -42,10 +42,13 @@ int main() {
 		const auto Proof = gargantuan::host::detail::ReadPlayerJoinProof(Environment);
 		Require(Proof && Proof->size() == 32 && Proof->front() == std::byte{0x01} &&
 			Proof->back() == std::byte{0xef}, "exact proof was corrupted");
+		const auto Key = gargantuan::host::detail::ReadPlayerServerPublicKey(Environment);
+		Require(Key && *Key == *Proof, "exact public server key was corrupted");
 		for (const auto &Invalid : {std::string(), Valid.substr(1), Valid + "0",
 				std::string(64, '0'), std::string(64, 'A'), std::string(64, 'x')}) {
 			SetValue(Invalid);
 			Require(!gargantuan::host::detail::ReadPlayerJoinProof(Environment), "malformed proof accepted");
+			Require(!gargantuan::host::detail::ReadPlayerServerPublicKey(Environment), "malformed server key accepted");
 		}
 		SetValue(Valid);
 		for (const auto &InvalidName : {std::string(), std::string(65, 'A'), std::string("1INVALID"),

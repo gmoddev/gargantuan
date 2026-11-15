@@ -1,6 +1,7 @@
 #include "host/server/ServerHost.hpp"
 
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <iostream>
@@ -43,7 +44,9 @@ namespace {
 		}
 		void OnListening(gargantuan::host::ServerListeningEvidence Evidence) noexcept override {
 			EvidenceValid.store(Evidence.Package.Project.IsValid() &&
-				Evidence.ContentManifestDigest.IsValid() && Evidence.Endpoint.IsValid());
+				Evidence.ContentManifestDigest.IsValid() && Evidence.Endpoint.IsValid() &&
+				std::any_of(Evidence.ServerPublicKey.begin(), Evidence.ServerPublicKey.end(),
+					[](std::byte Value) { return Value != std::byte{}; }));
 			ListeningCount.fetch_add(1);
 		}
 		void OnDraining() noexcept override { DrainingCount.fetch_add(1); }

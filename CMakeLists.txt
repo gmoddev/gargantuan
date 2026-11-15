@@ -1325,6 +1325,9 @@ if(BUILD_TESTING)
 			gargantuan_gns_transport
 		)
 		add_executable(gargantuan_game_session_real_transport_tests "tests/GameSessionGnsTests.cpp")
+		add_executable(gargantuan_gns_server_identity_tests "tests/GnsServerIdentityTests.cpp")
+		target_link_libraries(gargantuan_gns_server_identity_tests PRIVATE
+			gargantuan_core gargantuan_gns_transport)
 		# Manual physical Phase 1 probe. Only its socket-free self-test is CTest.
 		add_executable(gargantuan_physical_gns_funding_probe "tests/PhysicalGnsFundingProbe.cpp")
 		target_link_libraries(gargantuan_physical_gns_funding_probe PRIVATE gargantuan_core gargantuan_gns_transport)
@@ -1561,6 +1564,7 @@ if(BUILD_TESTING)
 				gargantuan_remote_real_transport_tests
 				gargantuan_character_real_transport_tests
 				gargantuan_game_session_real_transport_tests
+				gargantuan_gns_server_identity_tests
 				gargantuan_physical_gns_funding_probe
 			)
 			set(GARGANTUAN_PROTOBUF_RUNTIMES "")
@@ -1585,6 +1589,11 @@ if(BUILD_TESTING)
 					COMMAND ${CMAKE_COMMAND} -E copy_if_different
 						"${GARGANTUAN_PROTOBUF_RUNTIME}"
 						"$<TARGET_FILE_DIR:gargantuan_game_session_real_transport_tests>"
+				)
+				add_custom_command(TARGET gargantuan_gns_server_identity_tests POST_BUILD
+					COMMAND ${CMAKE_COMMAND} -E copy_if_different
+						"${GARGANTUAN_PROTOBUF_RUNTIME}"
+						"$<TARGET_FILE_DIR:gargantuan_gns_server_identity_tests>"
 				)
 				add_custom_command(TARGET gargantuan_physical_gns_funding_probe POST_BUILD
 					COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -1825,6 +1834,14 @@ if(BUILD_TESTING)
 		add_test(NAME gargantuan_remote_real_transport COMMAND gargantuan_remote_real_transport_tests)
 		add_test(NAME gargantuan_character_real_transport COMMAND gargantuan_character_real_transport_tests)
 		add_test(NAME gargantuan_game_session_real_transport COMMAND gargantuan_game_session_real_transport_tests)
+		if(WIN32)
+			add_test(NAME gargantuan_gns_server_identity
+				COMMAND powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass
+					-File "${CMAKE_CURRENT_SOURCE_DIR}/tests/GnsServerIdentityTests.ps1"
+					-Executable "$<TARGET_FILE:gargantuan_gns_server_identity_tests>")
+			set_tests_properties(gargantuan_gns_server_identity PROPERTIES
+				LABELS "networking;transport;identity" TIMEOUT 60 RUN_SERIAL TRUE)
+		endif()
 		add_test(NAME gargantuan_pooled_feedback_refresh
 			COMMAND gargantuan_game_session_real_transport_tests --pooled-feedback-refresh)
 		set_tests_properties(gargantuan_pooled_feedback_refresh PROPERTIES

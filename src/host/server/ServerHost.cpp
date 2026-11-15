@@ -97,6 +97,10 @@ namespace gargantuan::host {
 			std::size_t PollEvents(std::span<network::TransportEvent> Output) override { return Delegate->PollEvents(Output); }
 			std::optional<std::size_t> GetAvailableDatagramBytes(network::ConnectionId Connection) const override { return Delegate->GetAvailableDatagramBytes(Connection); }
 			std::optional<network::NetworkStatistics> GetStatistics(network::ConnectionId Connection) const override { return Delegate->GetStatistics(Connection); }
+			std::optional<network::TransportServerPublicKey> LocalServerPublicKey() const override { return Delegate->LocalServerPublicKey(); }
+			std::optional<network::TransportServerPublicKey> AuthenticatedServerPublicKey(network::ConnectionId Connection) const override {
+				return Delegate->AuthenticatedServerPublicKey(Connection);
+			}
 			network::TransportOperationResult Send(const network::NetworkMessageIntent &Message) override {
 				const bool Structural = Message.Traffic() == network::TrafficClass::StructuralReplication;
 				const bool Application = Message.Traffic() == network::TrafficClass::ReliableApplication;
@@ -710,6 +714,7 @@ namespace gargantuan::host {
 						.AdmissionMode = Managed ? network::GameSessionAdmissionMode::Authenticated :
 							network::GameSessionAdmissionMode::DevelopmentLocal,
 						.AdmissionProvider = HostConfiguration.AdmissionProvider,
+						.RequireServerIdentity = Managed,
 						.ReliableService = HostConfiguration.ReliableService,
 					},
 					Runtime.get()
@@ -723,6 +728,9 @@ namespace gargantuan::host {
 					if (Session->GetStatus() != network::GameSessionStatus::Listening ||
 						!Payload->ContentManifestDigest.IsValid())
 						throw std::runtime_error("managed server listener or package content is unavailable");
+					const auto ServerPublicKey = NativeTransport->LocalServerPublicKey();
+					if (!ServerPublicKey)
+						throw std::runtime_error("managed server identity is unavailable");
 					const auto Before = HostConfiguration.ManagedLifecycle->Snapshot();
 					if (!Before.AuthorityCurrent || Before.ReadyAcknowledged || Before.DrainRequested)
 						throw std::runtime_error("managed server authority was invalid before listening");
@@ -730,6 +738,7 @@ namespace gargantuan::host {
 						.Package = {Payload->Inspection.Identity, Payload->Inspection.Revision},
 						.ContentManifestDigest = Payload->ContentManifestDigest,
 						.Endpoint = *BindEndpoint,
+						.ServerPublicKey = *ServerPublicKey,
 					});
 				}
 			}

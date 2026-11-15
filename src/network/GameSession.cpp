@@ -106,12 +106,16 @@ namespace gargantuan::network {
 
 	bool GameSessionConfiguration::IsValid() const {
 		const bool AdmissionValid = AdmissionMode == GameSessionAdmissionMode::DevelopmentLocal
-			? !AdmissionProvider && !AdmissionProof &&
+			? !AdmissionProvider && !AdmissionProof && !RequireServerIdentity && !ExpectedServerPublicKey &&
 			  (AllowInsecureDevelopmentNetwork || IsLoopbackTransportEndpoint(Endpoint))
 			: AdmissionMode == GameSessionAdmissionMode::Authenticated && !AllowInsecureDevelopmentNetwork &&
-			  IsLoopbackTransportEndpoint(Endpoint) &&
+			  (IsLoopbackTransportEndpoint(Endpoint) ||
+				(Role == GameSessionRole::Server ? RequireServerIdentity : ExpectedServerPublicKey.has_value())) &&
 			  (Role == GameSessionRole::Server ? static_cast<bool>(AdmissionProvider) && !AdmissionProof
-											   : !AdmissionProvider && AdmissionProof.has_value());
+											   && !ExpectedServerPublicKey
+											   : !AdmissionProvider && AdmissionProof.has_value() && !RequireServerIdentity &&
+												 (!ExpectedServerPublicKey || std::any_of(ExpectedServerPublicKey->begin(),
+													 ExpectedServerPublicKey->end(), [](std::byte Value) { return Value != std::byte{}; })));
 		return Endpoint.IsValid() && Limits.IsValid() && HandshakeTimeoutTicks > 0 &&
 			   HandshakeTimeoutTicks <= DefaultGameSessionHandshakeTimeoutTicks * 10 && Relevance.IsValid() &&
 			   StructuralReplication.IsValid() &&
@@ -516,7 +520,16 @@ namespace gargantuan::network {
 				.Role = Configuration.Role == GameSessionRole::Server ? TransportRole::Server : TransportRole::Client,
 				.Endpoint = Configuration.Endpoint,
 				.AdvertisedLimits = Configuration.Limits,
+				.RequireServerIdentity = Configuration.RequireServerIdentity,
+				.ExpectedServerPublicKey = Configuration.ExpectedServerPublicKey,
 			});
+			if (Result.Succeeded() && Configuration.RequireServerIdentity &&
+				!Transport->LocalServerPublicKey()) {
+				FailSession({DisconnectReason::TransportFailure, "Server transport identity unavailable"});
+				return {.Status = TransportOperationStatus::TransportFailure,
+					.TerminalDisconnect = DisconnectInfo{DisconnectReason::TransportFailure,
+						"Server transport identity unavailable"}};
+			}
 			if (Result.Succeeded() && InjectFailure(detail::GameSessionFailurePoint::TransportStart)) {
 				FailSession({DisconnectReason::ResourceExhaustion, "Injected transport-start acquisition failure"});
 				return {
@@ -683,6 +696,11 @@ namespace gargantuan::network {
 		}
 
 		void OnConnected(ConnectionId Connection) {
+			if (Configuration.Role == GameSessionRole::Client && Configuration.ExpectedServerPublicKey &&
+				Transport->AuthenticatedServerPublicKey(Connection) != Configuration.ExpectedServerPublicKey) {
+				Reject(Connection, DisconnectReason::ProtocolViolation, "Server transport identity differs");
+				return;
+			}
 			if (!Connection.IsValid() || Peers.size() >= MaximumGameSessionPeers ||
 				(Configuration.ReliableService && Peers.size() >= Configuration.ReliableService->MaximumConnections)) {
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Game session peer capacity reached");

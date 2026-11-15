@@ -18,9 +18,16 @@ The public Player neither calls the private admission service nor links its
 protocol bindings. The input boundary and CLI denial tests do not qualify the
 real Node/PostgreSQL/TLS/server/client lifecycle; that requires separate evidence.
 
-Authenticated joins currently accept loopback endpoints only. The pinned GNS
-open-source build permits unauthenticated transport peers; ticket authorization
-does not establish the identity of the remote server. Non-loopback authenticated
-hosting remains disabled until a separately reviewed and qualified server-trust
-boundary is installed. An authenticated configuration cannot use the development
-override to escape this restriction.
+For a non-loopback authenticated join, the launcher also supplies
+`--server-key-env NAME`. Its variable contains the expected 32-byte GNS server
+public key as 64 lowercase hexadecimal digits. The native GNS adapter checks
+the remote certificate key and the encrypted handshake before reporting the
+connection to GameSession; a wrong or missing key is closed before the join
+proof is transmitted. This key must come from an authenticated Node ticket
+bound to the exact live server session. It is not a secret or a replacement for
+the short-lived one-use proof. The private server key never leaves GNS.
+
+The Engine key-pin path is not yet qualified with Node ticket propagation and
+real separate-process client/server tests. Existing deployment containment keeps
+managed hosting on loopback until those gates pass. An authenticated
+configuration cannot use the development override to escape this restriction.

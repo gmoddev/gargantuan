@@ -60,6 +60,9 @@ namespace gargantuan::network {
 		std::shared_ptr<IGameAdmissionProvider> AdmissionProvider;
 		// The client presents an opaque v2 proof; Engine never interprets it.
 		std::optional<std::array<std::byte, GameAdmissionProofBytes>> AdmissionProof;
+		// Remote authenticated admission requires actual native transport identity.
+		bool RequireServerIdentity = false;
+		std::optional<TransportServerPublicKey> ExpectedServerPublicKey;
 		// Trusted startup-only server input; absent means legacy/unqualified.
 		std::optional<ReliableServiceProfile> ReliableService;
 		// Trusted startup-only client declaration of the canonical ordinary source
