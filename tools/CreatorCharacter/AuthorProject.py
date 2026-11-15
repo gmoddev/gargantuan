@@ -94,14 +94,41 @@ class EditorClient:
         threading.Thread(target=DrainErrors, args=(self.Process.stderr,), daemon=True).start()
 
     def Close(self) -> None:
+        if self.Process.stdin and not self.Process.stdin.closed:
+            try:
+                self.Process.stdin.close()
+            except OSError:
+                pass
         if self.Process.poll() is None:
+            try:
+                self.Process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.Process.terminate()
+                try:
+                    self.Process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self.Process.kill()
+                    self.Process.wait(timeout=3)
+        self.Token = ""
+
+    def CloseSuccessfully(self) -> None:
+        if self.Process.stdin and not self.Process.stdin.closed:
+            try:
+                self.Process.stdin.close()
+            except OSError:
+                pass
+        try:
+            ExitCode = self.Process.wait(timeout=5)
+        except subprocess.TimeoutExpired as Error:
             self.Process.terminate()
             try:
                 self.Process.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 self.Process.kill()
                 self.Process.wait(timeout=3)
+            raise AuthoringError("EditorHost did not exit after protocol EOF") from Error
         self.Token = ""
+        Check(ExitCode == 0, "EditorHost exited unsuccessfully after SaveProject")
 
     def Call(self, Method: str, Params: dict[str, Any] | None = None) -> dict[str, Any]:
         self.Sequence += 1
@@ -218,16 +245,19 @@ def Author(Client: EditorClient, Project: Path, Sources: dict[str, str],
           set(Handshake.get("StudioCapabilities", []))), "EditorHost lacks authoring authority")
     Client.Call("OpenProject", {"Root": str(Project)})
     Schema = Client.Call("GetSchema", {"SchemaDiscoveryVersion": 7})
-    Names = ("KinematicCharacter", "Character", "MeshPart", "BasePart", "Animator",
+    Names = ("KinematicCharacter", "Character", "MeshPart", "BasePart", "Part", "Animator",
              "Attachment", "AttachmentMesh", "Script", "ModuleScript", "Players")
-    Definitions = {Name: Definition(Schema, Name, Name != "Players") for Name in Names}
+    Constructed = {"KinematicCharacter", "MeshPart", "Part", "Animator", "Attachment",
+                   "AttachmentMesh", "Script", "ModuleScript"}
+    Definitions = {Name: Definition(Schema, Name, Name in Constructed) for Name in Names}
     Snapshot = Client.Call("GetSnapshot")["Snapshot"]
     Scope = Snapshot.get("Cursor", {}).get("Scope")
     Check(Scope is not None, "snapshot lacks project scope")
     Workspace = FindObject(Snapshot, "Workspace", "Workspace")["Id"]
     Storage = FindObject(Snapshot, "ReplicatedStorage", "ReplicatedStorage")["Id"]
     Players = FindObject(Snapshot, "Players", "Players")["Id"]
-    Reserved = {"PlayableCharacterTemplate", "SkinnedRoot", "RigAnimator", "CrownSocket", "WispCharm"}
+    Reserved = {"PlayableCharacterTemplate", "SkinnedRoot", "RigAnimator", "CrownSocket",
+                "WispCharm", "CreatorFloor", "CreatorWall"}
     Reserved.update(Name for Name, _, _, _, _ in SOURCE_FILES)
     Check(not any(Object.get("Name") in Reserved for Object in Snapshot.get("Objects", [])),
           "an authored object name already exists; use a fresh project or review it in Studio")
@@ -265,6 +295,18 @@ def Author(Client: EditorClient, Project: Path, Sources: dict[str, str],
     def SetAttribute(Object: Any, Name: str, Value: str) -> None:
         Client.Call("SetAttribute", {"Object": Object, "Attribute": Name,
                                      "Value": Wire("String", Value)})
+
+    def CFrameAt(X: float, Y: float, Z: float) -> dict[str, Any]:
+        return Wire("CFrame", [X, Y, Z, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
+
+    Floor = Create("Part", Workspace, "CreatorFloor")
+    Wall = Create("Part", Workspace, "CreatorWall")
+    for Object, Size, Position in ((Floor, [40.0, 1.0, 40.0], [0.0, -0.5, 0.0]),
+                                   (Wall, [1.0, 4.0, 12.0], [4.0, 2.0, 0.0])):
+        SetProperty(Object, "Part", "BasePart", "Anchored", Wire("Bool", True))
+        SetProperty(Object, "Part", "BasePart", "CanCollide", Wire("Bool", True))
+        SetProperty(Object, "Part", "BasePart", "Size", Wire("Vector3", Size))
+        SetProperty(Object, "Part", "BasePart", "CFrame", CFrameAt(*Position))
 
     Template = Create("KinematicCharacter", Storage, "PlayableCharacterTemplate")
     Root = Create("MeshPart", Template, "SkinnedRoot")
@@ -334,6 +376,16 @@ def Author(Client: EditorClient, Project: Path, Sources: dict[str, str],
     VerifyParent(Animator, Root, "RigAnimator")
     VerifyParent(Socket, Root, "CrownSocket")
     VerifyParent(Accessory, Root, "WispCharm")
+    VerifyParent(Floor, Workspace, "CreatorFloor")
+    VerifyParent(Wall, Workspace, "CreatorWall")
+    for Object, Size, Position, Name in ((Floor, [40.0, 1.0, 40.0], [0.0, -0.5, 0.0], "CreatorFloor"),
+                                         (Wall, [1.0, 4.0, 12.0], [4.0, 2.0, 0.0], "CreatorWall")):
+        Properties = by_id[json.dumps(Object, sort_keys=True)].get("Properties", {})
+        Check(Properties.get("Size") == Wire("Vector3", Size) and
+              Properties.get("CFrame") == CFrameAt(*Position) and
+              Properties.get("Anchored") == Wire("Bool", True) and
+              Properties.get("CanCollide") == Wire("Bool", True),
+              f"{Name}: collidable scene readback differs")
     for Name, _, ParentName, _, _ in SOURCE_FILES:
         VerifyParent(CreatedSources[Name], Storage if ParentName == "ReplicatedStorage" else Workspace, Name)
     FinalRevision = Client.Call("GetProjectState")["AuthoritativeRevision"]
@@ -342,6 +394,7 @@ def Author(Client: EditorClient, Project: Path, Sources: dict[str, str],
     return {
         "Status": "AuthoredAndSaved", "Scope": Scope, "PersistedRevision": FinalRevision,
         "Template": Template, "RootPart": Root, "Animator": Animator,
+        "Floor": Floor, "Wall": Wall,
         "Socket": Socket, "Accessory": Accessory, "Sources": SourceObjects,
         "MeshReference": MeshReference, "CharmReference": CharmReference,
         "ClipReferences": Clips, "AssetIds": AssetIds,
@@ -373,6 +426,7 @@ def Main() -> int:
         Client = EditorClient(Binary, Args.rpc_timeout)
         try:
             Result = Author(Client, Project, Sources, Args.wisp_source, Args.charm_source)
+            Client.CloseSuccessfully()
         finally:
             Client.Close()
         Result["Project"] = str(Project)

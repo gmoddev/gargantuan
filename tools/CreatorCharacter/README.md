@@ -25,7 +25,8 @@ python tools/CreatorCharacter/AuthorProject.py `
 The receipt must be a new file outside the project. The client checks the
 handshake, exact schema versions, live project scope, unique catalog identities,
 rig joint paths, clip compatibility, source readback, and Character composition.
-It saves only after every check succeeds. Failure exits the owned process
+It saves only after every check succeeds and requires a normal EditorHost exit
+after standard-input EOF. Failure exits the owned process
 without a save; reopen the project in Studio to inspect it. The receipt records
 the saved revision, object IDs, asset references, and source hashes, but no
 session token or script body. Run the harness once per fresh project; it refuses
@@ -35,7 +36,10 @@ The saved template is `ReplicatedStorage/PlayableCharacterTemplate`. Its
 `SkinnedRoot` MeshPart has the Wisp Mesh, a direct `RigAnimator`, a `CrownSocket`
 Attachment on `WispRoot/WispCrown`, and a visual-only `WispCharm`
 AttachmentMesh on `WispRoot/WispCrown/WispAntenna`. The typed `RootPart` points
-to `SkinnedRoot`. The two ModuleScripts live in `ReplicatedStorage`; the four
+to `SkinnedRoot`. Workspace also contains an anchored collidable 40 × 1 × 40
+`CreatorFloor` at y = −0.5 and an anchored 1 × 4 × 12 `CreatorWall` centered
+at (4, 2, 0) for movement and collision acceptance. The two ModuleScripts
+live in `ReplicatedStorage`; the four
 context-specific Scripts live in `Workspace`. Their `InitialSource` is copied
 from the six `docs/examples/Character*` Luau files. The client sets the three
 animation reference attributes on `CharacterAnimationDriver`, the action
