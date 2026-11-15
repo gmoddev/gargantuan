@@ -16,7 +16,7 @@ try {
 	$TestExecutable = Join-Path $PackageRoot 'ManagedServerHostTests.exe'
 	Copy-Item -LiteralPath $ManagedHostTests -Destination $TestExecutable
 	$CaseIndex = 0
-	foreach ($Case in @('ReadyDrain', 'AuthorityLoss', 'NeverReady', 'PreReady', 'MissingProvider', 'MissingLifecycle')) {
+	foreach ($Case in @('ReadyDrain', 'AuthorityLoss', 'NeverReady', 'PreReady', 'MissingProvider', 'MissingLifecycle', 'InsecureOverride')) {
 		$Port = 41000 + ($PID % 1000) + $CaseIndex
 		$CaseIndex++
 		$StartInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -27,6 +27,7 @@ try {
 		$StartInfo.RedirectStandardOutput = $true
 		$StartInfo.RedirectStandardError = $true
 		$StartInfo.Arguments = ('"{0}" --bind "127.0.0.1:{1}" --max-ticks 400' -f $Case, $Port)
+		if ($Case -eq 'InsecureOverride') { $StartInfo.Arguments += ' --allow-insecure-development-network' }
 		$Process = [System.Diagnostics.Process]::Start($StartInfo)
 		try {
 			$StandardOutput = $Process.StandardOutput.ReadToEndAsync()

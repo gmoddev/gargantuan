@@ -61,7 +61,8 @@ int main(int ArgumentCount, char *Arguments[]) {
 	if (ArgumentCount < 4) return 2;
 	const std::string_view Case = Arguments[1];
 	if (Case != "ReadyDrain" && Case != "AuthorityLoss" && Case != "NeverReady" &&
-		Case != "PreReady" && Case != "MissingProvider" && Case != "MissingLifecycle") return 2;
+		Case != "PreReady" && Case != "MissingProvider" && Case != "MissingLifecycle" &&
+		Case != "InsecureOverride") return 2;
 	std::vector<char *> HostArguments{Arguments[0]};
 	for (int Index = 2; Index < ArgumentCount; ++Index) HostArguments.push_back(Arguments[Index]);
 	const auto Observer = std::make_shared<Lifecycle>();
@@ -86,14 +87,16 @@ int main(int ArgumentCount, char *Arguments[]) {
 		static_cast<int>(HostArguments.size()), HostArguments.data(), std::move(Configuration));
 	Worker.request_stop();
 	Worker.join();
-	const bool HasListener = Case != "PreReady" && Case != "MissingProvider" && Case != "MissingLifecycle";
+	const bool RejectedBeforeListening = Case == "MissingProvider" || Case == "MissingLifecycle" ||
+		Case == "InsecureOverride";
+	const bool HasListener = Case != "PreReady" && !RejectedBeforeListening;
 	const bool Expected = Result == ((Case == "ReadyDrain") ? 0 :
-		(Case == "MissingProvider" || Case == "MissingLifecycle") ? 2 : 7) &&
+		RejectedBeforeListening ? 2 : 7) &&
 		Observer->ListeningCount.load() == (HasListener ? 1 : 0) &&
-		Observer->DrainingCount.load() == ((Case == "MissingProvider" || Case == "MissingLifecycle") ? 0 : 1) &&
-		Observer->StoppedCount.load() == ((Case == "MissingProvider" || Case == "MissingLifecycle") ? 0 : 1) &&
+		Observer->DrainingCount.load() == (RejectedBeforeListening ? 0 : 1) &&
+		Observer->StoppedCount.load() == (RejectedBeforeListening ? 0 : 1) &&
 		(!HasListener || Observer->EvidenceValid.load()) &&
-		((Case == "MissingProvider" || Case == "MissingLifecycle") || Observer->DrainedBeforeStop.load()) &&
+		(RejectedBeforeListening || Observer->DrainedBeforeStop.load()) &&
 		(Case != "ReadyDrain" || Observer->DrainRequested.load()) &&
 		(Case != "AuthorityLoss" || !Observer->AuthorityCurrent.load());
 	if (!Expected) {
