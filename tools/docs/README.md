@@ -6,6 +6,7 @@ Run from the repository root with Python 3.12 or newer:
 python tools/docs/CheckDocumentation.py
 python tools/docs/CheckDocumentation.py --luau-compile luau-compile
 python -m unittest discover -s tools/docs -p "test_*.py"
+python -m unittest discover -s tests -p "test_ci_junit_output.py"
 ```
 
 `luau-compile` is the real compiler. `--null` compiles the standalone examples

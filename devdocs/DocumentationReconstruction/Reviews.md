@@ -26,6 +26,18 @@ Documentation validation and the normal expected-head merge/post-merge evidence
 are recorded on [PR #25](https://github.com/gmoddev/gargantuan/pull/25). Refused
 hosted jobs must remain distinct from user-authorized Dockerbox equivalents.
 
+Full Windows CI at documentation head `744bd2091ba2a896fcae714dbaca464e640549c7`
+passed native CTest, then exposed two old assertions in the existing CI/JUnit
+regression: documentation was expected to have no PR trigger, and job parsing
+required four-space YAML indentation. The tests now require PR documentation
+validation and find sibling jobs using their actual indentation. All existing
+manual-main-only Pages condition and permission assertions remain unchanged.
+The focused regression also runs in the fast documentation job so this policy
+drift fails before another full native build. The failed run retains its verdict.
+The independent CI reviewer verified the narrow diff and unchanged Native/GNS
+names, artifacts, JUnit assertions and Pages permissions. Local policy assertions
+pass; the real CTest subprocess case is executed where CTest is available.
+
 ## Initial pre-integration review — historical
 
 Reviewed on 2026-11-14 against integrated Engine

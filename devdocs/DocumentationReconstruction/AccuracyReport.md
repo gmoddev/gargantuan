@@ -103,7 +103,8 @@ tree comparison and post-merge checks. The receipt/command results are attached
 to PR #25 without introducing a recursive qualification layer.
 
 The patch relative to merged Engine main contains documentation, examples,
-site/tooling and documentation CI changes only. Existing Engine/Studio native
+site/tooling, documentation CI and its workflow-policy regression changes only.
+Production runtime and C++ native tests remain unchanged. Existing Engine/Studio native
 and hardware receipts retain their original sources; documentation validation
 does not become a fresh gameplay, GPU, latency or physical-provider campaign.
 
@@ -121,3 +122,10 @@ and root Git symlink-alias differences hidden by Windows. Focused fixes and
 regressions resolved both; historical link checks remain enabled. Current
 derived artifacts and PR validation report the expanded merged-source inventory
 and API counts independently.
+
+Windows CI at head `744bd2091ba2a896fcae714dbaca464e640549c7` passed all 162
+native CTests, then failed the existing CI/JUnit policy tests because they
+expected no documentation PR trigger and four-space job indentation. The
+follow-up aligns those assertions with requested PR validation, preserves every
+manual-main-only Pages condition/permission check and runs the focused suite in
+the fast documentation job. That failed run is not a qualification PASS.

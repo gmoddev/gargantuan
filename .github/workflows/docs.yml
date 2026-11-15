@@ -42,6 +42,7 @@ jobs:
       - name: Validate documentation, declarations and examples
         run: |
           python -m unittest discover -s tools/docs -p 'test_*.py'
+          python -m unittest discover -s tests -p 'test_ci_junit_output.py'
           python tools/docs/CheckDocumentation.py --luau-compile .docs-luau/luau-compile
           node --test tools/docs/test_repository_links.mjs
       - name: Install locked site dependencies
