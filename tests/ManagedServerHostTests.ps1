@@ -8,13 +8,18 @@ param(
 $ErrorActionPreference = 'Stop'
 $TestRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("gmsh-{0}-{1}" -f $PID, [Guid]::NewGuid().ToString('N').Substring(0, 8))
 $PackageRoot = Join-Path $TestRoot 'ServerPackage'
+$RuntimeFixture = Join-Path $TestRoot 'ServerRuntime'
 try {
 	New-Item -ItemType Directory -Path $TestRoot | Out-Null
-	# Use the ordinary packager and authored sample, with no direct project edits.
-	& $Packager build --project $ProjectRoot --output $PackageRoot --runtime $ServerRuntimeDistribution --configuration Release
+	# The package loader rejects undeclared files. Put the test host in a private
+	# copy of the ordinary runtime distribution, then let Packager hash it.
+	Copy-Item -LiteralPath $ServerRuntimeDistribution -Destination $RuntimeFixture -Recurse
+	$RuntimeHost = Join-Path $RuntimeFixture 'GargantuanServer.exe'
+	if (-not (Test-Path -LiteralPath $RuntimeHost)) { throw 'Server runtime executable is missing' }
+	Copy-Item -LiteralPath $ManagedHostTests -Destination $RuntimeHost -Force
+	& $Packager build --project $ProjectRoot --output $PackageRoot --runtime $RuntimeFixture --configuration Release
 	if ($LASTEXITCODE -ne 0) { throw 'Managed host fixture package build failed' }
-	$TestExecutable = Join-Path $PackageRoot 'ManagedServerHostTests.exe'
-	Copy-Item -LiteralPath $ManagedHostTests -Destination $TestExecutable
+	$TestExecutable = Join-Path $PackageRoot 'GargantuanServer.exe'
 	$CaseIndex = 0
 	foreach ($Case in @('ReadyDrain', 'AuthorityLoss', 'NeverReady', 'PreReady', 'MissingProvider', 'MissingLifecycle', 'InsecureOverride')) {
 		$Port = 41000 + ($PID % 1000) + $CaseIndex
