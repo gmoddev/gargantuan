@@ -1,176 +1,34 @@
 ---
-title: Working on Gargantuan
-description: Guide for working on Gargantuan.
+title: Build and run from source
+description: Source-verified prerequisites, native test coverage and development commands.
 ---
 
-import { Aside, Tabs, TabItem } from "@astrojs/starlight/components"
+Gargantuan uses C++23, CMake 3.25+, Ninja, generated Luau declarations and SDL GPU
+shaders. Read the canonical [build guide](../../../../../devdocs/Compiling.md)
+for platform prerequisites, options and qualification limits.
 
-Are you interested in working _on_ Gargantuan? This guide walks through how to compile and work on your own homegrown Gargantuans.
-## Supported Platforms
-Gargantuan's primary continuously validated development platform is **Windows
-x64 with Visual Studio 2026/MSVC 19.50 or newer**. macOS and Linux remain
-development targets, but they are not part of the current required CI gate and
-should not yet be treated as continuously supported configurations.
-## Prerequisites
-### Windows
-- Windows 10 and/or 11
-- Vulkan SDK
-DirectX 12 will eventually be supported.
-### MacOS
-- MacOS 26 and XCode 26
-- Vulkan SDK IF you want to test Vulkan via MoltenVK
-    - *Vulkan SDK comes included with glslc*
-
-[Homebrew](https://brew.sh/) can be used to trivially install CMake, Ninja, and CCache:
-```
-brew install cmake ninja ccache
-```
-### Linux
-#### Vulkan
-For Gargantuan to output graphics, you'll first need a **Vulkan-capable GPU and a working driver for it.** 
-
-The installation steps for this vary significantly with each distribution and system configuration, so this section assumes Vulkan is already properly configured.
-
-Verify that Vulkan can detect your GPU correctly:
-```
-vulkaninfo --summary
-```
-#### Dependencies
-Install dependencies for your Linux distribution with the following command(s):
-<Tabs>
-	<TabItem label="Arch Linux">
-		```
-		sudo pacman -Syu --needed base-devel cmake ninja ccache shaderc just git curl unzip freetype2 libx11 libxext libxcursor libxi libxfixes libxrandr libxss libxtst
-		```
-	</TabItem>
-	<TabItem label="Ubuntu">
-		```
-		sudo apt install build-essential cmake ninja-build ccache glslc just git curl unzip libfreetype-dev libx11-dev libxext-dev libxcursor-dev libxi-dev libxfixes-dev libxrandr-dev libxss-dev libxtst-dev
-		```
-	</TabItem>
-	<TabItem label="Debian">
-		```
-		sudo apt install build-essential cmake ninja-build ccache glslc just git curl unzip libfreetype-dev libx11-dev libxext-dev libxcursor-dev libxi-dev libxfixes-dev libxrandr-dev libxss-dev libxtst-dev
-		```
-	</TabItem>
-	<TabItem label="Fedora">
-		```
-		sudo dnf install gcc gcc-c++ cmake ninja-build ccache glslc just git curl unzip freetype-devel libX11-devel libXext-devel libXcursor-devel libXi-devel libXfixes-devel libXrandr-devel libXScrnSaver-devel libXtst-devel zlib-ng-compat-static libpng-static
-		```
-	</TabItem>
-	<TabItem label="openSUSE Tumbleweed">
-		```
-		sudo zypper install --no-recommends gcc gcc-c++ cmake ninja ccache shaderc just git curl unzip freetype2-devel libX11-devel libXext-devel libXcursor-devel libXi-devel libXfixes-devel libXrandr-devel libXss-devel libXtst-devel
-		```
-	</TabItem>
-</Tabs>
-#### Rokit
-Once you have installed dependencies, install [Rokit](https://github.com/rojo-rbx/rokit) via the automated installer script with `curl`:
-```
-curl -sSf https://raw.githubusercontent.com/rojo-rbx/rokit/main/scripts/install.sh | bash
-```
-
-Afterwards, **restart your shell** in order for Rokit to be picked up via PATH.
-## Get the Source Code
-Clone the Gargantuan repository and all of its submodules using the following command:
-```
-git clone --recursive https://github.com/teamfireworks/gargantuan.git
-```
-<Aside type="caution">
-	If you are an outside contributor, please clone from your own fork of Gargantuan. Team Fireworks can work on the main repository.
-</Aside>
-## Build Gargantuan
-Move to the newly cloned Gargantuan directory, and install the tools in `rokit.toml`:
-```
+```sh
+git clone --recursive https://github.com/gmoddev/gargantuan.git
+cd gargantuan
 rokit install
+lute tools/classgen
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+cmake --build build --parallel 4
+ctest --test-dir build -C Release --parallel 2 --timeout 300 --output-on-failure --no-tests=error
 ```
 
-Then, create a `build` folder inside for generated build files and binaries during compilation:
-```
-mkdir build
-```
+Install a supported compiler, Ninja, `clang-format`, Rokit and genuine `glslc`
+before these commands. On Windows use the x64 Visual Studio 2026 developer
+environment. Generate sources **before** configuring. Required CI covers Windows
+Release and Linux Clang sanitizers; GPU and physical network tests remain
+separate. macOS has no required CI gate.
 
-Gargantuan provides a [Justfile](https://github.com/teamfireworks/gargantuan/blob/main/.justfile) which is used with [Just](https://just.systems/) to simplify the build process. You can list the summary of all the available recipes with:
-```
-just -l
-```
+From the repository root, `build/gargantuan --script=assets/examples/baseplate.luau`
+opens the baseplate example. Use `build\gargantuan.exe` on Windows. The executable
+also accepts `--project=samples/FirstCompleteGame` and `--headless`.
+See [your first project](../../guides/first-project/) for creation and packaging.
 
-<Aside>
-	Alternatively, you can manually run the commands inside the Justfile and replace any variables as you see fit.
-
-	This is most important when working on Windows where commands default to PowerShell, as its awful to work with.
-</Aside>
-
-For now, use `just` to configure the project by instantiating CMake and generating the Ninja build files:
-```
-just configure
-```
-
-Then, compile Gargantuan:
-```
-just build
-```
-
-**After compilation finishes, the Gargantuan executable will be located in `build/gargantuan`!**
-#### Build Options
-Gargantuan includes optional [Tracy](https://github.com/wolfpld/tracy) profiling support, but it is disabled by default.
-
-To build the Tracy tools:
-```
-cmake -B build -DGARGANTUAN_TRACY_TOOLS=ON
-cmake --build build --target tracy-profiler tracy-capture tracy-csvexport
-```
-
-Once the tools are built and the engine is running, connect to them via `just`:
-```
-just run ...
-./build/bin/tracy-profiler
-```
-
-`tracy-capture -o run.tracy -s 10` records without a window open, and `tracy-csvexport run.tracy` prints per-zone totals, which is how two runs get compared.
-
-If you'd like to **completely disable Tracy,** run:
-```
-cmake -B build -DGARGANTUAN_TRACY=OFF
-```
-or:
-```
-just build --tracy=OFF
-```
-
-## Run Gargantuan
-Once built, you can run the binary with the `gargantuan` recipe:
-```
-just gargantuan --help
-```
-
-Run an `assets/example` script or the `assets/testbed` project:
-```
-just run_example cube.luau
-just run_testbed
-```
-
-<Aside type="note" title="Studio moved out of the engine repository">
-  The original in-engine Studio prototype was removed after Studio development
-  moved to the external [EditorHost architecture](./editor-host/). Its
-  MPL-2.0-covered historical implementation remains available through Git history.
-</Aside>
-
-**When you make changes in Gargantuan,** you can easily rebuild the engine and run the binary with the `fresh` recipes:
-```
-just fresh_example cube.luau
-just fresh_testbed
-```
-
-The native regression suite is registered with CTest. Run the complete suite
-from a configured build with:
-```
-ctest --test-dir build --output-on-failure --no-tests=error
-```
-
-The legacy `just test` recipe currently runs only the Lest Luau core suite and
-is not a replacement for CTest. The required Windows Release CI contract is
-documented in
-[Continuous native build and test contract](../../../../../devdocs/CurrentArchitecture/ContinuousIntegration.md).
-
-**You're now fully ready to work on Gargantuan!** Make sure to [follow our guidelines & best practices](./contributing-to-gargantuan) for submitting contributions, and have at it :D
+`just test` runs only the legacy Luau core suite. Use CTest for native coverage
+and the [CI contract](../../../../../devdocs/CurrentArchitecture/ContinuousIntegration.md)
+for qualification. Documentation work uses [integrity checks](../../../../../tools/docs/README.md)
+without reserving a native worker.

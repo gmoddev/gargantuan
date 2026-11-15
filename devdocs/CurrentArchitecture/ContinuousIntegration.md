@@ -26,7 +26,12 @@ The disabled Glaze codec prototype is not configured in this focused profile;
 enabling that prototype still brings its real toolchain requirements. Production
 builds retain their existing dependency configuration.
 
-Documentation builds on ordinary main pushes. Pages publication requires an
+Documentation integrity and the locked Astro site build run on pull requests,
+ordinary main pushes and explicit dispatch. The documentation job validates
+repository links, navigation, source traceability, generated declarations and
+compiled Luau examples, then checks emitted HTML routes/anchors/source URLs.
+It builds only the pinned Luau compiler CLI, not Engine or production workers.
+See [the integrity workflow](../../tools/docs/README.md). Pages publication requires an
 explicit `Documentation` workflow dispatch on `main` with boolean `deploy=true`;
 the default dispatch builds only. Pages/OIDC write permissions belong only to
 that guarded deployment job. Native/PR qualification does not authorize or

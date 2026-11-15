@@ -463,7 +463,7 @@ shape. The image references refer to existing catalog dependencies.
 The bounded shared-memory viewport transport is implemented in
 [EditorViewport.md](./EditorViewport.md). Authoritative scalar/structural/source
 mutation, persistence, transactions, and Undo/Redo are implemented. Script
-authoring uses project-v4 persistence and a journaled SourceVersion invalidation
+authoring uses the current project Instance format (v5) and a journaled SourceVersion invalidation
 without exposing Source through ordinary snapshots or gameplay replication.
 Minimal isolated Play/Stop is implemented in [PlaySession.md](./PlaySession.md).
 The optional [Play input inspection contract](./PlayInputInspection.md) exposes

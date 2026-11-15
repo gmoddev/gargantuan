@@ -29,10 +29,12 @@ class CIJUnitTests(unittest.TestCase):
             self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", Text)
             self.assertIn('${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}', Text)
             self.assertNotIn('github.ref', Text.split('\nconcurrency:', 1)[1].split('\njobs:', 1)[0])
-        # Public docs deployment is independent of draft-PR evidence visibility.
+        # Documentation PR validation is separate from explicit Pages deployment.
         Docs = (ROOT / '.github/workflows/docs.yml').read_text()
-        self.assertIn('branches: [main]', Docs)
-        self.assertNotIn('pull_request:', Docs)
+        DocsEvents = Docs.split('\non:\n', 1)[1].split('\npermissions:', 1)[0]
+        self.assertRegex(DocsEvents, r'(?m)^  push:\n    branches: \[main\]$')
+        self.assertRegex(DocsEvents, r'(?m)^  pull_request:$')
+        self.assertRegex(DocsEvents, r'(?m)^  workflow_dispatch:$')
 
     def test_independent_jobs_keep_their_required_check_and_artifact_names(self):
         Native = (ROOT / '.github/workflows/native-ci.yml').read_text()
@@ -55,7 +57,12 @@ class CIJUnitTests(unittest.TestCase):
     def test_pages_publication_requires_manual_main_opt_in(self):
         Text = (ROOT / '.github/workflows/docs.yml').read_text()
         Events, Jobs = Text.split('\njobs:\n', 1)
-        Build, Deploy = Jobs.split('\n    deploy:\n', 1)
+        BuildHeader = re.search(r'(?m)^( +)build:[ \t]*$', Jobs)
+        self.assertIsNotNone(BuildHeader)
+        JobIndent = BuildHeader.group(1)
+        JobBlocks = re.split(r'(?m)^' + re.escape(JobIndent) + r'deploy:[ \t]*$', Jobs, maxsplit=1)
+        self.assertEqual(len(JobBlocks), 2, 'Expected build and guarded deploy jobs at the same YAML level')
+        Build, Deploy = JobBlocks
         self.assertRegex(Events, r'workflow_dispatch:\n\s+inputs:\n\s+deploy:\n')
         self.assertRegex(Events, r'type: boolean\n\s+default: false')
         self.assertIn('branches: [main]', Events)

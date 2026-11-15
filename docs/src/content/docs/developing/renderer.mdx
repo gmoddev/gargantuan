@@ -1,0 +1,147 @@
+---
+title: Renderer
+description: Integrated SDL GPU renderer, material and environment capabilities, and limits.
+---
+
+This page describes Engine main `b5df1e7b1b80da27158ea794626f90a8ebd8a6d2`
+(merged source tree `7ef2a2b6b2bb34732bbb8335f30dff9588a68f39`).
+Renderer Foundations 3–5 and Runtime 6 are integrated. Earlier branch
+qualification records retain their original source and device scope; integration
+does not turn experimental options into defaults. The [publication contract](../render-extraction/)
+and [Core invariants](../../../../../docs/invariants/Core.md) keep live DataModel
+state out of render passes.
+
+```text
+DataModel changes -> RenderDirtyAccumulator -> RenderPublisher
+    -> immutable RenderPublication -> renderer-owned RenderProjection
+    -> SDL GPU resources and passes
+```
+
+Runtime publication follows simulation and `PreRender` on Main. EditorHost owns
+a separate consumer and CPU projection for headless picking; offscreen capture
+consumes the same values. Publications use exact sequence/base identities,
+sorted object changes and owned asset, UI and pose values. The projection is
+disposable and keyed by generation-safe `ObjectId`, with no retained live
+Instance pointers. Rejected deltas preserve accepted state; failed required
+resource application clears derived state and requires a full publication.
+See [`RenderPublication.hpp`](../../../../../include/gargantuan/render/RenderPublication.hpp),
+[`RenderProjection.cpp`](../../../../../src/render/RenderProjection.cpp) and
+[`Renderer.cpp`](../../../../../src/render/Renderer.cpp).
+
+## Backend and frame path
+
+`SDLRenderer` is the production GPU backend. `BaseRenderer` exposes graphical
+and GPU-skinning capabilities; SDL handles remain private. The frame records
+directional and eligible spotlight depth, Sky/background, world geometry,
+an HDR-to-SDR resolve when supported, then GUI. The runtime queries SDL for
+its windowed swapchain format; offscreen output uses `R8G8B8A8_UNORM`.
+Scene depth is checked D32 with conventional zero-to-one projection. A
+separate Filament target remains a comparison and benchmark path, with no
+runtime backend switch or generic RHI. See the [backend boundary](../../../../../devdocs/CurrentArchitecture/RendererBackendBoundary.md),
+[Foundation 2C](../../../../../devdocs/CurrentArchitecture/RendererFoundation2C.md),
+and [depth qualification](../../../../../devdocs/Validation/RendererDepthKI008.md).
+
+AssetService mesh and Image revisions become stable render identities and
+immutable published data. SDL owns device-local meshes, textures, palettes,
+pipelines, targets and residency. Static topology is uploaded once; bounded
+deformable ranges update persistent meshes. GPU skinning has a CPU fallback.
+There is no render thread or general GPU-resource authority in Instances.
+
+## Materials and color
+
+Imported glTF materials select metallic-roughness shading; primitive Parts and
+the built-in fallback keep the legacy model. The SDL material path uses linear
+glTF base-color factors, sRGB-decoded color textures, tangent-space normal
+maps, packed green roughness and blue metallic channels, emissive and occlusion
+inputs, sampler controls, and bounded material mip views. Alpha mask uses the
+factor and texture alpha with its cutoff. Opaque and masked surfaces write
+depth. Blended surfaces are ordered back to front by object-center depth with
+stable `ObjectId` ties; intersecting transparent geometry is not sorted per
+triangle. Masked directional and spotlight casters sample alpha; explicitly
+shadow-casting blended surfaces retain solid silhouettes. See
+[Foundation 3](../../../../../devdocs/CurrentArchitecture/RendererFoundation3.md),
+[Foundation 4](../../../../../devdocs/CurrentArchitecture/RendererFoundation4.md),
+[`OpaquePass.cpp`](../../../../../src/render/passes/OpaquePass.cpp),
+[`ShadowPass.cpp`](../../../../../src/render/passes/ShadowPass.cpp) and
+[`opaque.frag`](../../../../../assets/shaders/opaque.frag).
+
+When SDL supports an `R16G16B16A16_FLOAT` sampled color target, Sky, lights,
+fog and blended world geometry enter one scene-linear target. A fullscreen
+resolve applies manual exposure and the selected Filmic or Reinhard tone map
+once, producing SDR output before GUI. Otherwise construction chooses the
+direct SDR path with its per-surface tone and blend behavior. This is an HDR
+*working scene*, not an HDR display/swapchain guarantee. Automatic exposure
+and a broad temporal/post-processing stack are absent. Runtime and EditorHost
+have separate target ownership and capability checks.
+
+## Environment, lights and shadows
+
+One canonical `Lighting` service supplies ambient, directional sun, fog,
+exposure, tone mapping and shadow settings. The effective direct-child `Sky`
+uses six coherent Image faces; invalid edits may retain that same Sky's last
+good set. SDL can prefilter the global Sky for diffuse/specular image-based
+lighting. Bounded Radiance RGBE `.hdr` square faces or 2:1 panoramas import as
+linear float Image assets; EXR, unrestricted environment resolution and
+automatic capture are not supported. See [Environment Foundation 4](../../../../../devdocs/CurrentArchitecture/EnvironmentLightingFoundation4.md)
+and [HDR asset limits](../../../../../devdocs/CurrentArchitecture/HdrEnvironmentAssetsFoundation5.md).
+
+Schema-backed PointLight and SpotLight publish at most 512 active records;
+SDL uses a bounded screen-tile list with at most 24 lights per tile. Overflow
+is diagnosed and omitted from that tile. Authored `ReflectionProbe` volumes
+publish at most 32 coherent sources after a bounded scan; at most 12 are
+resident and two contribute per shaded point. They use imported faces, not
+dynamic scene capture, geometry-dependent diffuse occlusion or GI. Failed
+preparation leaves authored ambient/global environment available. See
+[Foundation 4 lighting](../../../../../devdocs/CurrentArchitecture/RendererFoundation4.md)
+and [probe semantics](../../../../../devdocs/CurrentArchitecture/RendererFoundation5SpatialLighting.md).
+
+The default directional path is one world-origin D32 map with submission-safe
+reuse. An authored nonzero cascade count enables up to four camera-relative
+layers, each 512, 1024 or 2048 pixels, with bounded receiver distance and
+per-layer reuse. Up to eight selected SpotLights can hold 1024-pixel atlas
+layers; denied or evicted lights still illuminate without shadow. Point cube
+shadows are unsupported. The two optional depth arrays total at most 96 MiB
+of logical texels at the default four 2048-pixel cascades plus eight spot
+layers, excluding native padding and retired resources. See
+[shadow contracts](../../../../../devdocs/CurrentArchitecture/RendererFoundation5Shadows.md).
+
+## Residency, recovery and submission limits
+
+The SDL texture cache keeps the base image path while bounding material mip
+views and retained source backing at 128 MiB each by default. View demand,
+cold eviction and per-publication upload admission preserve base-level
+sampling when a derived view is unavailable. This is not complete base-texture
+streaming, block compression, mesh LOD or a streaming-world system. Native
+allocation and in-flight retirement can exceed logical budget counters.
+Full-resync, resize, recreation, canceled upload, rejection and bounded churn
+paths have focused tests; physical driver removal and universal-device
+recovery were not qualified. See [residency details](../../../../../devdocs/CurrentArchitecture/HdrEnvironmentAssetsFoundation5.md)
+and [Foundation 5 qualification](../../../../../devdocs/Validation/RendererFoundation5Qualification.md).
+
+Ordinary ordered draws remain the default, with camera frustum culling and
+adjacent compatible opaque range grouping. Renderer-owned native instancing
+is opt-in for eligible rigid, homogeneous single-range geometry; textured,
+masked, blended, skinned and deformable cases use ordinary draws as needed.
+Optional contiguous Vulkan batching preserves object order, while the scene
+envelope can reject a wholly outside static scene. Neither is a general
+spatial index. Dense fully dynamic instancing has worse measured frame tails,
+so there is no default promotion or broad throughput claim. See
+[Foundation 5](../../../../../devdocs/CurrentArchitecture/RendererFoundation5.md),
+[scene envelope](../../../../../devdocs/CurrentArchitecture/RendererFoundation5SceneEnvelope.md)
+and [KI-RND-001](../../../../../KNOWN_ISSUES.md#ki-rnd-001-optional-instancing-has-workload-dependent-cpu-and-frame-tails).
+
+| Integrated capability | Current limit |
+| --- | --- |
+| Immutable publication, renderer-owned projection and SDL GPU | No retained live Instances, runtime backend switch or render thread |
+| Direct PBR, masks, sorted blends and HDR working scene | SDR presentation, no automatic exposure or per-triangle transparency ordering |
+| Global Sky IBL, authored probes, local lights and optional shadow layers | Bounded lists and residency; no GI, point shadows or automatic probes |
+| Bounded mip/source residency and tested resynchronization | No complete texture/geometry streaming or physical driver-removal proof |
+| Ordered opaque grouping and opt-in instancing/envelope | Ordinary draws default; no universal 50K dynamic performance guarantee |
+
+Start source verification with
+[`RendererPublicationTests.cpp`](../../../../../tests/RendererPublicationTests.cpp),
+[`RendererDepthTests.cpp`](../../../../../tests/RendererDepthTests.cpp),
+[`EnvironmentLightingReferenceTests.cpp`](../../../../../tests/EnvironmentLightingReferenceTests.cpp),
+[`ReflectionProbeGpuTests.cpp`](../../../../../tests/ReflectionProbeGpuTests.cpp),
+[`ShadowFoundation5GpuTests.cpp`](../../../../../tests/ShadowFoundation5GpuTests.cpp)
+and [`Runtime6RealisticPublicationProbe.cpp`](../../../../../tests/Runtime6RealisticPublicationProbe.cpp).

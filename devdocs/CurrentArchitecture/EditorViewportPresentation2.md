@@ -2,6 +2,13 @@
 
 Status: implemented and validated on Windows on 2026-08-25.
 
+Historical Studio presentation receipt: the Avalonia observations and
+recommendations below apply to the pinned pre-LUI Studio implementation at that
+date. LUI is now Studio's primary UI framework; this document does not qualify
+its native presentation, input, or display latency. Engine-owned EditorHost
+viewport transport contracts remain separate. See the Studio-owned
+[LUI migration decision](https://github.com/gmoddev/gargantuan-studio/blob/main/devdocs/AcceptedArchitecture/LuiPrimaryMigration.md).
+
 ## Decision and measured cause
 
 The old production Studio path was capture-driven. An Avalonia
