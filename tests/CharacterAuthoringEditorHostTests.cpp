@@ -38,6 +38,13 @@ namespace {
 		throw std::runtime_error("[Character:EditorHost] Missing object " + std::string(Name));
 	}
 
+	bool ReadBoolean(const Json &Snapshot, std::string_view Name, std::string_view Property) {
+		for (const auto &Object : Snapshot.at("Result").at("Snapshot").at("Objects"))
+			if (Object.at("Name").get<std::string>() == Name)
+				return Object.at("Properties").at(std::string(Property)).at("Value").get<bool>();
+		throw std::runtime_error("[Character:EditorHost] Missing boolean property " + std::string(Property));
+	}
+
 	bool HasIssue(const Json &Inspection, std::string_view Code) {
 		for (const auto &Issue : Inspection.at("Issues"))
 			if (Issue.at("Code").get<std::string>() == Code) return true;
@@ -107,9 +114,16 @@ int main() {
 		const auto MeshSchema = FindDefinition(Schema, "Engine.MeshPart");
 		const auto AnimatorSchema = FindDefinition(Schema, "Engine.Animator");
 		const auto AttachmentSchema = FindDefinition(Schema, "Engine.Attachment");
+		const auto PlayersSchema = FindDefinition(Schema, "Engine.Players");
 		const auto Snapshot = Success("GetSnapshot");
 		const auto Scope = Snapshot.at("Result").at("Snapshot").at("Cursor").at("Scope");
 		const auto Workspace = FindObject(Snapshot, "Workspace");
+		const auto Players = FindObject(Snapshot, "Players");
+		Check(Success("GetProjectState").at("Result").at("AuthoritativeRevision") == 1,
+			"Canonical player policy root is established before initial project revision");
+		for (const auto &Object : Snapshot.at("Result").at("Snapshot").at("Objects"))
+			Check(Object.at("ClassName") != "Player" && Object.at("ClassName") != "Script",
+				"Authoring service establishment does not initialize gameplay players or scripts");
 		auto Create = [&](const Json &Definition, const Json &Parent, std::string Name) {
 			return Success("CreateInstance", {
 				{"ClassSchemaId", Definition.at("SchemaId")},
@@ -132,6 +146,18 @@ int main() {
 				{"CharacterCompositionVersion", 1}, {"Scope", CurrentScope}, {"Object", Object},
 			});
 		};
+		for (const auto Property : {"CharacterAutoLoads", "DefaultControllerEnabled", "DefaultCameraEnabled"}) {
+			Check(ReadBoolean(Snapshot, "Players", Property), "Player policy starts with its declared default");
+			Check(Write(Players, PlayersSchema, PlayersSchema, Property,
+				{{"Type", "Bool"}, {"Value", false}}).at("Ok") == true,
+				"Player policy is authorable through the schema-backed property boundary");
+		}
+		Success("Undo");
+		Check(ReadBoolean(Success("GetSnapshot"), "Players", "DefaultCameraEnabled"),
+			"Player policy participates in authoritative Undo");
+		Success("Redo");
+		Check(!ReadBoolean(Success("GetSnapshot"), "Players", "DefaultCameraEnabled"),
+			"Player policy participates in authoritative Redo");
 		const auto Character = Create(CharacterSchema, Workspace, "AuthorCharacter");
 		const auto Kinematic = Create(KinematicSchema, Workspace, "NetworkCharacter");
 		const auto PlainRoot = Create(PartSchema, Character, "PlainRoot");
@@ -310,6 +336,9 @@ int main() {
 		const auto FreshScope = Reopened.at("Result").at("Snapshot").at("Cursor").at("Scope");
 		const auto ReopenedCharacter = FindObject(Reopened, "AuthorCharacter");
 		const auto ReopenedKinematic = FindObject(Reopened, "NetworkCharacter");
+		for (const auto Property : {"CharacterAutoLoads", "DefaultControllerEnabled", "DefaultCameraEnabled"})
+			Check(!ReadBoolean(Reopened, "Players", Property),
+				"Saved player policy survives project establishment and reopen");
 		Check(FreshScope != Scope && Inspect(ReopenedCharacter, FreshScope).at("Result").at("RootPart").is_null() &&
 			Inspect(ReopenedKinematic, FreshScope).at("Result").at("Meshes").size() == 1,
 			"Saved Character composition survives reopen under a fresh project scope");

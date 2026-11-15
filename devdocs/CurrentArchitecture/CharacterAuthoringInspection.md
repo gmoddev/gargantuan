@@ -66,3 +66,9 @@ RootPart denial, history, save/reopen and the public request contract.
 Native/GUI acceptance remains a separate qualification gate. Visual-only
 AttachmentMesh composition uses existing schema and render publication and
 creates no gameplay authority.
+
+Project establishment also creates the persistent Players policy service before
+the initial revision, alongside InputService. Its three saved policy switches
+are therefore authorable in a new project. This does not initialize runtime
+Player objects, scripts or controllers. Reopening retains existing saved values;
+the service remains protected from structural editor insertion/removal.
