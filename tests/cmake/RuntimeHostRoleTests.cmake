@@ -59,6 +59,10 @@ GargantuanRequireRejected(
 	"Player authenticated development override" "${GARGANTUAN_PLAYER}" "Authenticated join arguments are invalid"
 	--connect 127.0.0.1:46001 --join-proof-env GARGANTUAN_PLAYER_JOIN_PROOF_TEST --allow-insecure-development-network
 )
+GargantuanRequireRejected(
+	"Player authenticated remote server without trust" "${GARGANTUAN_PLAYER}" "Authenticated join arguments are invalid"
+	--connect 192.0.2.10:46001 --join-proof-env GARGANTUAN_PLAYER_JOIN_PROOF_TEST
+)
 unset(ENV{GARGANTUAN_PLAYER_JOIN_PROOF_TEST})
 GargantuanRequireRejected(
 	"Player incomplete client farm" "${GARGANTUAN_PLAYER}" "client farm arguments are invalid"

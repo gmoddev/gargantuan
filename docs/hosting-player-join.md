@@ -17,3 +17,10 @@ must redeem it against the exact authoritative session before creating a Player.
 The public Player neither calls the private admission service nor links its
 protocol bindings. The input boundary and CLI denial tests do not qualify the
 real Node/PostgreSQL/TLS/server/client lifecycle; that requires separate evidence.
+
+Authenticated joins currently accept loopback endpoints only. The pinned GNS
+open-source build permits unauthenticated transport peers; ticket authorization
+does not establish the identity of the remote server. Non-loopback authenticated
+hosting remains disabled until a separately reviewed and qualified server-trust
+boundary is installed. An authenticated configuration cannot use the development
+override to escape this restriction.

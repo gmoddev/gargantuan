@@ -788,9 +788,14 @@ namespace {
 		Provider->RejectRepeatedProofs = true;
 		auto NonLoopback = AuthenticatedConfiguration(GameSessionRole::Server, Provider);
 		NonLoopback.Endpoint = {"10.0.0.2", 27020};
-		Check(NonLoopback.IsValid(), "authenticated server may bind a non-loopback endpoint with a provider");
+		Check(!NonLoopback.IsValid(), "a ticket provider alone cannot authorize an unauthenticated remote transport");
+		NonLoopback.AllowInsecureDevelopmentNetwork = true;
+		Check(!NonLoopback.IsValid(), "authenticated hosting cannot use the development escape hatch");
 		NonLoopback.AdmissionProvider.reset();
 		Check(!NonLoopback.IsValid(), "authenticated server cannot start without its provider");
+		auto RemoteClient = AuthenticatedConfiguration(GameSessionRole::Client, Provider);
+		RemoteClient.Endpoint = {"10.0.0.2", 27020};
+		Check(!RemoteClient.IsValid(), "a valid ticket does not establish remote server identity");
 		auto MissingProof = AuthenticatedConfiguration(GameSessionRole::Client, Provider);
 		MissingProof.AdmissionProof.reset();
 		Check(!MissingProof.IsValid(), "authenticated client cannot silently send a v1 hello");

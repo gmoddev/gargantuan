@@ -108,7 +108,8 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	const bool AuthenticatedJoin = Program.is_used("--join-proof-env");
 	const auto JoinProof = AuthenticatedJoin
 		? host::detail::ReadPlayerJoinProof(Program.get<std::string>("--join-proof-env")) : std::nullopt;
-	if (AuthenticatedJoin && (!JoinProof || !ClientEndpoint || AllowInsecureDevelopmentNetwork)) {
+	if (AuthenticatedJoin && (!JoinProof || !ClientEndpoint || AllowInsecureDevelopmentNetwork ||
+		!network::IsLoopbackTransportEndpoint(*ClientEndpoint))) {
 		std::cerr << "[Network:Admission] Authenticated join arguments are invalid.\n";
 		return 2;
 	}

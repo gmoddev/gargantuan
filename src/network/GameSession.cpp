@@ -109,6 +109,7 @@ namespace gargantuan::network {
 			? !AdmissionProvider && !AdmissionProof &&
 			  (AllowInsecureDevelopmentNetwork || IsLoopbackTransportEndpoint(Endpoint))
 			: AdmissionMode == GameSessionAdmissionMode::Authenticated && !AllowInsecureDevelopmentNetwork &&
+			  IsLoopbackTransportEndpoint(Endpoint) &&
 			  (Role == GameSessionRole::Server ? static_cast<bool>(AdmissionProvider) && !AdmissionProof
 											   : !AdmissionProvider && AdmissionProof.has_value());
 		return Endpoint.IsValid() && Limits.IsValid() && HandshakeTimeoutTicks > 0 &&
