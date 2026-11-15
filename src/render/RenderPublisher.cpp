@@ -308,6 +308,12 @@ namespace gargantuan {
 			std::vector<std::string> JointPaths;
 			auto Current = std::static_pointer_cast<Instance>(Visual);
 			for (std::size_t Depth = 0; Current && Depth < SemanticSpatialResolver::MaximumAttachmentDepth; ++Depth) {
+				if (Current->GetDestroyed() || Current->IsDestroying() ||
+					ObjectRegistry::Get().Lookup(Current->GetObjectId()).get() != Current.get()) {
+					Diagnostic = {RenderExtractionIssue::StaleObjectId, Object,
+						"AttachmentMesh socket ancestry contains a stale object"};
+					return std::nullopt;
+				}
 				if (auto Anchor = std::dynamic_pointer_cast<Attachment>(Current)) {
 					if (!Anchor->GetJointPath().empty()) JointPaths.push_back(Anchor->GetJointPath());
 				} else if (auto Part = std::dynamic_pointer_cast<BasePart>(Current)) {
@@ -641,11 +647,14 @@ namespace gargantuan {
 		if (VisualDependencies.size() >= MaximumVisualAttachments) return false;
 		VisualDependency Dependency;
 		Dependency.Sources.push_back(Object);
+		std::vector<std::shared_ptr<Attachment>> RequiredAnchors;
 		auto Parent = Value->GetParent();
 		bool OwnerFound = false;
 		for (std::size_t Depth = 0; Parent && *Parent && Depth < MaximumVisualAncestry; ++Depth) {
-			if (auto Anchor = std::dynamic_pointer_cast<Attachment>(*Parent))
+			if (auto Anchor = std::dynamic_pointer_cast<Attachment>(*Parent)) {
 				Dependency.Sources.push_back(Anchor->GetObjectId());
+				RequiredAnchors.push_back(std::move(Anchor));
+			}
 			if (auto Part = std::dynamic_pointer_cast<BasePart>(*Parent)) {
 				OwnerFound = true;
 				Dependency.Sources.push_back(Part->GetObjectId());
@@ -670,6 +679,12 @@ namespace gargantuan {
 				}
 		}
 		if (Dependency.Assets.size() > MaximumVisualAssetDependencies) return false;
+		// The editor may register only the visual lazily. Register its bounded
+		// parent Attachment chain before resolving the visual so ancestor CFrame
+		// and JointPath signals invalidate the resolver's dependent entry.
+		if (auto Spatial = SpatialResolver.lock())
+			for (auto It = RequiredAnchors.rbegin(); It != RequiredAnchors.rend(); ++It)
+				Spatial->RegisterAttachment(*It);
 		Dependency.PoseConnection = Value->GetPropertyChangedSignal("WorldCFrame")->Connect(
 			[this, Object](std::monostate) {
 				if (Scope.IsValid()) Dirty->Mark(Scope, Object, RenderUpdateDomain::Transform);

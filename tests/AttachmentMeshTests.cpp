@@ -28,6 +28,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -135,9 +136,8 @@ int main() {
 		Visual->SetSize({1.0f, 2.0f, 1.0f});
 		Visual->SetParent(Socket);
 		auto Spatial = std::make_shared<SemanticSpatialResolver>(Assets);
-		Spatial->RegisterAttachment(Socket);
-		Spatial->RegisterAttachment(Visual);
-		Spatial->Step();
+		// Match EditorHost's lazy resolver: the producer discovers the visual;
+		// this test does not manually register the socket or accessory.
 		RenderPublisher Publisher;
 		Publisher.SetSpatialResolver(Spatial);
 		auto MeshChanges = Assets->DrainMeshChanges();
@@ -190,8 +190,30 @@ int main() {
 		(void)Projection.Apply(*Moved);
 		Rig->SetSize({2.0f, 1.0f, 1.0f});
 		auto ResizedOwner = Publisher.Publish(*World, Camera, 640, 360);
-		Check(FindUpdate(*ResizedOwner, Visual->GetObjectId()),
+		const auto ResizedVisual = FindUpdate(*ResizedOwner, Visual->GetObjectId());
+		Check(ResizedVisual,
 			"owner Size dirtiness reaches the dependent visual through the reverse index");
+		const auto BeforeSocketOffset = ResizedVisual->Item.ModelMatrix;
+		Socket->SetCFrame(CFrame(0.25f, 0.0f, 0.0f));
+		Spatial->Step();
+		auto OffsetSocket = Publisher.Publish(*World, Camera, 640, 360);
+		const auto OffsetItem = FindUpdate(*OffsetSocket, Visual->GetObjectId());
+		Check(OffsetItem && !Near(OffsetItem->Item.ModelMatrix, BeforeSocketOffset) &&
+			Near(OffsetItem->Item.ModelMatrix,
+				Spatial->ResolveAttachment(Visual)->Matrix * glm::scale(glm::mat4(1.0f), Visual->GetSize())),
+			"lazy registered parent CFrame invalidates the visual's cached semantic matrix");
+		Socket->SetJointPath("BeaconRoot");
+		Spatial->Step();
+		auto SwitchedSocket = Publisher.Publish(*World, Camera, 640, 360);
+		const auto SwitchedItem = FindUpdate(*SwitchedSocket, Visual->GetObjectId());
+		Check(SwitchedItem && !Near(SwitchedItem->Item.ModelMatrix, OffsetItem->Item.ModelMatrix) &&
+			Near(SwitchedItem->Item.ModelMatrix,
+				Spatial->ResolveAttachment(Visual)->Matrix * glm::scale(glm::mat4(1.0f), Visual->GetSize())),
+			"lazy registered parent JointPath switch updates the visual on an incremental publication");
+		Socket->SetJointPath("BeaconRoot/BeaconTip");
+		Socket->SetCFrame(CFrame());
+		Spatial->Step();
+		(void)Publisher.Publish(*World, Camera, 640, 360);
 		auto AnimatorValue = std::make_shared<Animator>();
 		AnimatorValue->SetParent(Rig);
 		AnimationRuntime Animation(Assets);
@@ -383,6 +405,52 @@ int main() {
 		Check(Recovered->FullResync && Recovered->VisualAttachmentsComplete &&
 			FindCreate(*Recovered, FirstBounded->GetObjectId()),
 			"falling below the visual bound recovers complete publication");
+
+		// AssetService must treat AttachmentMesh as a canonical live reference
+		// for both source-group deletion and generated-child retirement.
+		WriteText(Root / "assets" / "deletable.obj",
+			"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+		const auto Deletable = Assets->ImportProjectAsset(Mount, "assets/deletable.obj", AssetKind::Mesh);
+		Check(Deletable.Ok && Deletable.Record, "independent deletion fixture imports");
+		std::ifstream RigSource(GARGANTUAN_ANIMATION_PREVIEW_FIXTURE, std::ios::binary);
+		auto MaterialSource = nlohmann::ordered_json::parse(RigSource);
+		MaterialSource["materials"] = nlohmann::ordered_json::array({
+			{{"name", "Base"}, {"pbrMetallicRoughness", {{"baseColorFactor", {1.0, 1.0, 1.0, 1.0}}}}},
+			{{"name", "Orphan"}, {"pbrMetallicRoughness", {{"baseColorFactor", {1.0, 0.0, 1.0, 1.0}}}}},
+		});
+		MaterialSource["meshes"][0]["primitives"][0]["material"] = 0;
+		WriteText(Root / "assets" / "material-source.gltf", MaterialSource.dump());
+		const auto MaterialImport = Assets->ImportProjectAsset(
+			Mount, "assets/material-source.gltf", AssetKind::Mesh);
+		Check(MaterialImport.Ok && MaterialImport.Record,
+			"generated-material retirement fixture imports");
+		std::string OrphanMaterial;
+		for (const auto &Record : MaterialImport.Records)
+			if (Record.Kind == AssetKind::Material && Record.Name == "Orphan")
+				OrphanMaterial = Record.Reference.Value;
+		Check(!OrphanMaterial.empty(), "fixture exposes a generated orphan Material");
+		auto GuardVisual = std::make_shared<AttachmentMesh>();
+		GuardVisual->SetMesh(Deletable.Record->Reference.Value);
+		GuardVisual->SetMaterial(OrphanMaterial);
+		GuardVisual->SetParent(Socket);
+		const auto BlockedMeshDelete = Assets->DeleteProjectAsset(Deletable.Record->Reference.Value);
+		const auto BlockedMaterialDelete = Assets->DeleteProjectAsset(MaterialImport.Record->Reference.Value);
+		Check(!BlockedMeshDelete.Ok && BlockedMeshDelete.Diagnostic.Code == "AssetReferenced" &&
+			!BlockedMaterialDelete.Ok && BlockedMaterialDelete.Diagnostic.Code == "AssetReferenced",
+			"AttachmentMesh Mesh and explicit Material refs both block source-group deletion");
+		MaterialSource["materials"].erase(MaterialSource["materials"].begin() + 1);
+		WriteText(Root / "assets" / "material-source.gltf", MaterialSource.dump());
+		const auto BlockedRetirement = Assets->ReimportProjectAsset(Mount, MaterialImport.Record->Reference.Value);
+		Check(!BlockedRetirement.Ok && BlockedRetirement.Diagnostic.Code == "AssetReferenced" &&
+			Assets->GetAsset(OrphanMaterial).has_value(),
+			"reimport cannot retire a generated Material referenced only by AttachmentMesh");
+		GuardVisual->SetMaterial("");
+		const auto ReleasedRetirement = Assets->ReimportProjectAsset(Mount, MaterialImport.Record->Reference.Value);
+		Check(ReleasedRetirement.Ok && !Assets->GetAsset(OrphanMaterial),
+			"generated Material retires after the visual releases its reference");
+		GuardVisual->Destroy();
+		Check(Assets->DeleteProjectAsset(Deletable.Record->Reference.Value).Ok,
+			"source group can be deleted after the visual is destroyed");
 		std::cout << "[Creator:AttachmentMesh] All focused checks passed\n";
 		return 0;
 	} catch (const std::exception &Error) {
