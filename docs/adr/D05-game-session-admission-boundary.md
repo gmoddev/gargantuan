@@ -32,6 +32,14 @@ request. Successful peers retain that request ownership until disconnect or
 Stop. The provider's release is nonblocking and idempotent. Late or duplicate
 completions cannot create a Player.
 
+The generic dedicated host now accepts a paired managed lifecycle observer and
+admission provider at trusted startup. Its copied listening evidence follows
+package/content bootstrap and actual GameSession listener startup. It does not
+poll joins until the observer reports current authority and external READY
+acknowledgement; authority loss closes the session before Engine teardown.
+The default official host remains DevelopmentLocal. The observer is a cached,
+nonblocking signal boundary, not a Node or Fleet protocol implementation.
+
 The provider contract defines verification ownership; it does not itself
 implement durable proof issuance or redemption. A private host adapter must bind
 proofs to the exact server/session audience, enforce one use across retries, and

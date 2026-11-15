@@ -57,6 +57,19 @@ generation. Provider implementation must keep release nonblocking and
 enforce proof audience, one use, current lease, and account provenance. Engine
 does not treat transport encryption or an opaque proof as identity by itself.
 
-This generic boundary is implemented and exercised by simulated-session tests.
-The packaged server/client startup path and production provider are not wired;
-no public authenticated hosting qualification follows from this slice.
+The generic server host can now be composed with one trusted admission provider
+and one managed lifecycle observer. It emits copied package identity, manifest
+digest, and bind endpoint only after package/content bootstrap and a listening
+GameSession. The observer supplies a cached authority/READY snapshot; the host
+does not poll the session until authority is current and the external READY
+acknowledgement is observed. Its readiness gate expires no later than six
+seconds from host entry; the external supervisor retains the process-wide
+startup deadline for synchronous package and runtime work. Authority loss or a
+drain request closes the session before
+Engine teardown, and the observer is notified before drain and after stop.
+The default official server remains DevelopmentLocal.
+
+The generic boundary is exercised by simulated-session tests. A private Node
+wrapper, durable proof redemption, client startup wiring, and real-client
+qualification remain separate work; the generic seam alone is not production
+hosting readiness.

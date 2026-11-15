@@ -1830,6 +1830,22 @@ if(BUILD_TESTING)
 			PROPERTIES LABELS "networking;headless;optional" TIMEOUT 10)
 		set_tests_properties(gargantuan_physical_gns_probe_invalid_arguments PROPERTIES WILL_FAIL TRUE)
 		if(WIN32)
+			add_executable(gargantuan_managed_server_host_tests "tests/ManagedServerHostTests.cpp")
+			target_compile_features(gargantuan_managed_server_host_tests PRIVATE cxx_std_23)
+			target_include_directories(gargantuan_managed_server_host_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+			target_link_libraries(gargantuan_managed_server_host_tests PRIVATE
+				gargantuan_server_host gargantuan_core ${CMAKE_DL_LIBS})
+			add_dependencies(gargantuan_managed_server_host_tests gargantuan_server_runtime_distribution)
+			add_test(NAME gargantuan_managed_server_host
+				COMMAND powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+					-File "${CMAKE_CURRENT_SOURCE_DIR}/tests/ManagedServerHostTests.ps1"
+					-Packager "$<TARGET_FILE:gargantuan_packager>"
+					-ServerRuntimeDistribution "$<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution"
+					-ProjectRoot "${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
+					-ManagedHostTests "$<TARGET_FILE:gargantuan_managed_server_host_tests>"
+			)
+			set_tests_properties(gargantuan_managed_server_host PROPERTIES
+				LABELS "networking;transport;packaging;managed;optional" TIMEOUT 120 RUN_SERIAL TRUE)
 			add_test(NAME gargantuan_packaged_game_session
 				COMMAND powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
 					-File "${CMAKE_CURRENT_SOURCE_DIR}/tests/PackagedGameSession.ps1"
