@@ -18,7 +18,5 @@ namespace gargantuan {
 		glm::vec3 Size{1.0f};
 		Color3 Color{1.0f, 1.0f, 1.0f};
 		float Transparency = 0.0f;
-		bool Visible = true;
-		bool CastShadow = true;
 	};
 }
