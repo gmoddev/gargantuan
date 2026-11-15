@@ -88,3 +88,38 @@ it introduces no external content license. Existing animation tests retain
 attachment, incompatible reimport, package/relocation and runtime coverage.
 Headless tests are not a claim of native visual acceptance. Native UI/GPU evidence
 and source-bound test/CI results belong in the milestone validation receipt.
+
+## Optional two-clip blend extension, version 1
+
+Handshake capability AnimationPreviewBlend and AnimationPreviewBlendVersion: 1
+advertise two compatible clip slots in the same disposable scene. This adds no
+gameplay state machine, authored playback state or root-motion authority.
+
+New controls echo BlendVersion: 1. Action "Clip" accepts Slot "Primary" or
+"Secondary" with the existing strict reference Value; omission of Slot keeps
+legacy Primary behavior. Secondary requires a Primary. Each selection starts
+paused at zero and retains that slot's speed and loop on replacement.
+Missing/incompatible references or track-capacity rejection leave the previous
+pair and weights usable.
+
+Existing Play/Pause/Stop/Reset/Loop/Seek/Speed controls can target one explicit
+slot with BlendVersion. Action "BlendWeight" accepts a finite unit numeric
+Value, no Slot, and requires both clips. Effective weights are 1 - Value and
+Value; the first Secondary selection starts at 0.5. Action "ClearSecondaryClip"
+accepts neither Value nor Slot and restores the Primary weight to one.
+Clearing an absent Secondary is idempotent. Unsupported versions, slots and
+malformed controls reject before mutation.
+
+Versioned control responses and captures contain BlendVersion, BlendWeight,
+nullable PrimaryTimePosition/PrimaryPlaybackState and nullable
+SecondaryTimePosition/SecondaryPlaybackState. Capture retains legacy Primary
+time/state and publishes the current blended JointPositions. Legacy controls
+without BlendVersion retain the PreviewId-only result. The native Host must
+forward metadata from the exact displayed frame; synthetic model pose data does
+not qualify that presentation path.
+
+Preview and rig operations are exempt from legacy authoring-group expiry.
+They cannot commit an unrelated open group. Both tracks remain inside the
+existing bounded Animator and captured asset lifetime. Visual preview still
+disables root motion and never steps physics or project scripts. Fresh
+source-bound native/GUI qualification is required for the feature branch.

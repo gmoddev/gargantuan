@@ -27,6 +27,7 @@
 #include <string_view>
 
 namespace gargantuan {
+	class SemanticSpatialResolver;
 	inline constexpr std::uint32_t EditorHostProtocolVersion = 1;
 	inline constexpr std::uint32_t EditorHostPropertyBatchVersion = 1;
 	inline constexpr std::size_t EditorHostMaximumRequestBytes = 1024 * 1024;
@@ -84,6 +85,7 @@ namespace gargantuan {
 		bool AudioEnabled = false;
 		std::optional<RenderCameraInput> ViewportCamera;
 		RenderPublisher ViewportPublisher;
+		std::shared_ptr<SemanticSpatialResolver> ViewportSpatial;
 		RenderPublicationPtr LastViewportPublication;
 		RenderProjection ViewportProjection;
 		std::unique_ptr<EditorViewportRenderer> ViewportRenderer;
@@ -118,6 +120,8 @@ namespace gargantuan {
 		std::uint64_t NextPackageJobId = 1;
 
 		void AdvanceViewportGeneration();
+		void ResetViewportSpatial();
+		void StepViewportSpatial();
 		void EnsureViewportRenderer();
 		void ConsumePlayRenderPublications(EditorViewportRenderer *Renderer);
 		void PumpPlaySession();
