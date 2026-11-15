@@ -121,6 +121,7 @@ namespace gargantuan {
 		};
 		void ClearVisualDependencies();
 		bool IndexVisual(const std::shared_ptr<AttachmentMesh> &Value);
+		void ConnectVisualPose(const std::shared_ptr<AttachmentMesh> &Value);
 		void UnindexVisual(ObjectId Object);
 		std::weak_ptr<SemanticSpatialResolver> SpatialResolver;
 		std::unordered_map<ObjectId, VisualDependency> VisualDependencies;

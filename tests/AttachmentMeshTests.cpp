@@ -425,10 +425,11 @@ int main() {
 		const auto BeforeJournal = ChangeJournal::Get().GetRetentionWindow(Game->GetObjectId()).NextSequence;
 		Spatial->Step();
 		auto Idle = Publisher.Publish(*World, Camera, 640, 360);
-		Check(!Idle->FullResync && !FindUpdate(*Idle, Visual->GetObjectId()) &&
-			Game->GetAuthoritativeRevision() == BeforeRevision &&
+		Check(!Idle->FullResync && !FindUpdate(*Idle, Visual->GetObjectId()),
+			"initial socket resolution does not enqueue a redundant next-frame visual update");
+		Check(Game->GetAuthoritativeRevision() == BeforeRevision &&
 			ChangeJournal::Get().GetRetentionWindow(Game->GetObjectId()).NextSequence == BeforeJournal,
-			"idle socket publication does not modify authored state or history");
+			"idle socket publication does not modify authored revision or journal history");
 		Rig->SetCFrame(CFrame(1.0f, 0.0f, -4.0f));
 		Spatial->Step();
 		auto Moved = Publisher.Publish(*World, Camera, 640, 360);

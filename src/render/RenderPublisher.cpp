@@ -685,17 +685,27 @@ namespace gargantuan {
 		if (auto Spatial = SpatialResolver.lock())
 			for (auto It = RequiredAnchors.rbegin(); It != RequiredAnchors.rend(); ++It)
 				Spatial->ObserveAttachment(*It);
-		Dependency.PoseConnection = Value->GetPropertyChangedSignal("WorldCFrame")->Connect(
-			[this, Object](std::monostate) {
-				if (Scope.IsValid()) Dirty->Mark(Scope, Object, RenderUpdateDomain::Transform);
-			}
-		);
 		for (const auto Source : Dependency.Sources)
 			VisualSourceDependents[Source].push_back(Object);
 		for (const auto &Reference : Dependency.Assets)
 			VisualAssetDependents[Reference].push_back(Object);
 		VisualDependencies.emplace(Object, std::move(Dependency));
 		return true;
+	}
+
+	void RenderPublisher::ConnectVisualPose(const std::shared_ptr<AttachmentMesh> &Value) {
+		if (!Value || Value->GetDestroyed() || Value->IsDestroying()) return;
+		const auto Object = Value->GetObjectId();
+		auto Found = VisualDependencies.find(Object);
+		if (Found == VisualDependencies.end() || Found->second.PoseConnection) return;
+		// Initial resolution is already in the publication being built. Observe
+		// later pose changes only after extraction, so it cannot queue a stale
+		// first-frame transform dirty mark behind the captured dirty version.
+		Found->second.PoseConnection = Value->GetPropertyChangedSignal("WorldCFrame")->Connect(
+			[this, Object](std::monostate) {
+				if (Scope.IsValid()) Dirty->Mark(Scope, Object, RenderUpdateDomain::Transform);
+			}
+		);
 	}
 
 	std::shared_ptr<const std::vector<RenderReflectionProbeState>> RenderPublisher::BuildReflectionProbes(
@@ -1254,6 +1264,7 @@ namespace gargantuan {
 					if (!IndexVisual(Visual)) { VisualOverflow = true; break; }
 					RenderExtractionDiagnostic Diagnostic;
 					auto Extracted = ExtractAttachmentMesh(World, Visual, SpatialResolver.lock(), Diagnostic);
+					ConnectVisualPose(Visual);
 					if (!Extracted) {
 						if (Visual->GetVisible()) Result->Diagnostics.push_back(std::move(Diagnostic));
 						continue;
@@ -1497,6 +1508,7 @@ namespace gargantuan {
 				RenderExtractionDiagnostic Diagnostic;
 				auto Extracted = ExtractAttachmentMesh(World, AttachmentMeshValue,
 					SpatialResolver.lock(), Diagnostic, Previous == PublishedItems.end() ? nullptr : &Previous->second);
+				ConnectVisualPose(AttachmentMeshValue);
 				if (!Extracted) {
 					if (AttachmentMeshValue->GetVisible()) Result->Diagnostics.push_back(std::move(Diagnostic));
 					if (Previous != PublishedItems.end()) Result->Removes.push_back({Object});
