@@ -13,9 +13,10 @@ a complete description of every subsystem.
 The [developer entry point](../src/content/docs/index.mdx),
 [Engine overview](../src/content/docs/developing/engine-architecture.mdx) and
 [complete inventory](../../devdocs/DocumentationReconstruction/Inventory.json)
-target integrated Engine `2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f`.
+target integrated Engine `b5df1e7b1b80da27158ea794626f90a8ebd8a6d2`.
 [Reconciliation](../../devdocs/DocumentationReconstruction/AccuracyReport.md)
-keeps pending Renderer 3–5/Runtime 6 and separate Studio/Node sources explicit.
+records integrated Renderer 3–5/Runtime 6, merged Studio and separate Node
+source identities, with the original qualification limits preserved.
 
 ## Documentation authority
 

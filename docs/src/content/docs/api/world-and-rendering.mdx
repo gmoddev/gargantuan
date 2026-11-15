@@ -33,6 +33,24 @@ A hit contains `Instance: BasePart`, `Position: Vector3`, `Normal: Vector3`, and
 
 `RunService.PreSimulation(DeltaTime)`, `PostSimulation(DeltaTime)`, and `PreRender(DeltaTime)` are signals. `PreRender` runs before extraction/publication; a committed camera or visual change made there can affect the next publication. This is not a general render-thread callback. Keep handlers bounded, and disconnect connections when their owning gameplay object is removed.
 
-`Workspace.CurrentCamera` is a read-only reference managed by the engine. `Camera.CFrame` and vertical `FieldOfView` (1–120 degrees) are script-facing authored view state; `ViewportSize` is engine-written. `Lighting` has authored `Ambient`, `SunColor`, `Brightness`, `ClockTime`, `ExposureCompensation`, `EnvironmentColor`, `FogEnabled`, `FogColor`, `FogStart`, and `FogEnd`. These values are extracted for rendering; backend shader APIs and GPU handles are not Luau members. A `Sky` or `MeshPart` needs valid catalog assets for its intended visual result.
+`Workspace.CurrentCamera` is a read-only reference managed by the engine. `Camera.CFrame` and vertical `FieldOfView` (1–120 degrees) are script-facing authored view state; `ViewportSize` is engine-written. `Lighting` has authored `Ambient`, `SunColor`, `Brightness`, `ClockTime`, `ExposureCompensation`, `EnvironmentColor`, `FogEnabled`, `FogColor`, `FogStart`, and `FogEnd`. A `Sky` or `MeshPart` needs valid catalog assets for its intended visual result.
 
-The rendered result can lag live authoritative state by a publication/frame boundary. An unmerged renderer branch does not add a current script API here.
+The integrated `Lighting` declaration also exposes these authored controls. Invalid or non-finite values raise a property error before commit.
+
+| Property | Accepted value | Effect |
+| --- | --- | --- |
+| `ShadowCascadeCount` | Integer 0–4; default 0 | Zero keeps the existing fixed directional shadow volume; 1–4 request camera-relative cascades. |
+| `ShadowDistance` | Number 1–4096; default 250 | Maximum camera-relative directional shadow coverage. |
+| `EnvironmentRotation` | Degrees -180–180; default 0 | Yaw of the visible Sky and its image-based lighting. |
+| `IblIntensity` | Number 0–8; default 1 | Linear multiplier for diffuse and specular image-based lighting. |
+| `ToneMapping` | `Enum.ToneMappingMode.Filmic` or `.Reinhard`; default Filmic | Maps exposed world color before GUI composition. |
+
+## Local lights and reflection probes
+
+`LocalLight` is abstract. Construct `PointLight` or `SpotLight` with `Instance.new`, then parent it under `Workspace` or beneath a `BasePart` in that WorldRoot. `LightCFrame` is a rigid pose relative to the nearest ancestor `BasePart`, or in WorldRoot coordinates without one. `LightEnabled` defaults true; `LightColor` has linear RGB channels in 0–1; `LightIntensity` is 0–4096 and `LightRange` is 0.01–1024 world units. `SpotLight.LightConeAngles` is `Vector2.new(Inner, Outer)` in half-angle degrees, with `0 <= Inner <= Outer` and `1 <= Outer <= 89`; it points along the negative Z axis of `LightCFrame`. `LightShadows` requests shadows and `LightShadowPriority` ranges from -1024 to 1024. These are ordinary authored Instance properties subject to DataModel mutation authority. See [the light example](https://github.com/gmoddev/Gargantuan/blob/main/docs/examples/local-light.luau).
+
+The renderer publishes at most 512 enabled, nonzero-intensity local lights from one WorldRoot; the SDL light grid admits at most 24 overlapping lights per screen tile. `LightShadows` is a request, not a guarantee: the current SDL path has eight admitted spotlight shadow layers, while point-light shadow requests remain unshadowed. Lights with invalid world transforms or beyond publication capacity are skipped. The light and its transform are source data; the renderer owns shadow maps and other GPU resources.
+
+`ReflectionProbe` is a constructible local environment source, not an automatic scene capture. Parent it under `Workspace` or beneath a `BasePart` there. `ProbeCFrame` is a rigid relative pose, `ProbeSize` is the full oriented influence-box size (each component 0.1–16384), and `ProbeCaptureOffset` must stay strictly inside that box. `ProbeBlendDistance` is 0–8192; `ProbeIntensity` is 0–8; `ProbePriority` is an integer -1024–1024; `ProbeEnabled` and `ProbeBoxProjection` are booleans. Supply `ProbePositiveX`, `ProbeNegativeX`, `ProbePositiveY`, `ProbeNegativeY`, `ProbePositiveZ`, and `ProbeNegativeZ` as six available square, equal-size Image asset references. Assignment checks reference syntax; publication checks actual Image kind and coherent dimensions. An incomplete probe contributes nothing and the global Sky remains independent.
+
+Publication inspects at most 256 enabled probes and publishes at most 32 coherent ones; the SDL renderer keeps at most 12 resident and samples at most two per pixel. Preparation is bounded and may lag source changes, with other probes or the global Sky providing the environment while a probe is unavailable. These limits describe the current adapter, not a script-visible GPU API. Imported material textures, native mip views, Sky prefiltering, and shadow resources are renderer-owned derivatives. The rendered result can lag live authoritative state by a publication/frame boundary.

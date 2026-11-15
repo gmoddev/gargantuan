@@ -1,7 +1,7 @@
 ---
 status: current
 owner: build-and-test
-last_verified: 2026-11-14
+last_verified: 2026-11-15
 related_code:
   - CMakeLists.txt
   - .justfile
@@ -11,7 +11,7 @@ related_code:
 
 # Build and test Gargantuan
 
-These instructions describe integrated source `2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f`.
+These instructions describe integrated source `b5df1e7b1b80da27158ea794626f90a8ebd8a6d2`.
 The checked-in CMake files and CI workflows remain the exact configuration
 contract. Headless tests do not qualify a GPU or a physical network deployment.
 
@@ -97,6 +97,12 @@ assets, dependencies and notices. See
 [packaging](CurrentArchitecture/StandalonePackagingFoundation1.md) for options
 and lifecycle. Dedicated `GargantuanServer` is distinct from the development
 executable's `--headless` option.
+
+The integrated distribution stages all 18 compiled shaders on incremental
+builds and verifies the runtime shader directory against the source set. A
+partial legacy shader directory is not a valid Foundation 3–5 package. The
+renderer reference describes HDR/SDR, backend capability and device limits;
+successful packaging alone does not qualify a particular GPU.
 
 ## Optional configurations
 

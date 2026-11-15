@@ -1,5 +1,33 @@
 # Independent documentation review
 
+## Merged-source reconciliation — 2026-11-15
+
+Final current-source review uses Engine
+`b5df1e7b1b80da27158ea794626f90a8ebd8a6d2` / tree
+`7ef2a2b6b2bb34732bbb8335f30dff9588a68f39` and Studio
+`dc960b5433b73e1d305548e0dc5a8dfc0d9cf2f3` / tree
+`f34f0474321b86f73416a9deb5732fa41c1ff1c9`. The initial review below remains
+history for the pre-integration source; its old pending gate is satisfied.
+
+| Independent review | Source checked and disposition |
+| --- | --- |
+| API reviewer → renderer/physics | SDLRenderer defaults, Renderer HDR fallback, OpaquePass material/instancing, ShadowPass mask/cascade/spot behavior, publication and resident budgets, physics readback/query tests; no concrete discrepancy |
+| Renderer reviewer → Studio/network/architecture | Merged Studio tree, qualified ancestor and ten-gate receipt, SourceWrite/native Undo/explicit transfer, disabled Untrusted tier, five-method MCP subset, Engine mailbox/material capabilities and D03/F1 scopes; no concrete discrepancy |
+| Studio/network reviewer → API/examples/build | New declarations, setters, light/probe budgets, AssetService/Image metadata, example parenting/publication, CMake/CI prerequisites and frame lifecycle; identified narrower ResetPropertyToDefault support and effective-default semantics for correction |
+
+The default-reset guide now requires a supported saved native property or
+`Name` and the effective frozen concrete-class default. Writable alone is not
+sufficient. Raw declarative descriptions remain source metadata, with the
+behavior correction explicit; production declarations are outside this patch.
+Legacy documents not fully reverified remain Unverified rather than inheriting
+authority from the merged directory or a qualification receipt.
+
+Documentation validation and the normal expected-head merge/post-merge evidence
+are recorded on [PR #25](https://github.com/gmoddev/gargantuan/pull/25). Refused
+hosted jobs must remain distinct from user-authorized Dockerbox equivalents.
+
+## Initial pre-integration review — historical
+
 Reviewed on 2026-11-14 against integrated Engine
 `2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f`. Three independent GPT-6 High
 reviewers inspected another author's work after their own reconstruction slice.
@@ -59,7 +87,8 @@ combined patch. These are source reviews, not additional native qualification.
 No unresolved concrete source-review finding is accepted as current guidance.
 Legacy documents classified Unverified retain that status; the inventory does
 not certify every old sentence. Final integrated-source reconciliation remains
-blocked on the separate Engine integration and is required before PR promotion.
+historically blocked on the separate Engine integration. The merged-source
+review above resolves that source gate without relabeling the initial results.
 
 ## Validation scope
 

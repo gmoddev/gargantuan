@@ -1,96 +1,123 @@
-# Documentation accuracy and integration reconciliation
+---
+status: current
+owner: documentation
+last_verified: 2026-11-15
+---
 
-Status: **pre-integration reconstruction; draft required**. Audited 2026-11-14.
+# Documentation accuracy and integrated-source reconciliation
 
-Integrated Engine source: `2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f` (fetched
-remote main). The original dirty `foundation/3l-content-availability` checkout
-was preserved. All campaign edits use `docs/reconstruction-20261114` in a
-separate worktree. Runtime production sources, qualification receipts and other
-campaign branches/worktrees are outside this patch.
+The developer reference is reconciled against the actual merged Engine and
+Studio sources. Current qualification and the normal expected-head merge and
+post-merge results are recorded on [documentation PR #25](https://github.com/gmoddev/gargantuan/pull/25).
+The original dirty Engine checkout and the other integration worktrees remain
+untouched; this branch uses its isolated documentation worktree.
 
-Renderer Foundations 3–5 and Runtime 6 are not ancestors of this baseline.
-Read-only prospective inspection used
-`4b32a822a26492907005ce18c3b1045550bfce86`; moving integration refs are not source
-pins. The documentation PR must remain draft until the Engine integration is
-complete and the exact resulting main SHA has been reconciled.
+## Verified source identities
 
-The reconstructed hierarchy starts at the site home, Getting Started, Engine
-Architecture, API, Renderer/Physics, Networking, Engine/Studio/Node, Contributing
-and History. Original detailed contracts remain at their established paths.
-The machine-readable inventory classifies every document and explicitly marks
-unverified legacy prose rather than certifying it by directory name. The API
-catalog extracts every class/service declaration, includes source hashes and
-indexes native headers; extraction is not proof that a native method is usable
-in every capability context. The guides explain tested behavior and limits.
+| Owner | Actual merged source | Tree and qualification attribution |
+| --- | --- | --- |
+| Engine PR #24 | `b5df1e7b1b80da27158ea794626f90a8ebd8a6d2` | Tree `7ef2a2b6b2bb34732bbb8335f30dff9588a68f39`, identical to qualified integration candidate `7bd9f54866427aecba93fb76d2a65d2a536d5bcd` |
+| Studio PR #15 | `dc960b5433b73e1d305548e0dc5a8dfc0d9cf2f3` | Tree `f34f0474321b86f73416a9deb5732fa41c1ff1c9`, identical to final candidate `3b8f45c5edb8b06ff61a82669e54adf25b627276` |
+| Node inspected source | `f4440423c0701ff396f589fd51b6ce41edc63539` | Separate owner and service/provider contracts; no new Node integration qualification claimed |
 
-Studio verification uses the locally available remote-tracking LUI tree
-`6ae8f3dc427bc5221e978ae627eab6224e5ccea6`, distinct from the older local checkout.
-Node verification uses `f4440423c0701ff396f589fd51b6ce41edc63539` and excludes
-dirty integration files from qualified claims. The [cross-repository audit](NetworkStudioAudit.md)
-records provenance and ownership. LUI owns current Studio UI/workflows, Native
-Host owns native resources and IPC, and Engine EditorHost owns authoritative
-project mutations/source/history. No Studio or Node campaign was modified.
+Both merge SHAs were independently resolved using Git remotes and PR metadata,
+and the trees were read from the actual commit objects. Studio's extensive
+native receipt qualifies ancestor `93961e78c6ce91aa59fa297fcbd9efd57e0ac121`;
+the later launcher/evidence-only changes and final merged tree retain their
+separate identities. Engine GPU qualification does not certify Studio UI.
 
-Core 3L correctness is qualified under D03 `POOLED_CORRECTNESS_V1`; this does
-not relabel historical physical F1 failures, unrun Node32, or deployment
-performance/provider certification as passing. Every original measurement keeps
-its source and acceptance identity. Physics remains production Box3D/XPBD;
-experimental Jolt is not promoted.
+## Reconstructed current reference
 
-Independent source reviews and check results are recorded in
-[Reviews.md](Reviews.md). Subsystem corrections and limits are in
-[API audit](ApiAudit.md), [renderer/physics audit](RendererPhysicsAudit.md) and
-[network/Studio audit](NetworkStudioAudit.md).
+The hierarchy covers Getting Started, project creation/build/package workflows,
+Engine authority and lifecycle, practical API behavior, the extracted declaration
+catalog, renderer/physics/networking, Engine/Studio/Node boundaries, contribution
+policy and historical evidence. The [complete inventory](Inventory.json)
+classifies every tracked document/notices/receipt throughout the repository.
+Its unknown verification dates and Unverified records remain explicit; this
+campaign does not certify every old sentence by directory membership.
 
-## Required reconciliation before merge
+Renderer Foundations 3–5 and Runtime 6 are integrated. The guides now describe
+PBR materials, HDR with SDR presentation/fallback, bounded local lighting,
+reflection probes, cascaded/spot shadows, texture/mip residency and renderer
+recovery. Instancing and the scene envelope remain opt-in; compact traversal,
+unsupported authoring features, hardware limits and measured regressions are
+not promoted to universal capabilities.
 
-1. Obtain exact remote main after Engine integration and record its SHA/tree.
-2. Compare changed public declarations, source paths, renderer/runtime contracts,
-   build options, tests and the Studio/Node integration contracts.
-3. Reconcile every pending claim and new mainline documentation conflict without
-   rewriting historical receipts or changing acceptance thresholds.
-4. Refresh declaration catalog, inventory and traceability; compile examples,
-   run integrity checks and build/verify the site.
-5. Resolve independent review findings, then require applicable PR checks/review.
-6. Only then merge; inspect post-merge documentation CI and deployed links if
-   publication was explicitly requested. CI build is separate from Pages deploy.
+Runtime 6 preserves Main-owned Instance/DataModel authority, full ObjectId
+generations, exact committed history and ordinary callback order. Derived
+final-state work can coalesce, with explicit prepared-batch semantics. Active
+Luau entries pin VM lifetime while logical shutdown cancels queued work.
+Box3D and XPBD remain the production solver owners. No runtime or protocol
+implementation changes are made by the documentation patch.
 
-Until that external integration gate is satisfied, the deliverable is the
-reviewable documentation branch and draft PR, not a completed mainline merge.
+The API reference reconciles actual declarations and native dispatch, including
+PointLight, SpotLight, ReflectionProbe, Lighting controls, destructive-method
+capabilities, native property-reset restrictions and Script lifetime. The
+catalog retains source metadata rather than claiming every declaration
+description is a complete behavior contract. Examples include an actual local
+light and retain explicit setup and client/server authority.
 
-## Pre-integration validation
+Studio documentation now covers merged creator/extension and renderer-authoring
+capabilities: retained native draft editing and Undo, separate version-checked
+Engine Source commit, explicit single-Script transfer and scoped reviewed
+development plugins. Public Untrusted extension execution remains disabled.
+The MCP bridge remains a narrower five-method, opt-in subset. Native Host owns
+native resources/IPC; LUI owns UI/workflows; Engine EditorHost owns authoritative
+project state, history, source, assets and mutation.
 
-- Complete inventory: 250 documents, including notices and text receipts;
-  47 current, 16 incomplete, 58 historical, 5 routing duplicates and 124
-  unverified. Unknown historical review dates remain unknown.
-- Declaration catalog: 67 classes/services, 440 members and 214 native header
-  entries. Source hashes use canonical UTF-8/LF text so Windows and Linux agree.
-- Eight Python checker regressions and five Node link-transformer regressions pass.
-- A real Luau compiler accepts all five standalone files and three current
-  document examples (eight total), without executing gameplay.
-- Locked Bun 1.3.13 / Node 24 / Astro build produces 34 pages; the generated-site
-  checker verifies routes, anchors and local repository targets. Final exact
-  link count is recorded in the validation command output/PR.
-- Current and historical repository-link checks report zero unresolved targets.
-  Twenty historical sibling links now use original source pins, preserving
-  dirty-state caveats; three receipt links had only their anchor spelling fixed.
-- No production runtime source, native tests or other campaign state is changed.
+Core 3L correctness remains qualified under D03 `POOLED_CORRECTNESS_V1`.
+Historical strict F1 misses, unrun/deferred physical-provider scopes, latency
+targets and acceptance identities keep their original meanings. No physical
+Local32, real-TLS Node32 or universal deployment certification is inferred.
 
-Documentation PR CI must also pass at the published head. Syntax and source
-review do not establish full Engine typechecking, runtime gameplay execution,
-new graphics support or physical/provider/network performance qualification.
+## Traceability and independent review
 
-The first documentation PR run
-[`43595624171`](https://github.com/gmoddev/gargantuan/actions/runs/43595624171)
-failed at head `58ca102b03297b3ec6fb968f64e57abfc30c3130`: its Linux checker
-traversed nonexistent virtual route directories before normalizing `..`.
-Windows had masked that filesystem difference. The follow-up normalizes
-candidates first and adds the corresponding cross-platform regression; the
-original failed run remains failed evidence.
+[Traceability.json](Traceability.json) maps current guide claims to owning
+source and existing tests at the merged identities. Detailed review and concrete
+finding resolutions are in [Reviews.md](Reviews.md), [API audit](ApiAudit.md),
+[renderer/physics audit](RendererPhysicsAudit.md) and [network/Studio audit](NetworkStudioAudit.md).
+Each subsystem author received independent source review from another reviewer.
+The effective concrete-default restriction was corrected without editing the
+production declaration's abbreviated description.
 
-The next Linux run exposed root Git routing aliases: Linux follows their
-symlinks, while Windows checks out one-line link text. Parsing target content
-relative to the root alias produced 49 false historical-link findings. Alias
-targets are now validated separately and canonical documents are checked at
-their own paths. Inventory alias metadata also uses the link target on both
-platforms, with a regression covering both filesystem representations.
+Historical benchmark values, failures, sources and fixtures are preserved.
+The original pre-integration audit remains explicitly historical; its former
+Engine/Studio merge gate is satisfied by the actual sources above, not by
+relabeling old evidence.
+
+## Validation and merge contract
+
+The documentation workflow compiles the real Engine-pinned Luau compiler,
+runs Python and Node regressions, checks declaration/catalog/inventory/link
+drift and examples, installs the locked Bun/Node site toolchain, builds Astro
+and verifies every emitted page, route, anchor and repository target. Source
+hashes normalize Windows/Linux checkout newlines; Git routing aliases retain
+consistent target semantics on both platforms.
+
+While GitHub billing refuses hosted jobs before execution, the user authorizes
+Dockerbox CI equivalents under normal atomic worker admission. Refused hosted
+runs remain refused; worker execution must be identified as worker evidence.
+No check status is manufactured and no branch protection is disabled. The
+documentation PR uses ordinary expected-head merge, followed by exact merged
+tree comparison and post-merge checks. The receipt/command results are attached
+to PR #25 without introducing a recursive qualification layer.
+
+The patch relative to merged Engine main contains documentation, examples,
+site/tooling and documentation CI changes only. Existing Engine/Studio native
+and hardware receipts retain their original sources; documentation validation
+does not become a fresh gameplay, GPU, latency or physical-provider campaign.
+
+## Retained initial documentation checks
+
+The first phase targeted Engine `2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f`.
+Its [successful documentation run 43596708054](https://github.com/gmoddev/gargantuan/actions/runs/43596708054)
+qualified documentation head `ad68093ec4301c23101afe7416a820c8139d9e52`:
+250 documents, 67 declarations, eight compiled examples, 34 HTML pages and
+2,137 links. Those counts are historical and are not current merged-source
+counts.
+
+Earlier failed runs are preserved. Linux exposed virtual route normalization
+and root Git symlink-alias differences hidden by Windows. Focused fixes and
+regressions resolved both; historical link checks remain enabled. Current
+derived artifacts and PR validation report the expanded merged-source inventory
+and API counts independently.

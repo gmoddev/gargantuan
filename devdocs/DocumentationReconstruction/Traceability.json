@@ -1,8 +1,7 @@
 {
   "SchemaVersion": 1,
-  "IntegratedEngineSource": "2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f",
-  "ProspectiveEngineSource": "4b32a822a26492907005ce18c3b1045550bfce86",
-  "StudioSource": "6ae8f3dc427bc5221e978ae627eab6224e5ccea6",
+  "IntegratedEngineSource": "b5df1e7b1b80da27158ea794626f90a8ebd8a6d2",
+  "StudioSource": "dc960b5433b73e1d305548e0dc5a8dfc0d9cf2f3",
   "NodeInspectedSource": "f4440423c0701ff396f589fd51b6ce41edc63539",
   "Claims": [
     {
@@ -20,7 +19,7 @@
         "tests/PreparedPropertyTests.cpp"
       ],
       "Invariant": "Main owns state; full generations and scope; rejection is atomic.",
-      "Verification": "Source and existing tests inspected; no new native qualification executed"
+      "Verification": "Merged-source implementation and existing tests reviewed; no implied fresh hardware or physical F1 certification"
     },
     {
       "Subsystem": "Frame lifecycle and shutdown",
@@ -36,7 +35,7 @@
         "tests/GameSessionTests.cpp"
       ],
       "Invariant": "Host roles differ; borrowed renderer and session lifetimes remain explicit.",
-      "Verification": "Source and existing tests inspected; no new native qualification executed"
+      "Verification": "Merged-source implementation and existing tests reviewed; no implied fresh hardware or physical F1 certification"
     },
     {
       "Subsystem": "Schema and scripting",
@@ -52,7 +51,7 @@
         "tests/PreRunEditorHostTests.cpp"
       ],
       "Invariant": "Transactional frozen registry, explicit capabilities and VM contexts.",
-      "Verification": "Source and existing tests inspected; no new native qualification executed"
+      "Verification": "Merged-source implementation and existing tests reviewed; no implied fresh hardware or physical F1 certification"
     },
     {
       "Subsystem": "Luau public API",
@@ -70,7 +69,7 @@
         "tests/GuiFoundationTests.cpp"
       ],
       "Invariant": "Declared metadata plus native behavior; no blanket Roblox parity.",
-      "Verification": "Source and existing tests inspected; no new native qualification executed"
+      "Verification": "Merged-source implementation and existing tests reviewed; no implied fresh hardware or physical F1 certification"
     },
     {
       "Subsystem": "SDL rendering",
@@ -82,10 +81,14 @@
       ],
       "Tests": [
         "tests/RendererPublicationTests.cpp",
-        "tests/RendererDepthTests.cpp"
+        "tests/RendererDepthTests.cpp",
+        "tests/RendererMaterialMipTests.cpp",
+        "tests/ReflectionProbeGpuTests.cpp",
+        "tests/SpotShadowAtlasTests.cpp",
+        "tests/DirectionalShadowCacheTests.cpp"
       ],
-      "Invariant": "Immutable publication, renderer projection, SDL GPU; later Foundations pending.",
-      "Verification": "Source and existing tests inspected; no new native qualification executed"
+      "Invariant": "Integrated SDL GPU Foundations 3–5; immutable publication and renderer-owned projection; bounded HDR/material/light/probe/residency paths, opt-in instancing and scene envelope.",
+      "Verification": "Merged-source implementation and existing tests reviewed; no implied fresh hardware or physical F1 certification"
     },
     {
       "Subsystem": "Rigid and deformable physics",
@@ -101,7 +104,7 @@
         "tests/SoftBodyPhysicsTests.cpp"
       ],
       "Invariant": "Box3D/XPBD backend ownership, safe-point sync and owned results.",
-      "Verification": "Source and existing tests inspected; no new native qualification executed"
+      "Verification": "Merged-source implementation and existing tests reviewed; no implied fresh hardware or physical F1 certification"
     },
     {
       "Subsystem": "Replication, transport and F1",
@@ -118,7 +121,7 @@
         "tests/NetworkingContractsTests.cpp"
       ],
       "Invariant": "Core correctness and historical physical/provider scopes stay separate.",
-      "Verification": "Source and existing tests inspected; no new native qualification executed"
+      "Verification": "Merged-source implementation and existing tests reviewed; no implied fresh hardware or physical F1 certification"
     },
     {
       "Subsystem": "EditorHost and durable source",
@@ -135,7 +138,7 @@
         "tests/PackagingEditorHostTests.cpp"
       ],
       "Invariant": "Engine owns source, project revisions/history; Studio is projection.",
-      "Verification": "Source and existing tests inspected; no new native qualification executed"
+      "Verification": "Merged-source implementation and existing tests reviewed; no implied fresh hardware or physical F1 certification"
     },
     {
       "Subsystem": "Assets, animation, audio and GUI",
@@ -153,7 +156,7 @@
         "tests/GuiFoundationTests.cpp"
       ],
       "Invariant": "Canonical asset identity, bounded native lifecycles and capabilities.",
-      "Verification": "Source and existing tests inspected; no new native qualification executed"
+      "Verification": "Merged-source implementation and existing tests reviewed; no implied fresh hardware or physical F1 certification"
     },
     {
       "Subsystem": "Build and CI",
@@ -170,7 +173,7 @@
         "tests/cmake"
       ],
       "Invariant": "Generation precedes configure; Windows Release/Linux sanitizers; no new GPU certification.",
-      "Verification": "Source and existing tests inspected; no new native qualification executed"
+      "Verification": "Merged-source implementation and existing tests reviewed; no implied fresh hardware or physical F1 certification"
     },
     {
       "Subsystem": "Project creation and packaging",
@@ -186,7 +189,7 @@
         "samples/FirstCompleteGame/README.md"
       ],
       "Invariant": "Nonexistent destination, authoritative adoption and isolated Play; package validation scope.",
-      "Verification": "Source and existing tests inspected; no new native qualification executed"
+      "Verification": "Merged-source implementation and existing tests reviewed; no implied fresh hardware or physical F1 certification"
     },
     {
       "Subsystem": "Studio and Node separation",
@@ -199,7 +202,28 @@
         "tests/ContentAvailabilityTests.cpp"
       ],
       "Invariant": "LUI/UI, native resources/IPC, Engine authority and private provider delivery are distinct.",
-      "Verification": "Source and existing tests inspected; no new native qualification executed"
+      "Verification": "Merged-source implementation and existing tests reviewed; no implied fresh hardware or physical F1 certification"
+    },
+    {
+      "Subsystem": "Runtime 6 lifecycle and derived-work optimization",
+      "Document": "docs/src/content/docs/developing/engine-architecture.mdx",
+      "Source": [
+        "src/Engine.cpp",
+        "src/scripting/ScriptEngine.cpp",
+        "src/scripting/ThreadEngine.cpp",
+        "src/classes/Script.cpp",
+        "src/render/RenderPublisher.cpp"
+      ],
+      "Tests": [
+        "tests/FoundationTests.cpp",
+        "tests/Runtime6DirtyInsertFaultTests.cpp",
+        "tests/Runtime6ReadbackFaultTests.cpp"
+      ],
+      "Invariant": "Main Instance authority, full generations, exact committed history and ordinary callbacks remain; consumer final-state work may coalesce and logical VM shutdown preserves active-entry lifetime.",
+      "Verification": "Merged source and tests reviewed; original Runtime 6 measurements keep original source/binary/fixture identities."
     }
-  ]
+  ],
+  "EngineMergeTree": "7ef2a2b6b2bb34732bbb8335f30dff9588a68f39",
+  "StudioMergeTree": "f34f0474321b86f73416a9deb5732fa41c1ff1c9",
+  "Reconciled": "2026-11-15; source/test review at real merged identities. Historical execution receipts retain their original sources; docs execution is recorded separately on PR #25."
 }

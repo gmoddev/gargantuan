@@ -6,6 +6,7 @@ These are standalone script bodies for Gargantuan's runtime `Script` objects. Au
 | --- | --- |
 | `part-and-tags.luau` | Server Script in a running DataModel. |
 | `math-filter-signal.luau` | Server Script with `Workspace`; demonstrates VM-local `RaycastParams`, `Vector3`, and `Signal`. |
+| `local-light.luau` | Server Script with `Workspace`; creates a point light on an anchored Part. |
 | `world-query.luau` | Server Script with `Workspace`; run after the example part or other collidable geometry exists. |
 | `remote-server.luau` and `remote-client.luau` | A real client/server session, with a pre-authored `RemoteEvent` named `Ping` under `ReplicatedStorage`; place the scripts in Server and Client contexts respectively. Local Studio Play alone has no peer topology. |
 

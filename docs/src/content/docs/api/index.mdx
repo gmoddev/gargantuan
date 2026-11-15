@@ -3,14 +3,14 @@ title: Luau API reference
 description: Verified entry points for runtime scripts, services, world objects, input, assets, and remotes.
 ---
 
-This reference describes the **implemented runtime Luau surface** at the integrated `main` revision. It is a practical guide to common calls, not a promise of Roblox API compatibility or a complete generated member list. Class and service declarations are in `assets/classes/*.luau` and `assets/services/*.luau`; native methods and datatype bindings also need their C++ implementations. A declaration commented out in those files is not an API.
+This reference describes the **implemented runtime Luau surface** at integrated `main` revision `b5df1e7b1b80da27158ea794626f90a8ebd8a6d2`. It is a practical guide to common calls, not a promise of Roblox API compatibility or a complete generated member list. Class and service declarations are in `assets/classes/*.luau` and `assets/services/*.luau`; native methods and datatype bindings also need their C++ implementations. A declaration commented out in those files is not an API.
 
 | Start with | For |
 | --- | --- |
 | [Instances and services](./instances-and-services/) | `game`, `Instance.new`, hierarchy, signals, attributes, tags, and script lifecycle |
 | [Datatypes and globals](./datatypes-and-globals/) | VM constructors, returned value types, `task`, `require`, and diagnostics |
 | [Class and service catalog](./declaration-catalog/) | Complete mechanically extracted declarative members and source locations |
-| [World and rendering](./world-and-rendering/) | Parts, physics queries, camera, lighting, and frame events |
+| [World and rendering](./world-and-rendering/) | Parts, physics queries, camera, local lights, reflection probes, and frame events |
 | [Input, GUI, and media](./input-gui-and-media/) | Players, actions, GUI, assets, animation, and sound |
 | [Networking and persistence](./networking-and-persistence/) | Remotes, client/server direction, replicated state, and saved state |
 

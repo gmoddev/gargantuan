@@ -25,13 +25,23 @@ directories, even empty ones, are rejected rather than overwritten.
 The [creation contract](../../../../../devdocs/CurrentArchitecture/ProjectCreation.md)
 defines Engine behavior. Studio UX and Native Host are owned by the
 [Studio repository](https://github.com/GantriaEngine/gargantuan-studio).
-Use Studio and Engine versions qualified together.
+The current reconciled pair is Engine
+`b5df1e7b1b80da27158ea794626f90a8ebd8a6d2` and Studio
+`dc960b5433b73e1d305548e0dc5a8dfc0d9cf2f3`. Use the Studio-owned qualified
+launch profile and matching Native Host directory; an arbitrary build directory
+does not inherit that receipt's qualification.
 
 Create a Script through authoritative editor commands and try the
 [Instance example](../../api/instances-and-services/) in Play. Source edits,
 dirty state, Save and Undo/Redo belong to EditorHost. Studio text buffers are
 drafts until the source command succeeds. Play creates an isolated runtime
 DataModel; Stop discards gameplay changes and returns to authoring.
+
+Native text Undo affects the retained draft buffer; Engine Undo/Redo affects
+accepted project transactions. Commit Source uses the expected `SourceVersion`
+and remains separate from editing the draft. Studio also has explicit
+single-Script export/import with reviewed draft replacement; this is not a live
+filesystem synchronization service. See [Studio ownership and limits](../../developing/engine-studio-node/).
 
 ## Package the sample
 

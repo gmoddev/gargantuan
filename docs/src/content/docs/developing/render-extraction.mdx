@@ -145,11 +145,14 @@ render threading. Foundation 2C adds renderer-neutral material/texture
 lifecycle values and an SDL-private GUI pipeline with persistent buffers,
 scissors, alpha blending, and atlas sampling. See
 [`RendererBackendBoundary.md`](../../../../../devdocs/CurrentArchitecture/RendererBackendBoundary.md)
-for the verified ownership and leakage audit. The present SDL fragment shader
-samples base color and applies simple ambient/sun lighting, fog, and an ACES
-approximation. Material values also carry normal texture and metallic/roughness
-fields, but this shader does not consume them for normal mapping or PBR. See
-[Renderer](../renderer/) for the exact integrated feature boundary.
+for the verified ownership and leakage audit. The integrated SDL material path
+consumes imported metallic-roughness, normal, emissive and occlusion values,
+with legacy shading for primitives and the built-in fallback. A supported HDR
+scene target resolves once to SDR before GUI; unsupported devices retain
+direct SDR rendering. Material mip views, global/local image-based lighting,
+local lights and optional layered shadows remain renderer-owned derivatives
+of immutable values. See [Renderer](../renderer/) for the exact feature,
+residency, device and opt-in submission limits.
 
 The hard soft-body flow is solver-owned simulation to engine-owned deformable
 render values to `RenderDirtyAccumulator` and immutable `RenderPublication`,
@@ -158,63 +161,32 @@ solver memory never cross the seam. The first producer is now the sibling CPU
 XPBD cloth/rubber backend documented in
 [`SoftBodyPhysicsFoundation.md`](../../../../../devdocs/CurrentArchitecture/SoftBodyPhysicsFoundation.md).
 
-## Renderer technology decision checkpoint
+## Renderer decision and measurement boundary
 
-This section is non-normative future guidance. Gargantuan should revisit its
-renderer technology before the "competent lighting/renderer" roadmap work grows
-into a mature material, asset, lighting, culling, batching, and post-processing
-stack. The decision should be driven by a measured comparative prototype, not by
-making the current SDL implementation permanent by default.
-
-The candidate directions are:
-
-1. Gargantuan owns engine and rendering semantics while Filament supplies most
-   rendering technology.
-2. Gargantuan owns engine semantics while Ogre-Next owns a disposable,
-   persistent render-side scene projection.
-3. Gargantuan owns both engine semantics and a renderer built on a lower-level
-   API such as Diligent or SDL GPU.
-
-The first investigation should introduce only the smallest internal backend
-seam needed to compare one serious alternative, initially Filament, with the
-current SDL path. It should not build three polished backends. Compare at least
-material flexibility, instancing and batching, culling, lighting, large-scene
-performance, platform support, integration cost, debugging, licensing, and
-EditorHost compatibility. If rendering behavior proves to be a product
-differentiator that an integrated renderer cannot express without distorting
-Gargantuan's model, that evidence can justify owning more of the stack.
-
-Every option must preserve the existing authority boundary:
+Foundation 2C selected SDL GPU for runtime rendering. Foundation 3 compared
+its direct-material path with a separate Filament benchmark and recommended
+continuing SDL investment. Foundations 4–5 added HDR working color, lighting,
+shadows, residency and optional submission paths without changing the
+publication authority boundary. Filament remains an isolated reference, not
+a runtime backend selection. See [Foundation 3](../../../../../devdocs/CurrentArchitecture/RendererFoundation3.md)
+and [Foundation 5](../../../../../devdocs/CurrentArchitecture/RendererFoundation5.md).
 
 ```text
-authoritative DataModel
-    -> extracted or incrementally maintained render projection
-    -> immutable publication
-    -> renderer-owned scene and GPU resources
+authoritative DataModel -> dirty classification -> immutable publication
+    -> disposable renderer-owned projection -> GPU resources
 ```
 
-Renderer Foundation 2B uses incremental immutable publication in the supported
-runtime and EditorViewport. `RenderSnapshot` remains compatibility/full-state
-scaffolding, not the normal renderer path. See
+`RenderSnapshot` remains complete-state compatibility and resynchronization
+scaffolding; the ordinary runtime and EditorViewport path uses incremental
+publications. GUI publishes owned layout, text and atlas data as texture
+lifecycle plus complete immutable UI frames. See
 [`RendererFoundation2.md`](../../../../../devdocs/CurrentArchitecture/RendererFoundation2.md)
-for the accepted delta/full-resync contract, deformable and GUI boundaries,
-benchmarks, backend decision, and bounded migration sequence.
+and [`RendererFoundation2C.md`](../../../../../devdocs/CurrentArchitecture/RendererFoundation2C.md).
 
-Foundation 2C selected SDL GPU after real 300-frame fence-complete and
-1,800-frame queued deformable/GUI tests on AMD and NVIDIA hardware. It
-authorizes the GUI runtime to publish engine-owned layout/text/atlas results as
-`RenderTexture` lifecycle plus complete `RenderUiFrame` values. GUI Foundation 2
-retains that renderer-neutral contract and adds shared immutable ownership rather
-than a speculative UI delta. See
-[`RendererFoundation2C.md`](../../../../../devdocs/CurrentArchitecture/RendererFoundation2C.md).
-
-Any persistent render scene is a disposable `ObjectId`-indexed projection, not
-game state. It never becomes authoritative or retains live `Instance` pointers.
-
-Renderer benchmarks must also separate GPU rendering from Studio viewport
-presentation. GPU-to-CPU readback, pixel conversion, shared-memory transfer,
-managed copies, and bitmap upload can dominate observed Studio frame time
-independently of the renderer. Measure these stages separately. A shared GPU
-texture may later become the preferred fast path, while the bounded RGB
-shared-memory transport remains a portable fallback; adopting such a path
-requires its own process-boundary and lifecycle review.
+Renderer frame timings and Studio viewport presentation have different
+boundaries. GPU-to-CPU readback, pixel conversion, shared-memory transfer,
+managed copies and bitmap upload can affect Studio separately. The current
+Windows primary viewport path uses a BGRA8 LatestFrameMailbox v2; ring v1/RGB8
+and Base64 remain compatibility/fallback paths. A shared GPU texture would
+require its own process-boundary and lifecycle review. See the
+[EditorHost viewport](../editor-host/) contract.

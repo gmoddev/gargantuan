@@ -4,8 +4,9 @@
 
 `CreateProject` creates the smallest canonical persisted project: one `DataModel`
 named by the request and its required `Workspace` service. It uses normal native
-schema bootstrap, service construction, archivable-state marking, and project-v4
-serialization. It does not add starter parts, scripts, gameplay services, assets,
+schema bootstrap, service construction, archivable-state marking, and current
+Instance serialization (v5 writer; the creation contract originated with v4).
+It does not add starter parts, scripts, gameplay services, assets,
 or a template identity.
 
 The initial project state is explicit:

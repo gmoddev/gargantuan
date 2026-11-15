@@ -4,7 +4,7 @@ description: Integrated authority, lifecycle and consumer boundaries.
 ---
 
 This overview is verified against integrated Engine source
-`2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f`. Detailed invariants are in
+`b5df1e7b1b80da27158ea794626f90a8ebd8a6d2`. Detailed invariants are in
 [Core](../../../../../docs/invariants/Core.md); the
 [traceability matrix](../../../../../devdocs/DocumentationReconstruction/Traceability.json)
 maps each boundary to implementation and tests.
@@ -29,6 +29,12 @@ retains its scope; cross-DataModel migration is rejected. `Destroy` is monotonic
 and reentrant-safe. See [runtime foundation](../../../../../devdocs/CurrentArchitecture/FoundationRuntime.md),
 [mutation gateway](../../../../../devdocs/CurrentArchitecture/MutationGateway.md)
 and [Instance APIs](../../api/instances-and-services/).
+
+Runtime 6 optimizes adoption, mutation-derived work and publication without
+replacing Instance authority. Ordinary synchronous callbacks and committed
+journal/history order stay exact. Consumer final-state work can coalesce;
+prepared batches retain their separately declared semantics. No general ECS,
+global dirty bus or alternative identity owner is implied.
 
 ## Runtime composition and frame lifecycle
 
@@ -66,6 +72,13 @@ and boundary functions enforce it. Runtime game scripts do not acquire project
 filesystem, process, EditorHost or schema-definition authority. See
 [schema](../runtime-schema/), [script security](../../../../../devdocs/CurrentArchitecture/ScriptSecurity.md)
 and [API organization](../../api/).
+
+Script coroutines and active native entries retain their owning VM lifetime.
+Logical shutdown disconnects handlers and cancels queued work; physical VM close
+waits for active entries to unwind. Script sandbox identity is scoped to the
+executing resource, and native Destroy/ClearAllChildren paths enforce the
+existing mutation capability. These are lifetime and authority corrections,
+not additional ambient privileges.
 
 ## Projections and backend owners
 
@@ -106,5 +119,9 @@ propagates to its host; this is not a promise that every GPU loss is recoverable
 Host fatal paths use controlled logging/exit. Optional telemetry is consented,
 bounded and fail-open, with no new state authority.
 
-Renderer Foundations 3–5 and Runtime 6 remain [pending integration](../renderer/).
-Their measurements and optimized internals do not silently redefine this baseline.
+Renderer Foundations 3–5 and Runtime 6 are integrated in this baseline. The
+[renderer reference](../renderer/) describes bounded capability and device
+support, opt-in instancing, rejected experiments and recovery limits. Existing
+[qualification receipts](../../../../../devdocs/Validation/RuntimeFoundation6Qualification.md)
+retain their original source, binaries, fixtures and measured regressions;
+integration does not turn them into new universal performance claims.

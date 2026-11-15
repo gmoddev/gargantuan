@@ -107,9 +107,11 @@ and [LUI integration record](https://github.com/GantriaEngine/gargantuan-studio/
 define workflow support, source pins and UI qualification limits. Avalonia is
 a frozen historical reference.
 
-This reconstruction targets integrated Engine main
-`2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f`. Renderer Foundations 3–5 and Runtime 6
-remain pending integration. Read the
+This reference targets integrated Engine main
+`b5df1e7b1b80da27158ea794626f90a8ebd8a6d2`, including Renderer Foundations 3–5
+and Runtime 6, with Studio main
+`dc960b5433b73e1d305548e0dc5a8dfc0d9cf2f3`. Their qualified scopes and limits
+remain source-bound. Read the
 [source reconciliation report](devdocs/DocumentationReconstruction/AccuracyReport.md)
 before combining independently evolving Engine, Studio and Node builds.
 

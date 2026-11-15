@@ -233,15 +233,17 @@ Future CI should cover, with pinned dependencies:
 ### Supported Studio runtime
 
 **Validation: Historical Avalonia concern; reassess on LUI source.** The
-previous Studio host targeted framework-dependent `net7.0`. LUI is now the
-primary Studio UI, so that older runtime claim does not establish the active
-application's distribution status.
+previous Studio host targeted framework-dependent `net7.0`. The merged LUI
+Host targets `net10.0-windows10.0.19041.0` and `win-x64` in its Studio-owned
+project file. That source fact does not establish clean-machine distribution
+or every runtime prerequisite.
 
 For a supported distribution, verify the current LUI Host and framework runtime,
 Luau hosting, native telemetry loading, package contents, and clean-machine
 launch against the exact release source and binaries. Studio's own
-[mainline native receipt](https://github.com/GantriaEngine/gargantuan-studio/blob/main/devdocs/Validation/MainlineNative20261107.json)
-is source-bound and does not cover every distribution environment.
+[creator platform receipt](https://github.com/GantriaEngine/gargantuan-studio/blob/main/devdocs/Validation/StudioCreatorPlatformNativeQualification20261114.json)
+qualifies its pinned Windows host and Engine bundle, not every distribution
+environment or clean-machine install.
 
 ### Reliable backlog budget
 

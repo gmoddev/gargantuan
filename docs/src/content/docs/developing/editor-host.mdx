@@ -8,7 +8,7 @@ Gargantuan through the public, versioned EditorHost protocol instead of linking
 against private engine internals.
 
 The accepted Studio product model is maintained in the private Studio-owned
-[Gargantuan Studio Authoring and UX Architecture](https://github.com/GantriaEngine/gargantuan-studio/blob/docs/studio-authoring-ux-architecture/devdocs/AcceptedArchitecture/StudioAuthoringAndUXArchitecture.md).
+[Gargantuan Studio Authoring and UX Architecture](https://github.com/GantriaEngine/gargantuan-studio/blob/main/devdocs/AcceptedArchitecture/StudioAuthoringAndUXArchitecture.md).
 It defines resource-bound documents, first-party tools, selection, settings and
 future TestSession boundaries; acceptance is not feature completion. See the
 [public Studio checkpoint](../roadmap/#studio-authoring-checkpoint) for delivered,
@@ -128,19 +128,26 @@ frame sequence/dimensions, and picked stable IDs. Shared-memory names and
 handles, RGB buffers, renderer objects, and IPC streams remain in the native
 host layer.
 
-The Studio `origin/main` application uses LUI as its primary UI framework.
-Luau owns editor workflows and document/buffer policy; the Studio Host owns
+The merged Studio `dc960b5433b73e1d305548e0dc5a8dfc0d9cf2f3` application uses LUI as its primary UI framework.
+Luau owns editor workflows and document/buffer policy; the native Studio Host owns
 windows, process lifecycle, IPC, frame transport, and native resource lifetimes.
 See the [cross-repository ownership map](./engine-studio-node/) and the
 [Studio-owned current architecture](https://github.com/GantriaEngine/gargantuan-studio/blob/main/ARCHITECTURE.md)
-for exact LUI source and qualification pins.
+for exact LUI source and qualification pins. The Engine EditorHost owns project
+Instance/schema mutation, revision/history, persistence, package building,
+asset identity, and the disposable Play and animation-preview sessions.
 Current Studio supports schema-constrained object-reference editing through
 the authoritative property path. Minimal Play sessions are
 implemented with a separate runtime DataModel and VM; multiplayer, debugging,
 live-edit synchronization, and applying runtime changes back remain deferred.
 Structural editing, grouped transactions, Undo/Redo, and dedicated Script/
-ModuleScript Source authoring are implemented. Save and Save As persist an
-engine-captured project snapshot; Studio never serializes its document cache.
+ModuleScript Source authoring are implemented. Engine Undo/Redo traverses
+authoritative project history. Local source typing, explicit transfer import,
+and reviewed plugin source edits use the one retained native TextBox Undo owner;
+Commit Source is a separate `SetScriptSource` command with an exact
+`SourceVersion`. Save and Save As persist an engine-captured project snapshot;
+Studio never serializes its document cache. The single-Script export/import
+receipt and local candidate preview are explicit operations, not live file sync.
 The older Avalonia C# host is frozen historical Studio source, not the primary
 application. The public boundary exposes only stable IDs, schema,
 snapshot/journal data, structured commands, and viewport pixels. Script domains
@@ -150,6 +157,18 @@ grant is read access, validated mutation, editor commands, and local selection.
 The implemented Luau viewport adapter adds `ViewportControl`; it does not infer
 that permission from the `Studio` domain. Process, filesystem, and network
 access remain ungranted.
+
+The Studio creator integrates Engine asset-catalog search, dependency and
+material metadata, import/reimport, property asset choices, lighting edits,
+and bounded preview controls. Its renderer authoring journey is source-bound;
+advanced material fields require the advertised
+`AdvancedMaterialMetadata` catalog capability. Selection and local candidates
+do not bypass EditorHost's revision and mutation checks. Optional development
+extensions apply reviewed semantic effects through Studio policy and the same
+Engine authority; public Untrusted execution remains disabled. The optional
+MCP bridge admits only its published five-method subset, not general EditorHost
+access or Source commands. See the [Studio qualification ledger](https://github.com/GantriaEngine/gargantuan-studio/blob/main/devdocs/Validation/StudioCreatorPlatformIntegration20261114.md)
+and [MCP contract](https://github.com/GantriaEngine/gargantuan-studio/blob/main/experiments/LuiStudio/McpGateway.md).
 
 `GetSchema` schema-discovery version 7 exposes the frozen registry generation
 and immutable class/enum/extension metadata. Project classes include stable

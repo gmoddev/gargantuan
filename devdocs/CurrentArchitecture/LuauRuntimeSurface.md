@@ -69,6 +69,10 @@ nullable `Parent`. Available lifecycle/query methods are:
 `IsPropertyModified` is currently a partial compatibility stub that always
 returns true; callers should not use it to detect real default-state differences.
 
+`Destroy` and `ClearAllChildren` require `MutateDataModel` through generated
+native-method dispatch, including inherited calls. Both ordinary Server and
+Client runtime profiles have it; network-only inbound contexts do not.
+
 The ancestry, child, descendant, and destroying signals declared on `Instance`
 are exposed. Nullable lookups and nullable object-reference properties return
 Luau `nil`. Separate userdata wrappers for the same live Instance compare equal
@@ -140,6 +144,17 @@ The track's playback controls and properties are native userdata bindings in
 `src/animation/AnimationTrack.cpp`. Neither lookup nor track playback grants
 raw asset bytes, filesystem access, or a persistent animation handle.
 
+The integrated renderer authoring surface also includes `PointLight` and
+`SpotLight` (concrete `LocalLight` descendants), `ReflectionProbe`, and
+`Lighting.ShadowCascadeCount`, `ShadowDistance`, `EnvironmentRotation`,
+`IblIntensity`, and `ToneMapping`. Their current declaration, setter, and
+publication limits are documented in the public
+[world and rendering API](../../docs/src/content/docs/api/world-and-rendering.mdx).
+Radiance HDR import and material texture mip preparation remain native
+authoring/renderer paths, not new Luau import or GPU-control methods. The
+older BasePart list above is a historical subset; use the declarations and
+generated catalog for all members.
+
 The executable carries engine-shipped `DefaultActionMap`,
 `DefaultCharacterRuntime`, `DefaultLocomotion`, and `DefaultCamera` Luau modules. They start in a
 runtime-only unarchivable subtree and clean up on Stop. Games can serialize the
@@ -150,8 +165,14 @@ and kinematic query APIs.
 
 `Script` source is authored through Studio and scripts present in the Play
 snapshot run through the runtime scheduler. Runtime-created or newly adopted
-scripts are governed by the existing descendant scheduling behavior; this
-milestone does not add a dynamic-script-start contract. `Script` and
+Scripts enter the ScriptEngine activation queue. The queue is snapshotted at
+the start of each Step, so a newly queued Script starts no earlier than the
+next Step; a removed Script is skipped unless requeued before its turn, and
+destruction prevents requeueing. Each Script keeps its own `script` global
+through yields. Its initial coroutine root is released after a completed
+`lua_resume`; separately rooted tasks, signal callbacks, and Remote work can
+continue. Shutdown stops new callback admission and cleans tracked Scripts.
+These are runtime lifecycle rules, not a Source authoring grant. `Script` and
 `ModuleScript` clones preserve exact source but reset source-version conflict
 tokens, bytecode, and execution state. Instance-backed `require` restores the
 requiring Instance from its live full path and supports the `@game` alias used

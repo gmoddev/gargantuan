@@ -3,8 +3,11 @@ title: Physics
 description: Integrated rigid and deformable physics ownership and public boundaries.
 ---
 
-This page describes integrated main
-`2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f`. `WorldRoot` coordinates two
+This page describes Engine main
+`b5df1e7b1b80da27158ea794626f90a8ebd8a6d2` (merged source tree
+`7ef2a2b6b2bb34732bbb8335f30dff9588a68f39`). Renderer Foundations 3–5
+and Runtime 6 changed render/runtime internals but did not replace the Box3D
+rigid or CPU XPBD deformable backends. `WorldRoot` coordinates two
 separate engine-owned worlds at Main-domain safe points:
 
 ```text

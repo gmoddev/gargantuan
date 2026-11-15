@@ -1,6 +1,6 @@
 {
   "SchemaVersion": 1,
-  "IntegratedEngineSource": "2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f",
+  "IntegratedEngineSource": "b5df1e7b1b80da27158ea794626f90a8ebd8a6d2",
   "ProvenanceNote": "Last path commit is not proof of meaningful architectural review. LastMeaningfulUpdate uses a declared review date where available; unknown values remain null. New campaign files have no baseline path commit.",
   "Scope": "Every repository-tracked document, license and README plus intended new documentation; Git submodule internals excluded and retain their own ownership.",
   "ClassificationNote": "Current applies to scoped developer guidance, not exhaustive API completeness. Unverified is deliberate; directory names and accepted future designs do not prove implementation. Superseded and outdated are available categories, not assumed from age.",
@@ -106,9 +106,9 @@
       "Purpose": "Known issues",
       "LastMeaningfulUpdate": null,
       "LastPathCommit": {
-        "Sha": "68122b6dd45c8a52e302d666a4c378a816d6effd",
-        "Date": "2026-11-07T05:49:37-05:00",
-        "Subject": "Link expanded physics contracts and record inherited Weld limitation"
+        "Sha": "6e1197240eb107d1cc7b7eb904054858c378a4ab",
+        "Date": "2026-11-14T06:55:23-05:00",
+        "Subject": "Qualify foundation integration and complete renderer distribution contracts"
       },
       "RelevantSourceSubsystem": [
         "assets/classes/Instance.luau",
@@ -226,7 +226,7 @@
       "Path": "devdocs/Compiling.md",
       "Purpose": "Build and test Gargantuan",
       "LastMeaningfulUpdate": {
-        "Date": "2026-11-14",
+        "Date": "2026-11-15",
         "Basis": "Document-declared verification/review date; scope remains revision-specific"
       },
       "LastPathCommit": {
@@ -488,9 +488,9 @@
       "Purpose": "Asset Foundation 2A",
       "LastMeaningfulUpdate": null,
       "LastPathCommit": {
-        "Sha": "dc2459f23d7ff35cba1e9716afe233c86af1b48a",
-        "Date": "2026-11-05T07:44:50-05:00",
-        "Subject": "Integrate canonical geometry and bounded spatial streaming"
+        "Sha": "0958b2aecddc92f6fa4cffda7daba259028e22be",
+        "Date": "2026-11-14T06:50:48-05:00",
+        "Subject": "Add Foundation 4 HDR materials and bounded lighting"
       },
       "RelevantSourceSubsystem": [
         "include/gargantuan/assets/AssetTypes.hpp",
@@ -1200,13 +1200,35 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "devdocs/CurrentArchitecture/DirectionalShadowReuse.md",
+      "Purpose": "Directional shadow reuse",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "0958b2aecddc92f6fa4cffda7daba259028e22be",
+        "Date": "2026-11-14T06:50:48-05:00",
+        "Subject": "Add Foundation 4 HDR materials and bounded lighting"
+      },
+      "RelevantSourceSubsystem": [
+        "src/editor/EditorViewport.cpp",
+        "src/render/DirectionalShadowCache.cpp",
+        "src/render/Renderer.cpp",
+        "src/render/passes/ShadowPass.cpp",
+        "tests/DirectionalShadowCacheTests.cpp",
+        "tests/EditorViewportSmoke.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "devdocs/CurrentArchitecture/EditorHostProtocol.md",
       "Purpose": "EditorHost v0 protocol and Studio boundary",
       "LastMeaningfulUpdate": null,
       "LastPathCommit": {
-        "Sha": "a56a99cc785959383157261a166b22f22f47a7f9",
-        "Date": "2026-11-05T07:48:49-05:00",
-        "Subject": "Compose Input Actions and Script bindings with spatial streaming"
+        "Sha": "0958b2aecddc92f6fa4cffda7daba259028e22be",
+        "Date": "2026-11-14T06:50:48-05:00",
+        "Subject": "Add Foundation 4 HDR materials and bounded lighting"
       },
       "RelevantSourceSubsystem": [
         "Owning source not established; consult traceability matrix"
@@ -1261,9 +1283,9 @@
       "Purpose": "Editor Viewport Presentation Foundation 2",
       "LastMeaningfulUpdate": null,
       "LastPathCommit": {
-        "Sha": "e003b37265a0e036d5ab2deaaa9018893edbca60",
-        "Date": "2026-08-25T19:42:58-04:00",
-        "Subject": "Keep headless Play independent from viewport GPU"
+        "Sha": "0958b2aecddc92f6fa4cffda7daba259028e22be",
+        "Date": "2026-11-14T06:50:48-05:00",
+        "Subject": "Add Foundation 4 HDR materials and bounded lighting"
       },
       "RelevantSourceSubsystem": [
         "Owning source not established; consult traceability matrix"
@@ -1308,9 +1330,9 @@
         "Basis": "Document-declared verification/review date; scope remains revision-specific"
       },
       "LastPathCommit": {
-        "Sha": "4ef69d3c9b494fc5286249c371a78a10e9c926c9",
-        "Date": "2026-08-26T19:52:39-04:00",
-        "Subject": "Add environment and lighting foundation"
+        "Sha": "801e9904ddfcddd7caec463a3d7ab028179556dd",
+        "Date": "2026-11-14T06:51:16-05:00",
+        "Subject": "Add Foundation 5 spatial lighting shadows and guarded scalability"
       },
       "RelevantSourceSubsystem": [
         "assets/classes/Sky.luau",
@@ -1323,6 +1345,28 @@
         "src/render/passes/SkyPass.cpp",
         "tests/EnvironmentLightingBenchmark.cpp",
         "tests/RendererPublicationTests.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/CurrentArchitecture/EnvironmentLightingFoundation4.md",
+      "Purpose": "Renderer Foundation 4 environment lighting",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "0958b2aecddc92f6fa4cffda7daba259028e22be",
+        "Date": "2026-11-14T06:50:48-05:00",
+        "Subject": "Add Foundation 4 HDR materials and bounded lighting"
+      },
+      "RelevantSourceSubsystem": [
+        "assets/shaders/ibl_convolve.frag",
+        "src/render/ImageBasedLighting.cpp",
+        "src/render/passes/OpaquePass.cpp",
+        "src/render/passes/SkyPass.cpp",
+        "tests/EnvironmentLightingReferenceTests.cpp",
+        "tests/ImageBasedLightingGpuTests.cpp"
       ],
       "Status": "Unverified",
       "StatusLabel": "Unverified",
@@ -1375,9 +1419,9 @@
       "Purpose": "Runtime foundation: ownership, identity, jobs, and changes",
       "LastMeaningfulUpdate": null,
       "LastPathCommit": {
-        "Sha": "de95ae6104edbe82165d7463a43447d939a95ebd",
-        "Date": "2026-10-21T00:48:18-04:00",
-        "Subject": "CI Automation Hell"
+        "Sha": "4b32a822a26492907005ce18c3b1045550bfce86",
+        "Date": "2026-11-14T06:51:28-05:00",
+        "Subject": "Scale authoritative runtime publication and harden lifetime safety"
       },
       "RelevantSourceSubsystem": [
         "Owning source not established; consult traceability matrix"
@@ -1480,6 +1524,26 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "devdocs/CurrentArchitecture/HdrEnvironmentAssetsFoundation5.md",
+      "Purpose": "Renderer Foundation 5 HDR environment assets",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "801e9904ddfcddd7caec463a3d7ab028179556dd",
+        "Date": "2026-11-14T06:51:16-05:00",
+        "Subject": "Add Foundation 5 spatial lighting shadows and guarded scalability"
+      },
+      "RelevantSourceSubsystem": [
+        "src/assets/AssetImporter.cpp",
+        "src/render/ImageBasedLighting.cpp",
+        "src/render/TextureProvider.cpp",
+        "src/services/AssetService.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "devdocs/CurrentArchitecture/ImplementationGaps.md",
       "Purpose": "Implementation-readiness and gap audit",
       "LastMeaningfulUpdate": null,
@@ -1504,9 +1568,9 @@
         "Basis": "Document-declared verification/review date; scope remains revision-specific"
       },
       "LastPathCommit": {
-        "Sha": "a56a99cc785959383157261a166b22f22f47a7f9",
-        "Date": "2026-11-05T07:48:49-05:00",
-        "Subject": "Compose Input Actions and Script bindings with spatial streaming"
+        "Sha": "4b32a822a26492907005ce18c3b1045550bfce86",
+        "Date": "2026-11-14T06:51:28-05:00",
+        "Subject": "Scale authoritative runtime publication and harden lifetime safety"
       },
       "RelevantSourceSubsystem": [
         "Owning source not established; consult traceability matrix"
@@ -1653,6 +1717,7 @@
         "assets/runtime/",
         "assets/services/",
         "src/animation/AnimationTrack.cpp",
+        "src/content/docs/api/world-and-rendering.mdx",
         "src/scripting/",
         "tests/PlayerRuntimeTests.cpp"
       ],
@@ -1929,9 +1994,9 @@
         "Basis": "Document-declared verification/review date; scope remains revision-specific"
       },
       "LastPathCommit": {
-        "Sha": "68122b6dd45c8a52e302d666a4c378a816d6effd",
-        "Date": "2026-11-07T05:49:37-05:00",
-        "Subject": "Link expanded physics contracts and record inherited Weld limitation"
+        "Sha": "4b32a822a26492907005ce18c3b1045550bfce86",
+        "Date": "2026-11-14T06:51:28-05:00",
+        "Subject": "Scale authoritative runtime publication and harden lifetime safety"
       },
       "RelevantSourceSubsystem": [
         "cmake/Box3DCompatibility.cmake",
@@ -2761,9 +2826,9 @@
         "Basis": "Document-declared verification/review date; scope remains revision-specific"
       },
       "LastPathCommit": {
-        "Sha": "88429855047f7af1848ad785566a3efd01e7c1cf",
-        "Date": "2026-08-23T00:39:57-04:00",
-        "Subject": "Implement renderer and soft-body foundations"
+        "Sha": "63686a833c7360979d4e16dcf988033cbc0fbe50",
+        "Date": "2026-11-14T06:50:34-05:00",
+        "Subject": "Establish Renderer Foundation 3 material pipeline and ownership"
       },
       "RelevantSourceSubsystem": [
         "assets/filament/benchmark.mat",
@@ -2784,6 +2849,7 @@
       "ObsoleteTermMentions": [
         "FILAMENT",
         "Filament",
+        "OpenGL",
         "filament"
       ]
     },
@@ -2845,6 +2911,241 @@
         "OpenGL",
         "filament"
       ]
+    },
+    {
+      "Path": "devdocs/CurrentArchitecture/RendererFoundation3.md",
+      "Purpose": "Renderer Foundation 3",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "63686a833c7360979d4e16dcf988033cbc0fbe50",
+        "Date": "2026-11-14T06:50:34-05:00",
+        "Subject": "Establish Renderer Foundation 3 material pipeline and ownership"
+      },
+      "RelevantSourceSubsystem": [
+        "assets/shaders/opaque.frag",
+        "include/gargantuan/render/RenderPublication.hpp",
+        "src/FrameSkipper.cpp",
+        "src/render/passes/OpaquePass.cpp",
+        "src/services/AssetService.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": [
+        "Filament",
+        "filament"
+      ]
+    },
+    {
+      "Path": "devdocs/CurrentArchitecture/RendererFoundation4.md",
+      "Purpose": "Renderer Foundation 4",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "0958b2aecddc92f6fa4cffda7daba259028e22be",
+        "Date": "2026-11-14T06:50:48-05:00",
+        "Subject": "Add Foundation 4 HDR materials and bounded lighting"
+      },
+      "RelevantSourceSubsystem": [
+        "assets/shaders/scene-color.glsl",
+        "src/editor/EditorViewport.cpp",
+        "src/render/Renderer.cpp",
+        "src/render/passes/SceneResolvePass.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/CurrentArchitecture/RendererFoundation4Opaque.md",
+      "Purpose": "Renderer Foundation 4 opaque ordering",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "0958b2aecddc92f6fa4cffda7daba259028e22be",
+        "Date": "2026-11-14T06:50:48-05:00",
+        "Subject": "Add Foundation 4 HDR materials and bounded lighting"
+      },
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/CurrentArchitecture/RendererFoundation5.md",
+      "Purpose": "Renderer Foundation 5",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "801e9904ddfcddd7caec463a3d7ab028179556dd",
+        "Date": "2026-11-14T06:51:16-05:00",
+        "Subject": "Add Foundation 5 spatial lighting shadows and guarded scalability"
+      },
+      "RelevantSourceSubsystem": [
+        "src/render/ReflectionProbes.cpp",
+        "src/render/RenderPublisher.cpp",
+        "src/render/passes/OpaquePass.cpp",
+        "src/render/passes/ShadowPass.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": [
+        "Filament"
+      ]
+    },
+    {
+      "Path": "devdocs/CurrentArchitecture/RendererFoundation5ContiguousInstancing.md",
+      "Purpose": "Renderer Foundation 5 contiguous instancing experiment",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "801e9904ddfcddd7caec463a3d7ab028179556dd",
+        "Date": "2026-11-14T06:51:16-05:00",
+        "Subject": "Add Foundation 5 spatial lighting shadows and guarded scalability"
+      },
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/CurrentArchitecture/RendererFoundation5Cpu.md",
+      "Purpose": "Renderer Foundation 5 CPU attribution",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "7bd9f54866427aecba93fb76d2a65d2a536d5bcd",
+        "Date": "2026-11-14T07:50:27-05:00",
+        "Subject": "Keep SDR pass timing attribution stateless"
+      },
+      "RelevantSourceSubsystem": [
+        "tests/RendererCpuMicroprobe.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/CurrentArchitecture/RendererFoundation5InstancingPrototype.md",
+      "Purpose": "Renderer Foundation 5 instancing prototype",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "801e9904ddfcddd7caec463a3d7ab028179556dd",
+        "Date": "2026-11-14T06:51:16-05:00",
+        "Subject": "Add Foundation 5 spatial lighting shadows and guarded scalability"
+      },
+      "RelevantSourceSubsystem": [
+        "tests/RendererInstanceRecordCacheTests.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/CurrentArchitecture/RendererFoundation5SceneEnvelope.md",
+      "Purpose": "Renderer Foundation 5 scene envelope experiment",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "801e9904ddfcddd7caec463a3d7ab028179556dd",
+        "Date": "2026-11-14T06:51:16-05:00",
+        "Subject": "Add Foundation 5 spatial lighting shadows and guarded scalability"
+      },
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/CurrentArchitecture/RendererFoundation5Shadows.md",
+      "Purpose": "Renderer Foundation 5 shadow prototype",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "801e9904ddfcddd7caec463a3d7ab028179556dd",
+        "Date": "2026-11-14T06:51:16-05:00",
+        "Subject": "Add Foundation 5 spatial lighting shadows and guarded scalability"
+      },
+      "RelevantSourceSubsystem": [
+        "src/render/DirectionalShadowCache.cpp",
+        "src/render/passes/ShadowPass.cpp",
+        "src/render/sdl/SDLDirectionalCascadePlan.hpp",
+        "src/render/sdl/SDLDirectionalShadowCache.hpp",
+        "src/render/sdl/SDLShadowResources.hpp",
+        "src/render/sdl/SDLSpotShadowAtlas.hpp",
+        "tests/ShadowFoundation5GpuTests.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/CurrentArchitecture/RendererFoundation5SpatialLighting.md",
+      "Purpose": "Renderer Foundation 5 spatial lighting contracts",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "801e9904ddfcddd7caec463a3d7ab028179556dd",
+        "Date": "2026-11-14T06:51:16-05:00",
+        "Subject": "Add Foundation 5 spatial lighting shadows and guarded scalability"
+      },
+      "RelevantSourceSubsystem": [
+        "assets/classes/ReflectionProbe.luau",
+        "include/gargantuan/environment/ReflectionProbeSemantics.hpp",
+        "src/render/RenderPublisher.cpp",
+        "tests/ReflectionProbeSemanticsTests.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/CurrentArchitecture/RendererFoundation5StudioHandoff.md",
+      "Purpose": "Renderer Foundation 5 Engine to Studio handoff",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "801e9904ddfcddd7caec463a3d7ab028179556dd",
+        "Date": "2026-11-14T06:51:16-05:00",
+        "Subject": "Add Foundation 5 spatial lighting shadows and guarded scalability"
+      },
+      "RelevantSourceSubsystem": [
+        "assets/classes/LocalLight.luau",
+        "assets/classes/ReflectionProbe.luau",
+        "assets/classes/Sky.luau",
+        "assets/classes/SpotLight.luau",
+        "assets/services/Lighting.luau",
+        "src/assets/AssetImporter.cpp",
+        "src/classes/ReflectionProbe.cpp",
+        "src/editor/EditorHost.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/CurrentArchitecture/RendererFoundation5VisibilityExperiment.md",
+      "Purpose": "Renderer Foundation 5 visibility experiment",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "801e9904ddfcddd7caec463a3d7ab028179556dd",
+        "Date": "2026-11-14T06:51:16-05:00",
+        "Subject": "Add Foundation 5 spatial lighting shadows and guarded scalability"
+      },
+      "RelevantSourceSubsystem": [
+        "tests/RendererVisibilityHierarchyProbe.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
     },
     {
       "Path": "devdocs/CurrentArchitecture/ReplicatedStorage.md",
@@ -3063,9 +3364,9 @@
         "Basis": "Document-declared verification/review date; scope remains revision-specific"
       },
       "LastPathCommit": {
-        "Sha": "615ff24b1c2530de09fc2837dc1f773a11a6b501",
-        "Date": "2026-08-21T18:38:08-04:00",
-        "Subject": "Productize Luau-first player runtime"
+        "Sha": "4b32a822a26492907005ce18c3b1045550bfce86",
+        "Date": "2026-11-14T06:51:28-05:00",
+        "Subject": "Scale authoritative runtime publication and harden lifetime safety"
       },
       "RelevantSourceSubsystem": [
         "include/gargantuan/scripting/ScriptSecurity.hpp",
@@ -3286,9 +3587,9 @@
         "Basis": "Document-declared verification/review date; scope remains revision-specific"
       },
       "LastPathCommit": {
-        "Sha": "003da1c8044fe883a269a33bcc47238992cdc817",
-        "Date": "2026-08-24T00:44:23-04:00",
-        "Subject": "Harden runtime lifecycle and editor invariants"
+        "Sha": "801e9904ddfcddd7caec463a3d7ab028179556dd",
+        "Date": "2026-11-14T06:51:16-05:00",
+        "Subject": "Add Foundation 5 spatial lighting shadows and guarded scalability"
       },
       "RelevantSourceSubsystem": [
         "include/gargantuan/filesystem/BaseFilesystem.hpp",
@@ -3337,9 +3638,9 @@
       "Purpose": "Standalone Packaging Foundation 1",
       "LastMeaningfulUpdate": null,
       "LastPathCommit": {
-        "Sha": "561c3fb79f96f5b0b3c448886118a7d1b9c4fe40",
-        "Date": "2026-09-07T20:25:48-04:00",
-        "Subject": "Validate and document content availability"
+        "Sha": "6e1197240eb107d1cc7b7eb904054858c378a4ab",
+        "Date": "2026-11-14T06:55:23-05:00",
+        "Subject": "Qualify foundation integration and complete renderer distribution contracts"
       },
       "RelevantSourceSubsystem": [
         "Owning source not established; consult traceability matrix"
@@ -3480,8 +3781,11 @@
     },
     {
       "Path": "devdocs/DocumentationReconstruction/AccuracyReport.md",
-      "Purpose": "Documentation accuracy and integration reconciliation",
-      "LastMeaningfulUpdate": null,
+      "Purpose": "Documentation accuracy and integrated-source reconciliation",
+      "LastMeaningfulUpdate": {
+        "Date": "2026-11-15",
+        "Basis": "Document-declared verification/review date; scope remains revision-specific"
+      },
       "LastPathCommit": null,
       "RelevantSourceSubsystem": [
         "Owning source not established; consult traceability matrix"
@@ -3523,7 +3827,6 @@
       "RelevantSourceSubsystem": [
         "include/gargantuan/editor/EditorHost.hpp",
         "include/gargantuan/network/",
-        "src/GargantuanStudio/StudioWorkspaceShell.cs",
         "src/content/docs/developing/editor-host.mdx",
         "src/content/docs/developing/future-architecture-concerns.mdx",
         "src/editor/EditorHost.cpp",
@@ -3550,15 +3853,15 @@
         "include/gargantuan/physics/PhysicsTypes.hpp",
         "include/gargantuan/render/RenderPublication.hpp",
         "include/gargantuan/render/SDLRenderer.hpp",
+        "src/assets/AssetImporter.cpp",
         "src/classes/WorldRoot.cpp",
+        "src/editor/EditorViewport.cpp",
         "src/physics/Box3DAdvancedQueries.inl",
         "src/physics/Box3DPhysicsBackend.cpp",
+        "src/render/InstanceGpuCache.cpp",
         "src/render/RenderProjection.cpp",
         "src/render/RenderPublisher.cpp",
-        "src/render/Renderer.cpp",
-        "src/render/passes/",
-        "src/render/passes/OpaquePass.cpp",
-        "src/render/passes/ShadowPass.cpp"
+        "src/render/Renderer.cpp"
       ],
       "Status": "Current",
       "StatusLabel": "Current and authoritative",
@@ -4121,6 +4424,24 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "devdocs/Validation/EngineFoundations3To6Integration.md",
+      "Purpose": "Engine Foundation 3–6 mainline integration",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "7bd9f54866427aecba93fb76d2a65d2a536d5bcd",
+        "Date": "2026-11-14T07:50:27-05:00",
+        "Subject": "Keep SDR pass timing attribution stateless"
+      },
+      "RelevantSourceSubsystem": [
+        "tests/Foundation3LFinalAcceptance.md",
+        "tools/ci/VerifyEngineFoundationIntegration.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "devdocs/Validation/FirstCompleteGame.md",
       "Purpose": "First complete game validation",
       "LastMeaningfulUpdate": null,
@@ -4292,6 +4613,60 @@
       ]
     },
     {
+      "Path": "devdocs/Validation/RendererFoundation3Qualification.md",
+      "Purpose": "Renderer Foundation 3 qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "63686a833c7360979d4e16dcf988033cbc0fbe50",
+        "Date": "2026-11-14T06:50:34-05:00",
+        "Subject": "Establish Renderer Foundation 3 material pipeline and ownership"
+      },
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": [
+        "Filament",
+        "filament"
+      ]
+    },
+    {
+      "Path": "devdocs/Validation/RendererFoundation4Qualification.md",
+      "Purpose": "Renderer Foundation 4 qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "0958b2aecddc92f6fa4cffda7daba259028e22be",
+        "Date": "2026-11-14T06:50:48-05:00",
+        "Subject": "Add Foundation 4 HDR materials and bounded lighting"
+      },
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/RendererFoundation5Qualification.md",
+      "Purpose": "Renderer Foundation 5 qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "801e9904ddfcddd7caec463a3d7ab028179556dd",
+        "Date": "2026-11-14T06:51:16-05:00",
+        "Subject": "Add Foundation 5 spatial lighting shadows and guarded scalability"
+      },
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "devdocs/Validation/ReplicatedStorage20261029.md",
       "Purpose": "ReplicatedStorage implementation checkpoint — 2026-10-29",
       "LastMeaningfulUpdate": null,
@@ -4302,6 +4677,40 @@
       },
       "RelevantSourceSubsystem": [
         "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/RuntimeFoundation6Qualification.md",
+      "Purpose": "Runtime Foundation 6 qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "4b32a822a26492907005ce18c3b1045550bfce86",
+        "Date": "2026-11-14T06:51:28-05:00",
+        "Subject": "Scale authoritative runtime publication and harden lifetime safety"
+      },
+      "RelevantSourceSubsystem": [
+        "tools/classgen/"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/RuntimeFoundation6RealisticPublicationProbe.md",
+      "Purpose": "Runtime Foundation 6 realistic publication probe",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "4b32a822a26492907005ce18c3b1045550bfce86",
+        "Date": "2026-11-14T06:51:28-05:00",
+        "Subject": "Scale authoritative runtime publication and harden lifetime safety"
+      },
+      "RelevantSourceSubsystem": [
+        "tests/Runtime6RealisticPublicationProbe.cpp"
       ],
       "Status": "Historical",
       "StatusLabel": "Historical evidence requiring preservation",
@@ -4447,9 +4856,9 @@
         "Basis": "Document-declared verification/review date; scope remains revision-specific"
       },
       "LastPathCommit": {
-        "Sha": "a56a99cc785959383157261a166b22f22f47a7f9",
-        "Date": "2026-11-05T07:48:49-05:00",
-        "Subject": "Compose Input Actions and Script bindings with spatial streaming"
+        "Sha": "801e9904ddfcddd7caec463a3d7ab028179556dd",
+        "Date": "2026-11-14T06:51:16-05:00",
+        "Subject": "Add Foundation 5 spatial lighting shadows and guarded scalability"
       },
       "RelevantSourceSubsystem": [
         "include/gargantuan/runtime/",
@@ -4863,9 +5272,9 @@
       "Purpose": "Render Publication",
       "LastMeaningfulUpdate": null,
       "LastPathCommit": {
-        "Sha": "41efd95a28162ad7158bfe8ae4c9f0be25e0d51a",
-        "Date": "2026-09-21T21:30:34-04:00",
-        "Subject": "Fix scene depth precision and qualify KI-008 raw rendering"
+        "Sha": "4b32a822a26492907005ce18c3b1045550bfce86",
+        "Date": "2026-11-14T06:51:28-05:00",
+        "Subject": "Scale authoritative runtime publication and harden lifetime safety"
       },
       "RelevantSourceSubsystem": [
         "Owning source not established; consult traceability matrix"
@@ -4884,16 +5293,17 @@
       "LastPathCommit": null,
       "RelevantSourceSubsystem": [
         "assets/shaders/opaque.frag",
-        "include/gargantuan/render/RenderEnvironment.hpp",
         "include/gargantuan/render/RenderPublication.hpp",
-        "include/gargantuan/render/SDLRenderer.hpp",
         "src/render/RenderProjection.cpp",
         "src/render/Renderer.cpp",
         "src/render/passes/OpaquePass.cpp",
         "src/render/passes/ShadowPass.cpp",
-        "tests/EnvironmentLightingBenchmark.cpp",
+        "tests/EnvironmentLightingReferenceTests.cpp",
+        "tests/ReflectionProbeGpuTests.cpp",
         "tests/RendererDepthTests.cpp",
-        "tests/RendererPublicationTests.cpp"
+        "tests/RendererPublicationTests.cpp",
+        "tests/Runtime6RealisticPublicationProbe.cpp",
+        "tests/ShadowFoundation5GpuTests.cpp"
       ],
       "Status": "Current",
       "StatusLabel": "Current and authoritative",
@@ -4925,9 +5335,9 @@
       "Purpose": "Runtime Schema",
       "LastMeaningfulUpdate": null,
       "LastPathCommit": {
-        "Sha": "a56a99cc785959383157261a166b22f22f47a7f9",
-        "Date": "2026-11-05T07:48:49-05:00",
-        "Subject": "Compose Input Actions and Script bindings with spatial streaming"
+        "Sha": "4b32a822a26492907005ce18c3b1045550bfce86",
+        "Date": "2026-11-14T06:51:28-05:00",
+        "Subject": "Scale authoritative runtime publication and harden lifetime safety"
       },
       "RelevantSourceSubsystem": [
         "Owning source not established; consult traceability matrix"
@@ -5105,6 +5515,23 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "src/assets/third_party/README.md",
+      "Purpose": "stb_image",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "801e9904ddfcddd7caec463a3d7ab028179556dd",
+        "Date": "2026-11-14T06:51:16-05:00",
+        "Subject": "Add Foundation 5 spatial lighting shadows and guarded scalability"
+      },
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Inspect owning source before promoting to current authority",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "tests/Foundation3LFinalAcceptance.md",
       "Purpose": "Final Foundation 3L evidence conjunction",
       "LastMeaningfulUpdate": {
@@ -5219,6 +5646,23 @@
         "tests/NewPhysicalGameSessionFarmNodeTlsTests.ps1",
         "tests/PhysicalFarmNodeResourcesTests.ps1",
         "tests/PhysicalGameSessionFarmNodeTests.ps1"
+      ],
+      "Status": "Incomplete",
+      "StatusLabel": "Current but incomplete",
+      "ProposedAction": "Retain exact qualification/tool contract; scope certification to recorded source and evidence",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "tests/fixtures/Foundation3LQualifiedScale/README.md",
+      "Purpose": "Foundation 3L qualified scale content",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": {
+        "Sha": "4b32a822a26492907005ce18c3b1045550bfce86",
+        "Date": "2026-11-14T06:51:28-05:00",
+        "Subject": "Scale authoritative runtime publication and harden lifetime safety"
+      },
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
       ],
       "Status": "Incomplete",
       "StatusLabel": "Current but incomplete",

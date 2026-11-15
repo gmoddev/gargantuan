@@ -1770,7 +1770,7 @@
       "Name": "Instance",
       "Kind": "Class",
       "Source": "assets/classes/Instance.luau",
-      "SourceSha256": "5d82ffbf0ed1272671ace4e945be7e09d2fa15de802052bb13a80e0adfb7f1c8",
+      "SourceSha256": "abe97266e6f2924ccf0c6232f0a9b2549af0710144521c40e47a6f99698d164a",
       "Description": "Abstract class for all instances which can be part of the DataModel",
       "Extends": null,
       "Abstract": true,
@@ -1825,7 +1825,8 @@
       "Methods": [
         {
           "Name": "ClearAllChildren",
-          "Description": "Unparents all direct children of this instance"
+          "Description": "Unparents all direct children of this instance",
+          "RequiredCapability": "MutateDataModel"
         },
         {
           "Name": "Clone",
@@ -1834,7 +1835,8 @@
         },
         {
           "Name": "Destroy",
-          "Description": "Destroys this instance"
+          "Description": "Destroys this instance",
+          "RequiredCapability": "MutateDataModel"
         },
         {
           "Name": "FindFirstAncestor",
@@ -2300,7 +2302,7 @@
       "Name": "Lighting",
       "Kind": "Service",
       "Source": "assets/services/Lighting.luau",
-      "SourceSha256": "49d6ca20615feec5d7f4e99fae8d89925e92f4f56b629fd1edee2ffb7aa649fb",
+      "SourceSha256": "15acaa8d7df947f6fe1db32b3e70c87619c27d6916f8b7da848e1829c2869c94",
       "Description": "Owns the authored global environment and lighting semantics for one DataModel.",
       "Extends": "Instance",
       "Abstract": false,
@@ -2356,6 +2358,18 @@
           "Category": "Environment",
           "EditorHint": "ColorComponents",
           "Range": "{ minimum = 0, maximum = 1 }"
+        },
+        {
+          "Name": "EnvironmentRotation",
+          "Description": "Yaw in degrees around world +Y for the visible Sky and its image-based lighting.",
+          "Type": "t.Float",
+          "Unmodified": "0.0f",
+          "OverrideRead": "GetEnvironmentRotation",
+          "OverrideWrite": "SetEnvironmentRotation",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Environment",
+          "Range": "{ minimum = -180, maximum = 180 }"
         },
         {
           "Name": "ExposureCompensation",
@@ -2418,6 +2432,38 @@
           "Range": "{ minimum = 0, maximum = 100000 }"
         },
         {
+          "Name": "IblIntensity",
+          "Description": "Linear multiplier for diffuse and specular image-based lighting.",
+          "Type": "t.Float",
+          "Unmodified": "1.0f",
+          "OverrideRead": "GetIblIntensity",
+          "OverrideWrite": "SetIblIntensity",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Environment",
+          "Range": "{ minimum = 0, maximum = 8 }"
+        },
+        {
+          "Name": "ShadowCascadeCount",
+          "Description": "Camera-relative directional cascade count; zero retains the existing fixed shadow volume.",
+          "Type": "t.Integer",
+          "Unmodified": "0",
+          "Range": "{ minimum = 0, maximum = 4 }",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Shadows"
+        },
+        {
+          "Name": "ShadowDistance",
+          "Description": "Maximum camera-relative directional shadow coverage in world units.",
+          "Type": "t.Float",
+          "Unmodified": "250.0f",
+          "Range": "{ minimum = 1, maximum = 4096 }",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Shadows"
+        },
+        {
           "Name": "SunColor",
           "Description": "Art-directable color of the global directional sun.",
           "Type": "t.Color3",
@@ -2429,6 +2475,104 @@
           "Category": "Lighting",
           "EditorHint": "ColorComponents",
           "Range": "{ minimum = 0, maximum = 1 }"
+        },
+        {
+          "Name": "ToneMapping",
+          "Description": "Tone-mapping operator applied to exposed world color before GUI composition.",
+          "Type": "t.EnumItem(\"ToneMappingMode\")",
+          "Unmodified": "Enums::ToneMappingMode::Filmic",
+          "OverrideRead": "GetToneMapping",
+          "OverrideWrite": "SetToneMapping",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Exposure"
+        }
+      ],
+      "Methods": [],
+      "Signals": []
+    },
+    {
+      "Name": "LocalLight",
+      "Kind": "Class",
+      "Source": "assets/classes/LocalLight.luau",
+      "SourceSha256": "f0820a3352d5519b4b00ca5f3ace056eef5e71ece98b5daa955dd387f029b4f6",
+      "Description": "Abstract emitter with a rigid pose relative to its nearest BasePart or WorldRoot.",
+      "Extends": "Instance",
+      "Abstract": true,
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [
+        {
+          "Name": "LightCFrame",
+          "Description": "Rigid emitter pose relative to the nearest BasePart, or in WorldRoot coordinates without a BasePart.",
+          "Type": "t.CFrame",
+          "Unmodified": "gargantuan::CFrame()",
+          "OverrideRead": "GetLightCFrame",
+          "OverrideWrite": "SetLightCFrame",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Transform"
+        },
+        {
+          "Name": "LightColor",
+          "Description": "Linear RGB color of the emitted light.",
+          "Type": "t.Color3",
+          "Unmodified": "Color3(1.0f, 1.0f, 1.0f)",
+          "OverrideRead": "GetLightColor",
+          "OverrideWrite": "SetLightColor",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Lighting"
+        },
+        {
+          "Name": "LightEnabled",
+          "Description": "Whether the emitter contributes to the world lighting.",
+          "Type": "t.Bool",
+          "Unmodified": "true",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Lighting"
+        },
+        {
+          "Name": "LightIntensity",
+          "Description": "Candela-like scale for inverse-square falloff, from 0 to 4096.",
+          "Type": "t.Float",
+          "Unmodified": "16.0f",
+          "OverrideRead": "GetLightIntensity",
+          "OverrideWrite": "SetLightIntensity",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Lighting"
+        },
+        {
+          "Name": "LightRange",
+          "Description": "World-unit radius at which attenuation reaches zero, from 0.01 to 1024.",
+          "Type": "t.Float",
+          "Unmodified": "16.0f",
+          "OverrideRead": "GetLightRange",
+          "OverrideWrite": "SetLightRange",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Lighting"
+        },
+        {
+          "Name": "LightShadowPriority",
+          "Description": "Priority within the finite local-shadow budget, with stable identity ties.",
+          "Type": "t.Integer",
+          "Unmodified": "0",
+          "Range": "{ minimum = -1024, maximum = 1024 }",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Shadows"
+        },
+        {
+          "Name": "LightShadows",
+          "Description": "Requests bounded dynamic shadows; unsupported or unadmitted lights remain unshadowed.",
+          "Type": "t.Bool",
+          "Unmodified": "false",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Shadows"
         }
       ],
       "Methods": [],
@@ -2708,6 +2852,20 @@
       ]
     },
     {
+      "Name": "PointLight",
+      "Kind": "Class",
+      "Source": "assets/classes/PointLight.luau",
+      "SourceSha256": "a243213ca72f78237e96a2f2fb9d8d931207b28a11a5e0ecb25eeb9ea6db2011",
+      "Description": "An omnidirectional local emitter.",
+      "Extends": "LocalLight",
+      "Abstract": false,
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [],
+      "Methods": [],
+      "Signals": []
+    },
+    {
       "Name": "ProcessService",
       "Kind": "Service",
       "Source": "assets/services/ProcessService.luau",
@@ -2818,6 +2976,177 @@
           "Args": "{ t.Instance(\"Player\") }"
         }
       ]
+    },
+    {
+      "Name": "ReflectionProbe",
+      "Kind": "Class",
+      "Source": "assets/classes/ReflectionProbe.luau",
+      "SourceSha256": "2d2fa71b1a31dba082eb8726bb4976fcd6a2ecc4db967ac8ee7c32814971c8bf",
+      "Description": "Bounded local environment source with a spatial influence volume; the global Sky remains independent.",
+      "Extends": "Instance",
+      "Abstract": false,
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [
+        {
+          "Name": "ProbeBlendDistance",
+          "Description": "Inner boundary fade distance in world units.",
+          "Type": "t.Float",
+          "Unmodified": "1.0f",
+          "OverrideRead": "GetProbeBlendDistance",
+          "OverrideWrite": "SetProbeBlendDistance",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Environment"
+        },
+        {
+          "Name": "ProbeBoxProjection",
+          "Description": "Correct specular parallax against the oriented influence box.",
+          "Type": "t.Bool",
+          "Unmodified": "true",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Environment"
+        },
+        {
+          "Name": "ProbeCFrame",
+          "Description": "Rigid influence pose relative to the nearest BasePart, otherwise world-relative.",
+          "Type": "t.CFrame",
+          "Unmodified": "gargantuan::CFrame()",
+          "OverrideRead": "GetProbeCFrame",
+          "OverrideWrite": "SetProbeCFrame",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Environment"
+        },
+        {
+          "Name": "ProbeCaptureOffset",
+          "Description": "Captured cube origin in influence-box local coordinates.",
+          "Type": "t.Vector3",
+          "Unmodified": "glm::vec3(0.0f)",
+          "OverrideRead": "GetProbeCaptureOffset",
+          "OverrideWrite": "SetProbeCaptureOffset",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Environment"
+        },
+        {
+          "Name": "ProbeEnabled",
+          "Description": "Participates in local environment lighting.",
+          "Type": "t.Bool",
+          "Unmodified": "true",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Environment"
+        },
+        {
+          "Name": "ProbeIntensity",
+          "Description": "Linear multiplier for this probe radiance.",
+          "Type": "t.Float",
+          "Unmodified": "1.0f",
+          "OverrideRead": "GetProbeIntensity",
+          "OverrideWrite": "SetProbeIntensity",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Environment"
+        },
+        {
+          "Name": "ProbeNegativeX",
+          "Description": "Strict Image asset reference in cube-local NegativeX direction.",
+          "Type": "t.String",
+          "Unmodified": "\"\"",
+          "OverrideRead": "GetProbeNegativeX",
+          "OverrideWrite": "SetProbeNegativeX",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Environment",
+          "EditorHint": "AssetReference:Image"
+        },
+        {
+          "Name": "ProbeNegativeY",
+          "Description": "Strict Image asset reference in cube-local NegativeY direction.",
+          "Type": "t.String",
+          "Unmodified": "\"\"",
+          "OverrideRead": "GetProbeNegativeY",
+          "OverrideWrite": "SetProbeNegativeY",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Environment",
+          "EditorHint": "AssetReference:Image"
+        },
+        {
+          "Name": "ProbeNegativeZ",
+          "Description": "Strict Image asset reference in cube-local NegativeZ direction.",
+          "Type": "t.String",
+          "Unmodified": "\"\"",
+          "OverrideRead": "GetProbeNegativeZ",
+          "OverrideWrite": "SetProbeNegativeZ",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Environment",
+          "EditorHint": "AssetReference:Image"
+        },
+        {
+          "Name": "ProbePositiveX",
+          "Description": "Strict Image asset reference in cube-local PositiveX direction.",
+          "Type": "t.String",
+          "Unmodified": "\"\"",
+          "OverrideRead": "GetProbePositiveX",
+          "OverrideWrite": "SetProbePositiveX",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Environment",
+          "EditorHint": "AssetReference:Image"
+        },
+        {
+          "Name": "ProbePositiveY",
+          "Description": "Strict Image asset reference in cube-local PositiveY direction.",
+          "Type": "t.String",
+          "Unmodified": "\"\"",
+          "OverrideRead": "GetProbePositiveY",
+          "OverrideWrite": "SetProbePositiveY",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Environment",
+          "EditorHint": "AssetReference:Image"
+        },
+        {
+          "Name": "ProbePositiveZ",
+          "Description": "Strict Image asset reference in cube-local PositiveZ direction.",
+          "Type": "t.String",
+          "Unmodified": "\"\"",
+          "OverrideRead": "GetProbePositiveZ",
+          "OverrideWrite": "SetProbePositiveZ",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Environment",
+          "EditorHint": "AssetReference:Image"
+        },
+        {
+          "Name": "ProbePriority",
+          "Description": "Higher priorities consume local influence before lower priorities.",
+          "Type": "t.Integer",
+          "Unmodified": "0",
+          "OverrideRead": "GetProbePriority",
+          "OverrideWrite": "SetProbePriority",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Environment"
+        },
+        {
+          "Name": "ProbeSize",
+          "Description": "Full oriented influence-box dimensions in world units.",
+          "Type": "t.Vector3",
+          "Unmodified": "glm::vec3(16.0f)",
+          "OverrideRead": "GetProbeSize",
+          "OverrideWrite": "SetProbeSize",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Environment"
+        }
+      ],
+      "Methods": [],
+      "Signals": []
     },
     {
       "Name": "RemoteBase",
@@ -3566,6 +3895,32 @@
           "Description": "Fired once when non-looped playback reaches the clip boundary."
         }
       ]
+    },
+    {
+      "Name": "SpotLight",
+      "Kind": "Class",
+      "Source": "assets/classes/SpotLight.luau",
+      "SourceSha256": "62e8fdd0a9d4c971d59f456092ce9d7a5ab7c32b25d93e65e2adbc7ac88f43ce",
+      "Description": "A local emitter directed along its LightCFrame's negative Z axis.",
+      "Extends": "LocalLight",
+      "Abstract": false,
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [
+        {
+          "Name": "LightConeAngles",
+          "Description": "Inner and outer cone half angles in degrees. The outer angle is 1 to 89 degrees and the inner angle is 0 through the outer angle.",
+          "Type": "t.Vector2",
+          "Unmodified": "Vector2(20.0f, 35.0f)",
+          "OverrideRead": "GetLightConeAngles",
+          "OverrideWrite": "SetLightConeAngles",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Lighting"
+        }
+      ],
+      "Methods": [],
+      "Signals": []
     },
     {
       "Name": "Tags",
@@ -4590,6 +4945,12 @@
       ]
     },
     {
+      "Path": "include/gargantuan/classes/LocalLight.hpp",
+      "Types": [
+        "LocalLight"
+      ]
+    },
+    {
       "Path": "include/gargantuan/classes/LuaSourceContainer.hpp",
       "Types": [
         "BytecodeCompileStatus",
@@ -4624,9 +4985,21 @@
       ]
     },
     {
+      "Path": "include/gargantuan/classes/PointLight.hpp",
+      "Types": [
+        "PointLight"
+      ]
+    },
+    {
       "Path": "include/gargantuan/classes/ProximityPrompt.hpp",
       "Types": [
         "ProximityPrompt"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/classes/ReflectionProbe.hpp",
+      "Types": [
+        "ReflectionProbe"
       ]
     },
     {
@@ -4713,6 +5086,12 @@
       ]
     },
     {
+      "Path": "include/gargantuan/classes/SpotLight.hpp",
+      "Types": [
+        "SpotLight"
+      ]
+    },
+    {
       "Path": "include/gargantuan/classes/TextBox.hpp",
       "Types": [
         "GuiRuntime",
@@ -4763,7 +5142,12 @@
       "Path": "include/gargantuan/classes/WorldRoot.hpp",
       "Types": [
         "AssetService",
+        "CFrameDirtyCallbackProfile",
+        "DynamicReadbackPolicy",
+        "DynamicReadbackRecord",
+        "LocalLight",
         "OverlapResult",
+        "ReflectionProbe",
         "WorldRaycastResult",
         "WorldRoot",
         "WorldRootTestAccess"
@@ -4883,6 +5267,7 @@
       "Path": "include/gargantuan/datatypes/Signal.hpp",
       "Types": [
         "ScopedSignalDeferral",
+        "SignalDispatchProfile",
         "StackValue",
         "UserSignal"
       ]
@@ -4934,7 +5319,8 @@
         "EditorViewportCaptureView",
         "EditorViewportFrame",
         "EditorViewportPick",
-        "EditorViewportRenderer"
+        "EditorViewportRenderer",
+        "SDLRendererMetrics"
       ]
     },
     {
@@ -4983,6 +5369,12 @@
       "Path": "include/gargantuan/environment/EnvironmentSemantics.hpp",
       "Types": [
         "EnvironmentSunState"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/environment/ReflectionProbeSemantics.hpp",
+      "Types": [
+        "ReflectionProbeBlend"
       ]
     },
     {
@@ -5671,13 +6063,18 @@
     {
       "Path": "include/gargantuan/render/RenderEnvironment.hpp",
       "Types": [
+        "RenderDirectionalShadowSettings",
         "RenderEnvironmentState",
         "RenderFogState",
+        "RenderLocalLightKind",
+        "RenderLocalLightState",
+        "RenderReflectionProbeState",
         "RenderSkyFace",
         "RenderSkyFaceState",
         "RenderSkyState",
         "RenderTextureIdentity",
-        "RenderTextureIdentityHash"
+        "RenderTextureIdentityHash",
+        "RenderToneMapping"
       ]
     },
     {
@@ -5700,8 +6097,11 @@
       "Types": [
         "MeshEntry",
         "RenderProjectedObject",
+        "RenderProjectedTraversal",
         "RenderProjection",
         "RenderProjectionChanges",
+        "RenderSceneEnvelope",
+        "RenderSceneEnvelopeResult",
         "TextureEntry"
       ]
     },
@@ -5715,6 +6115,7 @@
         "RenderBounds",
         "RenderFrameState",
         "RenderMaterialState",
+        "RenderMaterialTextureSlot",
         "RenderMeshCreate",
         "RenderMeshIdentity",
         "RenderMeshIdentityHash",
@@ -5726,13 +6127,18 @@
         "RenderOpacityMode",
         "RenderPrimitiveMaterialState",
         "RenderPublication",
+        "RenderSamplerState",
+        "RenderShadingModel",
         "RenderSkeletonIdentity",
         "RenderSkinInfluence",
         "RenderSkinPalette",
         "RenderTextureCreate",
         "RenderTextureFormat",
+        "RenderTextureMagFilter",
+        "RenderTextureMinFilter",
         "RenderTextureRemove",
         "RenderTextureUpdate",
+        "RenderTextureWrap",
         "RenderUiBatch",
         "RenderUiClipRect",
         "RenderUiFrame",

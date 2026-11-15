@@ -17,7 +17,7 @@ Root = pathlib.Path(__file__).resolve().parents[2]
 Content = Root / "docs/src/content/docs"
 Artifacts = Root / "devdocs/DocumentationReconstruction"
 ApiPath = Root / "docs/src/data/PublicApi.json"
-BaseSource = "2a4c1d2b03e40178b97334bb6f1f2eeedd51fe9f"
+BaseSource = "b5df1e7b1b80da27158ea794626f90a8ebd8a6d2"
 RoutingAliases = {"AGENTS.md", "CLAUDE.md", "GEMINI.md", "CONTRIBUTING.md", "LICENSE.md"}
 Categories = {
     "Current": "Current and authoritative",
