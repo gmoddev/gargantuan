@@ -38,6 +38,7 @@ namespace gargantuan {
 
 		ThreadEngine(lua_State *mainState);
 		int TakeThreadReference(lua_State *thread);
+		void ShutdownRuntime();
 		void Step();
 		void ResumeThread(lua_State *thread, int threadReference, int argumentCount);
 		bool QueueScheduledTask(lua_State *thread, ScheduledTask::Type type, double delaySeconds, int argumentCount);
@@ -45,6 +46,7 @@ namespace gargantuan {
 
 	  private:
 		lua_State *L;
+		bool Stopping = false;
 
 		struct CompareWakeTime {
 			bool operator()(const ScheduledTask &lhs, const ScheduledTask &rhs) {

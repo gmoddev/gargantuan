@@ -4,9 +4,16 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/assets/InstanceSerialization.hpp"
+#include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/PointLight.hpp"
 #include "gargantuan/classes/Sky.hpp"
+#include "gargantuan/classes/SpotLight.hpp"
+#include "gargantuan/classes/ReflectionProbe.hpp"
 #include "gargantuan/environment/EnvironmentSemantics.hpp"
+#include "gargantuan/filesystem/DiskFilesystem.hpp"
+#include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
@@ -15,10 +22,14 @@
 #include "gargantuan/services/Workspace.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <type_traits>
 
 namespace {
@@ -77,6 +88,50 @@ namespace {
 		Game->Destroy();
 	}
 
+	void TestSceneEnvelopeLifecycle() {
+		using namespace gargantuan;
+		RenderProjection Projection;
+		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeFrame(),
+			.Creates = {{MakeItem({1, 1}, -10.0f)}, {MakeItem({2, 1}, 10.0f)}}};
+		(void)Projection.Apply(Initial);
+		Check(!Projection.GetSceneEnvelope().Envelope, "scene envelope waits for quiet publications");
+		RenderPublication Quiet{.Id = 2, .BaseId = 1, .Frame = MakeFrame()};
+		(void)Projection.Apply(Quiet);
+		Check(!Projection.GetSceneEnvelope().Envelope, "one quiet publication does not trigger a build");
+		Quiet.Id = 3; Quiet.BaseId = 2;
+		(void)Projection.Apply(Quiet);
+		const auto Built = Projection.GetSceneEnvelope();
+		Check(Built.Rebuilt && Built.Envelope && Built.Envelope->VisibleObjects == 2,
+			"static scene builds one complete envelope");
+		Check(Built.Envelope && Built.Envelope->Minimum.x < -10.5 && Built.Envelope->Maximum.x > 10.5,
+			"envelope covers transformed primitive corners");
+		Check(!Projection.GetSceneEnvelope().Rebuilt, "unchanged camera reuses the envelope");
+		RenderPublication Dynamic{.Id = 4, .BaseId = 3, .Frame = MakeFrame(),
+			.Updates = {{{1, 1}, RenderUpdateDomain::Transform, MakeItem({1, 1}, 100.0f)}}};
+		(void)Projection.Apply(Dynamic);
+		Check(!Projection.GetSceneEnvelope().Envelope, "transform update invalidates the envelope without rebuilding");
+		Quiet.Id = 5; Quiet.BaseId = 4; (void)Projection.Apply(Quiet);
+		Quiet.Id = 6; Quiet.BaseId = 5; (void)Projection.Apply(Quiet);
+		const auto Moved = Projection.GetSceneEnvelope();
+		Check(Moved.Envelope && Moved.Envelope->Maximum.x > 100.5,
+			"rebuild contains the latest object transform");
+		RenderPublication Hidden{.Id = 7, .BaseId = 6, .Frame = MakeFrame(),
+			.Updates = {{{1, 1}, RenderUpdateDomain::Visibility, MakeItem({1, 1}, 100.0f),
+				{}, {}, false}}};
+		(void)Projection.Apply(Hidden);
+		Check(!Projection.GetSceneEnvelope().Envelope, "visibility update invalidates the envelope");
+		Quiet.Id = 8; Quiet.BaseId = 7; (void)Projection.Apply(Quiet);
+		Quiet.Id = 9; Quiet.BaseId = 8; (void)Projection.Apply(Quiet);
+		const auto Visible = Projection.GetSceneEnvelope();
+		Check(Visible.Envelope && Visible.Envelope->VisibleObjects == 1 && Visible.Envelope->Maximum.x < 11.0,
+			"hidden objects are absent from the envelope and cull count");
+		RenderPublication Removed{.Id = 10, .BaseId = 9, .Frame = MakeFrame(), .Removes = {{{1, 1}}}};
+		(void)Projection.Apply(Removed);
+		Check(!Projection.GetSceneEnvelope().Envelope, "removal invalidates the envelope");
+		Projection.Clear();
+		Check(!Projection.GetSceneEnvelope().Envelope, "restart clears the cached envelope");
+	}
+
 	void TestProjectionOrderingAndIdentity() {
 		using namespace gargantuan;
 		RenderProjection Projection;
@@ -114,11 +169,125 @@ namespace {
 		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Duplicate); }, "duplicate updates are rejected atomically");
 		Check(Projection.GetItem({10, 1})->ModelMatrix[3].x == 4.0f, "rejected updates do not mutate the projection");
 
+		RenderPublication Mixed{.Id = 3, .BaseId = 2, .Frame = MakeFrame()};
+		Mixed.Updates = {
+			{{11, 2}, RenderUpdateDomain::Transform, MakeItem({11, 2}, 6.0f)},
+			{{10, 1}, RenderUpdateDomain::Transform, MakeItem({10, 1}, 8.0f)},
+		};
+		auto Conflicting = Mixed;
+		Conflicting.Removes = {{{10, 1}}};
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Conflicting); },
+			"an object cannot be removed and updated in the same publication");
+		auto StaleUpdate = Mixed;
+		StaleUpdate.Updates[1] = {{11, 1}, RenderUpdateDomain::Transform, MakeItem({11, 1}, 8.0f)};
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(StaleUpdate); },
+			"an update to a removed generation rejects the entire publication");
+		Check(Projection.GetLastPublicationId() == 2 && Projection.GetItem({11, 2})->ModelMatrix[3].x == 0.0f,
+			"the valid prefix of a rejected publication does not mutate the projection");
+		for (std::uint32_t Index = 20; Index < 100; ++Index) Mixed.Creates.push_back({MakeItem({Index, 1})});
+		Changes = Projection.Apply(Mixed);
+		Check(Changes.Created == 80 && Changes.Updated == 2 &&
+			Projection.GetItem({10, 1})->ModelMatrix[3].x == 8.0f &&
+			Projection.GetItem({11, 2})->ModelMatrix[3].x == 6.0f,
+			"unsorted updates apply to the correct identities when new entries grow the projection");
+
 		RenderProjection Restarted;
 		auto Restart = Initial;
 		Restart.Id = 50;
 		Restart.Creates = {{MakeItem({10, 1}, 4.0f)}, {MakeItem({11, 2})}};
 		Check(Restarted.Apply(Restart).Created == 2 && Restarted.GetSize() == 2, "a renderer restart accepts a deterministic full resync");
+	}
+
+	void TestCompactTraversalOrderAndLifecycle() {
+		using namespace gargantuan;
+		RenderProjection Projection;
+		const auto MirrorsMap = [&] {
+			const auto &Records = Projection.GetCompactTraversal();
+			Check(Records.size() == Projection.GetObjects().size(), "compact traversal covers every projected object");
+			auto Existing = Projection.GetObjects().begin();
+			for (const auto &Record : Records) {
+				if (Existing == Projection.GetObjects().end()) break;
+				Check(Record.Object == Existing->first && Record.Projected == &Existing->second,
+					"compact traversal retains exact map order and entry identity");
+				Check(Record.Pose == Projection.GetAnimationPose(Record.Object),
+					"compact traversal resolves the current animation pose");
+				Check(Record.MeshBounds == (Record.Projected->Mesh ?
+					Projection.GetMeshBounds(*Record.Projected->Mesh) : nullptr),
+					"compact traversal resolves the current mesh bounds");
+				++Existing;
+			}
+		};
+		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeFrame()};
+		Initial.Creates = {{MakeItem({10, 1})}, {MakeItem({11, 1})}};
+		(void)Projection.Apply(Initial);
+		MirrorsMap();
+		const auto *StableData = Projection.GetCompactTraversal().data();
+		std::unordered_map<ObjectId, RenderProjectedObject> LegacyOrder;
+		LegacyOrder.reserve(2);
+		LegacyOrder.emplace(ObjectId{10, 1}, RenderProjectedObject{MakeItem({10, 1})});
+		LegacyOrder.emplace(ObjectId{11, 1}, RenderProjectedObject{MakeItem({11, 1})});
+		LegacyOrder.reserve(LegacyOrder.size());
+		RenderPublication Move{.Id = 2, .BaseId = 1, .Frame = MakeFrame()};
+		Move.Updates.push_back({{10, 1}, RenderUpdateDomain::Transform, MakeItem({10, 1}, 4.0f)});
+		(void)Projection.Apply(Move);
+		Check(Projection.GetObjects().bucket_count() == LegacyOrder.bucket_count() &&
+			Projection.GetCompactTraversal().data() == StableData &&
+			Projection.GetItem({10, 1})->ModelMatrix[3].x == 4.0f,
+			"in-place transform updates follow legacy reserve and reuse traversal storage");
+		{
+			auto Actual = Projection.GetObjects().begin();
+			for (auto Expected = LegacyOrder.begin(); Expected != LegacyOrder.end(); ++Expected, ++Actual)
+				Check(Actual != Projection.GetObjects().end() && Actual->first == Expected->first,
+					"compact traversal preserves Foundation 4 map iteration after reserve");
+		}
+		MirrorsMap();
+		RenderPublication Grow{.Id = 3, .BaseId = 2, .Frame = MakeFrame()};
+		for (std::uint32_t Slot = 20; Slot < 200; ++Slot) Grow.Creates.push_back({MakeItem({Slot, 1})});
+		(void)Projection.Apply(Grow);
+		MirrorsMap();
+		RenderPublication Remove{.Id = 4, .BaseId = 3, .Frame = MakeFrame()};
+		Remove.Removes.push_back({{10, 1}});
+		(void)Projection.Apply(Remove);
+		MirrorsMap();
+		RenderPublication Invalid{.Id = 5, .BaseId = 4, .Frame = MakeFrame()};
+		Invalid.Updates.push_back({{10, 1}, RenderUpdateDomain::Transform, MakeItem({10, 1})});
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Invalid); },
+			"stale update rejects before compact traversal mutation");
+		MirrorsMap();
+		RenderPublication Resync{.Id = 100, .FullResync = true, .Frame = MakeFrame()};
+		Resync.Creates.push_back({MakeItem({90, 2})});
+		(void)Projection.Apply(Resync);
+		MirrorsMap();
+		const RenderMeshIdentity Mesh{7, 1};
+		auto Vertices = std::make_shared<const std::vector<RenderVertex>>(std::vector<RenderVertex>(3));
+		auto Indices = std::make_shared<const std::vector<std::uint32_t>>(std::vector<std::uint32_t>{0, 1, 2});
+		RenderPublication BindMesh{.Id = 101, .BaseId = 100, .Frame = MakeFrame()};
+		BindMesh.MeshCreates.push_back({Mesh, 1, 1, Vertices, Indices,
+			{glm::vec3(-1.0f), glm::vec3(1.0f)}});
+		BindMesh.Updates.push_back({{90, 2}, RenderUpdateDomain::Geometry, MakeItem({90, 2}), Mesh});
+		(void)Projection.Apply(BindMesh);
+		MirrorsMap();
+		const auto *StableBounds = Projection.GetCompactTraversal().front().MeshBounds;
+		RenderPublication MoveBounds{.Id = 102, .BaseId = 101, .Frame = MakeFrame()};
+		MoveBounds.MeshVertexUpdates.push_back({Mesh, 2, 0,
+			std::make_shared<const std::vector<RenderVertex>>(std::vector<RenderVertex>(1)),
+			{glm::vec3(-2.0f), glm::vec3(2.0f)}});
+		(void)Projection.Apply(MoveBounds);
+		Check(Projection.GetCompactTraversal().front().MeshBounds == StableBounds &&
+			StableBounds->Maximum.x == 2.0f,
+			"in-place mesh bounds updates retain a live compact traversal pointer");
+		const RenderMeshIdentity OtherMesh{8, 1};
+		RenderPublication Rebind{.Id = 103, .BaseId = 102, .Frame = MakeFrame()};
+		Rebind.MeshCreates.push_back({OtherMesh, 1, 1, Vertices, Indices,
+			{glm::vec3(-4.0f), glm::vec3(4.0f)}});
+		Rebind.Updates.push_back({{90, 2}, RenderUpdateDomain::Geometry, MakeItem({90, 2}), OtherMesh});
+		(void)Projection.Apply(Rebind);
+		MirrorsMap();
+		Check(Projection.GetCompactTraversal().front().MeshBounds == Projection.GetMeshBounds(OtherMesh) &&
+			Projection.GetCompactTraversal().front().MeshBounds->Maximum.x == 4.0f,
+			"mesh rebinding refreshes cached bounds identity");
+		Projection.Clear();
+		Check(Projection.GetCompactTraversal().empty(), "clearing projection retires compact traversal pointers");
 	}
 
 	void TestDeformableAndGuiContracts() {
@@ -240,6 +409,24 @@ namespace {
 			"out-of-range texture updates are rejected atomically"
 		);
 
+		auto InvalidHdrPixels = std::make_shared<std::vector<std::uint8_t>>(16, 0);
+		const auto NanBits = std::bit_cast<std::uint32_t>(std::numeric_limits<float>::quiet_NaN());
+		for (unsigned Byte = 0; Byte < 4; ++Byte)
+			(*InvalidHdrPixels)[Byte] = static_cast<std::uint8_t>(NanBits >> (Byte * 8));
+		RenderPublication InvalidHdr{.Id = 6, .BaseId = 5, .Frame = MakeFrame()};
+		InvalidHdr.TextureCreates.push_back({{90, 1}, 1, 1, 1, RenderTextureFormat::Rgba32Float, InvalidHdrPixels});
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(InvalidHdr); },
+			"non-finite float texture radiance is rejected before GPU residency");
+		auto ExtremeHdrPixels = std::make_shared<std::vector<std::uint8_t>>(16, 0);
+		const auto ExtremeBits = std::bit_cast<std::uint32_t>(1000000.0f);
+		for (unsigned Byte = 0; Byte < 4; ++Byte)
+			(*ExtremeHdrPixels)[Byte] = static_cast<std::uint8_t>(ExtremeBits >> (Byte * 8));
+		RenderProjection ExtremeProjection;
+		RenderPublication ExtremeHdr{.Id = 1, .FullResync = true, .Frame = MakeFrame()};
+		ExtremeHdr.TextureCreates.push_back({{91, 1}, 1, 1, 1, RenderTextureFormat::Rgba32Float, ExtremeHdrPixels});
+		Check(ExtremeProjection.Apply(ExtremeHdr).TexturesCreated == 1,
+			"finite float radiance above half-float target range survives neutral projection");
+
 		RenderPublication TopologyChange{.Id = 6, .BaseId = 5, .Frame = MakeFrame()};
 		TopologyChange.MeshRemoves.push_back({{1, 1}});
 		TopologyChange.MeshCreates.push_back({
@@ -322,6 +509,19 @@ namespace {
 			Coalesced->Updates[0].Item.ModelMatrix[3].x == 99.0f,
 			"redundant transform and material writes coalesce into one final-state update"
 		);
+		RenderPublisher ReferencePublisher;
+		const auto Reference = ReferencePublisher.Publish(*World, Camera, 640, 360);
+		Check(Reference->FullResync && Reference->Creates.size() == 1,
+			"independent full resync captures the updated Part");
+		if (Coalesced->Updates.size() == 1 && Reference->Creates.size() == 1) {
+			const auto &Incremental = Coalesced->Updates.front().Item;
+			const auto &Complete = Reference->Creates.front().Item;
+			Check(Incremental.Object == Complete.Object && Incremental.Geometry == Complete.Geometry &&
+				Incremental.ModelMatrix == Complete.ModelMatrix &&
+				Incremental.InverseModelMatrix == Complete.InverseModelMatrix &&
+				Incremental.Color == Complete.Color && Incremental.CastShadow == Complete.CastShadow,
+				"incremental final-state extraction matches independent full resync values");
+		}
 
 		auto CreatedAndUpdated = std::make_shared<Part>();
 		CreatedAndUpdated->SetParent(World);
@@ -379,6 +579,72 @@ namespace {
 			"returning to a prior publication scope retains the consumer and performs a full resync"
 		);
 		SecondGame->Destroy();
+		Game->Destroy();
+	}
+
+	void TestIncrementalWorldMembership() {
+		using namespace gargantuan;
+		ChangeJournal::Get().Clear();
+		RenderDirtyAccumulator::Get().Clear();
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto InWorld = std::make_shared<Folder>();
+		InWorld->SetParent(World);
+		auto Nested = std::make_shared<Folder>();
+		Nested->SetParent(InWorld);
+		auto OutsideWorld = std::make_shared<Folder>();
+		OutsideWorld->SetParent(Game);
+		auto PartValue = std::make_shared<Part>();
+		PartValue->SetParent(Nested);
+		const auto Object = PartValue->GetObjectId();
+		RenderPublisher Publisher;
+		const auto Initial = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(Initial->FullResync && Initial->Creates.size() == 1 &&
+			Initial->Creates.front().Item.Object == Object,
+			"full resync includes a Part below nested folders in WorldRoot");
+		Nested->SetParent(OutsideWorld);
+		const auto Removed = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(!Removed->FullResync && Removed->Removes.size() == 1 && Removed->Removes.front().Object == Object,
+			"incremental publication removes descendants transferred outside WorldRoot");
+		Nested->SetParent(InWorld);
+		const auto Restored = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(!Restored->FullResync && Restored->Creates.size() == 1 &&
+			Restored->Creates.front().Item.Object == Object,
+			"incremental publication restores the same generation below nested folders");
+		PartValue->Destroy();
+		const auto Destroyed = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(Destroyed->Removes.size() == 1 && Destroyed->Removes.front().Object == Object,
+			"destroyed nested Part removes its generation-safe identity");
+		Game->Destroy();
+	}
+
+	void TestDirtyDomainsDoNotMaskFinalState() {
+		using namespace gargantuan;
+		ChangeJournal::Get().Clear();
+		RenderDirtyAccumulator::Get().Clear();
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto PartValue = std::make_shared<Part>();
+		PartValue->SetParent(World);
+		RenderDirtyAccumulator ManualDirty;
+		RenderPublisher Publisher(&ManualDirty);
+		const auto Initial = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(Initial->Creates.size() == 1, "manual dirty fixture starts from one published Part");
+		RenderProjection Projection;
+		(void)Projection.Apply(*Initial);
+		PartValue->SetCFrame(CFrame(glm::vec3(13.0f, 2.0f, -4.0f)));
+		ManualDirty.Mark(World->GetReplicationScopeId(), PartValue->GetObjectId(), RenderUpdateDomain::Material);
+		const auto Changed = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(Initial->Creates.size() == 1 && Changed->Updates.size() == 1 &&
+			Changed->Updates.front().Item.ModelMatrix[3].x == 13.0f &&
+			Changed->Updates.front().Item.InverseModelMatrix[3].x !=
+				Initial->Creates.front().Item.InverseModelMatrix[3].x,
+			"material-only dirty hint cannot conceal a changed final transform or inverse");
+		(void)Projection.Apply(*Changed);
+		const auto Projected = Projection.GetObjects().find(PartValue->GetObjectId());
+		Check(Projected != Projection.GetObjects().end() &&
+			Projected->second.Item.ModelMatrix[3].x == 13.0f,
+			"projection applies the complete final transform despite a material-only hint");
 		Game->Destroy();
 	}
 
@@ -482,6 +748,92 @@ namespace {
 		Accumulator.ReleaseConsumer(SecondConsumer);
 	}
 
+	void TestSingleObjectBatchDirtyParity() {
+		using namespace gargantuan;
+		RenderDirtyAccumulator Ordinary;
+		RenderDirtyAccumulator Batched;
+		const ObjectId Scope{900, 1};
+		const ObjectId Object{901, 1};
+		const auto OrdinaryFast = Ordinary.CreateConsumer();
+		const auto OrdinarySlow = Ordinary.CreateConsumer();
+		const auto BatchedFast = Batched.CreateConsumer();
+		const auto BatchedSlow = Batched.CreateConsumer();
+		std::vector<std::pair<ObjectId, ChangePayload>> Changes{
+			{Object, ObjectCreatedChange{"Part"}},
+			{Object, PropertyUpdatedChange{"CFrame", WireCFrame{{0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1}}, true}},
+			{Object, PropertyUpdatedChange{"Color", WireColor3{1, 0, 0}, true}},
+			{Object, ObjectReparentedChange{ObjectId{902, 1}}},
+			{Object, ObjectDestroyedChange{}},
+		};
+		for (const auto &[RecordObject, Payload] : Changes) Ordinary.RecordChange(Scope, RecordObject, Payload);
+		Batched.SetProfilingEnabled(true);
+		Batched.RecordBatch(Scope, Changes);
+		const auto Profile = Batched.GetProfile();
+		Check(Profile.ClassificationCalls == Changes.size() && Profile.AccumulationCalls == 1,
+			"single-object batch classifies every event and performs one dirty accumulation");
+		const auto OrdinaryFirst = Ordinary.Capture(Scope, OrdinaryFast);
+		const auto OrdinarySecond = Ordinary.Capture(Scope, OrdinarySlow);
+		const auto BatchedFirst = Batched.Capture(Scope, BatchedFast);
+		const auto BatchedSecond = Batched.Capture(Scope, BatchedSlow);
+		Check(OrdinaryFirst.Records.size() == 1 && OrdinarySecond.Records.size() == 1 &&
+			BatchedFirst.Records.size() == 1 && BatchedSecond.Records.size() == 1 &&
+			OrdinaryFirst.Records[0].Object == BatchedFirst.Records[0].Object &&
+			OrdinaryFirst.Records[0].Domains == BatchedFirst.Records[0].Domains &&
+			OrdinarySecond.Records[0].Domains == BatchedSecond.Records[0].Domains &&
+			!OrdinaryFirst.FullResyncRequired && !BatchedFirst.FullResyncRequired,
+			"create, property, reparent, and destroy union to the same final render domains");
+		Ordinary.Acknowledge(OrdinaryFirst);
+		Batched.Acknowledge(BatchedFirst);
+		Check(Ordinary.GetPendingObjectCount(Scope) == 1 && Batched.GetPendingObjectCount(Scope) == 1,
+			"fast consumer acknowledgement retains work for a slow consumer");
+		Ordinary.RecordChange(Scope, Object, PropertyUpdatedChange{"CFrame", WireCFrame{}, true});
+		Batched.RecordChange(Scope, Object, PropertyUpdatedChange{"CFrame", WireCFrame{}, true});
+		Ordinary.Acknowledge(OrdinarySecond);
+		Batched.Acknowledge(BatchedSecond);
+		const auto OrdinaryAgain = Ordinary.Capture(Scope, OrdinaryFast);
+		const auto BatchedAgain = Batched.Capture(Scope, BatchedFast);
+		Check(OrdinaryAgain.Records.size() == 1 && BatchedAgain.Records.size() == 1 &&
+			OrdinaryAgain.Records[0].Domains == BatchedAgain.Records[0].Domains,
+			"later dirty publication survives acknowledgement of an older batch capture");
+		Ordinary.Acknowledge(OrdinaryAgain);
+		Batched.Acknowledge(BatchedAgain);
+		Ordinary.Acknowledge(Ordinary.Capture(Scope, OrdinarySlow));
+		Batched.Acknowledge(Batched.Capture(Scope, BatchedSlow));
+		Check(Ordinary.GetPendingObjectCount(Scope) == 0 && Batched.GetPendingObjectCount(Scope) == 0,
+			"both consumers acknowledge the latest version and release pending dirty state");
+
+		const ObjectId Other{903, 1};
+		std::vector<std::pair<ObjectId, ChangePayload>> Mixed{
+			{Object, PropertyUpdatedChange{"CFrame", WireCFrame{}, true}},
+			{Other, PropertyUpdatedChange{"Color", WireColor3{0, 1, 0}, true}},
+		};
+		for (const auto &[RecordObject, Payload] : Mixed) Ordinary.RecordChange(Scope, RecordObject, Payload);
+		Batched.RecordBatch(Scope, Mixed);
+		const auto OrdinaryMixed = Ordinary.Capture(Scope, OrdinaryFast);
+		const auto BatchedMixed = Batched.Capture(Scope, BatchedFast);
+		Check(OrdinaryMixed.Records.size() == 2 && BatchedMixed.Records.size() == 2 &&
+			OrdinaryMixed.Records[0].Object == BatchedMixed.Records[0].Object &&
+			OrdinaryMixed.Records[0].Domains == BatchedMixed.Records[0].Domains &&
+			OrdinaryMixed.Records[1].Object == BatchedMixed.Records[1].Object &&
+			OrdinaryMixed.Records[1].Domains == BatchedMixed.Records[1].Domains,
+			"mixed-object batch retains ordinary per-object dirty capture semantics");
+		RenderDirtyAccumulator Scoped;
+		const auto ScopedConsumer = Scoped.CreateConsumer();
+		const ObjectId OtherScope{904, 1};
+		Scoped.RecordBatch(Scope, Changes);
+		Scoped.RecordBatch(OtherScope, Changes);
+		const auto FirstScope = Scoped.Capture(Scope, ScopedConsumer);
+		const auto SecondScope = Scoped.Capture(OtherScope, ScopedConsumer);
+		Check(FirstScope.Records.size() == 1 && SecondScope.Records.size() == 1 &&
+			FirstScope.Records[0].Domains == SecondScope.Records[0].Domains,
+			"batch dirty domains remain scoped to each authoritative world");
+		Scoped.Acknowledge(FirstScope);
+		Check(Scoped.GetPendingObjectCount(Scope) == 0 &&
+			Scoped.GetPendingObjectCount(OtherScope) == 1,
+			"one scope acknowledgement cannot retire another scope's pending batch");
+		Scoped.Acknowledge(SecondScope);
+	}
+
 	void TestAnimationPaletteContracts() {
 		using namespace gargantuan;
 		const ObjectId Object{30, 1};
@@ -511,6 +863,10 @@ namespace {
 			.Palette = {Skeleton, Palette},
 		});
 		const auto Changes = Projection.Apply(Initial);
+		Check(Projection.GetCompactTraversal().size() == 1 &&
+			Projection.GetCompactTraversal().front().Pose == Projection.GetAnimationPose(Object) &&
+			Projection.GetCompactTraversal().front().MeshBounds == Projection.GetMeshBounds(SourceMesh),
+			"compact traversal caches a coherent pose and source mesh bounds");
 		Check(Changes.AnimationPosesUpdated == 1 &&
 			Changes.PaletteUploadBytes == 2 * sizeof(RenderSkinPaletteEntry) &&
 			Projection.GetAnimationPose(Object) &&
@@ -613,11 +969,21 @@ namespace {
 			.Palette = {Skeleton, DeformedPalette},
 		});
 		(void)Projection.Apply(Deformed);
+		Check(Projection.GetCompactTraversal().size() == 1 &&
+			Projection.GetCompactTraversal().front().Pose == Projection.GetAnimationPose(Object) &&
+			Projection.GetCompactTraversal().front().Pose->PoseRevision == 2,
+			"existing pose updates retain a live compact traversal pointer");
 		Check(
 			Projection.BuildAnimationVisibilityFeedback(VisibleAnimationObjects, 1) &&
 				VisibleAnimationObjects == std::vector<ObjectId>{Object},
 			"GPU visibility bounds conservatively include palette deformation outside the bind-pose bounds"
 		);
+		RenderPublication RemovePose{.Id = 4, .BaseId = 3, .Frame = MakeFrame()};
+		RemovePose.AnimationPoseRemoves.push_back({Object});
+		(void)Projection.Apply(RemovePose);
+		Check(Projection.GetCompactTraversal().size() == 1 &&
+			Projection.GetCompactTraversal().front().Pose == nullptr,
+			"pose removal invalidates compact traversal without retaining a dangling pointer");
 	}
 
 	void TestEnvironmentLightingFoundation() {
@@ -635,6 +1001,8 @@ namespace {
 		const Color3 DefaultAmbient = LightingValue->GetAmbient();
 		Check(
 			LightingValue->GetClockTime() == 12.0f && LightingValue->GetBrightness() == 1.0f &&
+				LightingValue->GetEnvironmentRotation() == 0.0f && LightingValue->GetIblIntensity() == 1.0f &&
+				LightingValue->GetToneMapping() == Enums::ToneMappingMode::Filmic &&
 				DefaultAmbient.R == 0.2f && DefaultAmbient.G == 0.2f && DefaultAmbient.B == 0.2f,
 			"Lighting defaults are deterministic"
 		);
@@ -651,6 +1019,12 @@ namespace {
 		CheckThrows<std::invalid_argument>(
 			[&] { LightingValue->SetFogStart(1001.0f); }, "FogStart rejects an inverted fog interval"
 		);
+		CheckThrows<std::invalid_argument>([&] { LightingValue->SetEnvironmentRotation(181.0f); },
+			"environment yaw rejects out-of-range values");
+		CheckThrows<std::invalid_argument>([&] { LightingValue->SetIblIntensity(-0.1f); },
+			"image-based light intensity rejects negative values");
+		CheckThrows<std::invalid_argument>([&] { LightingValue->SetToneMapping(static_cast<Enums::ToneMappingMode>(2)); },
+			"unregistered tone-mapping mode cannot commit");
 
 		const auto Sunrise = ComputeEnvironmentSunState(6.0f, 2.0f, Color3(1.0f, 0.5f, 0.25f));
 		const auto Noon = ComputeEnvironmentSunState(12.0f, 2.0f, Color3(1.0f, 0.5f, 0.25f));
@@ -702,6 +1076,9 @@ namespace {
 			LightingValue->SetClockTime(static_cast<float>(Index % 24));
 		LightingValue->SetAmbient(Color3(0.1f, 0.15f, 0.2f));
 		LightingValue->SetExposureCompensation(1.0f);
+		LightingValue->SetEnvironmentRotation(-90.0f);
+		LightingValue->SetIblIntensity(0.25f);
+		LightingValue->SetToneMapping(Enums::ToneMappingMode::Reinhard);
 		LightingValue->SetFogEnabled(true);
 		LightingValue->SetFogStart(10.0f);
 		LightingValue->SetFogEnd(100.0f);
@@ -709,10 +1086,18 @@ namespace {
 		Check(
 			Animated->EnvironmentChanged && Animated->Creates.empty() && Animated->Updates.empty() &&
 				Animated->Removes.empty() && Animated->Frame.Environment.ExposureMultiplier == 2.0f &&
-				Animated->Frame.Environment.Fog.Enabled,
+				Animated->Frame.Environment.Fog.Enabled && Animated->Frame.Environment.EnvironmentRotation == -90.0f &&
+				Animated->Frame.Environment.IblIntensity == 0.25f &&
+				Animated->Frame.Environment.ToneMapping == RenderToneMapping::Reinhard,
 			"many environment edits coalesce into one environment-only final-state publication"
 		);
 		(void)Projection.Apply(*Animated);
+		auto InvalidEnvironment = *Animated;
+		InvalidEnvironment.BaseId = Animated->Id;
+		++InvalidEnvironment.Id;
+		InvalidEnvironment.Frame.Environment.IblIntensity = 9.0f;
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(InvalidEnvironment); },
+			"projection rejects an invalid IBL multiplier in a neutral environment payload");
 		auto Static = Publisher.Publish(*World, Camera, 640, 360);
 		Check(
 			!Static->EnvironmentChanged && Static->Creates.empty() && Static->Updates.empty(),
@@ -809,6 +1194,363 @@ namespace {
 		);
 		Game->Destroy();
 	}
+	void TestRetainedUiTextureLifecycle() {
+		using namespace gargantuan;
+		const RenderTextureIdentity Texture{90, 1};
+		RenderUiBatch Batch;
+		Batch.Texture = Texture; Batch.Vertices.resize(3); Batch.Indices = {0, 1, 2};
+		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeFrame(), .UiChanged = true};
+		Initial.TextureCreates.push_back({Texture, 1, 1, 1, RenderTextureFormat::Rgba8Unorm,
+			std::make_shared<const std::vector<std::uint8_t>>(4, 255)});
+		Initial.SharedUi = std::make_shared<const RenderUiFrame>(RenderUiFrame{640, 360, 1.0f, {Batch}});
+		RenderProjection Projection;
+		(void)Projection.Apply(Initial);
+		RenderPublication Remove{.Id = 2, .BaseId = 1, .Frame = MakeFrame()};
+		Remove.TextureRemoves.push_back({Texture});
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Remove); },
+			"texture removal cannot strand a retained UI batch");
+		Check(Projection.GetLastPublicationId() == 1 && Projection.GetTextureCount() == 1 &&
+			Projection.GetUi().Batches.size() == 1, "rejected UI texture removal is atomic");
+		Remove.UiChanged = true;
+		Remove.Ui = {640, 360, 1.0f, {}};
+		(void)Projection.Apply(Remove);
+		Check(Projection.GetTextureCount() == 0 && Projection.GetUi().Batches.empty(),
+			"explicit UI teardown and texture removal commit together");
+	}
+
+	void TestReflectionProbeContracts() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto Probe = std::make_shared<ReflectionProbe>();
+		Probe->SetName("Local Environment Witness");
+		Probe->SetParent(World);
+		Probe->SetProbeSize({20, 10, 12});
+		Probe->SetProbeCFrame(CFrame(10, 2, -5));
+		Probe->SetProbeIntensity(2.0f);
+		Probe->SetProbePriority(3);
+		Check(World->GetReflectionProbes().contains(Probe->GetObjectId()), "probe enters scoped weak membership");
+		CheckThrows<std::invalid_argument>([&] { Probe->SetProbeCaptureOffset({11, 0, 0}); }, "capture origin must stay inside box");
+		CheckThrows<std::invalid_argument>([&] { Probe->SetProbeIntensity(std::numeric_limits<float>::quiet_NaN()); },
+			"probe rejects nonfinite radiance multiplier");
+		CheckThrows<std::invalid_argument>([&] { Probe->SetProbeCFrame(CFrame(glm::vec3(0), glm::mat3(2))); },
+			"probe rejects scaled orientation");
+		CheckThrows<std::invalid_argument>([&] { Probe->SetProbePositiveX("../local.hdr"); }, "probe source accepts asset references only");
+		auto Assets = std::dynamic_pointer_cast<AssetService>(Game->GetService("AssetService"));
+		const auto ProbeRoot = std::filesystem::temp_directory_path() /
+			("gargantuan-probe-publication-" + AssetId::New().ToString());
+		struct ProbeFixtureRoot final {
+			std::filesystem::path Path;
+			~ProbeFixtureRoot() {
+				std::error_code Error;
+				std::filesystem::remove_all(Path, Error);
+			}
+		} FixtureRoot{ProbeRoot};
+		std::filesystem::create_directories(ProbeRoot);
+		DiskFilesystem Filesystem(ProbeRoot);
+		SourceMount Mount(Filesystem);
+		const auto WriteProbeImage = [&](std::uint8_t Channel) {
+			std::vector<std::uint8_t> Bytes(54 + 4 * 4 * 4, 0);
+			const auto Write16 = [&](std::size_t Offset, std::uint16_t Value) {
+				for (unsigned Byte = 0; Byte < 2; ++Byte)
+					Bytes[Offset + Byte] = static_cast<std::uint8_t>(Value >> (Byte * 8));
+			};
+			const auto Write32 = [&](std::size_t Offset, std::uint32_t Value) {
+				for (unsigned Byte = 0; Byte < 4; ++Byte)
+					Bytes[Offset + Byte] = static_cast<std::uint8_t>(Value >> (Byte * 8));
+			};
+			Bytes[0] = 'B'; Bytes[1] = 'M';
+			Write32(2, static_cast<std::uint32_t>(Bytes.size()));
+			Write32(10, 54); Write32(14, 40); Write32(18, 4); Write32(22, 4);
+			Write16(26, 1); Write16(28, 32); Write32(34, 4 * 4 * 4);
+			for (std::size_t Pixel = 54; Pixel < Bytes.size(); Pixel += 4) {
+				Bytes[Pixel] = Channel; Bytes[Pixel + 1] = Channel;
+				Bytes[Pixel + 2] = Channel; Bytes[Pixel + 3] = 255;
+			}
+			std::ofstream File(ProbeRoot / "probe.bmp", std::ios::binary);
+			File.write(reinterpret_cast<const char *>(Bytes.data()), static_cast<std::streamsize>(Bytes.size()));
+			if (!File) throw std::runtime_error("[Render:PublicationTest] Could not write probe image fixture");
+		};
+		WriteProbeImage(96);
+		const auto ProbeImport = Assets->ImportProjectAsset(Mount, "probe.bmp", AssetKind::Image, "Probe Face");
+		if (!ProbeImport.Ok || !ProbeImport.Record) {
+			Check(false, "probe fixture imports a project image");
+			Game->Destroy();
+			return;
+		}
+		const auto ProbeReference = ProbeImport.Record->Reference.Value;
+		Probe->SetProbePositiveX(ProbeReference); Probe->SetProbeNegativeX(ProbeReference);
+		Probe->SetProbePositiveY(ProbeReference); Probe->SetProbeNegativeY(ProbeReference);
+		Probe->SetProbePositiveZ(ProbeReference); Probe->SetProbeNegativeZ(ProbeReference);
+		Check(!Assets->DeleteProjectAsset(ProbeReference).Ok,
+			"a probe's image reference prevents deleting its canonical asset group");
+		RenderPublisher ProbePublisher;
+		auto TextureChanges = Assets->DrainTextureChanges();
+		ProbePublisher.SetUiTextureChanges(std::move(TextureChanges.Creates),
+			std::move(TextureChanges.Updates), std::move(TextureChanges.Removes));
+		const auto FirstProbe = ProbePublisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(FirstProbe->Frame.Environment.ReflectionProbes &&
+			FirstProbe->Frame.Environment.ReflectionProbes->size() == 1,
+			"probe with six canonical image references publishes one local environment");
+		WriteProbeImage(128);
+		const auto ReimportedImage = Assets->ReimportProjectAsset(Mount, ProbeReference);
+		Check(ReimportedImage.Ok && ReimportedImage.Record &&
+			ReimportedImage.Record->Reference.Value == ProbeReference,
+			"probe face reimport preserves its image identity");
+		TextureChanges = Assets->DrainTextureChanges();
+		ProbePublisher.SetUiTextureChanges(std::move(TextureChanges.Creates),
+			std::move(TextureChanges.Updates), std::move(TextureChanges.Removes));
+		const auto ReimportedProbe = ProbePublisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(ReimportedProbe->EnvironmentChanged && ReimportedProbe->TextureUpdates.size() == 1 &&
+			ReimportedProbe->Frame.Environment.ReflectionProbes &&
+			ReimportedProbe->Frame.Environment.ReflectionProbes->front().Source.Faces[0].ContentRevision == 2,
+			"probe source reimport invalidates environment without changing the probe identity");
+		const std::string HdrHeader = "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 4 +X 4\n";
+		std::vector<std::uint8_t> HdrBytes(HdrHeader.begin(), HdrHeader.end());
+		for (unsigned Pixel = 0; Pixel < 16; ++Pixel)
+			HdrBytes.insert(HdrBytes.end(), {128, 64, 32, 137});
+		{
+			std::ofstream File(ProbeRoot / "probe.hdr", std::ios::binary);
+			File.write(reinterpret_cast<const char *>(HdrBytes.data()),
+				static_cast<std::streamsize>(HdrBytes.size()));
+			if (!File) throw std::runtime_error("[Render:PublicationTest] Could not write HDR probe fixture");
+		}
+		const auto HdrImport = Assets->ImportProjectAsset(Mount, "probe.hdr", AssetKind::Image, "HDR Probe Face");
+		if (HdrImport.Ok && HdrImport.Record) {
+			const auto HdrReference = HdrImport.Record->Reference.Value;
+			Probe->SetProbePositiveX(HdrReference);
+			auto LightingValue = std::dynamic_pointer_cast<Lighting>(Game->GetService("Lighting"));
+			auto MixedSky = std::make_shared<Sky>();
+			MixedSky->SetSkyboxPositiveX(HdrReference); MixedSky->SetSkyboxNegativeX(ProbeReference);
+			MixedSky->SetSkyboxPositiveY(ProbeReference); MixedSky->SetSkyboxNegativeY(ProbeReference);
+			MixedSky->SetSkyboxPositiveZ(ProbeReference); MixedSky->SetSkyboxNegativeZ(ProbeReference);
+			MixedSky->SetParent(LightingValue);
+			TextureChanges = Assets->DrainTextureChanges();
+			ProbePublisher.SetUiTextureChanges(std::move(TextureChanges.Creates),
+				std::move(TextureChanges.Updates), std::move(TextureChanges.Removes));
+			ProbePublisher.RequestFullResync();
+			const auto Mixed = ProbePublisher.Publish(*World, RenderCameraInput{}, 64, 64);
+			RenderProjection MixedProjection;
+			Check(Mixed->Frame.Environment.Sky && Mixed->Frame.Environment.ReflectionProbes &&
+				Mixed->Frame.Environment.ReflectionProbes->size() == 1 &&
+				std::ranges::any_of(Mixed->TextureCreates, [](const auto &Create) {
+					return Create.Format == RenderTextureFormat::Rgba32Float;
+				}) && MixedProjection.Apply(*Mixed).EnvironmentsUpdated == 1,
+				"mixed RGBA8/HDR cube faces retain their formats through publication and projection");
+			MixedSky->Destroy();
+		} else Check(false, "square HDR face imports for mixed-format cube publication");
+		Game->MarkPersistenceSubtreeArchivable();
+		std::shared_ptr<Instance> GameInstance = Game;
+		const auto Document = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, GameInstance);
+		std::istringstream SavedDocument(Document);
+		auto Saved = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, SavedDocument);
+		const auto Restored = Saved.Instance ? std::dynamic_pointer_cast<ReflectionProbe>(
+			Saved.Instance->FindFirstDescendant("Local Environment Witness")) : nullptr;
+		Check(Saved.Ok && Restored && Restored->GetProbeSize() == glm::vec3(20, 10, 12) &&
+			Restored->GetProbePriority() == 3 && Restored->GetProbeIntensity() == 2.0f, "probe generic schema persistence");
+		if (Saved.Instance) Saved.Instance->Destroy();
+		Probe->Destroy();
+		Check(World->GetReflectionProbes().empty(), "probe membership retires before identity reuse");
+		Check(Assets->DeleteProjectAsset(ProbeReference).Ok,
+			"probe image asset becomes deletable after the consumer is destroyed");
+		Game->Destroy();
+
+		RenderReflectionProbeState State;
+		State.Object = {7, 1};
+		State.Source.FaceDimension = 1;
+		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeFrame()};
+		for (std::size_t Face = 0; Face < 6; ++Face) {
+			const RenderTextureIdentity Texture{Face + 1, 1};
+			State.Source.Faces[Face] = {Texture, 1};
+			Initial.TextureCreates.push_back({Texture, 1, 1, 1, RenderTextureFormat::Rgba8Unorm,
+				std::make_shared<const std::vector<std::uint8_t>>(std::initializer_list<std::uint8_t>{255, 255, 255, 255})});
+		}
+		Initial.Frame.Environment.ReflectionProbes = std::make_shared<const std::vector<RenderReflectionProbeState>>(1, State);
+		RenderProjection Projection;
+		(void)Projection.Apply(Initial);
+		auto Invalid = Initial;
+		Invalid.Id = 2;
+		State.Source.Faces[0].ContentRevision = 2;
+		Invalid.Frame.Environment.ReflectionProbes = std::make_shared<const std::vector<RenderReflectionProbeState>>(1, State);
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Invalid); }, "probe cannot reference incoherent source revision");
+		Check(Projection.GetLastPublicationId() == 1 && Projection.GetFrame().Environment.ReflectionProbes ==
+			Initial.Frame.Environment.ReflectionProbes, "invalid probe preserves last accepted immutable publication");
+		Invalid = Initial; Invalid.Id = 2; Invalid.Frame.Environment.DirectionalShadows.CascadeCount = 5;
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Invalid); }, "cascade budget rejects before mutation");
+	}
+
+	void TestLocalLights() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto Owner = std::make_shared<Part>();
+		Owner->SetAnchored(true);
+		Owner->SetCFrame(CFrame(3, 0, 0));
+		Owner->SetParent(World);
+		auto Holder = std::make_shared<Folder>();
+		Holder->SetParent(Owner);
+		auto Point = std::make_shared<PointLight>();
+		Point->SetName("Point Witness");
+		Point->SetLightColor({.25f, .5f, 1.0f});
+		Point->SetLightRange(12.0f);
+		Point->SetParent(World);
+		auto Spot = std::make_shared<SpotLight>();
+		Spot->SetName("Spot Witness");
+		Spot->SetLightIntensity(42.0f);
+		Spot->SetLightConeAngles({10.0f, 32.0f});
+		Spot->SetLightCFrame(CFrame(0, 0, 2));
+		Spot->SetParent(Holder);
+		CheckThrows<std::invalid_argument>([&] { Spot->SetLightConeAngles({40.0f, 32.0f}); },
+			"inverted spot cone does not commit");
+		CheckThrows<std::invalid_argument>([&] { Spot->SetLightRange(0.0f); }, "zero light range is rejected");
+		CheckThrows<std::invalid_argument>([&] { Point->SetLightIntensity(std::numeric_limits<float>::infinity()); },
+			"non-finite intensity is rejected");
+		CheckThrows<std::invalid_argument>([&] { Spot->SetLightCFrame(CFrame(glm::vec3(0), glm::mat3(2))); },
+			"local light pose rejects a scaled rotation");
+
+		RenderPublisher Publisher;
+		RenderProjection Projection;
+		const auto Publish = [&] { return Publisher.Publish(*World, RenderCameraInput{}, 640, 360); };
+		const auto First = Publish();
+		const auto FirstLights = First->Frame.Environment.LocalLights;
+		const auto SpotId = Spot->GetObjectId();
+		const auto PointId = Point->GetObjectId();
+		const auto Find = [](const RenderPublicationPtr &Publication, ObjectId Id) -> const RenderLocalLightState * {
+			const auto &Lights = Publication->Frame.Environment.LocalLights;
+			if (!Lights) return nullptr;
+			const auto Found = std::ranges::find(*Lights, Id, &RenderLocalLightState::Object);
+			return Found != Lights->end() ? &*Found : nullptr;
+		};
+		const auto *FirstPoint = Find(First, PointId);
+		const auto *FirstSpot = Find(First, SpotId);
+		Check(FirstLights && FirstLights->size() == 2 && FirstPoint && FirstSpot &&
+			FirstPoint->Kind == RenderLocalLightKind::Point && FirstPoint->Range == 12.0f &&
+			FirstPoint->Color == glm::vec3(.25f, .5f, 1.0f) && FirstSpot->Kind == RenderLocalLightKind::Spot &&
+			FirstSpot->Position == glm::vec3(3, 0, 2) && FirstSpot->Direction == glm::vec3(0, 0, -1) &&
+			FirstSpot->InnerConeCosine > FirstSpot->OuterConeCosine && FirstSpot->Intensity == 42.0f,
+			"PointLight and SpotLight publish stable, scoped identities and effective rigid world poses");
+		(void)Projection.Apply(*First);
+		const auto Quiet = Publish();
+		Check(!Quiet->EnvironmentChanged && Quiet->Frame.Environment.LocalLights == FirstLights,
+			"unchanged publication retains the same immutable light payload");
+		(void)Projection.Apply(*Quiet);
+
+		Owner->SetCFrame(CFrame(glm::vec3(10, 1, 0), glm::mat3(glm::vec3(0, 0, -1),
+			glm::vec3(0, 1, 0), glm::vec3(1, 0, 0))));
+		const auto Moved = Publish();
+		const auto *MovedSpot = Find(Moved, SpotId);
+		Check(Moved->EnvironmentChanged && MovedSpot && MovedSpot->Position == glm::vec3(12, 1, 0) &&
+			MovedSpot->Direction == glm::vec3(-1, 0, 0) && FirstSpot && FirstSpot->Position == glm::vec3(3, 0, 2),
+			"owner-only transform invalidates its descendant light without altering old publications");
+		(void)Projection.Apply(*Moved);
+		Holder->SetParent(World);
+		const auto Reparented = Publish();
+		const auto *DetachedSpot = Find(Reparented, SpotId);
+		Check(Reparented->EnvironmentChanged && DetachedSpot && DetachedSpot->Position == glm::vec3(0, 0, 2),
+			"same-world ancestor reparent refreshes the nearest BasePart binding");
+		(void)Projection.Apply(*Reparented);
+
+		Game->MarkPersistenceSubtreeArchivable();
+		std::shared_ptr<Instance> SaveRoot = Game;
+		std::istringstream Document(InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, SaveRoot));
+		auto Saved = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Document);
+		const auto SavedSpot = Saved.Instance ?
+			std::dynamic_pointer_cast<SpotLight>(Saved.Instance->FindFirstDescendant("Spot Witness")) : nullptr;
+		Check(Saved.Ok && SavedSpot && SavedSpot->GetLightConeAngles() == Vector2(10, 32) &&
+			SavedSpot->GetLightIntensity() == 42.0f && SavedSpot->GetLightCFrame().Position == glm::vec3(0, 0, 2),
+			"generated local light schema restores authored cone, transform, and intensity");
+		if (Saved.Instance) Saved.Instance->Destroy();
+
+		Spot->SetParent(Game->GetService("ReplicatedStorage"));
+		Point->SetLightEnabled(false);
+		const auto Empty = Publish();
+		Check(Empty->EnvironmentChanged && !Empty->Frame.Environment.LocalLights && World->GetLocalLights().size() == 1,
+			"disabled and out-of-WorldRoot lights do not contribute");
+		(void)Projection.Apply(*Empty);
+		Point->Destroy();
+		Check(World->GetLocalLights().empty(), "destroyed lights retire WorldRoot membership");
+
+		for (std::size_t Index = 0; Index < MaximumRenderLocalLights + 2; ++Index)
+			std::make_shared<PointLight>()->SetParent(World);
+		Publisher.RequestFullResync();
+		const auto Bounded = Publish();
+		const auto BoundedLights = Bounded->Frame.Environment.LocalLights;
+		Check(BoundedLights && BoundedLights->size() == MaximumRenderLocalLights &&
+			std::ranges::is_sorted(*BoundedLights, {}, &RenderLocalLightState::Object) &&
+			std::ranges::any_of(Bounded->Diagnostics, [](const auto &Diagnostic) {
+				return Diagnostic.Issue == RenderExtractionIssue::PublicationOverflow;
+			}), "local light capacity publishes the first sorted eligible IDs with an overflow diagnostic");
+		(void)Projection.Apply(*Bounded);
+		if (BoundedLights && !BoundedLights->empty()) {
+			auto Invalid = *Bounded;
+			++Invalid.Id;
+			auto Duplicate = std::make_shared<std::vector<RenderLocalLightState>>(*BoundedLights);
+			Duplicate->at(1).Object = Duplicate->front().Object;
+			Invalid.Frame.Environment.LocalLights = std::move(Duplicate);
+			CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Invalid); },
+				"projection rejects duplicate local light identities before mutation");
+			Check(Projection.GetFrame().Environment.LocalLights == BoundedLights,
+				"projection retains the previous immutable light list after rejection");
+		}
+		Game->Destroy();
+	}
+
+	void TestReflectionProbePublicationBudget() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto Assets = std::dynamic_pointer_cast<AssetService>(Game->GetService("AssetService"));
+		const auto Face = Assets->RegisterMemoryImage("ProbeBudgetFace", 4, 4,
+			std::vector<std::uint8_t>(4 * 4 * 4, 255));
+		std::vector<std::shared_ptr<ReflectionProbe>> Probes;
+		for (std::size_t Index = 0; Index <= MaximumRenderReflectionProbes; ++Index) {
+			auto Probe = std::make_shared<ReflectionProbe>();
+			Probe->SetParent(World);
+			Probes.push_back(std::move(Probe));
+		}
+		const auto Valid = *std::ranges::max_element(Probes, {}, [](const auto &Probe) {
+			return Probe->GetObjectId();
+		});
+		Valid->SetProbePositiveX(Face); Valid->SetProbeNegativeX(Face);
+		Valid->SetProbePositiveY(Face); Valid->SetProbeNegativeY(Face);
+		Valid->SetProbePositiveZ(Face); Valid->SetProbeNegativeZ(Face);
+		RenderPublisher Publisher;
+		auto Changes = Assets->DrainTextureChanges();
+		Publisher.SetUiTextureChanges(std::move(Changes.Creates), std::move(Changes.Updates),
+			std::move(Changes.Removes));
+		const auto Publication = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(Publication->Frame.Environment.ReflectionProbes &&
+			Publication->Frame.Environment.ReflectionProbes->size() == 1 &&
+			Publication->Frame.Environment.ReflectionProbes->front().Object == Valid->GetObjectId(),
+			"incomplete probes do not consume the 32 coherent probe publication slots");
+		for (const auto &Probe : Probes) {
+			Probe->SetProbePositiveX(Face); Probe->SetProbeNegativeX(Face);
+			Probe->SetProbePositiveY(Face); Probe->SetProbeNegativeY(Face);
+			Probe->SetProbePositiveZ(Face); Probe->SetProbeNegativeZ(Face);
+		}
+		Publisher.RequestFullResync();
+		const auto Full = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(Full->Frame.Environment.ReflectionProbes &&
+			Full->Frame.Environment.ReflectionProbes->size() == MaximumRenderReflectionProbes &&
+			std::ranges::any_of(Full->Diagnostics, [](const auto &Diagnostic) {
+				return Diagnostic.Issue == RenderExtractionIssue::PublicationOverflow &&
+					Diagnostic.Message.find("coherent probe publication limit") != std::string::npos;
+			}), "coherent probe publication stays capped at 32 with a diagnostic");
+		Game->Destroy();
+
+		Game = std::make_shared<DataModel>();
+		World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		for (std::size_t Index = 0; Index <= MaximumRenderReflectionProbes * 8; ++Index)
+			std::make_shared<ReflectionProbe>()->SetParent(World);
+		RenderPublisher BoundedPublisher;
+		const auto Bounded = BoundedPublisher.Publish(*World, RenderCameraInput{}, 64, 64);
+		Check(!Bounded->Frame.Environment.ReflectionProbes &&
+			std::ranges::any_of(Bounded->Diagnostics, [](const auto &Diagnostic) {
+				return Diagnostic.Issue == RenderExtractionIssue::PublicationOverflow &&
+					Diagnostic.Message.find("source inspection limit") != std::string::npos;
+			}), "incomplete probe inspection has a finite diagnosed cap");
+		Game->Destroy();
+	}
 }
 
 static_assert(std::is_same_v<gargantuan::RenderPublicationPtr, std::shared_ptr<const gargantuan::RenderPublication>>);
@@ -818,12 +1560,21 @@ int main() {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		TestCameraDepthConvention();
+		TestSceneEnvelopeLifecycle();
 		TestProjectionOrderingAndIdentity();
+		TestCompactTraversalOrderAndLifecycle();
 		TestDeformableAndGuiContracts();
 		TestAnimationPaletteContracts();
 		TestIncrementalPublisher();
+		TestIncrementalWorldMembership();
+		TestDirtyDomainsDoNotMaskFinalState();
 		TestDirtyAccumulatorBoundsAndConsumers();
+		TestSingleObjectBatchDirtyParity();
 		TestEnvironmentLightingFoundation();
+		TestLocalLights();
+		TestReflectionProbeContracts();
+		TestReflectionProbePublicationBudget();
+		TestRetainedUiTextureLifecycle();
 	} catch (const std::exception &Error) {
 		std::cerr << "[Render:PublicationTest] unexpected exception: " << Error.what() << '\n';
 		return 1;

@@ -7,6 +7,7 @@
 #include "gargantuan/classes/Player.hpp"
 #include "gargantuan/datatypes/Vector2.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
+#include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "gargantuan/scripting/StackValue.hpp"
 #include "gargantuan/services/AssetService.hpp"
@@ -154,6 +155,7 @@ namespace gargantuan {
 	CharacterMotionRequest CharacterControlService::EvaluateMovement(
 		const network::CharacterInputCommand &Command, const KinematicCharacter &CharacterValue
 	) {
+		[[maybe_unused]] auto KeepServiceAlive = shared_from_this();
 		if (!PolicyState || MovementPolicyReference == LUA_NOREF)
 			throw std::runtime_error("[Character:Control] no movement policy is installed");
 		auto CharacterPointer = std::dynamic_pointer_cast<KinematicCharacter>(
@@ -161,6 +163,7 @@ namespace gargantuan {
 		);
 		if (!CharacterPointer) throw std::runtime_error("[Character:Control] movement target is unavailable");
 		auto *L = PolicyState;
+		[[maybe_unused]] auto KeepRuntimeAlive = ScriptEngine::Get(L)->weak_from_this().lock();
 		const auto StackBase = lua_gettop(L);
 		ScriptSecurityScope SecurityScope(MovementPolicyContext);
 		lua_getref(L, MovementPolicyReference);
@@ -195,10 +198,12 @@ namespace gargantuan {
 		const std::shared_ptr<KinematicCharacter> &CharacterValue,
 		std::uint32_t Token
 	) {
+		[[maybe_unused]] auto KeepServiceAlive = shared_from_this();
 		const auto Name = GetActionName(Token);
 		if (!Name || !PlayerValue || !CharacterValue) return false;
 		if (!PolicyState || ActionPolicyReference == LUA_NOREF) return true;
 		auto *L = PolicyState;
+		[[maybe_unused]] auto KeepRuntimeAlive = ScriptEngine::Get(L)->weak_from_this().lock();
 		const auto StackBase = lua_gettop(L);
 		ScriptSecurityScope SecurityScope(ActionPolicyContext);
 		lua_getref(L, ActionPolicyReference);

@@ -122,6 +122,7 @@ return c({
 		},
 		Destroy = {
 			description = "Destroys this instance",
+			requiredCapability = "MutateDataModel",
 		},
 
 		IsPropertyModified = {
@@ -145,6 +146,7 @@ return c({
 		},
 		ClearAllChildren = {
 			description = "Unparents all direct children of this instance",
+			requiredCapability = "MutateDataModel",
 		},
 		-- WaitForChild = {
 		-- 	description = "Yields until the named child is parented to this instance",

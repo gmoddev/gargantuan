@@ -38,7 +38,7 @@ namespace gargantuan {
 		EngineProviderConfiguration ProviderConfiguration
 	)
 		: DataModel(game), Renderer(renderer),
-		  Script(std::make_unique<class ScriptEngine>(game, std::move(RuntimeDiagnostic), ProviderConfiguration.Mode)),
+		  Script(std::make_shared<class ScriptEngine>(game, std::move(RuntimeDiagnostic), ProviderConfiguration.Mode)),
 		  Workspace(GetService<gargantuan::Workspace>()),
 		  WorldRoot(std::static_pointer_cast<gargantuan::WorldRoot>(Workspace)),
 		  RunService(GetService<gargantuan::RunService>()), ProcessService(GetService<gargantuan::ProcessService>()),
@@ -106,7 +106,7 @@ namespace gargantuan {
 			DataModel, Players, ActionMap, Spatial, Renderer && dynamic_cast<HeadlessRenderer *>(Renderer) == nullptr
 		);
 		Assets->ConfigureBuiltInFont(DefaultGuiFont);
-		Gui = std::make_unique<GuiRuntime>(DataModel, DefaultGuiFont);
+		Gui = std::make_shared<GuiRuntime>(DataModel, DefaultGuiFont);
 		if (Renderer) {
 			const auto [Width, Height] = Renderer->GetViewportSize();
 			Gui->SetViewport({Width, Height, 1.0f, {}});
@@ -114,6 +114,7 @@ namespace gargantuan {
 		if (DataModel->Filesystem) ProjectSources = std::make_unique<SourceMount>(*DataModel->Filesystem);
 
 		UnbindDescendants = DataModel->BindDescendants([this](std::shared_ptr<Instance> inst) {
+			if (Destroyed || !Script || Script->IsStopping()) return;
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::EngineActivation);
 			if (auto script = std::dynamic_pointer_cast<gargantuan::Script>(inst)) {
 				this->Script->ScriptQueue.insert(script);
@@ -145,6 +146,7 @@ namespace gargantuan {
 		});
 
 		DescendantRemovedConnection = DataModel->DescendantRemoved->Connect([this](std::shared_ptr<Instance> inst) {
+			if (!Script || Script->IsStopping()) return;
 			if (auto script = std::dynamic_pointer_cast<gargantuan::Script>(inst);
 				script && Script->ScriptQueue.contains(script)) {
 				Script->ScriptQueue.erase(script);
@@ -179,6 +181,10 @@ namespace gargantuan {
 		}
 
 		Script->RunBootstrapScript(Players->StartDefaultRuntime(ProviderConfiguration.Mode));
+		if (Destroyed) {
+			Construction.Complete = true;
+			return;
+		}
 		Interaction->StartDefaultRuntime();
 
 		LOG_INFO(App, "Constructed engine");
@@ -193,6 +199,19 @@ namespace gargantuan {
 		if (Destroyed) return;
 		Destroyed = true;
 		LOG_INFO(App, "Destroying engine");
+		if (DataModelDestroyingConnection) {
+			DataModelDestroyingConnection->Disconnect();
+			DataModelDestroyingConnection.reset();
+		}
+		if (UnbindDescendants) {
+			UnbindDescendants();
+			UnbindDescendants = {};
+		}
+		if (DescendantRemovedConnection) {
+			DescendantRemovedConnection->Disconnect();
+			DescendantRemovedConnection.reset();
+		}
+		if (Script) Script->ShutdownRuntime();
 		if (ResidencyPolicy) ResidencyPolicy->Stop(Content.get());
 		ResidencyPolicy.reset();
 		// Preparation owns immutable metadata only. Join before Engine teardown;
@@ -203,10 +222,6 @@ namespace gargantuan {
 		}
 		ResidencyPolicyManifest.reset();
 		if (Content) Content->Stop();
-		if (DataModelDestroyingConnection) {
-			DataModelDestroyingConnection->Disconnect();
-			DataModelDestroyingConnection.reset();
-		}
 		if (Interaction && !Interaction->GetDestroyed()) Interaction->ShutdownRuntime();
 		if (Players && !Players->GetDestroyed()) Players->ShutdownRuntime();
 		if (CharacterControl && !CharacterControl->GetDestroyed()) CharacterControl->DetachRuntime();
@@ -218,14 +233,6 @@ namespace gargantuan {
 		Gui.reset();
 		if (Renderer) Renderer->Destroy();
 		if (WorldRoot && !WorldRoot->GetDestroyed()) WorldRoot->Destroy();
-		if (UnbindDescendants) {
-			UnbindDescendants();
-			UnbindDescendants = {};
-		}
-		if (DescendantRemovedConnection) {
-			DescendantRemovedConnection->Disconnect();
-			DescendantRemovedConnection.reset();
-		}
 		if (Entitlements && !Entitlements->GetDestroyed()) {
 			Entitlements->DetachAsyncRuntime();
 			Entitlements->ShutdownProviderRuntime();
@@ -239,10 +246,15 @@ namespace gargantuan {
 
 	HostEventResult Engine::ProcessEvent(const HostEvent &Event) {
 		HostEventResult Result;
+		if (Destroyed) return Result;
+		// GUI callbacks can destroy the Engine from inside ProcessEvent.
+		auto ActiveGui = Gui;
 		if (const auto *Resize = std::get_if<WindowResizeEvent>(&Event)) {
 			Renderer->Resize(static_cast<int>(Resize->Width), static_cast<int>(Resize->Height));
+			if (Destroyed) return Result;
 			RenderPublishing.RequestFullResync();
-			if (Gui) Gui->SetViewport({Resize->Width, Resize->Height, 1.0f, {}});
+			if (ActiveGui) ActiveGui->SetViewport({Resize->Width, Resize->Height, 1.0f, {}});
+			if (Destroyed) return Result;
 			Workspace->GetCurrentCamera()->SetViewportSize(Vector2(Resize->Width, Resize->Height));
 			return Result;
 		}
@@ -253,14 +265,22 @@ namespace gargantuan {
 		}
 		if (const auto *Focus = std::get_if<FocusEvent>(&Event); Focus && !Focus->Focused && Interaction)
 			Interaction->CancelInput();
+		if (Destroyed) return Result;
 
 		Result.Consumed = UserInputService->ProcessEvent(Event);
-		const bool GuiConsumed = Gui && Gui->ProcessEvent(Event);
-		Result.Consumed = Input->ProcessEvent(Event, GuiConsumed) || GuiConsumed || Result.Consumed;
+		if (Destroyed) return Result;
+		const bool GuiConsumed = ActiveGui && ActiveGui->ProcessEvent(Event);
+		Result.Consumed = GuiConsumed || Result.Consumed;
+		if (Destroyed) return Result;
+		Result.Consumed = Input->ProcessEvent(Event, GuiConsumed) || Result.Consumed;
+		if (Destroyed) return Result;
 		if (!Result.Consumed) Result.Command = Workspace->GetCurrentCamera()->ProcessEvent(Event);
+		if (Destroyed) { Result.Command.reset(); return Result; }
 		if (auto InputCommand = UserInputService->SynchronizeMouseBehavior()) Result.Command = InputCommand;
-		if (Gui)
-			if (auto TextInputCommand = Gui->SynchronizeTextInput()) Result.Command = TextInputCommand;
+		if (Destroyed) { Result.Command.reset(); return Result; }
+		if (ActiveGui)
+			if (auto TextInputCommand = ActiveGui->SynchronizeTextInput()) Result.Command = TextInputCommand;
+		if (Destroyed) Result.Command.reset();
 		return Result;
 	}
 
@@ -302,7 +322,12 @@ namespace gargantuan {
 	void Engine::Step() {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::EngineStep);
 		if (Destroyed || !ProcessService->Alive) return;
+		// A server callback can destroy game during any Luau resume in this
+		// frame. Keep the VM alive until every active callback has unwound.
+		auto ScriptRuntime = Script;
+		auto ActiveGui = Gui;
 		Mutations.Drain();
+		if (Destroyed) return;
 		if (Content) {
 			if (ResidencyPolicy && !Content->IsManifestAvailable()) {
 				ResidencyPolicy->Stop(Content.get());
@@ -357,6 +382,7 @@ namespace gargantuan {
 			} else Content->Step();
 		}
 
+		if (Destroyed) return;
 		CurrentTick = std::chrono::steady_clock::now();
 		if (LastTick.time_since_epoch().count() == 0) LastTick = CurrentTick;
 		float deltaTime = GetDeltaTime();
@@ -370,15 +396,20 @@ namespace gargantuan {
 			{
 				G_PROFILE("Simulation");
 				RunService->PreSimulation->Fire(deltaTime);
+				if (Destroyed) return;
 				runtime_detail::MeasureWork(runtime_detail::WorkPhase::Physics,
 					[&] { WorldRoot->StepPhysics(deltaTime, std::nullopt); });
+				if (Destroyed) return;
 				Workspace->GetCurrentCamera()->Step(deltaTime);
+				if (Destroyed) return;
 				RunService->PostSimulation->Fire(deltaTime);
+				if (Destroyed) return;
 			}
 
 			{
 				G_PROFILE("PreRender");
 				RunService->PreRender->Fire(deltaTime);
+				if (Destroyed) return;
 				if (Spatial) Spatial->PrepareAnimationRequirements();
 				if (Animation) {
 					AnimationUpdateContext UpdateContext;
@@ -402,6 +433,7 @@ namespace gargantuan {
 					}
 					runtime_detail::MeasureWork(runtime_detail::WorkPhase::Animation,
 						[&] { Animation->Step(deltaTime, UpdateContext); });
+					if (Destroyed) return;
 					for (const auto &Request : Animation->GetRootMotionRequests()) {
 						runtime_detail::WorkScope Work(runtime_detail::WorkPhase::RootMotion);
 						const auto AdmissionStarted = std::chrono::steady_clock::now();
@@ -433,6 +465,7 @@ namespace gargantuan {
 								.LocalSpace = true,
 							}
 						);
+						if (Destroyed) return;
 						RootMotionMetrics.PhysicsCpuNanoseconds += Result.PhysicsCpuNanoseconds;
 						if (!Result.Succeeded())
 							++RootMotionMetrics.Rejected;
@@ -450,24 +483,30 @@ namespace gargantuan {
 								.count()
 						);
 					}
+					if (Destroyed) return;
 					RenderPublishing.SetAnimationPoseChanges(Animation->GetPoseUpdates(), Animation->GetPoseRemoves());
 					Animation->ClearChanges();
 				}
 				if (Spatial) Spatial->Step();
 				Interaction->Step(CurrentTick);
-				if (Gui) {
+				if (Destroyed) return;
+				if (ActiveGui) {
 					auto MeshChanges = Assets->DrainMeshChanges();
 					if (!MeshChanges.Creates.empty() || !MeshChanges.Removes.empty())
 						RenderPublishing.SetAssetMeshChanges(
 							std::move(MeshChanges.Creates), std::move(MeshChanges.Removes)
 						);
-					(void)Gui->Reconcile();
-					Gui->Publish(RenderPublishing);
+					(void)ActiveGui->Reconcile();
+					if (Destroyed) return;
+					ActiveGui->Publish(RenderPublishing);
 				}
+				if (Destroyed) return;
 			}
 
 			Input->EndFrame();
+			if (Destroyed) return;
 			UserInputService->EndFrame();
+			if (Destroyed) return;
 
 			{
 				G_PROFILE("Draw");
@@ -482,12 +521,15 @@ namespace gargantuan {
 					RenderPublishing.RequestFullResync();
 					throw;
 				}
+				if (Destroyed) return;
 			}
 
 			{
 				G_PROFILE("Scripts");
 				if (Entitlements) (void)Entitlements->PumpAsyncCompletions();
-				Script->Step();
+				if (Destroyed) return;
+				ScriptRuntime->Step();
+				if (Destroyed) return;
 				if (Audio) Audio->Step(Workspace->GetCurrentCamera()->GetCFrame());
 			}
 		}

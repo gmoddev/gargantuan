@@ -5,6 +5,7 @@ layout(set = 1, binding = 0) uniform SkyUniforms {
     vec4 UpTan;
     vec4 LookExposure;
     vec4 EnvironmentColorHasSky;
+    vec4 SceneFlags;
 } sky;
 
 layout(location = 0) out vec3 ViewRay;

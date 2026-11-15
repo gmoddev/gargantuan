@@ -57,7 +57,12 @@ namespace gargantuan {
 		[[nodiscard]] bool IsValid() const { return Slot != 0 && Generation != 0; }
 	};
 
-	enum class RenderTextureFormat : std::uint8_t { Rgba8Unorm };
+	enum class RenderTextureFormat : std::uint8_t { Rgba8Unorm, Rgba32Float };
+
+	[[nodiscard]] constexpr std::uint32_t GetRenderTexturePixelBytes(RenderTextureFormat Format) {
+		return Format == RenderTextureFormat::Rgba8Unorm ? 4u :
+			Format == RenderTextureFormat::Rgba32Float ? 16u : 0u;
+	}
 
 	struct RenderTextureCreate {
 		RenderTextureIdentity Texture;
@@ -81,6 +86,31 @@ namespace gargantuan {
 	struct RenderTextureRemove { RenderTextureIdentity Texture; };
 
 	enum class RenderOpacityMode : std::uint8_t { Opaque, Masked, Transparent };
+	enum class RenderShadingModel : std::uint8_t { Legacy, MetallicRoughness };
+
+	enum class RenderTextureMinFilter : std::uint8_t {
+		Default, Nearest, Linear, NearestMipmapNearest, LinearMipmapNearest, NearestMipmapLinear, LinearMipmapLinear,
+	};
+	enum class RenderTextureMagFilter : std::uint8_t { Default, Nearest, Linear };
+	enum class RenderTextureWrap : std::uint8_t { Repeat, MirroredRepeat, ClampToEdge };
+	enum class RenderMaterialTextureSlot : std::uint8_t { BaseColor, Normal, MetallicRoughness, Emissive, Occlusion, Count };
+
+	struct RenderSamplerState {
+		RenderTextureMinFilter MinFilter = RenderTextureMinFilter::Default;
+		RenderTextureMagFilter MagFilter = RenderTextureMagFilter::Default;
+		RenderTextureWrap WrapU = RenderTextureWrap::Repeat;
+		RenderTextureWrap WrapV = RenderTextureWrap::Repeat;
+
+		auto operator<=>(const RenderSamplerState &) const = default;
+		[[nodiscard]] constexpr bool IsValid() const {
+			return MinFilter <= RenderTextureMinFilter::LinearMipmapLinear &&
+				MagFilter <= RenderTextureMagFilter::Linear && WrapU <= RenderTextureWrap::ClampToEdge &&
+				WrapV <= RenderTextureWrap::ClampToEdge;
+		}
+	};
+
+	using RenderMaterialSamplers = std::array<RenderSamplerState, static_cast<std::size_t>(RenderMaterialTextureSlot::Count)>;
+	inline constexpr float MaximumRenderNormalScale = 64.0f;
 
 	struct RenderMaterialState {
 		std::uint64_t Revision = 1;
@@ -92,6 +122,14 @@ namespace gargantuan {
 		RenderOpacityMode OpacityMode = RenderOpacityMode::Opaque;
 		float AlphaCutoff = 0.5f;
 		bool DoubleSided = false;
+		RenderShadingModel ShadingModel = RenderShadingModel::Legacy;
+		std::optional<RenderTextureIdentity> MetallicRoughnessTexture;
+		glm::vec3 EmissiveFactor{0.0f};
+		std::optional<RenderTextureIdentity> EmissiveTexture;
+		std::optional<RenderTextureIdentity> OcclusionTexture;
+		float OcclusionStrength = 1.0f;
+		float NormalScale = 1.0f;
+		RenderMaterialSamplers TextureSamplers{};
 	};
 
 	struct RenderPrimitiveMaterialState {

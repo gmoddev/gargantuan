@@ -16,6 +16,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -48,6 +50,7 @@ namespace {
 		std::uint32_t Width = 1280;
 		std::uint32_t Height = 720;
 		bool Synchronize = true;
+		std::optional<std::filesystem::path> CaptureDirectory;
 	};
 
 	struct Samples {
@@ -120,13 +123,15 @@ namespace {
 					"cloth-partial-64k|rubber|topology|gui|mixed|texture-lifecycle|environment|animation|"
 					"animation-rigs|animation-bones|animation-shadow|animation-static-50k|"
 					"animation-differential] "
-					"[--frames=N] [--warmup=N] [--width=N] [--height=N] [--synchronize=on|off]\n";
+					"[--frames=N] [--warmup=N] [--width=N] [--height=N] [--synchronize=on|off] "
+					"[--capture=<fresh-directory>]\n";
 				std::exit(0);
 			} else if (const auto Parsed = Value("--scenario=")) Result.Scenario = *Parsed;
 			else if (const auto Parsed = Value("--frames=")) Result.Frames = ParseSize(*Parsed, "frames");
 			else if (const auto Parsed = Value("--warmup=")) Result.WarmupFrames = ParseSize(*Parsed, "warmup");
 			else if (const auto Parsed = Value("--width=")) Result.Width = static_cast<std::uint32_t>(ParseSize(*Parsed, "width"));
 			else if (const auto Parsed = Value("--height=")) Result.Height = static_cast<std::uint32_t>(ParseSize(*Parsed, "height"));
+			else if (const auto Parsed = Value("--capture=")) Result.CaptureDirectory.emplace(*Parsed);
 			else if (const auto Parsed = Value("--synchronize=")) {
 				if (*Parsed == "on") Result.Synchronize = true;
 				else if (*Parsed == "off") Result.Synchronize = false;
@@ -261,6 +266,14 @@ namespace {
 		Result.CompletionWait.push_back(Milliseconds(Metrics.LastGpuCompletionWaitNanoseconds));
 	}
 
+	void WriteReferenceCapture(const std::filesystem::path &Path, const EditorViewportFrame &Frame) {
+		std::ofstream Image(Path, std::ios::binary);
+		Image << "P6\n" << Frame.Width << ' ' << Frame.Height << "\n255\n";
+		Image.write(reinterpret_cast<const char *>(Frame.RgbPixels.data()),
+			static_cast<std::streamsize>(Frame.RgbPixels.size()));
+		if (!Image) throw std::runtime_error("could not write reference capture: " + Path.string());
+	}
+
 	template <typename PublicationFactory>
 	void Run(
 		std::string_view Name,
@@ -275,7 +288,10 @@ namespace {
 			Vector2(static_cast<float>(Settings.Width), static_cast<float>(Settings.Height)),
 			{.Offscreen = true, .WaitForGpuCompletion = Settings.Synchronize, .DebugDevice = false}
 		);
-		Renderer.Draw(std::make_shared<const RenderPublication>(std::move(Initial)));
+		auto First = std::make_shared<const RenderPublication>(std::move(Initial));
+		const auto CaptureNext = Settings.CaptureDirectory ? std::optional(MakeNext) : std::nullopt;
+		Renderer.Draw(First);
+		if (!Settings.CaptureDirectory) First.reset();
 		for (std::size_t Frame = 0; Frame < Settings.WarmupFrames; ++Frame)
 			Renderer.Draw(std::make_shared<const RenderPublication>(MakeNext(Frame)));
 		const auto Baseline = Renderer.GetMetrics();
@@ -361,6 +377,22 @@ namespace {
 				sizeof(RenderSkinPaletteEntry) : 0)
 			<< ',' << StabilityGate << ',' << RestartGate << ',' << SkinningGate << ",NA,"
 			<< (Settings.Synchronize ? "FenceCompletionLatency" : "QueuedCpuPacing") << '\n';
+		if (Settings.CaptureDirectory) {
+			Renderer.Destroy();
+			EditorViewportRenderer Viewport(Settings.Width, Settings.Height);
+			auto Next = *CaptureNext;
+			(void)Viewport.CaptureBgra(First);
+			WriteReferenceCapture(*Settings.CaptureDirectory / (std::string(Name) + "-initial.ppm"),
+				Viewport.Capture(First));
+			RenderPublicationPtr Last;
+			for (std::size_t Frame = 0; Frame < 16; ++Frame) {
+				Last = std::make_shared<const RenderPublication>(Next(Frame));
+				Viewport.ApplyPublication(Last);
+			}
+			(void)Viewport.CaptureBgra(Last);
+			WriteReferenceCapture(*Settings.CaptureDirectory / (std::string(Name) + "-step16.ppm"),
+				Viewport.Capture(Last));
+		}
 	}
 
 	RenderSkeletonIdentity MakeSkeletonIdentity(std::uint8_t Seed) {
@@ -1002,6 +1034,8 @@ int main(int ArgumentCount, char **Arguments) {
 	try {
 		const SDLGuard SDL;
 		const auto Settings = ParseOptions(ArgumentCount, Arguments);
+		if (Settings.CaptureDirectory && !std::filesystem::create_directory(*Settings.CaptureDirectory))
+			throw std::runtime_error("reference capture directory already exists");
 		std::cout << std::fixed << std::setprecision(4);
 		std::cout << "Scenario,Driver,Synchronization,Frames,Warmup";
 		for (const auto *Stage : {"Frame", "Projection", "MeshTransfer", "TextureTransfer", "UiPreparation", "Submission", "CompletionWait"})

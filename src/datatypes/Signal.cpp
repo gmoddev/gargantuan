@@ -11,6 +11,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_log.h>
 #include <algorithm>
+#include <chrono>
 #include <exception>
 #include <lua.h>
 #include <lualib.h>
@@ -19,9 +20,29 @@
 
 namespace gargantuan {
 	namespace {
+		using SignalClock = std::chrono::steady_clock;
 		thread_local std::size_t SignalDeferralDepth = 0;
 		thread_local bool SignalDeferralCanceled = false;
 		thread_local std::vector<std::pair<std::shared_ptr<BaseSignal>, BaseSignal::CallbackArgument>> DeferredSignals;
+		thread_local bool SignalDispatchProfilingEnabled = false;
+		thread_local SignalDispatchProfile CurrentSignalDispatchProfile;
+
+		std::uint64_t ElapsedNanoseconds(SignalClock::time_point Start) {
+			return static_cast<std::uint64_t>(
+				std::chrono::duration_cast<std::chrono::nanoseconds>(SignalClock::now() - Start).count());
+		}
+	}
+
+	void BaseSignal::SetDispatchProfilingEnabled(bool Enabled) {
+		SignalDispatchProfilingEnabled = Enabled;
+	}
+
+	void BaseSignal::ResetDispatchProfile() {
+		CurrentSignalDispatchProfile = {};
+	}
+
+	SignalDispatchProfile BaseSignal::GetDispatchProfile() {
+		return CurrentSignalDispatchProfile;
 	}
 
 	ScopedSignalDeferral::ScopedSignalDeferral() {
@@ -130,8 +151,15 @@ namespace gargantuan {
 	};
 
 	void BaseSignal::Fire(CallbackArgument value) {
+		const bool Profile = SignalDispatchProfilingEnabled;
+		const auto FireStart = Profile ? SignalClock::now() : SignalClock::time_point{};
+		if (Profile) ++CurrentSignalDispatchProfile.Calls;
 		if (SignalDeferralDepth != 0) {
 			DeferredSignals.emplace_back(shared_from_this(), std::move(value));
+			if (Profile) {
+				++CurrentSignalDispatchProfile.DeferredCalls;
+				CurrentSignalDispatchProfile.TotalNanoseconds += ElapsedNanoseconds(FireStart);
+			}
 			return;
 		}
 		// A handler may connect, disconnect or fire this signal again, so run
@@ -140,34 +168,63 @@ namespace gargantuan {
 		// Instance::Destroy does -- cannot pull entries out from under the loop.
 		std::vector<SignalConnection::Pointer> NestedSnapshot;
 		auto *ConnectionsToFire = &FiringSnapshot;
+		const auto SnapshotStart = Profile ? SignalClock::now() : SignalClock::time_point{};
 		if (FiringDepth == 0)
 			FiringSnapshot.assign(Connections.begin(), Connections.end());
 		else {
 			NestedSnapshot = Connections;
 			ConnectionsToFire = &NestedSnapshot;
 		}
+		if (Profile)
+			CurrentSignalDispatchProfile.SnapshotNanoseconds += ElapsedNanoseconds(SnapshotStart);
 		FiringDepth++;
 
 		try {
 			for (auto &connection : *ConnectionsToFire) {
-				if (connection && connection->Connected && connection->Callback) connection->Callback(value);
+				if (Profile) ++CurrentSignalDispatchProfile.ConnectionVisits;
+				if (connection && connection->Connected && connection->Callback) {
+					if (Profile) {
+						if (connection->L) ++CurrentSignalDispatchProfile.ScriptCallbacks;
+						else ++CurrentSignalDispatchProfile.NativeCallbacks;
+					}
+					if (Profile) {
+						const auto CallbackStart = SignalClock::now();
+						try {
+							connection->Callback(value);
+						} catch (...) {
+							CurrentSignalDispatchProfile.CallbackNanoseconds += ElapsedNanoseconds(CallbackStart);
+							throw;
+						}
+						CurrentSignalDispatchProfile.CallbackNanoseconds += ElapsedNanoseconds(CallbackStart);
+					} else connection->Callback(value);
+				}
 			}
 		} catch (...) {
+			const auto CleanupStart = Profile ? SignalClock::now() : SignalClock::time_point{};
 			FiringDepth--;
 			if (FiringDepth == 0) FiringSnapshot.clear();
 			if (FiringDepth == 0)
 				std::erase_if(Connections, [](const SignalConnection::Pointer &connection) {
 					return !connection || !connection->Connected;
 				});
+			if (Profile) {
+				CurrentSignalDispatchProfile.CleanupNanoseconds += ElapsedNanoseconds(CleanupStart);
+				CurrentSignalDispatchProfile.TotalNanoseconds += ElapsedNanoseconds(FireStart);
+			}
 			throw;
 		}
 
+		const auto CleanupStart = Profile ? SignalClock::now() : SignalClock::time_point{};
 		FiringDepth--;
 		if (FiringDepth == 0) FiringSnapshot.clear();
 		if (FiringDepth == 0) {
 			std::erase_if(Connections, [](const SignalConnection::Pointer &connection) {
 				return !connection || !connection->Connected;
 			});
+		}
+		if (Profile) {
+			CurrentSignalDispatchProfile.CleanupNanoseconds += ElapsedNanoseconds(CleanupStart);
+			CurrentSignalDispatchProfile.TotalNanoseconds += ElapsedNanoseconds(FireStart);
 		}
 	}
 
@@ -227,10 +284,13 @@ namespace gargantuan {
 		const auto SecurityContext = GetCurrentScriptSecurityContext();
 		auto Connection = signal->Once(
 			[L, mainState, threadReference, signal, SecurityContext](CallbackArgument value) {
+				[[maybe_unused]] auto KeepAlive = ScriptEngine::Get(mainState)->weak_from_this().lock();
 				ScriptSecurityScope SecurityScope(SecurityContext);
 				try {
 					int argumentCount = signal->LPushArgument(L, value);
+					const int PreResumeStatus = lua_costatus(mainState, L);
 					int status = lua_resume(L, mainState, argumentCount);
+					ScriptEngine::Get(mainState)->CompleteManagedScriptThreadResume(L, status, PreResumeStatus);
 					if (status != LUA_OK && status != LUA_YIELD) {
 						SDL_Log("Failed to resume thread after signal: %s", lua_tostring(L, -1));
 						lua_pop(L, 1);
@@ -311,6 +371,7 @@ namespace gargantuan {
 	}
 
 	void BaseSignal::LRunCallback(lua_State *mainState, BaseSignal *signal, int callbackReference, std::any value) {
+		[[maybe_unused]] auto KeepAlive = ScriptEngine::Get(mainState)->weak_from_this().lock();
 		if (callbackReference == LUA_NOREF || callbackReference == LUA_REFNIL) {
 			return;
 		}

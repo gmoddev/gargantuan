@@ -35,7 +35,8 @@ namespace gargantuan {
 
 	RenderUpdateDomain RenderDirtyAccumulator::Classify(const ChangePayload &Payload) {
 		if (const auto *Created = std::get_if<ObjectCreatedChange>(&Payload)) {
-			if (Created->ClassName == "Lighting" || Created->ClassName == "Sky")
+			if (Created->ClassName == "Lighting" || Created->ClassName == "Sky" ||
+				Created->ClassName == "PointLight" || Created->ClassName == "SpotLight" || Created->ClassName == "ReflectionProbe")
 				return RenderUpdateDomain::Environment | RenderUpdateDomain::Hierarchy;
 			return RenderUpdateDomain::Transform | RenderUpdateDomain::Material | RenderUpdateDomain::Visibility |
 				RenderUpdateDomain::Geometry | RenderUpdateDomain::Hierarchy;
@@ -58,9 +59,16 @@ namespace gargantuan {
 		if (Property->PropertyName == "Ambient" || Property->PropertyName == "SunColor" ||
 			Property->PropertyName == "Brightness" || Property->PropertyName == "ClockTime" ||
 			Property->PropertyName == "ExposureCompensation" || Property->PropertyName == "EnvironmentColor" ||
+			Property->PropertyName == "EnvironmentRotation" || Property->PropertyName == "IblIntensity" ||
+			Property->PropertyName == "ToneMapping" ||
+			Property->PropertyName.starts_with("Probe") || Property->PropertyName.starts_with("Shadow") ||
 			Property->PropertyName == "FogEnabled" || Property->PropertyName == "FogColor" ||
 			Property->PropertyName == "FogStart" || Property->PropertyName == "FogEnd" ||
-			Property->PropertyName == "Enabled" || Property->PropertyName.starts_with("Skybox"))
+			Property->PropertyName == "Enabled" || Property->PropertyName.starts_with("Skybox") ||
+			Property->PropertyName == "LightEnabled" || Property->PropertyName == "LightColor" ||
+			Property->PropertyName == "LightIntensity" || Property->PropertyName == "LightRange" ||
+			Property->PropertyName == "LightCFrame" || Property->PropertyName == "LightConeAngles" ||
+			Property->PropertyName == "LightShadows" || Property->PropertyName == "LightShadowPriority")
 			return RenderUpdateDomain::Environment;
 		return RenderUpdateDomain::None;
 	}
@@ -127,6 +135,42 @@ namespace gargantuan {
 			ProfileAccumulationNanoseconds.fetch_add(
 				ProfileNanoseconds(ProfileClock::now() - AccumulationStart), std::memory_order_relaxed
 			);
+		}
+	}
+
+	void RenderDirtyAccumulator::RecordBatch(
+		ObjectId Scope,
+		std::span<const std::pair<ObjectId, ChangePayload>> Changes
+	) noexcept {
+		if (Changes.empty()) return;
+		const auto Object = Changes.front().first;
+		for (const auto &[Candidate, Payload] : Changes) {
+			(void)Payload;
+			if (Candidate != Object) {
+				for (const auto &[RecordObject, RecordPayload] : Changes)
+					RecordChange(Scope, RecordObject, RecordPayload);
+				return;
+			}
+		}
+		const bool Profile = ProfilingEnabled.load(std::memory_order_relaxed);
+		const auto ClassificationStart = Profile ? ProfileClock::now() : ProfileClock::time_point{};
+		auto Domains = RenderUpdateDomain::None;
+		for (const auto &[RecordObject, Payload] : Changes) {
+			(void)RecordObject;
+			Domains = Domains | Classify(Payload);
+		}
+		if (Profile) {
+			ProfileClassificationCalls.fetch_add(Changes.size(), std::memory_order_relaxed);
+			ProfileClassificationNanoseconds.fetch_add(
+				ProfileNanoseconds(ProfileClock::now() - ClassificationStart), std::memory_order_relaxed);
+		}
+		if (Domains == RenderUpdateDomain::None) return;
+		const auto AccumulationStart = Profile ? ProfileClock::now() : ProfileClock::time_point{};
+		Mark(Scope, Object, Domains);
+		if (Profile) {
+			ProfileAccumulationCalls.fetch_add(1, std::memory_order_relaxed);
+			ProfileAccumulationNanoseconds.fetch_add(
+				ProfileNanoseconds(ProfileClock::now() - AccumulationStart), std::memory_order_relaxed);
 		}
 	}
 

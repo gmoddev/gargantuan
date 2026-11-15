@@ -1,1 +1,2 @@
 vendor/manifold/** text eol=lf
+tests/fixtures/Foundation3LQualifiedScale/*.json -text

@@ -1,0 +1,255 @@
+name: Renderer Foundation 5 qualification
+
+on:
+  push:
+    branches: [foundation/renderer-5]
+    paths-ignore:
+      - 'devdocs/**'
+      - 'docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-vulkan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908
+        with:
+          version: 1.2.0
+          cache: true
+      - name: Install Linux qualification tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends clang-19 clang-format g++-14 ninja-build glslc spirv-tools \
+            libfreetype-dev libx11-dev libxcursor-dev libxext-dev libxi-dev libxrandr-dev libxss-dev libxtst-dev \
+            xvfb xauth mesa-vulkan-drivers vulkan-tools
+      - name: Build and verify the exact candidate
+        run: |
+          set -euo pipefail
+          mkdir -p renderer-evidence
+          git rev-parse HEAD > renderer-evidence/source.txt
+          lute tools/classgen
+          cmake -S . -B build-renderer -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 \
+            -DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 \
+            -DBUILD_TESTING=ON -DGARGANTUAN_TRACY=OFF -DGARGANTUAN_WITH_GNS=OFF \
+            -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF -DGARGANTUAN_BUILD_RENDERER_BENCHMARKS=ON \
+            -DGARGANTUAN_BUILD_RENDERER_ALLOCATION_PROBE=ON
+          cmake --build build-renderer --parallel 3 --target gargantuan_editor_viewport_smoke \
+            gargantuan_renderer_publication_tests gargantuan_asset_foundation_tests gargantuan_renderer_benchmark \
+            gargantuan_renderer_depth_tests gargantuan_ibl_reference_tests gargantuan_ibl_gpu_tests \
+            gargantuan_renderer_material_mip_tests gargantuan_directional_shadow_cache_tests \
+            gargantuan_reflection_probe_tests gargantuan_directional_cascade_numerics_tests \
+            gargantuan_spot_shadow_atlas_tests gargantuan_reflection_probe_gpu_tests gargantuan_shadow_foundation5_gpu_tests \
+            gargantuan_renderer_instance_record_tests gargantuan_renderer_allocation_benchmark \
+            gargantuan_renderer_allocation_probe_tests
+          cmake --build build-renderer --parallel 3 --target gargantuan_renderer_foundation2_benchmark
+          SDL_VIDEODRIVER=dummy ctest --test-dir build-renderer --output-on-failure \
+            -R '^gargantuan_(renderer_publication|asset_foundation|packaged_shaders|ibl_reference|renderer_material_mips|directional_shadow_cache|reflection_probe_reference|directional_cascade_numerics|spot_shadow_atlas|renderer_instance_records|renderer_allocation_probe)$' \
+            | tee renderer-evidence/ctest.log
+          SDL_VIDEODRIVER=dummy ./build-renderer/gargantuan_renderer_foundation2_benchmark 1 \
+            --renderer-only --group-width=256 --rigid-only --samples=renderer-evidence/semantic-frames.csv \
+            | tee renderer-evidence/semantic.csv
+          SDL_VIDEODRIVER=dummy ctest --test-dir build-renderer --output-on-failure -R '^gargantuan_renderer_instance_records$' \
+            | tee renderer-evidence/instance-records.log
+          for shader in build-renderer/shaders/*.spv; do spirv-val "$shader"; done
+          (cd build-renderer && sha256sum shaders/*.spv) > renderer-evidence/shaders.sha256
+          export VK_DRIVER_FILES="$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)"
+          test -n "$VK_DRIVER_FILES"
+          xvfb-run -a vulkaninfo --summary > renderer-evidence/device.txt
+          failed=0
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_editor_viewport_smoke --require-hdr) \
+            2>&1 | tee renderer-evidence/viewport.log || failed=1
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_depth_tests \
+            --opaque-ordering --output=../renderer-evidence/opaque-ordering) 2>&1 | tee renderer-evidence/opaque-ordering.log || failed=1
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_depth_tests \
+            --instancing-ordering --output=../renderer-evidence/instancing-ordering) 2>&1 | tee renderer-evidence/instancing-ordering.log || failed=1
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_depth_tests \
+            --contiguous-instancing --output=../renderer-evidence/contiguous-instancing) 2>&1 | tee renderer-evidence/contiguous-instancing.log || failed=1
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_depth_tests \
+            --primitive-instancing) 2>&1 | tee renderer-evidence/primitive-instancing.log || failed=1
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_depth_tests \
+            --scene-envelope-pixels --output=../renderer-evidence/scene-envelope) 2>&1 | tee renderer-evidence/scene-envelope.log || failed=1
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_ibl_gpu_tests) \
+            2>&1 | tee renderer-evidence/ibl.log || failed=1
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_reflection_probe_gpu_tests ../renderer-evidence/probes) \
+            2>&1 | tee renderer-evidence/probes.log || failed=1
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_shadow_foundation5_gpu_tests ../renderer-evidence/shadows) \
+            2>&1 | tee renderer-evidence/shadows.log || failed=1
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_benchmark \
+            --incremental --backend=sdl --scenario=material-check --width=640 --height=360 \
+            --capture=../renderer-evidence/material) 2>&1 | tee renderer-evidence/material-check.csv || failed=1
+          (cd build-renderer && SDL_GPU_DRIVER=vulkan xvfb-run -a ./gargantuan_renderer_benchmark \
+            --incremental --backend=sdl --scenario=material-extensions --width=640 --height=360 \
+            --capture=../renderer-evidence/extensions) 2>&1 | tee renderer-evidence/material-extensions.csv || failed=1
+          exit "$failed"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: renderer5-linux
+          path: renderer-evidence/
+
+  windows-release:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908
+        with:
+          version: 1.2.0
+          cache: true
+      - name: Build physical GPU and EditorHost executables
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $VsWhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $Install = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          & (Join-Path $Install 'Common7/Tools/Launch-VsDevShell.ps1') -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          if (-not (Get-Command clang-format.exe -ErrorAction SilentlyContinue)) {
+            $Formatter = Get-ChildItem -LiteralPath (Join-Path $Install 'VC/Tools/Llvm') -Filter clang-format.exe -File -Recurse |
+              Select-Object -First 1
+            if (-not $Formatter) { throw 'Could not find clang-format' }
+            $env:Path = "$($Formatter.DirectoryName);$env:Path"
+          }
+          lute tools/classgen
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $Compiler = Get-Command glslc.exe -ErrorAction SilentlyContinue
+          if (-not $Compiler) {
+            choco install vulkan-sdk --version=1.4.350 --yes --no-progress
+            if ($LASTEXITCODE -notin @(0, 1641, 3010)) { throw 'Vulkan SDK installation failed' }
+            $Compiler = Get-ChildItem -LiteralPath 'C:/VulkanSDK' -Filter glslc.exe -File -Recurse |
+              Where-Object { $_.DirectoryName -match '[\\/]Bin$' } | Select-Object -First 1
+          }
+          if (-not $Compiler) { throw 'Could not find glslc' }
+          $Glslc = if ($Compiler -is [System.IO.FileInfo]) { $Compiler.FullName } else { $Compiler.Source }
+          New-Item -ItemType Directory -Force 'renderer-evidence' | Out-Null
+          $Options = @('-S', '.', '-B', 'build-renderer', '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
+            '-DBUILD_TESTING=ON', '-DGARGANTUAN_TRACY=OFF', '-DGARGANTUAN_WITH_GNS=OFF',
+            '-DGARGANTUAN_BUILD_RENDERER_BENCHMARKS=ON', '-DGARGANTUAN_BUILD_RENDERER_ALLOCATION_PROBE=ON',
+            '-DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF',
+            "-DGARGANTUAN_GLSLC_EXECUTABLE=$Glslc")
+          cmake @Options 2>&1 | Tee-Object -FilePath renderer-evidence/configure.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $Targets = @('gargantuan', 'gargantuan_shaders', 'gargantuan_editor_viewport_smoke',
+            'gargantuan_renderer_benchmark', 'gargantuan_renderer_depth_tests', 'gargantuan_renderer_foundation2_gpu_benchmark',
+            'gargantuan_ibl_gpu_tests', 'gargantuan_foundation_tests', 'gargantuan_renderer_foundation2_benchmark',
+            'gargantuan_reflection_probe_tests', 'gargantuan_directional_cascade_numerics_tests',
+            'gargantuan_spot_shadow_atlas_tests', 'gargantuan_reflection_probe_gpu_tests', 'gargantuan_shadow_foundation5_gpu_tests',
+            'gargantuan_renderer_instance_record_tests', 'gargantuan_renderer_publication_tests',
+            'gargantuan_asset_foundation_tests', 'gargantuan_directional_shadow_cache_tests',
+            'gargantuan_ibl_reference_tests', 'gargantuan_renderer_material_mip_tests',
+            'gargantuan_renderer_allocation_benchmark', 'gargantuan_renderer_allocation_probe_tests')
+          cmake --build build-renderer --parallel 3 --target @Targets 2>&1 | Tee-Object -FilePath renderer-evidence/build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $Names = @('gargantuan.exe', 'gargantuan_editor_viewport_smoke.exe', 'gargantuan_renderer_benchmark.exe',
+            'gargantuan_renderer_depth_tests.exe', 'gargantuan_renderer_foundation2_gpu_benchmark.exe',
+            'gargantuan_ibl_gpu_tests.exe', 'gargantuan_renderer_foundation2_benchmark.exe',
+            'gargantuan_reflection_probe_gpu_tests.exe', 'gargantuan_shadow_foundation5_gpu_tests.exe',
+            'gargantuan_renderer_publication_tests.exe', 'gargantuan_asset_foundation_tests.exe',
+            'gargantuan_directional_shadow_cache_tests.exe', 'gargantuan_renderer_allocation_benchmark.exe', 'SDL3.dll',
+            'test-fixtures/Roboto-Regular.ttf', 'test-fixtures/ross.png')
+          $ShaderFiles = Get-ChildItem -LiteralPath build-renderer/shaders -File -Filter '*.spv'
+          $Names += $ShaderFiles | ForEach-Object { "shaders/$($_.Name)" }
+          $Members = foreach ($Name in $Names) {
+            $File = Join-Path build-renderer $Name
+            $Item = Get-Item -LiteralPath $File
+            @{ path = $Name; bytes = $Item.Length; sha256 = (Get-FileHash -LiteralPath $File).Hash.ToLowerInvariant() }
+          }
+          $Help = & ./build-renderer/gargantuan.exe --help
+          if ($LASTEXITCODE -ne 0 -or ($Help -join [Environment]::NewLine) -notmatch '--editor-host') {
+            throw 'Packaged engine did not expose EditorHost'
+          }
+          @{ source = $env:GITHUB_SHA; directory = 'build-renderer'; editorHostArgument = $true
+            rawSamples = $true; supportsHdr = $true; referenceCaptures = $true; files = @($Members) } |
+            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath renderer-evidence/renderer-package.json
+          $env:SDL_VIDEODRIVER = 'dummy'
+          $env:SDL_AUDIODRIVER = 'dummy'
+          ctest --test-dir build-renderer --output-on-failure -R '^gargantuan_(foundation|renderer_publication|asset_foundation|directional_shadow_cache|ibl_reference|renderer_material_mips|reflection_probe_reference|directional_cascade_numerics|spot_shadow_atlas|renderer_instance_records|renderer_allocation_probe)$' 2>&1 |
+            Tee-Object -FilePath renderer-evidence/ctest.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./build-renderer/gargantuan_renderer_foundation2_benchmark.exe 1 --renderer-only --group-width=256 --rigid-only --samples=renderer-evidence/semantic-frames.csv 2>&1 |
+            Tee-Object -FilePath renderer-evidence/semantic.csv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: renderer5-windows
+          path: |
+            renderer-evidence/
+            build-renderer/gargantuan.exe
+            build-renderer/gargantuan_editor_viewport_smoke.exe
+            build-renderer/gargantuan_renderer_benchmark.exe
+            build-renderer/gargantuan_renderer_allocation_benchmark.exe
+            build-renderer/gargantuan_renderer_depth_tests.exe
+            build-renderer/gargantuan_renderer_foundation2_gpu_benchmark.exe
+            build-renderer/gargantuan_renderer_foundation2_benchmark.exe
+            build-renderer/gargantuan_ibl_gpu_tests.exe
+            build-renderer/gargantuan_reflection_probe_gpu_tests.exe
+            build-renderer/gargantuan_shadow_foundation5_gpu_tests.exe
+            build-renderer/gargantuan_renderer_publication_tests.exe
+            build-renderer/gargantuan_asset_foundation_tests.exe
+            build-renderer/gargantuan_directional_shadow_cache_tests.exe
+            build-renderer/*.dll
+            build-renderer/runtime/
+            build-renderer/test-fixtures/
+            build-renderer/shaders/
+
+  linux-sanitizers:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[renderer5-sanitizers]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908
+        with:
+          version: 1.2.0
+          cache: true
+      - name: Verify renderer publication and resources with sanitizers
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends clang-19 libclang-rt-19-dev clang-format g++-14 ninja-build glslc \
+            libfreetype-dev libx11-dev libxcursor-dev libxext-dev libxi-dev libxrandr-dev libxss-dev libxtst-dev
+          lute tools/classgen
+          mkdir -p renderer-evidence
+          git rev-parse HEAD > renderer-evidence/source.txt
+          Instrument='-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer'
+          cmake -S . -B build-sanitized -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 \
+            "-DCMAKE_C_FLAGS=$Instrument" "-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 $Instrument" \
+            '-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O1 -gline-tables-only -DNDEBUG' \
+            '-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O1 -gline-tables-only -DNDEBUG' \
+            '-DCMAKE_EXE_LINKER_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 -fsanitize=address,undefined' \
+            -DLINKER_SUPPORTS_WL_NO_UNDEFINED=OFF \
+            -DBUILD_TESTING=ON -DGARGANTUAN_TRACY=OFF -DGARGANTUAN_WITH_GNS=OFF \
+            -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF -DGARGANTUAN_BUILD_RENDERER_BENCHMARKS=ON
+          cmake --build build-sanitized --parallel 3 --target gargantuan_renderer_publication_tests \
+            gargantuan_asset_foundation_tests gargantuan_ibl_reference_tests gargantuan_renderer_material_mip_tests \
+            gargantuan_directional_shadow_cache_tests gargantuan_reflection_probe_tests \
+            gargantuan_directional_cascade_numerics_tests gargantuan_spot_shadow_atlas_tests \
+            gargantuan_renderer_instance_record_tests
+          cmake --build build-sanitized --parallel 3 --target gargantuan_renderer_foundation2_benchmark
+          SDL_VIDEODRIVER=dummy ctest --test-dir build-sanitized --output-on-failure \
+            -R '^gargantuan_(renderer_publication|asset_foundation|ibl_reference|renderer_material_mips|directional_shadow_cache|reflection_probe_reference|directional_cascade_numerics|spot_shadow_atlas|renderer_instance_records)$' \
+            | tee renderer-evidence/sanitizers.log
+          SDL_VIDEODRIVER=dummy ./build-sanitized/gargantuan_renderer_foundation2_benchmark 1 \
+            --renderer-only --group-width=256 --rigid-only --samples=renderer-evidence/semantic-frames.csv \
+            | tee renderer-evidence/semantic.csv
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: renderer5-sanitizers
+          path: renderer-evidence/

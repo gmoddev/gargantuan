@@ -1,6 +1,7 @@
 #include "render/sdl/SDLGpuMesh.hpp"
 #include "gargantuan/render/Mesh.hpp"
 #include "gargantuan/render/SDLRenderer.hpp"
+#include <cmath>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -8,6 +9,23 @@
 
 namespace gargantuan {
 	namespace {
+		std::optional<RenderBounds> GetImmutablePositionBounds(const std::vector<Vertex> &Vertices) {
+			// Match the conservative local-coordinate limit used by opaque coverage.
+			// An unsupported mesh may still use ordinary drawing; it cannot instance.
+			constexpr float MaximumLocalCoordinate = 1.0e6f;
+			if (Vertices.empty()) return std::nullopt;
+			RenderBounds Bounds{Vertices.front().Position, Vertices.front().Position};
+			for (const auto &VertexValue : Vertices) {
+				const auto Position = VertexValue.Position;
+				if (!std::isfinite(Position.x) || !std::isfinite(Position.y) || !std::isfinite(Position.z) ||
+					glm::any(glm::greaterThan(glm::abs(Position), glm::vec3(MaximumLocalCoordinate))))
+					return std::nullopt;
+				Bounds.Minimum = glm::min(Bounds.Minimum, Position);
+				Bounds.Maximum = glm::max(Bounds.Maximum, Position);
+			}
+			return Bounds;
+		}
+
 		Mesh ConvertMesh(const RenderMeshCreate &MeshData) {
 			Mesh Result;
 			Result.Vertices.reserve(MeshData.Vertices->size());
@@ -43,11 +61,13 @@ namespace gargantuan {
 		this->VertexBufferSize = static_cast<std::uint32_t>(VertexBytes);
 		this->IndexCount = static_cast<std::uint32_t>(Indices.size());
 		this->IndexBufferSize = static_cast<std::uint32_t>(IndexBytes);
+		ImmutablePositionBounds = GetImmutablePositionBounds(Vertices);
 	}
 
 	SDLGpuMesh::SDLGpuMesh(const RenderMeshCreate &MeshData, SDLRendererMetrics *MetricsValue)
 		: SDLGpuMesh(ConvertMesh(MeshData), MetricsValue) {
 		if (Metrics && MeshData.SkinInfluences) ++Metrics->SkinnedSourceResourceCreations;
+		if (MeshData.SkinInfluences) ImmutablePositionBounds.reset();
 	}
 
 	SDL_GPUBuffer *SDLGpuMesh::CreateVertexBuffer(SDL_GPUDevice *gpu) {
@@ -138,6 +158,7 @@ namespace gargantuan {
 			throw std::out_of_range("Dynamic mesh vertex update exceeds its persistent buffer");
 		if (UpdatedVertices.size() > std::numeric_limits<std::uint32_t>::max() / sizeof(Vertex))
 			throw std::length_error("Dynamic mesh vertex update exceeds the SDL transfer limit");
+		ImmutablePositionBounds.reset();
 		for (std::size_t Index = 0; Index < UpdatedVertices.size(); ++Index) {
 			const auto &Source = UpdatedVertices[Index];
 			auto &Destination = Vertices[FirstVertex + Index];

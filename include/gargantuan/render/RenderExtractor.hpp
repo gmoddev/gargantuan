@@ -13,6 +13,7 @@
 #include <optional>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <glm/glm.hpp>
 
@@ -130,6 +131,8 @@ namespace gargantuan {
 			const WorldRoot &World,
 			std::vector<RenderExtractionDiagnostic> &Diagnostics
 		);
+		[[nodiscard]] std::shared_ptr<const std::vector<RenderReflectionProbeState>> BuildReflectionProbes(
+			const WorldRoot &World, std::vector<RenderExtractionDiagnostic> &Diagnostics);
 
 		RenderExtractor FullExtractor;
 		RenderDirtyAccumulator *Dirty = nullptr;
@@ -145,6 +148,7 @@ namespace gargantuan {
 		std::unordered_map<ObjectId, RenderAnimationPoseState> CommittedAnimationPoses;
 		std::vector<ObjectId> PendingAnimationObjects;
 		RenderEnvironmentState PublishedEnvironment;
+		std::unordered_set<ObjectId> LocalLightOwners;
 		std::optional<PublishedSky> LastKnownGoodSky;
 		bool HasPublishedEnvironment = false;
 		std::shared_ptr<const RenderUiFrame> PendingUi;

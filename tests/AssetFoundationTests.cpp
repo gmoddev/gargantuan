@@ -13,6 +13,7 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "../src/assets/AssetImporter.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -126,6 +127,78 @@ namespace {
 		return Bytes;
 	}
 
+	std::vector<std::uint8_t> MakeHdrHeader(std::uint32_t Width, std::uint32_t Height) {
+		const auto Header = "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y " + std::to_string(Height) +
+			" +X " + std::to_string(Width) + "\n";
+		return {Header.begin(), Header.end()};
+	}
+
+	std::vector<std::uint8_t> MakeHdr(std::uint32_t Width, std::uint32_t Height,
+		std::array<std::uint8_t, 4> Rgbe) {
+		auto Bytes = MakeHdrHeader(Width, Height);
+		for (std::uint32_t Y = 0; Y < Height; ++Y) for (std::uint32_t X = 0; X < Width; ++X)
+			Bytes.insert(Bytes.end(), Rgbe.begin(), Rgbe.end());
+		return Bytes;
+	}
+
+	std::vector<std::uint8_t> MakeHdrWithMetadata(std::string_view Lines) {
+		const auto Flat = MakeHdr(2, 2, {128, 64, 32, 137});
+		const auto Header = "#?RADIANCE\n" + std::string(Lines) + "\n-Y 2 +X 2\n";
+		std::vector<std::uint8_t> Bytes(Header.begin(), Header.end());
+		Bytes.insert(Bytes.end(), Flat.begin() + static_cast<std::ptrdiff_t>(MakeHdrHeader(2, 2).size()), Flat.end());
+		return Bytes;
+	}
+
+	std::vector<std::uint8_t> MakeHdrRle(bool Literal) {
+		auto Bytes = MakeHdrHeader(8, 8);
+		constexpr std::array<std::uint8_t, 4> Rgbe{128, 64, 32, 137};
+		for (std::uint32_t Y = 0; Y < 8; ++Y) {
+			Bytes.insert(Bytes.end(), {2, 2, 0, 8});
+			for (const auto Channel : Rgbe) {
+				Bytes.push_back(Literal ? 8 : 136);
+				for (unsigned Pixel = 0; Pixel < (Literal ? 8u : 1u); ++Pixel) Bytes.push_back(Channel);
+			}
+		}
+		return Bytes;
+	}
+
+	void CheckHdrTruncations(std::string_view Name, const std::vector<std::uint8_t> &Bytes,
+		std::size_t HeaderBytes, const gargantuan::IAssetImporter &Importer) {
+		const gargantuan::AssetImportContext Context{
+			.RequestedKind = gargantuan::AssetKind::Image, .SourceExtension = ".hdr",
+			.Deadline = std::chrono::steady_clock::now() + std::chrono::minutes(5),
+		};
+		Check(Importer.ImportGraph(Bytes, Context).has_value(), "complete HDR corruption fixture decodes");
+		for (std::size_t Prefix = HeaderBytes; Prefix < Bytes.size(); ++Prefix) {
+			const auto Result = Importer.ImportGraph({Bytes.data(), Prefix}, Context);
+			if (Result) {
+				std::cerr << "[Assets:HDR] Accepted truncated " << Name << " prefix=" << Prefix << '/' << Bytes.size() << '\n';
+				++Failures;
+			}
+		}
+	}
+
+	std::vector<std::uint8_t> MakeHdrGradient() {
+		auto Bytes = MakeHdr(8, 4, {0, 0, 0, 0});
+		const auto HeaderBytes = Bytes.size() - 8 * 4 * 4;
+		for (std::uint32_t Y = 0; Y < 4; ++Y) for (std::uint32_t X = 0; X < 8; ++X) {
+			const auto Offset = HeaderBytes + (Y * 8 + X) * 4;
+			Bytes[Offset] = static_cast<std::uint8_t>(32 + X * 16);
+			Bytes[Offset + 1] = static_cast<std::uint8_t>(32 + Y * 32);
+			Bytes[Offset + 2] = 0;
+			Bytes[Offset + 3] = 136;
+		}
+		return Bytes;
+	}
+
+	float ReadHdrChannel(const gargantuan::ImportedImage &Image, std::size_t Pixel, unsigned Channel) {
+		const auto Offset = (Pixel * 4 + Channel) * 4;
+		std::uint32_t Bits = 0;
+		for (unsigned Byte = 0; Byte < 4; ++Byte)
+			Bits |= static_cast<std::uint32_t>((*Image.Pixels)[Offset + Byte]) << (Byte * 8);
+		return std::bit_cast<float>(Bits);
+	}
+
 	std::string EncodeBase64(std::span<const std::uint8_t> Bytes) {
 		static constexpr std::string_view Alphabet =
 			"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -201,7 +274,8 @@ namespace {
 		Root["materials"] = nlohmann::ordered_json::array({
 			{{"name", "Textured"},
 			 {"pbrMetallicRoughness", {{"baseColorFactor", {0.8, 0.7, 0.6, 1.0}},
-				 {"baseColorTexture", {{"index", 0}}}, {"metallicFactor", 0.25}, {"roughnessFactor", 0.75}}},
+				 {"baseColorTexture", {{"index", 0}}}, {"metallicRoughnessTexture", {{"index", 0}}},
+				 {"metallicFactor", 0.25}, {"roughnessFactor", 0.75}}},
 			 {"normalTexture", {{"index", 0}, {"scale", 1.0}}},
 			 {"alphaMode", "MASK"}, {"alphaCutoff", 0.4}, {"doubleSided", true}},
 			{{"name", "Translucent"},
@@ -248,12 +322,75 @@ namespace {
 	std::shared_ptr<gargantuan::AssetService> GetAssets(const std::shared_ptr<gargantuan::DataModel> &World) {
 		return std::dynamic_pointer_cast<gargantuan::AssetService>(World->GetService("AssetService"));
 	}
+
+	void CheckMaterialArtifactVersions() {
+		using namespace gargantuan;
+		ImportedMaterial Material;
+		const AssetId Image{1, 2};
+		std::vector<std::uint8_t> Expected{'G', 'A', 'R', 'G', 'A', 'S', '0', '1'};
+		AppendU32(Expected, 2);
+		Expected.push_back(static_cast<std::uint8_t>(AssetKind::Material));
+		for (std::size_t Index = 0; Index < 6; ++Index) AppendFloat(Expected, 1.0f);
+		Expected.insert(Expected.end(), {0, 0, 0}); // Color reference, normal reference, opaque mode.
+		AppendFloat(Expected, 0.5f);
+		Expected.push_back(0); // Single sided.
+		const auto V2 = EncodeAssetArtifact(Material, AssetKind::Material);
+		const auto V2Decoded = DecodeAssetArtifact(Expected, AssetKind::Material, AssetContentId::Hash(Expected));
+		Check(V2 && **V2 == Expected && V2Decoded &&
+			!std::get<ImportedMaterial>(V2Decoded->Asset).HasAdvancedInputs(),
+			"legacy v2 material bytes and defaults remain unchanged");
+
+		Material.MetallicRoughnessTexture = Image;
+		Expected[8] = 5;
+		Expected.insert(Expected.end(), {1, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0});
+		const auto V5 = EncodeAssetArtifact(Material, AssetKind::Material);
+		const auto V5Decoded = DecodeAssetArtifact(Expected, AssetKind::Material, AssetContentId::Hash(Expected));
+		Check(V5 && **V5 == Expected && V5Decoded &&
+			std::get<ImportedMaterial>(V5Decoded->Asset).MetallicRoughnessTexture == Image &&
+			!std::get<ImportedMaterial>(V5Decoded->Asset).HasAdvancedInputs(),
+			"legacy v5 packed-material bytes and defaults remain unchanged");
+
+		Material.MetallicRoughnessTexture.reset();
+		Material.EmissiveFactor = {.25f, .5f, 1.0f};
+		Material.EmissiveTexture = Image;
+		Material.OcclusionTexture = Image;
+		Material.OcclusionStrength = .25f;
+		const auto OcclusionSlot = static_cast<std::size_t>(RenderMaterialTextureSlot::Occlusion);
+		Material.TextureSamplers[OcclusionSlot].WrapV = RenderTextureWrap::MirroredRepeat;
+		const auto V6 = EncodeAssetArtifact(Material, AssetKind::Material);
+		Check(V6 && (*V6)->at(8) == 6, "advanced material without a packed texture uses artifact v6");
+		if (!V6) return;
+		const auto V6Decoded = DecodeAssetArtifact(**V6, AssetKind::Material, AssetContentId::Hash(**V6));
+		bool Stable = false;
+		if (V6Decoded) {
+			const auto Reencoded = EncodeAssetArtifact(V6Decoded->Asset, AssetKind::Material);
+			Stable = Reencoded && **Reencoded == **V6;
+		}
+		Check(Stable, "v6 material decode and re-encode are byte stable");
+		auto InvalidSampler = **V6;
+		InvalidSampler.back() = 255;
+		Check(!DecodeAssetArtifact(InvalidSampler, AssetKind::Material, AssetContentId::Hash(InvalidSampler)),
+			"v6 material rejects invalid sampler enum even with a valid artifact hash");
+		Material.OcclusionStrength = 1.25f;
+		Check(!EncodeAssetArtifact(Material, AssetKind::Material), "v6 material rejects out-of-range occlusion strength");
+	}
 }
 
 int main() {
 	using namespace gargantuan;
 	struct SdlProcessCleanup final { ~SdlProcessCleanup() { SDL_Quit(); } } SdlCleanup;
+	const auto *ExecutableBase = SDL_GetBasePath();
+	if (!ExecutableBase) { std::cerr << "[Asset:Test] Could not locate packaged fixtures\n"; return 1; }
+	const auto PackagedFixtures = std::filesystem::path(ExecutableBase) / "test-fixtures";
+	const auto FontFixture = std::filesystem::exists(GARGANTUAN_ASSET_TEST_FONT_PATH) ?
+		std::filesystem::path(GARGANTUAN_ASSET_TEST_FONT_PATH) : PackagedFixtures / "Roboto-Regular.ttf";
+	const auto PngFixture = std::filesystem::exists(GARGANTUAN_ASSET_TEST_PNG_PATH) ?
+		std::filesystem::path(GARGANTUAN_ASSET_TEST_PNG_PATH) : PackagedFixtures / "ross.png";
+	if (!std::filesystem::is_regular_file(FontFixture) || !std::filesystem::is_regular_file(PngFixture)) {
+		std::cerr << "[Asset:Test] Missing required font or PNG fixture\n"; return 1;
+	}
 	BootstrapNativeRuntimeSchema();
+	CheckMaterialArtifactVersions();
 
 	auto NewProjectWorld = std::make_shared<DataModel>();
 	(void)NewProjectWorld->GetService("Workspace");
@@ -317,9 +454,9 @@ int main() {
 	WriteText(Root / "assets" / "extreme.obj", "v 0 0 0\nv 1000001 0 0\nv 0 1 0\nf 1 2 3\n");
 	WriteText(Root / "assets" / "bad.png", "not a png");
 	WriteText(Root / "assets" / "bad.ttf", "not a font");
-	std::filesystem::copy_file(std::filesystem::path(GARGANTUAN_ASSET_TEST_FONT_PATH),
+	std::filesystem::copy_file(FontFixture,
 		Root / "assets" / "font.ttf", std::filesystem::copy_options::overwrite_existing);
-	std::filesystem::copy_file(std::filesystem::path(GARGANTUAN_ASSET_TEST_PNG_PATH),
+	std::filesystem::copy_file(PngFixture,
 		Root / "assets" / "representative.png", std::filesystem::copy_options::overwrite_existing);
 	auto CompoundFixture = MakeGltfFixture(91);
 	WriteBytes(Root / "assets" / "compound.glb", MakeGlb(CompoundFixture));
@@ -388,6 +525,135 @@ int main() {
 		"stable logical identity remains distinct from deterministic content identity");
 	const auto PersistentImageReference = DuplicateContent.Record->Reference.Value;
 	auto PngImport = Assets->ImportProjectAsset(Mount, "assets/representative.png", AssetKind::Image, "Representative PNG");
+	const auto HdrImporters = CreateFoundationAssetImporters();
+	const auto HdrDecoder = std::ranges::find_if(HdrImporters, [](const auto &Importer) {
+		return Importer->GetKind() == AssetKind::Image && Importer->SupportsExtension(".hdr");
+	});
+	Check(HdrDecoder != HdrImporters.end(), "Radiance HDR importer is registered");
+	if (HdrDecoder != HdrImporters.end()) {
+		CheckHdrTruncations("flat-2x2", MakeHdr(2, 2, {128, 64, 32, 137}),
+			MakeHdrHeader(2, 2).size(), **HdrDecoder);
+		CheckHdrTruncations("flat-after-wide-header", MakeHdr(8, 8, {128, 64, 32, 137}),
+			MakeHdrHeader(8, 8).size(), **HdrDecoder);
+		CheckHdrTruncations("rle-run", MakeHdrRle(false), MakeHdrHeader(8, 8).size(), **HdrDecoder);
+		CheckHdrTruncations("rle-literal", MakeHdrRle(true), MakeHdrHeader(8, 8).size(), **HdrDecoder);
+	}
+	WriteBytes(Root / "assets" / "uniform.hdr", MakeHdr(4, 2, {128, 64, 32, 137}));
+	auto HdrImport = Assets->ImportProjectAsset(Mount, "assets/uniform.hdr", AssetKind::Image, "HDR Panorama");
+	Check(HdrImport.Ok && HdrImport.Records.size() == 6 && HdrImport.Record &&
+		HdrImport.Record->LogicalKey == "positive-x", "HDR panorama creates six canonical Image assets");
+	std::array<AssetId, 6> HdrIds{};
+	if (HdrImport.Records.size() == 6) {
+		for (std::size_t Index = 0; Index < HdrIds.size(); ++Index) {
+			const auto &Record = HdrImport.Records[Index];
+			HdrIds[Index] = Record.Id;
+			const auto *Image = Record.Asset ? std::get_if<ImportedImage>(Record.Asset.get()) : nullptr;
+			Check(Image && Image->Format == RenderTextureFormat::Rgba32Float && Image->Width == 1 &&
+				Image->Height == 1 && Image->Pixels && Image->Pixels->size() == 16,
+				"HDR cube face retains linear float pixels");
+			if (Image && Image->Pixels && Image->Pixels->size() >= 4) {
+				std::uint32_t Bits = 0;
+				for (unsigned Byte = 0; Byte < 4; ++Byte) Bits |= static_cast<std::uint32_t>((*Image->Pixels)[Byte]) << (Byte * 8);
+				Check(std::abs(std::bit_cast<float>(Bits) - 256.0f) < 0.01f,
+					"HDR source radiance survives import without SDR clipping");
+			}
+		}
+		const auto &Face = std::get<ImportedImage>(*HdrImport.Records[0].Asset);
+		const auto Encoded = EncodeAssetArtifact(Face, AssetKind::Image);
+		if (Encoded) {
+			auto InvalidArtifact = std::vector<std::uint8_t>(**Encoded);
+			const auto NanBits = std::bit_cast<std::uint32_t>(std::numeric_limits<float>::quiet_NaN());
+			for (unsigned Byte = 0; Byte < 4; ++Byte)
+				InvalidArtifact[InvalidArtifact.size() - 16 + Byte] = static_cast<std::uint8_t>(NanBits >> (Byte * 8));
+			const auto Rejected = DecodeAssetArtifact(InvalidArtifact, AssetKind::Image,
+				AssetContentId::Hash(InvalidArtifact));
+			Check(!Rejected && Rejected.error().Code == "InvalidRadiance",
+				"version 7 image artifact rejects non-finite radiance after integrity validation");
+			const auto ExtremeBits = std::bit_cast<std::uint32_t>(1000000.0f);
+			for (unsigned Byte = 0; Byte < 4; ++Byte)
+				InvalidArtifact[InvalidArtifact.size() - 16 + Byte] = static_cast<std::uint8_t>(ExtremeBits >> (Byte * 8));
+			const auto Extreme = DecodeAssetArtifact(InvalidArtifact, AssetKind::Image,
+				AssetContentId::Hash(InvalidArtifact));
+			Check(Extreme && std::abs(ReadHdrChannel(std::get<ImportedImage>(Extreme->Asset), 0, 0) - 1000000.0f) < 1.0f,
+				"canonical float artifact preserves finite radiance above the half-float GPU range");
+		} else Check(false, "HDR face encodes as a canonical float image artifact");
+	}
+	const auto HdrChanges = Assets->DrainTextureChanges();
+	Check(std::ranges::count_if(HdrChanges.Creates, [](const auto &Create) {
+		return Create.Format == RenderTextureFormat::Rgba32Float;
+	}) == 6, "HDR faces publish explicit float GPU texture format");
+	WriteBytes(Root / "assets" / "gradient.hdr", MakeHdrGradient());
+	const auto GradientImport = Assets->ImportProjectAsset(Mount, "assets/gradient.hdr", AssetKind::Image, "HDR Orientation");
+	if (GradientImport.Ok && GradientImport.Records.size() == 6) {
+		const auto Face = [&](std::string_view Key) -> const ImportedImage * {
+			const auto Record = std::ranges::find(GradientImport.Records, Key, &AssetRecord::LogicalKey);
+			return Record == GradientImport.Records.end() || !Record->Asset
+				? nullptr : std::get_if<ImportedImage>(Record->Asset.get());
+		};
+		const auto *PositiveX = Face("positive-x"), *NegativeX = Face("negative-x");
+		const auto *PositiveY = Face("positive-y"), *NegativeY = Face("negative-y");
+		Check(PositiveX && NegativeX && PositiveY && NegativeY &&
+			ReadHdrChannel(*PositiveX, 0, 0) > ReadHdrChannel(*NegativeX, 0, 0) + 20.0f &&
+			ReadHdrChannel(*PositiveY, 0, 1) < ReadHdrChannel(*NegativeY, 0, 1) - 20.0f,
+			"equirectangular import follows the Sky +X and +Y face orientation");
+	} else Check(false, "bounded HDR gradient imports as a six-face panorama");
+	if (HdrImport.Record) {
+		const auto Saved = Assets->CaptureProjectAssets();
+		auto Restarted = std::make_shared<AssetService>();
+		Restarted->LoadProjectAssetSnapshot(Saved);
+		const auto Restored = Restarted->GetAsset(HdrImport.Record->Reference.Value);
+		Check(Restored && Restored->Id == HdrImport.Record->Id && Restored->Asset &&
+			std::get<ImportedImage>(*Restored->Asset).Format == RenderTextureFormat::Rgba32Float,
+			"HDR artifact survives an asset-service restart with stable identity");
+		WriteBytes(Root / "assets" / "uniform.hdr", MakeHdr(4, 2, {64, 32, 16, 137}));
+		const auto Reimported = Assets->ReimportProjectAsset(Mount, HdrImport.Record->Reference.Value);
+		Check(Reimported.Ok && Reimported.Records.size() == 6 &&
+			std::ranges::all_of(Reimported.Records, [&](const auto &Record) {
+				return std::ranges::find(HdrIds, Record.Id) != HdrIds.end() && Record.ContentRevision == 2;
+			}), "HDR panorama reimport keeps all six derived identities");
+	}
+	// The largest RGBE exponent and mantissa still encode finite float32 radiance.
+	// NaN rejection is exercised through the canonical artifact above.
+	WriteBytes(Root / "assets" / "max-rgbe.hdr", MakeHdr(2, 2, {255, 255, 255, 255}));
+	const auto MaximumRgbe = Assets->ImportProjectAsset(Mount, "assets/max-rgbe.hdr", AssetKind::Image);
+	Check(MaximumRgbe.Ok && MaximumRgbe.Record && MaximumRgbe.Record->Asset &&
+		std::isfinite(ReadHdrChannel(std::get<ImportedImage>(*MaximumRgbe.Record->Asset), 0, 0)) &&
+		ReadHdrChannel(std::get<ImportedImage>(*MaximumRgbe.Record->Asset), 0, 0) > 1.0e38f,
+		"maximum RGBE source radiance remains finite in the canonical image");
+	const auto CheckHdrMetadata = [&](std::string_view Name, std::string_view Lines, bool Accepted,
+		std::string_view Diagnostic) {
+		const auto Path = "assets/" + std::string(Name) + ".hdr";
+		WriteBytes(Root / Path, MakeHdrWithMetadata(Lines));
+		const auto Result = Assets->ImportProjectAsset(Mount, Path, AssetKind::Image);
+		Check(Result.Ok == Accepted && (Accepted || Result.Diagnostic.Code == Diagnostic),
+			"HDR metadata is admitted only with unambiguous linear RGBE interpretation");
+	};
+	CheckHdrMetadata("duplicate-format", "FORMAT=32-bit_rle_rgbe\nFORMAT=32-bit_rle_rgbe\n",
+		false, "MalformedImage");
+	CheckHdrMetadata("mixed-format", "FORMAT=32-bit_rle_xyze\nFORMAT=32-bit_rle_rgbe\n",
+		false, "UnsupportedColorSpace");
+	CheckHdrMetadata("nonunit-pixel-aspect", "FORMAT=32-bit_rle_rgbe\nPIXASPECT=2\n",
+		false, "UnsupportedPixelAspect");
+	CheckHdrMetadata("nonunit-exposure", "FORMAT=32-bit_rle_rgbe\nEXPOSURE=2\n",
+		false, "UnsupportedExposure");
+	CheckHdrMetadata("explicit-correction", "FORMAT=32-bit_rle_rgbe\nCOLORCORR=1 1 1\n",
+		false, "UnsupportedColorSpace");
+	CheckHdrMetadata("neutral-metadata", "# tool note EXPOSURE=2\nCUSTOM=kept\nFORMAT=32-bit_rle_rgbe\nEXPOSURE= +1\nPIXASPECT=1\n",
+		true, "");
+	WriteBytes(Root / "assets" / "extreme.hdr", MakeHdr(2, 2, {128, 0, 0, 145}));
+	const auto ExtremeImport = Assets->ImportProjectAsset(Mount, "assets/extreme.hdr", AssetKind::Image);
+	Check(ExtremeImport.Ok && ExtremeImport.Record && ExtremeImport.Record->Asset &&
+		ReadHdrChannel(std::get<ImportedImage>(*ExtremeImport.Record->Asset), 0, 0) > 65504.0f,
+		"finite HDR radiance above half-float range survives canonical source import");
+	auto TruncatedHdr = MakeHdr(2, 2, {128, 0, 0, 129});
+	TruncatedHdr.resize(TruncatedHdr.size() - 4);
+	WriteBytes(Root / "assets" / "truncated.hdr", TruncatedHdr);
+	Check(!Assets->ImportProjectAsset(Mount, "assets/truncated.hdr", AssetKind::Image).Ok,
+		"truncated HDR pixel payload is rejected");
+	WriteText(Root / "assets" / "oversized.hdr", "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1024 +X 2048\n");
+	Check(!Assets->ImportProjectAsset(Mount, "assets/oversized.hdr", AssetKind::Image).Ok,
+		"oversized HDR dimensions are rejected before pixel decode");
+	(void)Assets->DrainTextureChanges();
 	Check(PngImport.Ok && PngImport.Record && PngImport.Record->Asset &&
 		std::get<ImportedImage>(*PngImport.Record->Asset).Width == 512,
 		"representative PNG input passes header preflight and canonical RGBA decode");
@@ -652,6 +918,7 @@ int main() {
 		"glTF conversion preserves canonical vertices, UVs, tangents, winding, and primitive material slots");
 	Check(GltfMaterial && GltfMaterial->Value.BaseColorTexture == GltfImageRecord->Id &&
 		GltfMaterial->Value.NormalTexture == GltfImageRecord->Id &&
+		GltfMaterial->Value.MetallicRoughnessTexture == GltfImageRecord->Id &&
 		GltfMaterial->Value.MetallicFactor == 0.25f && GltfMaterial->Value.RoughnessFactor == 0.75f &&
 		GltfMaterial->Value.AlphaMode == AssetMaterialAlphaMode::Mask && GltfMaterial->Value.DoubleSided &&
 		TexturedMaterialRecord->Dependencies.size() == 1 && GltfMeshRecord->Dependencies.size() == 3 &&
@@ -689,7 +956,9 @@ int main() {
 			MeshCreates.push_back(&Create);
 	Check(MeshCreates.size() == 2 && MeshCreates[0]->Mesh == MeshCreates[1]->Mesh &&
 		MeshCreates[0]->Primitives && MeshCreates[0]->Primitives->size() == 2 &&
-		MeshCreates[0]->Primitives->at(0).Material.BaseColorTexture.has_value(),
+		MeshCreates[0]->Primitives->at(0).Material.BaseColorTexture.has_value() &&
+		MeshCreates[0]->Primitives->at(0).Material.MetallicRoughnessTexture ==
+			MeshCreates[0]->Primitives->at(0).Material.BaseColorTexture,
 		"two MeshParts share one mesh residency while publishing per-primitive material and texture state");
 	RenderProjection CompoundProjection;
 	Check(CompoundProjection.Apply(*CompoundPublication).Created >= 2,
@@ -825,6 +1094,74 @@ int main() {
 		!RemoteGltf.Ok && RemoteGltf.Diagnostic.Code == "ExternalUriRejected",
 		"malformed containers and traversal, absolute, and remote glTF URIs fail with structured diagnostics");
 
+	auto AdvancedFixture = MakeGltfFixture(92);
+	AdvancedFixture.Document["samplers"] =
+		nlohmann::ordered_json::array({{{"minFilter", 9986}, {"magFilter", 9729}, {"wrapS", 33648}, {"wrapT", 33071}}});
+	AdvancedFixture.Document["textures"].push_back({{"source", 0}, {"sampler", 0}});
+	auto &AdvancedSource = AdvancedFixture.Document["materials"][0];
+	AdvancedSource["normalTexture"] = {{"index", 1}, {"scale", -0.5}};
+	AdvancedSource["emissiveFactor"] = {0.125, 0.25, 0.5};
+	AdvancedSource["emissiveTexture"] = {{"index", 0}};
+	AdvancedSource["occlusionTexture"] = {{"index", 1}, {"strength", 0.375}};
+	const RenderSamplerState ExplicitSampler{RenderTextureMinFilter::NearestMipmapLinear, RenderTextureMagFilter::Linear,
+		RenderTextureWrap::MirroredRepeat, RenderTextureWrap::ClampToEdge};
+	const auto NormalSlot = static_cast<std::size_t>(RenderMaterialTextureSlot::Normal);
+	const auto OcclusionSlot = static_cast<std::size_t>(RenderMaterialTextureSlot::Occlusion);
+	const auto ImageBeforeAdvanced = Assets->ResolveImage(GltfImageRecord->Reference.Value);
+	WriteBytes(Root / "assets" / "compound.glb", MakeGlb(AdvancedFixture));
+	const auto AdvancedImport = Assets->ReimportProjectAsset(Mount, GltfMeshRecord->Reference.Value);
+	const auto AdvancedMaterial = Assets->ResolveMaterial(TexturedMaterialRecord->Reference.Value);
+	const auto ImageAfterAdvanced = Assets->ResolveImage(GltfImageRecord->Reference.Value);
+	Check(AdvancedImport.Ok && AdvancedImport.Records.size() == 5 && AdvancedMaterial && ImageBeforeAdvanced &&
+		ImageAfterAdvanced && ImageAfterAdvanced->Texture == ImageBeforeAdvanced->Texture &&
+		ImageAfterAdvanced->ContentRevision == ImageBeforeAdvanced->ContentRevision &&
+		std::ranges::all_of(AdvancedImport.Records, [&](const AssetRecord &Record) {
+			return StableIds.at(Record.LogicalKey) == Record.Id;
+		}) && AdvancedMaterial->Value.EmissiveTexture == GltfImageRecord->Id &&
+		AdvancedMaterial->Value.OcclusionTexture == GltfImageRecord->Id &&
+		AdvancedMaterial->Value.EmissiveFactor == glm::vec3(0.125f, 0.25f, 0.5f) &&
+		AdvancedMaterial->Value.OcclusionStrength == 0.375f && AdvancedMaterial->Value.NormalScale == -0.5f &&
+		AdvancedMaterial->Value.TextureSamplers[NormalSlot] == ExplicitSampler &&
+		AdvancedMaterial->Value.TextureSamplers[OcclusionSlot] == ExplicitSampler &&
+		AdvancedMaterial->Value.TextureSamplers[0] == RenderSamplerState{} &&
+		Assets->GetAsset(TexturedMaterialRecord->Reference.Value)->Dependencies == std::vector{GltfImageRecord->Id},
+		"advanced glTF roles and samplers preserve deduplicated image IDs, residency, revision, and dependencies");
+
+	CompoundPublisher.RequestFullResync();
+	auto AdvancedPublication = CompoundPublisher.Publish(*WorkspaceValue, RenderCameraInput{}, 320, 180);
+	Check(std::ranges::any_of(AdvancedPublication->Creates, [&](const auto &Create) {
+		if (Create.Item.Object != MeshPartA->GetObjectId() || !Create.Primitives || !ImageAfterAdvanced) return false;
+		const auto &Material = Create.Primitives->front().Material;
+		return Material.EmissiveTexture == ImageAfterAdvanced->Texture && Material.OcclusionTexture == ImageAfterAdvanced->Texture &&
+			Material.EmissiveFactor == glm::vec3(.125f, .25f, .5f) && Material.OcclusionStrength == .375f &&
+			Material.NormalScale == -.5f && Material.TextureSamplers[OcclusionSlot] == ExplicitSampler;
+	}), "full RenderPublication carries advanced material state without separate image residency");
+	(void)CompoundProjection.Apply(*AdvancedPublication);
+
+	auto InvalidAdvanced = AdvancedFixture;
+	InvalidAdvanced.Document["samplers"][0]["magFilter"] = 9987;
+	WriteBytes(Root / "assets" / "compound.glb", MakeGlb(InvalidAdvanced));
+	const auto InvalidAdvancedReimport = Assets->ReimportProjectAsset(Mount, GltfMeshRecord->Reference.Value);
+	const auto StaleAdvanced = Assets->GetAsset(TexturedMaterialRecord->Reference.Value);
+	Check(!InvalidAdvancedReimport.Ok && InvalidAdvancedReimport.Diagnostic.Code == "InvalidSampler" &&
+		StaleAdvanced && StaleAdvanced->State == AssetState::Stale && AdvancedMaterial &&
+		StaleAdvanced->ContentRevision == AdvancedMaterial->ContentRevision,
+		"bad sampler reimport preserves last-known-good advanced material");
+	InvalidAdvanced = AdvancedFixture;
+	InvalidAdvanced.Document["materials"][0]["occlusionTexture"]["index"] = 99;
+	WriteBytes(Root / "assets" / "invalid-occlusion.glb", MakeGlb(InvalidAdvanced));
+	const auto BeforeInvalidOcclusion = Assets->GetCatalog(false).size();
+	const auto InvalidOcclusion = Assets->ImportProjectAsset(Mount, "assets/invalid-occlusion.glb", AssetKind::Mesh);
+	Check(!InvalidOcclusion.Ok && InvalidOcclusion.Diagnostic.Code == "InvalidTexture" &&
+		Assets->GetCatalog(false).size() == BeforeInvalidOcclusion,
+		"bad occlusion reference creates no partial source group");
+	WriteBytes(Root / "assets" / "compound.glb", MakeGlb(AdvancedFixture));
+	const auto RetriedAdvanced = Assets->ReimportProjectAsset(Mount, GltfMeshRecord->Reference.Value);
+	const auto RetriedMaterial = Assets->ResolveMaterial(TexturedMaterialRecord->Reference.Value);
+	Check(RetriedAdvanced.Ok && AdvancedMaterial && RetriedMaterial &&
+		RetriedMaterial->ContentRevision == AdvancedMaterial->ContentRevision,
+		"identical v6 reimport restores availability without changing content revision");
+
 	auto FontImport = Assets->ImportProjectAsset(Mount, "assets/font.ttf", AssetKind::Font, "Project Font");
 	auto Font = FontImport.Record ? Assets->ResolveFont(FontImport.Record->Reference.Value) : std::nullopt;
 	Check(FontImport.Ok && Font && Font->Bytes && !Font->Bytes->empty() && Font->FaceCount > 0,
@@ -950,6 +1287,11 @@ int main() {
 	auto ReopenedProject = Project::fromExisting(&ReopenFilesystem);
 	auto ReopenedWorld = ReopenedProject.DeserializeGame();
 	auto ReopenedAssets = GetAssets(ReopenedWorld);
+	const auto ReopenedMaterial = ReopenedAssets->ResolveMaterial(TexturedMaterialRecord->Reference.Value);
+	Check(ReopenedMaterial && ReopenedMaterial->Value.EmissiveTexture == GltfImageRecord->Id &&
+		ReopenedMaterial->Value.OcclusionTexture == GltfImageRecord->Id && ReopenedMaterial->Value.NormalScale == -.5f &&
+		ReopenedMaterial->Value.TextureSamplers[OcclusionSlot] == ExplicitSampler,
+		"advanced material artifact and dependency graph survive fresh project reopen");
 	Check(ReopenedAssets && ReopenedAssets->IsAvailable(PersistentImageReference) &&
 		ReopenedAssets->ResolveMesh(MeshImport.Record->Reference.Value).has_value() &&
 		ReopenedAssets->ResolveMeshResource(GltfMeshRecord->Reference.Value).has_value() &&
@@ -1017,7 +1359,8 @@ int main() {
 	};
 	auto Handshake = Call("Handshake");
 	Check(Handshake["Ok"] && std::ranges::contains(Handshake["Result"]["Capabilities"], "AssetCatalog") &&
-		std::ranges::contains(Handshake["Result"]["Capabilities"], "StrictAssetReferences"),
+		std::ranges::contains(Handshake["Result"]["Capabilities"], "StrictAssetReferences") &&
+		std::ranges::contains(Handshake["Result"]["Capabilities"], "AdvancedMaterialMetadata"),
 		"EditorHost advertises the Asset Foundation command contract");
 	auto Opened = Call("OpenProject", {{"Root", Root.generic_string()}});
 	Check(Opened["Ok"], "EditorHost opens a persisted asset project");
@@ -1029,6 +1372,25 @@ int main() {
 			return Record["Kind"] == "Material" && Record.contains("SourceGroupId") &&
 				Record.contains("LogicalKey") && Record.contains("Dependencies");
 		}), "EditorHost exposes bounded v2 grouping, dependency, and material metadata without raw resources");
+	const auto AdvancedCatalog = Call("GetAssetCatalog", {{"IncludeAdvancedMaterials", true}});
+	const auto AdvancedOff = Call("GetAssetCatalog", {{"IncludeAdvancedMaterials", false}});
+	const auto BadAdvancedRequest = Call("GetAssetCatalog", {{"IncludeAdvancedMaterials", 1}});
+	Check(AdvancedCatalog["Ok"] && AdvancedCatalog["Result"]["CatalogVersion"] == 2 &&
+		AdvancedOff["Ok"] && AdvancedOff["Result"]["Assets"] == Catalog["Result"]["Assets"] &&
+		!BadAdvancedRequest["Ok"] && BadAdvancedRequest["Error"]["Code"] == "MalformedRequest" &&
+		std::ranges::none_of(Catalog["Result"]["Assets"], [](const auto &Record) {
+			return Record["Metadata"].contains("AdvancedMaterial");
+		}) && std::ranges::any_of(AdvancedCatalog["Result"]["Assets"], [&](const auto &Record) {
+			if (Record["Reference"] != TexturedMaterialRecord->Reference.Value ||
+				!Record["Metadata"].contains("AdvancedMaterial")) return false;
+			const auto &Metadata = Record["Metadata"]["AdvancedMaterial"];
+			return Metadata["EmissiveFactor"] == nlohmann::json::array({.125, .25, .5}) &&
+				Metadata["EmissiveTexture"] == GltfImageRecord->Id.ToString() &&
+				Metadata["OcclusionTexture"] == GltfImageRecord->Id.ToString() &&
+				Metadata["OcclusionStrength"] == .375 && Metadata["NormalScale"] == -.5 &&
+				Metadata["TextureSamplers"]["Occlusion"]["MinFilter"] == "NearestMipmapLinear" &&
+				Metadata["TextureSamplers"]["Occlusion"]["WrapU"] == "MirroredRepeat";
+		}), "advanced metadata is bounded opt-in and leaves legacy v2 catalog responses unchanged");
 	auto Revision = Catalog["Result"]["ProjectState"]["AuthoritativeRevision"].get<std::uint64_t>();
 	auto HostImport = Call("ImportAsset", {
 		{"Source", "assets/editor.bmp"}, {"Kind", "Image"}, {"Name", "Editor Image"}, {"ExpectedRevision", Revision},

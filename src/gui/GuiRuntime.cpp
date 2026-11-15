@@ -251,6 +251,7 @@ namespace gargantuan {
 		ObjectId KeyboardPressed;
 		bool TextInputCommandDirty = true;
 		bool TextInputWasActive = false;
+		bool ClearingTransientState = false;
 		std::shared_ptr<const GuiLayoutSnapshot> Layout = std::make_shared<const GuiLayoutSnapshot>();
 		std::shared_ptr<const GuiPresentationSnapshot> Presentation = std::make_shared<const GuiPresentationSnapshot>();
 		std::shared_ptr<const GuiAccessibilitySnapshot> Accessibility = std::make_shared<const GuiAccessibilitySnapshot>();
@@ -2209,16 +2210,32 @@ namespace gargantuan {
 	}
 
 	void GuiRuntime::ClearTransientState() {
+		if (State->ClearingTransientState) return;
+		State->ClearingTransientState = true;
+		struct ClearGuard {
+			bool &Active;
+			~ClearGuard() { Active = false; }
+		} Guard{State->ClearingTransientState};
 		std::unordered_set<ObjectId> Changed;
 		for (const auto &[Pointer, Object] : State->Hovered) { (void)Pointer; Changed.insert(Object); }
 		for (const auto &[Pointer, Object] : State->Pressed) { (void)Pointer; Changed.insert(Object); }
-		for (const auto &[Root, Object] : State->FocusedByRoot) {
-			(void)Root;
-			if (auto Gui = std::dynamic_pointer_cast<GuiBase2d>(ObjectRegistry::Get().Lookup(Object))) Gui->FocusLost->Fire({});
+		// FocusLost can synchronously destroy the Engine or change focus. Iterate
+		// a snapshot so nested teardown and focus changes cannot invalidate us.
+		std::vector<std::pair<ObjectId, ObjectId>> Focused(State->FocusedByRoot.begin(), State->FocusedByRoot.end());
+		for (const auto &[Root, Object] : Focused) {
+			auto Current = State->FocusedByRoot.find(Root);
+			if (Current == State->FocusedByRoot.end() || Current->second != Object) continue;
 			Changed.insert(Object);
+			if (auto Gui = std::dynamic_pointer_cast<GuiBase2d>(ObjectRegistry::Get().Lookup(Object))) Gui->FocusLost->Fire({});
 		}
-		for (auto &[Object, Editing] : State->TextEditing) {
-			Editing.Composition.clear();
+		std::vector<ObjectId> EditingObjects;
+		EditingObjects.reserve(State->TextEditing.size());
+		for (const auto &[Object, Editing] : State->TextEditing) { (void)Editing; EditingObjects.push_back(Object); }
+		for (const auto Object : EditingObjects) {
+			auto Current = State->TextEditing.find(Object);
+			if (Current == State->TextEditing.end()) continue;
+			auto Editing = Current->second;
+			Current->second.Composition.clear();
 			if (auto Input = std::dynamic_pointer_cast<TextBox>(ObjectRegistry::Get().Lookup(Object)))
 				Input->CommitRuntimeEditing(
 					static_cast<int>(Editing.Caret), static_cast<int>(std::min(Editing.Caret, Editing.Anchor)),

@@ -2,9 +2,10 @@
 
 ## Status and scope
 
-This document describes the foundation implemented in the first post-audit pass.
-It is a runtime contract, not a claim that networking, persistence, parallel
-simulation, or Studio are implemented.
+This document describes the runtime authority and lifecycle contract, including
+the measured Runtime Foundation 6 core changes. Subsystem completeness and
+qualification belong to their current architecture documents and acceptance
+records; this document does not certify parallel simulation or product capacity.
 
 The governing rule is:
 
@@ -40,6 +41,12 @@ Hierarchy mutation is committed before ancestry notifications run. Callbacks
 therefore observe the new parent/child collections rather than a half-applied
 operation. Callbacks remain synchronous and can initiate a later mutation; a
 broader transaction/notification queue is future work.
+Per-property signals are allocated when requested through
+`GetPropertyChangedSignal`. Ordinary reflected property, Parent and Destroyed
+notifications do not allocate per-property signals unless requested. Existing
+subscriptions still fire synchronously after the committed change, including
+during nested mutation. The separate custom-schema property path still creates
+its notification signal on commit.
 
 Destruction has a monotonic lifecycle:
 
@@ -138,6 +145,16 @@ holding its journal lock. Its payload model represents object creation,
 reflected/extension/attribute updates, tag changes, reparenting, and destruction.
 First adoption publishes a detached subtree into one scope. Moving an already
 adopted subtree between DataModel scopes is rejected.
+Ordinary batch commits append under that lock and roll back any appended tail
+if allocation fails. They evict the oldest retained records only after the
+whole batch has appended, so failed batches do not consume sequence numbers
+or partially evict history.
+The prepared-property qualification executable also sweeps ordinary batch
+allocation failures while a stream is full. Its test allocator records whether
+a failure happened after a record was appended, then verifies exact retained
+handle identity, sequence and eviction counters through rollback and a
+successful ordered retry. Renderer dirtiness may conservatively request a full
+resync after failure; this journal guarantee does not imply dirty state rollback.
 
 Records remain an in-process prototype. Retention is bounded per scope and cursor reads
 detect eviction with `ResnapshotRequired`; the current default capacity is 16,384.
@@ -179,19 +196,149 @@ complete boundary inventory in a later hardening pass.
 
 `Engine` owns every DataModel descendant subscription it installs. Teardown
 unbinds the descendant-added callback and disconnects the descendant-removed
-connection before releasing `ScriptEngine`; no Instance signal may retain a raw
-runtime pointer after `Engine::Destroy`. `ScriptEngine` tracks every Script it
+connection before releasing its `ScriptEngine` owner. The Engine-owned VM has
+shared native lifetime; each active Lua entry pins it until that entry unwinds.
+Logical runtime shutdown happens immediately when Engine destruction begins:
+it stops activation, disconnects tracked Lua signal/remote handlers and retires
+queued task references before descendant/service destruction. The active Lua
+call may finish returning or reporting an error; physical `lua_close` waits for
+the final active entry to release its pin. This does not add another DataModel
+authority or change callback security contexts. VM entry, shutdown and mutable
+runtime work remain Main-owned; shared lifetime does not permit concurrent Lua
+execution. `ScriptEngine` tracks every Script it
 steps and every Luau-backed signal connection it creates. It retires coroutine
 and callback registry references while the VM is still alive, before
 `lua_close`. A live Engine also observes DataModel destruction and performs this
 runtime teardown before the DataModel destroys its services and descendants.
-Both Engine-first and DataModel-first destruction orders have regression
-coverage, followed by process-level SDL cleanup.
+Engine-first, DataModel-first and callback-triggered destruction have regression
+coverage; qualification status of the latest lifecycle changes is recorded in
+`../Validation/RuntimeFoundation6Qualification.md`.
 
-## Remaining blockers before network replication
+Active Engine event/frame calls also retain `GuiRuntime` while routed callbacks
+unwind. Destruction still clears transient GUI state and drops the Engine's
+owner immediately. Transient-state clearing guards nested calls and snapshots
+focus/editing entries before callbacks, preventing callback-triggered teardown
+from invalidating iteration. Neither resource pin changes scene authority.
 
-Snapshot baseline, serialized references, scoped journal records, isolated
-in-process receiver apply, and the reusable protocol-input hardening boundary
-are implemented. See `ProtocolInputHardening.md`. Durable world IDs, schema
-migration, peer authentication, networking contracts, and transport negotiation
-remain later work.
+Script activation roots the newly created coroutine from the top of the main
+Lua stack before loading/resuming it and restores the caller's stack height.
+The registry reference remains independent of library tables and temporary
+stack values. Cleanup requested by self-disable or self-destruction waits for
+the active resume to return; it then releases the coroutine and preserves the
+requested disabled/restart state. Activation queue iteration uses an owning
+entry snapshot and checks current queue membership before each turn, so
+callbacks cannot invalidate an iterator. New entries wait until the next Step.
+
+Terminal Script coroutines release their own registry roots after resume returns.
+Native task, signal-wait, Remote and entitlement resumptions identify the original
+Script through a private weak thread association. They capture the coroutine's
+state before resuming: an invalid nested resume is not completion, and a successful
+return can leave results on the coroutine stack. The existing eight-entry idle
+prune pass reconciles completion through Luau's coroutine library. Independently
+rooted tasks and callbacks retain their own lifetime and Script sandbox identity.
+
+Logical shutdown also closes the Engine-owned ActionMap facade to new bindings
+before native teardown callbacks run. It retires only the facade's bounded legacy
+handles through their existing per-ID destruction path. Authored InputService
+definitions remain outside that ownership table. Runtime cleanup cannot depend
+on a Lua Destroying handler after Lua handlers have been disconnected.
+
+## Networking and downstream ownership
+
+Snapshot baselines, serialized references, scoped journal records, receiver apply
+and protocol-input hardening are implemented. Runtime changes retain the current
+networking owners: `ReplicationFoundation3I.md` owns immutable revisioned object
+templates; `ReplicationFoundation3J.md` owns scheduler-accepted per-peer history;
+`ContentAvailabilityFoundation3L_3.md` owns bounded dependency planning. D03's
+`POOLED_CORRECTNESS_V1` remains the accepted service qualification contract.
+Render dirty coalescing never rewrites those reliable histories. See
+`RuntimeFoundation6Qualification.md` in `devdocs/Validation/` for exact source,
+measured improvements and remaining qualification limits. Durable persistence
+identity and schema migration remain separate future work.
+
+## Runtime Foundation 6 storage and change-distribution disposition
+
+The integrated continuation retains ordinary Instance fields as authoritative
+storage. Main still validates and commits each ordinary mutation, records its
+ordered history and invokes existing observers synchronously. The measured
+changes optimize implementation overhead: journal batch append/rollback,
+unobserved ordinary notifications, same-object render-domain accumulation,
+typed incremental extraction, unchanged-model inverse reuse and indexed physics
+admission. No script API, object identity, wire format or scheduling authority
+changes. Qualification scope is recorded in
+`../Validation/RuntimeFoundation6Qualification.md`.
+
+The current architectural choice is optimized Instance authority plus
+consumer-owned immutable or compact derivatives. A bounded direct/SoA/snapshot
+experiment includes setter, dirty capture and synchronization costs. Its one
+consumer does not repay the extra SoA synchronization, and per-object immutable
+snapshot allocation costs more again. Consequently this continuation does not
+move authoritative transforms, velocity, visibility or hierarchy into an ECS,
+add native storage handles to Luau, or create a general component registry.
+These measurements do not rule out a future many-consumer or narrowly scoped
+system experiment; that requires its own complete authority/synchronization
+comparison and lifecycle gates.
+
+Physics derives backend descriptions and consumes authored changes at existing
+Main safe points. Post-step simulation publishes through ordinary Instance
+setters, with suppression limited to its own redundant CFrame feedback. The
+combined compact control/readback representation was rejected on complete-path
+cost. The continuation instead includes a selective dynamic readback index for
+large, predominantly static worlds, following paired Windows and Linux sparse,
+dense, lifecycle and boundary comparisons. It activates at 8192 Parts with at
+most one eighth accepted dynamic bodies and retires below 4096 Parts or above
+one quarter dynamic bodies. These measured private thresholds are not asserted
+optimal. Ordered controls and publication remain unchanged; unknown accounting,
+invalid identities and failed index allocation use ordered full readback in the
+same step. Final canonical gates qualify this composition; performance coverage
+remains limited to the regimes recorded in the qualification report. Body handles stay
+private derived resources, tied to complete ObjectId generations. This storage
+work neither replaces Box3D/XPBD nor changes qualified solver behavior.
+
+Rendering consumes immutable RenderPublication and owns its disposable
+RenderProjection. The publisher validates live generation and WorldRoot ancestry
+before incremental extraction, and still emits complete final-state values.
+For recognized render-affecting changes, a domain hint cannot mask other final
+fields. New render dependencies must be classified or request full resync.
+Exact model equality may reuse the cached inverse. A lost publication base
+rejects the delta; the caller must request a full resync, after which the
+publisher rebuilds complete state.
+Renderer instancing remains independently opt-in. Fewer CPU publication
+milliseconds do not qualify native GPU execution or change its defaults.
+
+Replication retains the 3I revisioned immutable template catalog and 3J/3L
+per-peer planning/accepted history. The existing scoped journal is already a
+typed committed input. A second global event bus would duplicate classification,
+bounded cursors and recovery without measured benefit here. Final renderer state
+and redundant internal physics dirty work may coalesce. Required callbacks,
+ordinary journal records, transaction boundaries, create/destroy/reparent and
+reference dependencies, and accepted reliable transport ownership retain their
+existing ordering. Explicit prepared mutation keeps its distinct atomic observer
+contract and is not substituted for ordinary setters based on throughput.
+
+Creation and retirement retain DataModel admission, monotonic destruction and
+slot-plus-generation identity. Indexed physics membership reduces repeated
+admission searches without changing traversal order or inventing deferred
+script-visible lifecycle. Existing 3L content activation, materialization and
+retirement remain the large-world owners. New caches must remain disposable,
+bounded by their subsystem and reconstructible after full resync; a stale slot
+must never alias a replacement Instance.
+
+This continuation does not parallelize mutable graph traversal or mutation.
+Existing bounded JobSystem computation returns results to Main; immutable
+renderer/network projections retain their accepted thread boundaries. The
+single-consumer snapshot/SoA results do not justify new cross-thread queues or
+moving live Instance work to a worker. Dense setters, full rebuilds, replica
+application, replication preflight and occasional full-engine tails remain
+measured ceilings. Streaming, terrain and multiplayer should extend the current
+subsystem-owned projections and admission budgets, with targeted data-oriented
+storage introduced only where complete-path evidence repays its synchronization
+and lifetime costs.
+
+The combined evaluation adds an opt-in Main-owned signal-dispatch profile and
+private WorldRoot listener counters. Disabled profiles take no timing samples.
+These counters are diagnostic and inclusive under reentrancy; callback and
+signal totals must not be added to ordinary setter timings. They expose no Luau
+capability or mutable storage handle. The per-registration dirty-binding, epoch
+and hot/cold variants remain isolated experiments: reduced repeated-callback
+work did not repay their full physics safe-point cost in paired measurements.

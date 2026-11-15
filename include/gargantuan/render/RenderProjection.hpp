@@ -20,7 +20,18 @@ namespace gargantuan {
 		std::shared_ptr<const std::vector<RenderPrimitiveMaterialState>> Primitives;
 	};
 
+	struct RenderProjectedTraversal {
+		ObjectId Object;
+		const RenderProjectedObject *Projected = nullptr;
+		const RenderAnimationPoseUpdate *Pose = nullptr;
+		// Null denotes a primitive; its bounds remain pass-local.
+		const RenderBounds *MeshBounds = nullptr;
+	};
+
 	struct RenderProjectionChanges {
+		// Publication validation and committed projection mutation are distinct CPU costs.
+		std::uint64_t ValidationNanoseconds = 0;
+		std::uint64_t MutationNanoseconds = 0;
 		std::size_t Created = 0;
 		std::size_t Updated = 0;
 		std::size_t Removed = 0;
@@ -42,14 +53,27 @@ namespace gargantuan {
 		std::size_t UiIndices = 0;
 	};
 
+	struct RenderSceneEnvelope {
+		glm::dvec3 Minimum{0.0};
+		glm::dvec3 Maximum{0.0};
+		std::size_t VisibleObjects = 0;
+	};
+
+	struct RenderSceneEnvelopeResult {
+		const RenderSceneEnvelope *Envelope = nullptr;
+		std::uint64_t BuildNanoseconds = 0;
+		bool Rebuilt = false;
+	};
+
 	class RenderProjection final {
 	  public:
 		[[nodiscard]] RenderProjectionChanges Apply(const RenderSnapshot &Snapshot);
 		[[nodiscard]] RenderProjectionChanges Apply(const RenderPublication &Publication);
-		void Clear();
+		void Clear() noexcept;
 
 		[[nodiscard]] const RenderItem *GetItem(ObjectId Object) const;
 		[[nodiscard]] const RenderAnimationPoseUpdate *GetAnimationPose(ObjectId Object) const;
+		[[nodiscard]] const RenderBounds *GetMeshBounds(RenderMeshIdentity Mesh) const;
 		[[nodiscard]] bool
 		BuildAnimationVisibilityFeedback(std::vector<ObjectId> &VisibleObjects, std::size_t MaximumObjects) const;
 		[[nodiscard]] const std::unordered_map<ObjectId, RenderAnimationPoseUpdate> &GetAnimationPoses() const {
@@ -60,8 +84,14 @@ namespace gargantuan {
 		[[nodiscard]] std::size_t GetTextureCount() const { return Textures.size(); }
 		[[nodiscard]] RenderPublicationId GetLastPublicationId() const { return LastPublicationId; }
 		[[nodiscard]] const RenderFrameState &GetFrame() const { return Frame; }
-		[[nodiscard]] const RenderUiFrame &GetUi() const { return *Ui; }
+		[[nodiscard]] const RenderUiFrame &GetUi() const {
+			static const RenderUiFrame Empty;
+			return Ui ? *Ui : Empty;
+		}
 		[[nodiscard]] const std::unordered_map<ObjectId, RenderProjectedObject> &GetObjects() const { return Entries; }
+		// Mirrors GetObjects() iteration exactly until a structural publication changes it.
+		[[nodiscard]] const std::vector<RenderProjectedTraversal> &GetCompactTraversal() const;
+		[[nodiscard]] RenderSceneEnvelopeResult GetSceneEnvelope() const;
 		[[nodiscard]] RenderSnapshotPtr BuildCompatibilitySnapshot() const;
 
 	  private:
@@ -85,11 +115,17 @@ namespace gargantuan {
 		};
 		std::unordered_map<RenderTextureIdentity, TextureEntry, RenderTextureIdentityHash> Textures;
 		std::unordered_map<ObjectId, RenderAnimationPoseUpdate> AnimationPoses;
-		// Validation scratch is retained so a steady pose-only publication does not
-		// allocate merely to detect duplicate pose operations.
+		// Retain validation scratch across publications to avoid per-operation allocation.
+		std::vector<ObjectId> TouchedObjectScratch;
+		std::vector<RenderProjectedObject *> UpdatedEntryScratch;
 		std::vector<ObjectId> TouchedPoseScratch;
+		mutable std::vector<RenderProjectedTraversal> CompactTraversal;
+		mutable bool CompactTraversalValid = false;
+		mutable std::optional<RenderSceneEnvelope> SceneEnvelope;
+		mutable bool SceneEnvelopeValid = false;
+		std::uint8_t SceneEnvelopeQuietFrames = 0;
 		RenderPublicationId LastPublicationId = InvalidRenderPublicationId;
 		RenderFrameState Frame;
-		std::shared_ptr<const RenderUiFrame> Ui = std::make_shared<const RenderUiFrame>();
+		std::shared_ptr<const RenderUiFrame> Ui;
 	};
 } // namespace gargantuan

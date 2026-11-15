@@ -7,6 +7,7 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/ImageLabel.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
+#include "gargantuan/classes/ReflectionProbe.hpp"
 #include "gargantuan/classes/Sky.hpp"
 #include "gargantuan/classes/Sound.hpp"
 #include "gargantuan/classes/TextLabel.hpp"
@@ -47,6 +48,17 @@ namespace gargantuan {
 		constexpr std::string_view DefaultMaterialReference = "builtin://material/default";
 		constexpr std::string_view RuntimeCatalogFormat = "GargantuanRuntimeAssets";
 		constexpr std::uint32_t RuntimeCatalogVersion = 1;
+
+		std::optional<AssetId> ImportedMaterial::*MaterialTextureBinding(AssetImportBindingKind Kind) {
+			switch (Kind) {
+				case AssetImportBindingKind::MaterialBaseColorTexture: return &ImportedMaterial::BaseColorTexture;
+				case AssetImportBindingKind::MaterialNormalTexture: return &ImportedMaterial::NormalTexture;
+				case AssetImportBindingKind::MaterialMetallicRoughnessTexture: return &ImportedMaterial::MetallicRoughnessTexture;
+				case AssetImportBindingKind::MaterialEmissiveTexture: return &ImportedMaterial::EmissiveTexture;
+				case AssetImportBindingKind::MaterialOcclusionTexture: return &ImportedMaterial::OcclusionTexture;
+				default: return nullptr;
+			}
+		}
 
 		struct AssetImportThreadCleanup final {
 			~AssetImportThreadCleanup() { SDL_CleanupTLS(); }
@@ -114,7 +126,7 @@ namespace gargantuan {
 			return std::visit([](const auto &Value) -> std::size_t {
 				using T = std::decay_t<decltype(Value)>;
 				if constexpr (std::is_same_v<T, ImportedImage>)
-					return Value.Rgba8 ? Value.Rgba8->size() : 0;
+					return Value.Pixels ? Value.Pixels->size() : 0;
 				else if constexpr (std::is_same_v<T, ImportedFont>)
 					return Value.Bytes ? Value.Bytes->size() : 0;
 				else if constexpr (std::is_same_v<T, ImportedMesh>)
@@ -203,8 +215,7 @@ namespace gargantuan {
 					if (Binding.Kind == AssetImportBindingKind::MeshPrimitiveMaterial &&
 						(Node.Kind != AssetKind::Mesh || Kinds.at(Binding.LogicalKey) != AssetKind::Material))
 						return std::unexpected(Error("InvalidDependency", "Mesh primitive dependency must target a Material asset"));
-					if ((Binding.Kind == AssetImportBindingKind::MaterialBaseColorTexture ||
-						Binding.Kind == AssetImportBindingKind::MaterialNormalTexture) &&
+					if (MaterialTextureBinding(Binding.Kind) &&
 						(Node.Kind != AssetKind::Material || Kinds.at(Binding.LogicalKey) != AssetKind::Image))
 						return std::unexpected(Error("InvalidDependency", "Material texture dependency must target an Image asset"));
 					if (Binding.Kind == AssetImportBindingKind::AnimationSkeletonMesh &&
@@ -259,10 +270,10 @@ namespace gargantuan {
 						Animation->SkeletonAsset = DependencyId;
 					} else {
 						auto *Material = std::get_if<ImportedMaterial>(&Node.Asset);
-						if (!Material) return std::unexpected(Error("InvalidDependency", "Material texture binding target is invalid"));
-						if (Binding.Kind == AssetImportBindingKind::MaterialBaseColorTexture)
-							Material->BaseColorTexture = DependencyId;
-						else Material->NormalTexture = DependencyId;
+						const auto Target = MaterialTextureBinding(Binding.Kind);
+						if (!Material || !Target || Material->*Target)
+							return std::unexpected(Error("InvalidDependency", "Material texture binding is invalid or duplicated"));
+						Material->*Target = DependencyId;
 					}
 				}
 				auto Artifact = EncodeAssetArtifact(Node.Asset, Node.Kind);
@@ -354,6 +365,7 @@ namespace gargantuan {
 			std::uint64_t Revision = 0;
 			std::uint32_t Width = 0;
 			std::uint32_t Height = 0;
+			RenderTextureFormat Format = RenderTextureFormat::Rgba8Unorm;
 			std::shared_ptr<const std::vector<std::uint8_t>> Pixels;
 		};
 
@@ -394,7 +406,7 @@ namespace gargantuan {
 				"engine-package", {}, 1, AssetState::Ready, std::nullopt, {}, Asset, true};
 			Record.SourceGroupId = Id;
 			Records.emplace(Record.Reference.Value, Record);
-			TextureResidency Residency{TextureIdentity(Id), 1, 2, 2, PixelBytes};
+			TextureResidency Residency{TextureIdentity(Id), 1, 2, 2, RenderTextureFormat::Rgba8Unorm, PixelBytes};
 			Textures.emplace(Record.Reference.Value, Residency);
 			CpuBytes += PixelBytes->size();
 			PendingTextures.Creates.push_back({Residency.Identity, 1, 2, 2, RenderTextureFormat::Rgba8Unorm, PixelBytes});
@@ -523,20 +535,22 @@ namespace gargantuan {
 			if (const auto *Image = std::get_if<ImportedImage>(Record.Asset.get())) {
 				auto Existing = Textures.find(Record.Reference.Value);
 				if (Existing == Textures.end()) {
-					TextureResidency Residency{TextureIdentity(Record.Id), Record.ContentRevision, Image->Width, Image->Height, Image->Rgba8};
+					TextureResidency Residency{TextureIdentity(Record.Id), Record.ContentRevision, Image->Width, Image->Height,
+						Image->Format, Image->Pixels};
 					Textures.emplace(Record.Reference.Value, Residency);
 					PendingTextures.Creates.push_back({Residency.Identity, Residency.Revision, Residency.Width, Residency.Height,
-						RenderTextureFormat::Rgba8Unorm, Residency.Pixels});
+						Residency.Format, Residency.Pixels});
 					PendingTextures.UploadBytes += Residency.Pixels->size();
 					return;
 				}
 				auto &Residency = Existing->second;
-				if (Residency.Width == Image->Width && Residency.Height == Image->Height) {
+				if (Residency.Width == Image->Width && Residency.Height == Image->Height &&
+					Residency.Format == Image->Format) {
 					Residency.Revision = std::max(Residency.Revision + 1, Record.ContentRevision);
-					Residency.Pixels = Image->Rgba8;
+					Residency.Pixels = Image->Pixels;
 					PendingTextures.Updates.push_back({Residency.Identity, Residency.Revision, 0, 0,
-						Image->Width, Image->Height, Image->Rgba8});
-					PendingTextures.UploadBytes += Image->Rgba8->size();
+						Image->Width, Image->Height, Image->Pixels});
+					PendingTextures.UploadBytes += Image->Pixels->size();
 					return;
 				}
 				PendingTextures.Removes.push_back({Residency.Identity});
@@ -544,10 +558,11 @@ namespace gargantuan {
 				Residency.Revision = 1;
 				Residency.Width = Image->Width;
 				Residency.Height = Image->Height;
-				Residency.Pixels = Image->Rgba8;
+				Residency.Format = Image->Format;
+				Residency.Pixels = Image->Pixels;
 				PendingTextures.Creates.push_back({Residency.Identity, 1, Image->Width, Image->Height,
-					RenderTextureFormat::Rgba8Unorm, Image->Rgba8});
-				PendingTextures.UploadBytes += Image->Rgba8->size();
+					Image->Format, Image->Pixels});
+				PendingTextures.UploadBytes += Image->Pixels->size();
 				return;
 			}
 			if (const auto *Mesh = std::get_if<ImportedMesh>(Record.Asset.get())) {
@@ -756,9 +771,14 @@ namespace gargantuan {
 				std::vector<AssetId> SemanticDependencies;
 				if (Record->Asset) {
 					if (const auto *Material = std::get_if<ImportedMaterial>(Record->Asset.get())) {
-						if (Material->BaseColorTexture) SemanticDependencies.push_back(*Material->BaseColorTexture);
-						if (Material->NormalTexture && !std::ranges::contains(SemanticDependencies, *Material->NormalTexture))
-							SemanticDependencies.push_back(*Material->NormalTexture);
+						for (const auto &Texture : {Material->BaseColorTexture, Material->NormalTexture,
+							Material->MetallicRoughnessTexture, Material->EmissiveTexture, Material->OcclusionTexture}) {
+							if (!Texture || std::ranges::contains(SemanticDependencies, *Texture)) continue;
+							const auto Dependency = ById.find(*Texture);
+							if (Dependency == ById.end() || Dependency->second->Kind != AssetKind::Image)
+								throw std::runtime_error("Material artifact texture must target an Image asset");
+							SemanticDependencies.push_back(*Texture);
+						}
 					} else if (const auto *Mesh = std::get_if<ImportedMesh>(Record->Asset.get()); Mesh && Mesh->Primitives) {
 						for (const auto &Primitive : *Mesh->Primitives) if (Primitive.Material &&
 							!std::ranges::contains(SemanticDependencies, *Primitive.Material)) SemanticDependencies.push_back(*Primitive.Material);
@@ -988,6 +1008,16 @@ namespace gargantuan {
 								CommitFailure = Error("AssetReferenced", "Removed generated asset is referenced by Sky");
 								break;
 							}
+							if (auto Probe = std::dynamic_pointer_cast<ReflectionProbe>(Object); Probe &&
+								(Probe->GetProbePositiveX() == RemovedReference ||
+								 Probe->GetProbeNegativeX() == RemovedReference ||
+								 Probe->GetProbePositiveY() == RemovedReference ||
+								 Probe->GetProbeNegativeY() == RemovedReference ||
+								 Probe->GetProbePositiveZ() == RemovedReference ||
+								 Probe->GetProbeNegativeZ() == RemovedReference)) {
+								CommitFailure = Error("AssetReferenced", "Removed generated asset is referenced by ReflectionProbe");
+								break;
+							}
 						}
 					}
 				}
@@ -1113,6 +1143,21 @@ namespace gargantuan {
 							World->GetReplicationScopeId(), SkyValue->GetObjectId(), RenderUpdateDomain::Environment
 						);
 				}
+				for (const auto &Object : World->GetDescendants()) if (auto Probe = std::dynamic_pointer_cast<ReflectionProbe>(Object)) {
+					const std::array References{
+						Probe->GetProbePositiveX(), Probe->GetProbeNegativeX(),
+						Probe->GetProbePositiveY(), Probe->GetProbeNegativeY(),
+						Probe->GetProbePositiveZ(), Probe->GetProbeNegativeZ(),
+					};
+					const bool Changed = std::ranges::any_of(References, [&](const std::string &Reference) {
+						auto Parsed = AssetReference::Parse(Reference);
+						return Parsed && Parsed->ProjectAsset && SemanticallyChanged.contains(*Parsed->ProjectAsset);
+					});
+					if (Changed)
+						RenderDirtyAccumulator::Get().Mark(
+							World->GetReplicationScopeId(), Probe->GetObjectId(), RenderUpdateDomain::Environment
+						);
+				}
 			}
 		}
 		return Operation;
@@ -1165,6 +1210,14 @@ namespace gargantuan {
 						 IsGroupReference(SkyValue->GetSkyboxPositiveZ()) ||
 						 IsGroupReference(SkyValue->GetSkyboxNegativeZ())))
 						return {false, Existing->second, Error("AssetReferenced", "Asset source group is referenced by Sky")};
+					if (auto Probe = std::dynamic_pointer_cast<ReflectionProbe>(Object); Probe &&
+						(IsGroupReference(Probe->GetProbePositiveX()) ||
+						 IsGroupReference(Probe->GetProbeNegativeX()) ||
+						 IsGroupReference(Probe->GetProbePositiveY()) ||
+						 IsGroupReference(Probe->GetProbeNegativeY()) ||
+						 IsGroupReference(Probe->GetProbePositiveZ()) ||
+						 IsGroupReference(Probe->GetProbeNegativeZ())))
+						return {false, Existing->second, Error("AssetReferenced", "Asset source group is referenced by ReflectionProbe")};
 				}
 			}
 			for (auto Removed : Group) {
@@ -1268,6 +1321,11 @@ namespace gargantuan {
 		Render.Roughness = Material->RoughnessFactor;
 		Render.AlphaCutoff = Material->AlphaCutoff;
 		Render.DoubleSided = Material->DoubleSided;
+		Render.EmissiveFactor = Material->EmissiveFactor;
+		Render.OcclusionStrength = Material->OcclusionStrength;
+		Render.NormalScale = Material->NormalScale;
+		Render.TextureSamplers = Material->TextureSamplers;
+		if (Record->first != DefaultMaterialReference) Render.ShadingModel = RenderShadingModel::MetallicRoughness;
 		switch (Material->AlphaMode) {
 			case AssetMaterialAlphaMode::Opaque: Render.OpacityMode = RenderOpacityMode::Opaque; break;
 			case AssetMaterialAlphaMode::Mask: Render.OpacityMode = RenderOpacityMode::Masked; break;
@@ -1280,6 +1338,9 @@ namespace gargantuan {
 		};
 		Render.BaseColorTexture = ResolveTexture(Material->BaseColorTexture);
 		Render.NormalTexture = ResolveTexture(Material->NormalTexture);
+		Render.MetallicRoughnessTexture = ResolveTexture(Material->MetallicRoughnessTexture);
+		Render.EmissiveTexture = ResolveTexture(Material->EmissiveTexture);
+		Render.OcclusionTexture = ResolveTexture(Material->OcclusionTexture);
 		return AssetMaterialResource{*Material, Render, Record->second.ContentRevision};
 	}
 

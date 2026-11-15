@@ -7,13 +7,16 @@
 
 #include <Luau/Compiler.h>
 #include <functional>
+#include <list>
 #include <lua.h>
 #include <luacode.h>
 #include <lualib.h>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace gargantuan {
 	class Script;
@@ -48,7 +51,7 @@ namespace gargantuan {
 	int OpenLibVector2(lua_State *L);
 	int OpenLibVector3(lua_State *L);
 
-	class ScriptEngine {
+	class ScriptEngine : public std::enable_shared_from_this<ScriptEngine> {
 	  public:
 		ScriptEngine(
 			std::shared_ptr<DataModel> game,
@@ -61,7 +64,7 @@ namespace gargantuan {
 		ThreadEngine Threads;
 		lua_CompileOptions CompileOptions;
 		std::unordered_set<std::shared_ptr<Script>> ScriptQueue;
-		std::vector<std::weak_ptr<Script>> ManagedScripts;
+		std::list<std::pair<ObjectId, std::weak_ptr<Script>>> ManagedScripts;
 
 		std::shared_ptr<gargantuan::DataModel> DataModel;
 		std::shared_ptr<Instance> RequireCurrentInstance = nullptr;
@@ -70,10 +73,15 @@ namespace gargantuan {
 		std::vector<std::weak_ptr<SignalConnection>> SignalConnections;
 		std::vector<std::weak_ptr<RemoteFunction>> RemoteFunctions;
 		RuntimeMode Mode = RuntimeMode::Offline;
+		[[nodiscard]] bool IsStopping() const { return Stopping; }
 		std::shared_ptr<Instance> FindRequiredInstanceByPath(const char *path);
 		void EmitRuntimeDiagnostic(std::string Severity, std::string Message) const;
 		void TrackSignalConnection(const std::shared_ptr<SignalConnection> &Connection);
 		void TrackRemoteFunction(const std::shared_ptr<RemoteFunction> &Function);
+		void TrackManagedScriptThread(lua_State *Thread, const std::shared_ptr<Script> &ScriptValue);
+		void UntrackManagedScriptThread(lua_State *Thread);
+		void CompleteManagedScriptThreadResume(lua_State *Thread, int Status, int PreResumeStatus);
+		void ShutdownRuntime();
 		void RunBootstrapScript(const std::shared_ptr<Script> &ScriptValue);
 		[[nodiscard]] bool CanRunScript(const Script &ScriptValue) const;
 
@@ -81,5 +89,16 @@ namespace gargantuan {
 
 		static ScriptEngine *Get(lua_State *L);
 		static void DumpStack(lua_State *L);
+
+	  private:
+		using ManagedScriptIterator = decltype(ManagedScripts)::iterator;
+		std::unordered_map<ObjectId, ManagedScriptIterator> ManagedScriptIds;
+		std::map<std::weak_ptr<Script>, ManagedScriptIterator, std::owner_less<std::weak_ptr<Script>>>
+			DetachedManagedScripts;
+		std::unordered_map<lua_State *, std::weak_ptr<Script>> ManagedScriptThreads;
+		ManagedScriptIterator ManagedScriptPruneCursor = ManagedScripts.end();
+		void TrackManagedScript(const std::shared_ptr<Script> &ScriptValue);
+		void PruneExpiredManagedScripts();
+		bool Stopping = false;
 	};
 }

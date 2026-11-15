@@ -7,11 +7,15 @@
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/DeformableBody.hpp"
+#include "gargantuan/classes/LocalLight.hpp"
+#include "gargantuan/classes/ReflectionProbe.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Sky.hpp"
+#include "gargantuan/classes/SpotLight.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/environment/EnvironmentSemantics.hpp"
+#include "gargantuan/environment/ReflectionProbeSemantics.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Lighting.hpp"
@@ -63,7 +67,10 @@ namespace gargantuan {
 				Left.ExposureMultiplier != Right.ExposureMultiplier ||
 				!Equal(Left.EnvironmentColor, Right.EnvironmentColor) || Left.Fog.Enabled != Right.Fog.Enabled ||
 				!Equal(Left.Fog.Color, Right.Fog.Color) || Left.Fog.Start != Right.Fog.Start ||
-				Left.Fog.End != Right.Fog.End || Left.Sky.has_value() != Right.Sky.has_value())
+				Left.Fog.End != Right.Fog.End || Left.Sky.has_value() != Right.Sky.has_value() ||
+				Left.LocalLights != Right.LocalLights || Left.EnvironmentRotation != Right.EnvironmentRotation ||
+				Left.IblIntensity != Right.IblIntensity || Left.ToneMapping != Right.ToneMapping ||
+				Left.ReflectionProbes != Right.ReflectionProbes || Left.DirectionalShadows != Right.DirectionalShadows)
 				return false;
 			if (!Left.Sky) return true;
 			if (Left.Sky->FaceDimension != Right.Sky->FaceDimension) return false;
@@ -83,6 +90,15 @@ namespace gargantuan {
 				case Enums::PartType::CornerWedge: return RenderGeometry::CornerWedge;
 			}
 			return std::nullopt;
+		}
+
+		bool IsInWorld(const Instance &Value, const WorldRoot &World) {
+			auto Parent = Value.ParentReference.lock();
+			while (Parent) {
+				if (auto *Ancestor = dynamic_cast<WorldRoot *>(Parent.get())) return Ancestor == &World;
+				Parent = Parent->ParentReference.lock();
+			}
+			return false;
 		}
 
 		RenderCameraSnapshot BuildCamera(
@@ -125,13 +141,16 @@ namespace gargantuan {
 			return Result;
 		}
 
-		std::optional<RenderItem> ExtractItem(const std::shared_ptr<Part> &PartValue, RenderExtractionDiagnostic &Diagnostic) {
-			const auto Object = PartValue ? PartValue->GetObjectId() : ObjectId{};
+		std::optional<RenderItem> ExtractItem(
+			const std::shared_ptr<Part> &PartValue, ObjectId ExpectedObject,
+			RenderExtractionDiagnostic &Diagnostic, const RenderItem *Previous
+		) {
+			const auto Object = ExpectedObject;
 			if (!PartValue || PartValue->GetDestroyed() || PartValue->IsDestroying()) {
 				Diagnostic = {RenderExtractionIssue::DeadObject, Object, "Skipped a dead renderable object"};
 				return std::nullopt;
 			}
-			if (!Object.IsValid() || ObjectRegistry::Get().Lookup(Object).get() != PartValue.get()) {
+			if (!Object.IsValid()) {
 				Diagnostic = {RenderExtractionIssue::StaleObjectId, Object, "Skipped a renderable object with stale identity"};
 				return std::nullopt;
 			}
@@ -156,7 +175,8 @@ namespace gargantuan {
 			}
 			const auto Model = glm::translate(glm::mat4(1.0f), Frame.Position) * glm::mat4(Frame.Rotation) *
 				glm::scale(glm::mat4(1.0f), Size);
-			const auto Inverse = glm::inverse(Model);
+			const auto Inverse = Previous && Previous->ModelMatrix == Model
+				? Previous->InverseModelMatrix : glm::inverse(Model);
 			if (!IsFinite(Model) || !IsFinite(Inverse)) {
 				Diagnostic = {RenderExtractionIssue::InvalidTransform, Object, "Skipped a primitive with a non-invertible transform"};
 				return std::nullopt;
@@ -181,14 +201,18 @@ namespace gargantuan {
 		std::optional<ExtractedMeshPart> ExtractMeshPart(
 			const WorldRoot &World,
 			const std::shared_ptr<MeshPart> &PartValue,
-			RenderExtractionDiagnostic &Diagnostic
+			RenderExtractionDiagnostic &Diagnostic,
+			std::optional<ObjectId> ValidatedObject = std::nullopt,
+			const RenderItem *Previous = nullptr
 		) {
-			const auto Object = PartValue ? PartValue->GetObjectId() : ObjectId{};
+			const auto Object = ValidatedObject ? *ValidatedObject :
+				(PartValue ? PartValue->GetObjectId() : ObjectId{});
 			if (!PartValue || PartValue->GetDestroyed() || PartValue->IsDestroying()) {
 				Diagnostic = {RenderExtractionIssue::DeadObject, Object, "Skipped a dead MeshPart"};
 				return std::nullopt;
 			}
-			if (!Object.IsValid() || ObjectRegistry::Get().Lookup(Object).get() != PartValue.get()) {
+			if (!Object.IsValid() ||
+				(!ValidatedObject && ObjectRegistry::Get().Lookup(Object).get() != PartValue.get())) {
 				Diagnostic = {RenderExtractionIssue::StaleObjectId, Object, "Skipped a MeshPart with stale identity"};
 				return std::nullopt;
 			}
@@ -208,7 +232,8 @@ namespace gargantuan {
 			}
 			const auto Model = glm::translate(glm::mat4(1.0f), Frame.Position) * glm::mat4(Frame.Rotation) *
 				glm::scale(glm::mat4(1.0f), Size);
-			const auto Inverse = glm::inverse(Model);
+			const auto Inverse = Previous && Previous->ModelMatrix == Model
+				? Previous->InverseModelMatrix : glm::inverse(Model);
 			if (!IsFinite(Model) || !IsFinite(Inverse)) {
 				Diagnostic = {RenderExtractionIssue::InvalidTransform, Object, "Skipped a MeshPart with a non-invertible transform"};
 				return std::nullopt;
@@ -356,6 +381,12 @@ namespace gargantuan {
 
 		std::size_t EstimatePublicationBytes(const RenderPublication &Publication) {
 			std::size_t Result = sizeof(RenderPublication);
+			if (Publication.EnvironmentChanged && Publication.Frame.Environment.LocalLights)
+				Result = AddBounded(Result, MultiplyBounded(Publication.Frame.Environment.LocalLights->size(),
+					sizeof(RenderLocalLightState)));
+			if (Publication.EnvironmentChanged && Publication.Frame.Environment.ReflectionProbes)
+				Result = AddBounded(Result, MultiplyBounded(Publication.Frame.Environment.ReflectionProbes->size(),
+					sizeof(RenderReflectionProbeState)));
 			Result = AddBounded(Result, MultiplyBounded(Publication.Creates.size(), sizeof(RenderObjectCreate)));
 			Result = AddBounded(Result, MultiplyBounded(Publication.Updates.size(), sizeof(RenderObjectUpdate)));
 			Result = AddBounded(Result, MultiplyBounded(Publication.Removes.size(), sizeof(RenderObjectRemove)));
@@ -418,10 +449,142 @@ namespace gargantuan {
 		if (Dirty) Dirty->ReleaseConsumer(DirtyConsumer);
 	}
 
+	std::shared_ptr<const std::vector<RenderReflectionProbeState>> RenderPublisher::BuildReflectionProbes(
+		const WorldRoot &World, std::vector<RenderExtractionDiagnostic> &Diagnostics
+	) {
+		const auto Model = World.GetDataModel();
+		const auto Service = Model ? Model->FindService("AssetService") : std::nullopt;
+		const auto Assets = Service ? std::dynamic_pointer_cast<AssetService>(*Service) : nullptr;
+		std::vector<RenderReflectionProbeState> Probes;
+		Probes.reserve(std::min(World.GetReflectionProbes().size(), MaximumRenderReflectionProbes));
+		// Source lookup is bounded even when a world contains many incomplete
+		// authoring placeholders. Only coherent probes consume the publication cap.
+		constexpr std::size_t MaximumInspectedProbes = MaximumRenderReflectionProbes * 8;
+		std::size_t Inspected = 0;
+		for (const auto &[Id, WeakProbe] : World.GetReflectionProbes()) {
+			const auto Probe = WeakProbe.lock();
+			if (!Probe || Probe->GetDestroyed() || Probe->IsDestroying() || !Probe->GetProbeEnabled()) continue;
+			if (Inspected++ == MaximumInspectedProbes) {
+				Diagnostics.push_back({RenderExtractionIssue::PublicationOverflow, Id,
+					"[Environment:ReflectionProbe] World exceeds the 256 probe source inspection limit"});
+				break;
+			}
+			auto Pose = Probe->GetProbeCFrame();
+			auto Parent = Probe->GetParent();
+			std::shared_ptr<BasePart> Owner;
+			while (Parent && !dynamic_cast<const WorldRoot *>(Parent->get())) {
+				if (!Owner) Owner = std::dynamic_pointer_cast<BasePart>(*Parent);
+				Parent = (*Parent)->GetParent();
+			}
+			if (!Parent || Parent->get() != &World) continue;
+			if (Owner) {
+				LocalLightOwners.insert(Owner->GetObjectId());
+				Pose = Owner->GetRenderCFrame() * Pose;
+			}
+			RenderReflectionProbeState State{
+				.Object = Id, .Position = Pose.Position, .Rotation = Pose.Rotation,
+				.HalfSize = Probe->GetProbeSize() * 0.5f, .CaptureOffset = Probe->GetProbeCaptureOffset(),
+				.BlendDistance = Probe->GetProbeBlendDistance(), .Intensity = Probe->GetProbeIntensity(),
+				.Priority = Probe->GetProbePriority(), .BoxProjection = Probe->GetProbeBoxProjection(),
+			};
+			const std::array References{Probe->GetProbePositiveX(), Probe->GetProbeNegativeX(), Probe->GetProbePositiveY(),
+				Probe->GetProbeNegativeY(), Probe->GetProbePositiveZ(), Probe->GetProbeNegativeZ()};
+			bool Valid = Assets != nullptr;
+			for (std::size_t Face = 0; Valid && Face < References.size(); ++Face) {
+				const auto Record = Assets->GetAsset(References[Face]);
+				const auto *Image = Record && Record->Asset ? std::get_if<ImportedImage>(Record->Asset.get()) : nullptr;
+				const auto Resource = Record && Record->Kind == AssetKind::Image && Image && Image->Width == Image->Height &&
+					(Record->State == AssetState::Ready || Record->State == AssetState::Stale) ?
+					Assets->ResolveImage(References[Face]) : std::nullopt;
+				if (!Resource || (State.Source.FaceDimension && State.Source.FaceDimension != Resource->Width) ||
+					Resource->Width != Resource->Height) { Valid = false; break; }
+				State.Source.FaceDimension = Resource->Width;
+				State.Source.Faces[Face] = {Resource->Texture, Resource->ContentRevision};
+			}
+			if (Valid && IsValidReflectionProbe(State)) {
+				if (Probes.size() == MaximumRenderReflectionProbes) {
+					Diagnostics.push_back({RenderExtractionIssue::PublicationOverflow, Id,
+						"[Environment:ReflectionProbe] World exceeds the 32 coherent probe publication limit"});
+					break;
+				}
+				Probes.push_back(State);
+			}
+			else Diagnostics.push_back({RenderExtractionIssue::InvalidEnvironment, Id,
+				"[Environment:ReflectionProbe] Incoherent source or invalid influence pose; using other probes and global Sky"});
+		}
+		if (Probes.empty()) return nullptr;
+		if (PublishedEnvironment.ReflectionProbes && *PublishedEnvironment.ReflectionProbes == Probes)
+			return PublishedEnvironment.ReflectionProbes;
+		return std::make_shared<const std::vector<RenderReflectionProbeState>>(std::move(Probes));
+	}
+
 	RenderEnvironmentState RenderPublisher::BuildEnvironmentState(
 		const WorldRoot &World, std::vector<RenderExtractionDiagnostic> &Diagnostics
 	) {
 		RenderEnvironmentState Result;
+		LocalLightOwners.clear();
+		Result.ReflectionProbes = BuildReflectionProbes(World, Diagnostics);
+		std::vector<RenderLocalLightState> Lights;
+		const auto &Members = World.GetLocalLights();
+		Lights.reserve(std::min(Members.size(), MaximumRenderLocalLights));
+		bool InvalidLightReported = false;
+		std::size_t Considered = 0;
+		for (const auto &[Id, WeakLight] : Members) {
+			const auto Light = WeakLight.lock();
+			if (!Light || Light->GetDestroyed() || Light->IsDestroying() || !Light->GetLightEnabled() ||
+				Light->GetLightIntensity() == 0.0f) continue;
+			std::shared_ptr<BasePart> Owner;
+			auto Parent = Light->GetParent();
+			while (Parent && !dynamic_cast<const WorldRoot *>(Parent->get())) {
+				if (!Owner) Owner = std::dynamic_pointer_cast<BasePart>(*Parent);
+				Parent = (*Parent)->GetParent();
+			}
+			if (!Parent || Parent->get() != &World) continue;
+			if (Considered == MaximumRenderLocalLights) {
+				Diagnostics.push_back({RenderExtractionIssue::PublicationOverflow, Id,
+					"[Environment:LocalLight] World exceeds the 512 light publication limit"});
+				break;
+			}
+			++Considered;
+			auto Frame = Light->GetLightCFrame();
+			if (Owner) {
+				LocalLightOwners.insert(Owner->GetObjectId());
+				Frame = Owner->GetRenderCFrame() * Frame;
+			}
+			const auto Forward = Frame.GetLookVector();
+			const auto ForwardLength = glm::length(Forward);
+			if (!IsFinite(Frame.Position) || glm::any(glm::greaterThan(glm::abs(Frame.Position),
+					glm::vec3(MaximumLocalLightCoordinate))) || !std::isfinite(ForwardLength) || ForwardLength < 1.0e-6f) {
+				if (!InvalidLightReported) {
+					Diagnostics.push_back({RenderExtractionIssue::InvalidEnvironment, Id,
+						"[Environment:LocalLight] Skipping a light with an invalid world transform"});
+					InvalidLightReported = true;
+				}
+				continue;
+			}
+			RenderLocalLightState State{
+				.Object = Id,
+				.Position = Frame.Position,
+				.Direction = Forward / ForwardLength,
+				.Color = static_cast<glm::vec3>(Light->GetLightColor()),
+				.Intensity = Light->GetLightIntensity(),
+				.Range = Light->GetLightRange(),
+				.ShadowEnabled = Light->GetLightShadows(),
+				.ShadowPriority = Light->GetLightShadowPriority(),
+			};
+			if (const auto *Spot = dynamic_cast<const SpotLight *>(Light.get())) {
+				const auto Angles = Spot->GetLightConeAngles();
+				State.Kind = RenderLocalLightKind::Spot;
+				State.InnerConeCosine = std::cos(glm::radians(Angles.GetX()));
+				State.OuterConeCosine = std::cos(glm::radians(Angles.GetY()));
+			}
+			Lights.push_back(State);
+		}
+		if (!Lights.empty()) {
+			if (PublishedEnvironment.LocalLights && *PublishedEnvironment.LocalLights == Lights)
+				Result.LocalLights = PublishedEnvironment.LocalLights;
+			else Result.LocalLights = std::make_shared<const std::vector<RenderLocalLightState>>(std::move(Lights));
+		}
 		auto DataModelValue = World.GetDataModel();
 		if (!DataModelValue) return Result;
 
@@ -438,6 +601,12 @@ namespace gargantuan {
 		Result.SunIntensity = Sun.Intensity;
 		Result.ExposureMultiplier = ComputeEnvironmentExposure(LightingValue->GetExposureCompensation());
 		Result.EnvironmentColor = static_cast<glm::vec3>(LightingValue->GetEnvironmentColor());
+		Result.EnvironmentRotation = LightingValue->GetEnvironmentRotation();
+		Result.IblIntensity = LightingValue->GetIblIntensity();
+		Result.DirectionalShadows.CascadeCount = static_cast<std::uint32_t>(LightingValue->GetShadowCascadeCount());
+		Result.DirectionalShadows.Distance = LightingValue->GetShadowDistance();
+		Result.ToneMapping = LightingValue->GetToneMapping() == Enums::ToneMappingMode::Reinhard ?
+			RenderToneMapping::Reinhard : RenderToneMapping::Filmic;
 		Result.Fog = {
 			.Enabled = LightingValue->GetFogEnabled(),
 			.Color = static_cast<glm::vec3>(LightingValue->GetFogColor()),
@@ -570,9 +739,10 @@ namespace gargantuan {
 		std::unordered_map<RenderTextureIdentity, RenderTextureUpdate, RenderTextureIdentityHash> LastUpdates;
 		TouchedTextures.reserve(Creates.size() + Updates.size() + Removes.size());
 		for (const auto &Create : Creates) {
-			const auto Expected = static_cast<std::size_t>(Create.Width) * Create.Height * 4;
+			const auto PixelBytes = GetRenderTexturePixelBytes(Create.Format);
+			const auto Expected = static_cast<std::size_t>(Create.Width) * Create.Height * PixelBytes;
 			if (!Create.Texture.IsValid() || Create.Revision == 0 || Create.Width == 0 || Create.Height == 0 ||
-				Create.Format != RenderTextureFormat::Rgba8Unorm || !Create.Pixels || Create.Pixels->size() != Expected ||
+				PixelBytes == 0 || !Create.Pixels || Create.Pixels->size() != Expected ||
 				NextTextures.contains(Create.Texture))
 				throw std::invalid_argument("Render publisher rejects an invalid or duplicate UI texture creation");
 			NextTextures.emplace(Create.Texture, PublishedTexture{
@@ -582,18 +752,19 @@ namespace gargantuan {
 		}
 		for (const auto &Update : Updates) {
 			auto Existing = NextTextures.find(Update.Texture);
-			const auto Expected = static_cast<std::size_t>(Update.Width) * Update.Height * 4;
+			const auto PixelBytes = Existing == NextTextures.end() ? 0u : GetRenderTexturePixelBytes(Existing->second.Format);
+			const auto Expected = static_cast<std::size_t>(Update.Width) * Update.Height * PixelBytes;
 			if (Existing == NextTextures.end() || Update.Revision <= Existing->second.Revision ||
 				Update.X > Existing->second.Width || Update.Y > Existing->second.Height ||
 				Update.Width > Existing->second.Width - Update.X || Update.Height > Existing->second.Height - Update.Y ||
-				!Update.Pixels || Update.Pixels->size() != Expected)
+				PixelBytes == 0 || !Update.Pixels || Update.Pixels->size() != Expected)
 				throw std::invalid_argument("Render publisher rejects an invalid UI texture update");
 			auto Pixels = std::make_shared<std::vector<std::uint8_t>>(*Existing->second.Pixels);
 			for (std::uint32_t Row = 0; Row < Update.Height; ++Row) {
-				const auto SourceOffset = static_cast<std::size_t>(Row) * Update.Width * 4;
+				const auto SourceOffset = static_cast<std::size_t>(Row) * Update.Width * PixelBytes;
 				const auto DestinationOffset =
-					(static_cast<std::size_t>(Update.Y + Row) * Existing->second.Width + Update.X) * 4;
-				std::copy_n(Update.Pixels->data() + SourceOffset, static_cast<std::size_t>(Update.Width) * 4,
+					(static_cast<std::size_t>(Update.Y + Row) * Existing->second.Width + Update.X) * PixelBytes;
+				std::copy_n(Update.Pixels->data() + SourceOffset, static_cast<std::size_t>(Update.Width) * PixelBytes,
 					Pixels->data() + DestinationOffset);
 			}
 			Existing->second.Revision = Update.Revision;
@@ -924,8 +1095,10 @@ namespace gargantuan {
 		Result->BaseId = LastPublicationId;
 		const bool EnvironmentDirty = !HasPublishedEnvironment || !PendingTextureCreates.empty() ||
 									  !PendingTextureUpdates.empty() || !PendingTextureRemoves.empty() ||
-									  std::ranges::any_of(DirtyBatch.Records, [](const RenderDirtyRecord &Record) {
-										  return HasRenderUpdateDomain(Record.Domains, RenderUpdateDomain::Environment);
+								  std::ranges::any_of(DirtyBatch.Records, [&](const RenderDirtyRecord &Record) {
+									  return HasRenderUpdateDomain(Record.Domains, RenderUpdateDomain::Environment) ||
+										  (HasRenderUpdateDomain(Record.Domains, RenderUpdateDomain::Transform) &&
+											  LocalLightOwners.contains(Record.Object));
 									  });
 		auto Environment = PublishedEnvironment;
 		if (EnvironmentDirty) {
@@ -953,7 +1126,7 @@ namespace gargantuan {
 			auto DeformableValue = std::dynamic_pointer_cast<DeformableBody>(InstanceValue);
 			if (DeformableValue) {
 				const bool ShouldRender = !DeformableValue->GetDestroyed() && !DeformableValue->IsDestroying() &&
-					DeformableValue->FindFirstAncestorWhichIsA("WorldRoot").get() == &World;
+					IsInWorld(*DeformableValue, World);
 				RenderExtractionDiagnostic Diagnostic;
 				auto Extracted = ShouldRender ? ExtractDeformable(World, DeformableValue, Diagnostic) : std::nullopt;
 				if (ProfilingEnabled)
@@ -1014,9 +1187,10 @@ namespace gargantuan {
 			}
 			if (MeshPartValue) {
 				const bool ShouldRender = !MeshPartValue->GetDestroyed() && !MeshPartValue->IsDestroying() &&
-					MeshPartValue->FindFirstAncestorWhichIsA("WorldRoot").get() == &World;
+					IsInWorld(*MeshPartValue, World);
 				RenderExtractionDiagnostic Diagnostic;
-				auto Extracted = ShouldRender ? ExtractMeshPart(World, MeshPartValue, Diagnostic) : std::nullopt;
+				auto Extracted = ShouldRender ? ExtractMeshPart(World, MeshPartValue, Diagnostic, Object,
+				Previous == PublishedItems.end() ? nullptr : &Previous->second) : std::nullopt;
 				if (ProfilingEnabled)
 					LastProfile.FinalStateExtractionNanoseconds +=
 						ProfileNanoseconds(ProfileClock::now() - ExtractionStart);
@@ -1046,7 +1220,7 @@ namespace gargantuan {
 				continue;
 			}
 			const bool ShouldRender = PartValue && !PartValue->GetDestroyed() && !PartValue->IsDestroying() &&
-				PartValue->FindFirstAncestorWhichIsA("WorldRoot").get() == &World;
+				IsInWorld(*PartValue, World);
 			if (!ShouldRender) {
 				if (ProfilingEnabled)
 					LastProfile.FinalStateExtractionNanoseconds +=
@@ -1065,7 +1239,8 @@ namespace gargantuan {
 				continue;
 			}
 			RenderExtractionDiagnostic Diagnostic;
-			auto Item = ExtractItem(PartValue, Diagnostic);
+			auto Item = ExtractItem(PartValue, Object, Diagnostic,
+				Previous == PublishedItems.end() ? nullptr : &Previous->second);
 			if (ProfilingEnabled)
 				LastProfile.FinalStateExtractionNanoseconds +=
 					ProfileNanoseconds(ProfileClock::now() - ExtractionStart);

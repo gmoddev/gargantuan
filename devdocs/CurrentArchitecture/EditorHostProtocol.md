@@ -427,6 +427,27 @@ extension adds only fixed-size geometry values to each existing bounded record
 and performs no resolver, filesystem or physics operation. All geometry
 compilation/import commands and their existing capabilities remain unchanged.
 
+## Advanced material catalog metadata
+
+Handshake capability `AdvancedMaterialMetadata` advertises optional boolean
+`GetAssetCatalog.Params.IncludeAdvancedMaterials`, default false. A true
+request keeps `CatalogVersion: 2` and adds one `Metadata.AdvancedMaterial`
+object to Material records with advanced inputs. Its fields are
+`EmissiveFactor` (three linear unit RGB numbers), `EmissiveTexture` and
+`OcclusionTexture` (Image AssetId strings or null), `OcclusionStrength`
+(unit number), `NormalScale` (number in `[-64,64]`), and `TextureSamplers`
+(object containing only nondefault slots).
+
+Sampler slot keys are `BaseColor`, `Normal`, `MetallicRoughness`, `Emissive`,
+and `Occlusion`. Each supplied slot contains `MinFilter` (`Default`,
+`Nearest`, `Linear`, `NearestMipmapNearest`, `LinearMipmapNearest`,
+`NearestMipmapLinear`, or `LinearMipmapLinear`), `MagFilter` (`Default`,
+`Nearest` or `Linear`), `WrapU` and `WrapV` (`Repeat`, `MirroredRepeat`
+or `ClampToEdge`). Omitted slots use the default filter and repeat wrapping.
+The read uses existing session, capability, and response-size checks. The
+standard catalog and asset mutation responses retain their existing metadata
+shape. The image references refer to existing catalog dependencies.
+
 ## Licensing and repository contract
 
 - Gargantuan and EditorHost remain public MPL-2.0 code.

@@ -35,7 +35,7 @@ SkinnedVertex ApplySkinning(
         if (Weight <= 0.0 || Joint >= EntryCount) continue;
         SkinnedPosition += SkinPalette.Entries[Joint].PositionMatrix * vec4(Position, 1.0) * Weight;
         SkinnedNormal += mat3(SkinPalette.Entries[Joint].NormalMatrix) * Normal * Weight;
-        SkinnedTangent += mat3(SkinPalette.Entries[Joint].NormalMatrix) * Tangent.xyz * Weight;
+        SkinnedTangent += mat3(SkinPalette.Entries[Joint].PositionMatrix) * Tangent.xyz * Weight;
         AppliedWeight += Weight;
     }
 

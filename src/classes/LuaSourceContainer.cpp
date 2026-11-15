@@ -94,10 +94,12 @@ namespace gargantuan {
 		// Scripts can be named and parented after construction. Capture the live
 		// Instance path so require() can restore the correct navigation context.
 		ChunkName = GetFullName();
+		// Give this Script its own global table before assigning `script`.
+		// Otherwise later Scripts replace the shared fallback global and an
+		// older yielded coroutine can resolve the wrong Script on resume.
+		luaL_sandboxthread(L);
 		StackValue<std::shared_ptr<Instance>>::Push(L, shared_from_this());
 		lua_setglobal(L, "script");
-
-		luaL_sandboxthread(L);
 
 		if (luau_load(L, ChunkName.c_str(), Bytecode.data(), BytecodeSize, 0) != LUA_OK) {
 			return std::format("Failed to load {}: {}", ChunkName, lua_tostring(L, -1));

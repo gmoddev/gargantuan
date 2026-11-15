@@ -381,7 +381,11 @@ namespace gargantuan {
 		ObjectRegistry::Get().Invalidate(objectId);
 		if (scope.IsValid())
 			ChangeJournal::Get().Commit(scope, objectId, PropertyUpdatedChange{"Destroyed", true, true});
-		GetPropertyChangedSignal("Destroyed")->Fire({});
+		if (auto Found = PropertyChangedSignals.find("Destroyed");
+			Found != PropertyChangedSignals.end() && Found->second) {
+			auto Signal = Found->second;
+			Signal->Fire({});
+		}
 
 		Destroying->Fire({});
 
@@ -436,7 +440,11 @@ namespace gargantuan {
 		}
 		if (propertyName == "Name" || property->PersistencePolicy == InstanceProperty::Persistence::Saved)
 			if (auto dataModel = GetDataModel()) dataModel->AdvanceAuthoritativeRevision();
-		GetPropertyChangedSignal(std::string(propertyName))->Fire({});
+		if (auto Found = PropertyChangedSignals.find(std::string(propertyName));
+			Found != PropertyChangedSignals.end() && Found->second) {
+			auto Signal = Found->second;
+			Signal->Fire({});
+		}
 	}
 
 	ObjectId Instance::GetReplicationScopeId() const {
@@ -1118,7 +1126,11 @@ namespace gargantuan {
 
 	void Instance::FireAncestryChanged(std::shared_ptr<Instance> child, std::shared_ptr<Instance> parent) {
 		AncestryChanged->Fire({child, parent});
-		GetPropertyChangedSignal("Parent")->Fire({});
+		if (auto Found = PropertyChangedSignals.find("Parent");
+			Found != PropertyChangedSignals.end() && Found->second) {
+			auto Signal = Found->second;
+			Signal->Fire({});
+		}
 		for (auto &descendant : Children) {
 			descendant->FireAncestryChanged(child, parent);
 		}

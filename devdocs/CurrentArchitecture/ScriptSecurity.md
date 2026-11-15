@@ -47,6 +47,12 @@ context, including when a worker command is later drained on Main. Studio
 mutation remains an EditorHost command applied by the gateway; Studio never
 receives an authoritative `Instance` pointer.
 
+Generated native method metadata can require a script capability. Luau method
+dispatch enforces it for inherited methods as well as methods declared on the
+concrete class. `Instance:Destroy()` and `Instance:ClearAllChildren()` require
+`MutateDataModel`; network-only inbound handler contexts cannot invoke either.
+Ordinary Server and Client runtime profiles already grant that capability.
+
 Dedicated script Source reads require EditorCommands plus ReadDataModel;
 Source writes require EditorCommands plus MutateDataModel and pass through the
 MutationGateway with project scope, stable identity, UTF-8/size validation, and
@@ -68,6 +74,38 @@ later from ambient Core therefore cannot upgrade the callback that an ordinary
 runtime Script registered. Signal Wait uses the same rule. `ProcessService`
 checks `ProcessControl` for exit and stdout operations; ordinary player/runtime
 profiles do not receive it.
+
+The Script activation queue snapshots its members at the start of each
+`ScriptEngine::Step`. A newly queued Script starts no earlier than the next
+step. A Script removed before its turn is skipped unless it has been requeued
+before that turn; destroying it prevents requeueing.
+The engine retains one weak cleanup entry per Script across restarts and
+removes expired entries incrementally during registration and ordinary steps.
+Shutdown cleans the remaining live Scripts in first-registration order before
+closing the VM. Tracking a detached bootstrap Script does not publish its
+ObjectId or add a journal record.
+Each Script binds its `script` global in its own sandbox before loading source.
+Yielded Script coroutines and their deferred tasks keep that binding when
+another Script starts; starting a Script does not overwrite the main VM global.
+After a finish or error, Script releases its own coroutine root after the
+current `lua_resume` returns. Task, signal, Remote and entitlement completion
+paths notify the owning Script when its yielded original thread terminates.
+The bounded managed-Script pruning pass also retires threads completed or
+closed through Luau's own coroutine functions after their terminal state is
+observed on an engine Step.
+Deferred tasks, signal callbacks and Remote requests retain their separate Lua
+roots; completing the initial Script does not cancel them. A still-yielded
+Script keeps its own root until completion or explicit cleanup.
+
+Engine destruction stops new Script activation, scheduled/deferred task
+admission and tracked Lua handlers before destroying services or descendants.
+Active Lua calls keep the native VM alive through their return/error boundary;
+this lifetime pin grants no capability and does not replace their captured
+security context. A stopped runtime cannot begin another queued callback just
+because its physical VM is still temporarily alive.
+Current native call sites enter `Script::Step` through `ScriptEngine`, which
+registers the Script for VM cleanup first. An external native host calling
+`Script::Step` directly must keep the Script and VM alive through that call.
 
 The current context is thread-local and defaults to trusted Core for backwards
 compatibility with engine-owned call paths. New untrusted script entry points

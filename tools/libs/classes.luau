@@ -33,6 +33,7 @@ export type ClassParameter = { read name: string, read type: types.Type }
 export type ClassMethod = {
 	read description: string,
 	read level: Permission?,
+	read requiredCapability: "MutateDataModel"?,
 
 	read params: { ClassParameter }?,
 	read returns: types.Type?,

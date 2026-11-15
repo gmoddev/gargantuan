@@ -251,6 +251,26 @@ jobs:
           if errorlevel 1 exit /b %errorlevel%
           cmake --build build-ci --config Release --parallel %CMAKE_BUILD_PARALLEL_LEVEL%
 
+      - name: Freeze Runtime6 physical GPU probes
+        id: runtime6_physical_capture
+        if: github.event_name == 'workflow_dispatch' && !inputs.scheduler_trace && !inputs.scheduler_pair_diagnostic && !inputs.scheduler_ack_cycle_diagnostic
+        continue-on-error: true
+        shell: cmd
+        run: |
+          call "%VSDEVCMD%" -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b %errorlevel%
+          python tools\ci\FreezeRuntime6Physical.py --source-root "%CD%" --build-root "%CD%\build-ci" --output-root "%CD%\runtime6-physical-probes" --source "%GITHUB_SHA%"
+          if errorlevel 1 exit /b %errorlevel%
+
+      - name: Upload Runtime6 physical GPU probes
+        if: github.event_name == 'workflow_dispatch' && !inputs.scheduler_trace && !inputs.scheduler_pair_diagnostic && !inputs.scheduler_ack_cycle_diagnostic && steps.runtime6_physical_capture.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: runtime6-physical-probes-${{ github.sha }}
+          if-no-files-found: error
+          path: runtime6-physical-probes/
+
       - name: Build bounded scheduler diagnostic
         if: github.event_name == 'workflow_dispatch' && (inputs.scheduler_trace || inputs.scheduler_pair_diagnostic || inputs.scheduler_ack_cycle_diagnostic)
         shell: cmd

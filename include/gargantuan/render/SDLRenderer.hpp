@@ -19,6 +19,13 @@ namespace gargantuan {
 		std::uint32_t InjectPaletteUploadFailures = 0;
 		std::uint32_t InjectShaderCreationFailures = 0;
 		std::uint32_t InjectPipelineCreationFailures = 0;
+		bool EnableHdrScene = true;
+		bool EnableOpaqueGrouping = true;
+		bool ProfileDetailed = false;
+		bool UseCompactTraversal = false;
+		bool EnableInstancing = false;
+		bool EnableSceneEnvelope = false;
+		bool UseContiguousInstancing = false;
 	};
 
 	struct SDLRendererMetrics {
@@ -55,6 +62,7 @@ namespace gargantuan {
 		std::uint64_t SkinnedSourceResourceCreations = 0;
 		std::uint64_t CpuSkinnedVertexUploads = 0;
 		std::uint64_t MainShadowPoseMismatches = 0;
+		std::uint64_t ShadowPoseChecks = 0;
 		std::uint64_t CpuProjectionNanoseconds = 0;
 		std::uint64_t CpuVisibilityNanoseconds = 0;
 		std::uint64_t CpuMeshTransferNanoseconds = 0;
@@ -69,6 +77,99 @@ namespace gargantuan {
 		std::uint64_t LastUiPreparationNanoseconds = 0;
 		std::uint64_t LastSubmissionNanoseconds = 0;
 		std::uint64_t LastGpuCompletionWaitNanoseconds = 0;
+		// Inclusive CPU recording phases. These are host clocks, never GPU timestamps.
+		std::uint64_t LastShadowClassificationNanoseconds = 0;
+		std::uint64_t LastProjectionValidationNanoseconds = 0;
+		std::uint64_t LastProjectionMutationNanoseconds = 0;
+		std::uint64_t LastMeshApplicationNanoseconds = 0;
+		std::uint64_t LastPaletteApplicationNanoseconds = 0;
+		std::uint64_t LastCommandAcquireNanoseconds = 0;
+		std::uint64_t LastShadowRecordingNanoseconds = 0;
+		std::uint64_t LastSkyRecordingNanoseconds = 0;
+		std::uint64_t LastOpaqueRecordingNanoseconds = 0;
+		std::uint64_t LastResolveRecordingNanoseconds = 0;
+		std::uint64_t LastGuiRecordingNanoseconds = 0;
+		std::uint64_t LastGpuSubmitNanoseconds = 0;
+		std::uint64_t LastInstanceApplicationNanoseconds = 0;
+		std::uint64_t LastInstanceUploadNanoseconds = 0;
+		std::uint64_t LastInstancePreparationNanoseconds = 0;
+		std::uint64_t LastInstanceTraversalNanoseconds = 0;
+		std::uint64_t LastInstanceCandidateNanoseconds = 0;
+		std::uint64_t LastInstanceVisibleUploadNanoseconds = 0;
+		// ProfileDetailed samples one of every 128 candidate records. These
+		// timings are sampled host work, not whole-frame phase durations.
+		std::uint64_t LastInstanceSampleSourceNanoseconds = 0;
+		std::uint64_t LastInstanceSampleCullNanoseconds = 0;
+		std::uint64_t LastInstanceSampleEligibilityNanoseconds = 0;
+		std::uint64_t LastInstanceSampleSlotNanoseconds = 0;
+		std::uint64_t LastInstanceSampleBatchNanoseconds = 0;
+		std::uint64_t InstanceSampleObjects = 0;
+		std::uint64_t InstanceSampleCullTests = 0;
+		std::uint64_t InstanceSampleEligibilityChecks = 0;
+		std::uint64_t InstanceSampleSlotLookups = 0;
+		std::uint64_t InstanceSampleBatchAdmissions = 0;
+		// Fine timings are populated only with ProfileDetailed; clock overhead is
+		// intentionally excluded from normal performance qualification.
+		std::uint64_t LastCameraTraversalNanoseconds = 0;
+		std::uint64_t LastCameraCullNanoseconds = 0;
+		std::uint64_t LastCameraResidencyNanoseconds = 0;
+		std::uint64_t LastOpaqueGroupingNanoseconds = 0;
+		std::uint64_t LastWorldDrawRecordingNanoseconds = 0;
+		std::uint64_t LastTransparentNanoseconds = 0;
+		std::uint64_t CameraVisitedObjects = 0;
+		std::uint64_t CameraHiddenObjects = 0;
+		std::uint64_t CameraFrustumTests = 0;
+		std::uint64_t CameraMeshLookups = 0;
+		std::uint64_t WorldPrimitiveDraws = 0;
+		std::uint64_t CameraCulledObjects = 0;
+		std::uint64_t EnvelopeRejections = 0;
+		std::uint64_t EnvelopeBuildNanoseconds = 0;
+		std::uint64_t EnvelopeRebuilds = 0;
+		std::uint64_t WorldGeometryBindings = 0;
+		std::uint64_t WorldMaterialBindings = 0;
+		std::uint64_t InstancedDrawCalls = 0;
+		std::uint64_t ContiguousInstancedDrawCalls = 0;
+		std::uint64_t MaximumInstancedBatchSize = 0;
+		std::uint64_t InstancedObjects = 0;
+		std::uint64_t InstanceUploadBytes = 0;
+		std::uint64_t VisibleIndexUploadBytes = 0;
+		std::uint64_t HdrSceneBytes = 0;
+		std::uint64_t SceneResolveDraws = 0;
+		std::uint64_t IblBuilds = 0;
+		std::uint64_t IblCacheHits = 0;
+		std::uint64_t IblPreprocessPasses = 0;
+		std::uint64_t IblLastPrepareNanoseconds = 0;
+		std::uint64_t OpaqueGroupingCandidates = 0;
+		std::uint64_t OpaqueGroupedObjects = 0;
+		std::uint64_t OpaqueGroupingUnprovenBounds = 0;
+		std::uint64_t OpaqueGroupingConflictBarriers = 0;
+		std::uint64_t OpaqueGroupingBudgetBarriers = 0;
+		std::uint64_t OpaqueGroupingPairTests = 0;
+		std::uint64_t OpaqueGroupingDepthProofs = 0;
+		std::uint64_t VisibleLocalLights = 0;
+		std::uint64_t OverBudgetLightTiles = 0;
+		std::uint64_t DroppedLightTileIndices = 0;
+		std::uint64_t LocalLightUploadBytes = 0;
+		std::uint64_t LastLocalLightGridNanoseconds = 0;
+		std::uint64_t MaterialViewBytes = 0;
+		std::uint64_t MaterialSourceBytes = 0;
+		std::uint64_t MaterialViewFallbacks = 0;
+		std::uint64_t MaterialUploadStagingBytes = 0;
+		std::uint64_t ShadowMapBuilds = 0;
+		std::uint64_t ShadowCacheHits = 0;
+		std::uint64_t ShadowMapPasses = 0;
+		std::uint64_t ShadowCasterDraws = 0;
+		std::uint64_t SolidShadowCasterDraws = 0;
+		std::uint64_t ResidentReflectionProbes = 0;
+		std::uint64_t ProbeArrayBytes = 0;
+		std::uint64_t ProbeUploadBytes = 0;
+		std::uint64_t ProbeUpdates = 0;
+		std::uint64_t ProbePreprocessBuilds = 0;
+		std::uint64_t LastProbePreparationNanoseconds = 0;
+		std::uint64_t MaterialViewEvictions = 0;
+		std::uint64_t DeferredMaterialViewUploads = 0;
+		std::uint64_t MaterialSourceEvictions = 0;
+		std::uint64_t MaterialSourceRehydrates = 0;
 	};
 
 	class SDLRenderer final : public BaseRenderer {
@@ -89,6 +190,8 @@ namespace gargantuan {
 		[[nodiscard]] std::pair<std::uint32_t, std::uint32_t> GetViewportSize() const override;
 
 	  private:
+		friend struct SDLRendererTestAccess;
+		void SetSolidShadowDepthExperimentForTesting(bool Enabled);
 		struct Backend;
 		std::unique_ptr<Backend> State;
 	};

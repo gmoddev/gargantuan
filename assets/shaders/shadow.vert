@@ -14,10 +14,13 @@ layout(set = 1, binding = 0) uniform Uniforms {
     mat4 PartMatrix;
 } uniforms;
 
+layout(location = 0) out vec2 FragmentUV;
+
 void main()
 {
     SkinnedVertex Vertex = ApplySkinning(
         VertexPosition, VertexNormal, VertexTangent, VertexJoints, VertexWeights
     );
     gl_Position = uniforms.ShadowMatrix * uniforms.PartMatrix * vec4(Vertex.Position, 1.0);
+    FragmentUV = VertexUV;
 }

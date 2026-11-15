@@ -54,6 +54,21 @@ or package destination. `PackageBuilder::Capture` obtains project serialization
 and assets synchronously from one authoritative world before asynchronous I/O
 starts.
 
+Content units carry a producer-selected instance schema version in the immutable
+GamePayload. Ordinary capture defaults to the current version 5 writer. A
+trusted native producer may explicitly select supported version 4 for retained
+authored payloads; every unit must declare that exact version, and mixed,
+mismatched or unsupported versions reject before output commit. Snapshot,
+staged content manifests and spatial inspection use the same selected version.
+This does not change the project snapshot writer or consumer acceptance rules.
+
+The Foundation 3L qualified scale producer uses this compatibility path for its
+original 512-object, 273,032-byte v4 workload. It pins the accepted payload and
+manifest digests and checks current deserialization/default controls before
+packaging. General scale fixtures continue to use evolving v5 serialization;
+the qualified producer must not silently rebaseline its byte workload when
+saved properties or document-local NodeIds are added.
+
 The CLI opens the disk project, so its captured and persisted revisions are the
 same. Studio uses EditorHost and can deliberately package a valid unsaved
 revision.
@@ -218,6 +233,13 @@ failure whenever the opt-in is enabled.
 Runtime modules, font, and shaders resolve only under executable-relative
 `runtime/` and `shaders/`. There is no parent/build/source fallback. Linux uses
 `$ORIGIN` and macOS uses `@loader_path` for adjacent shared libraries.
+
+The canonical distribution stages all 18 Foundation 3–6 SPIR-V outputs,
+including the non-cube-array portable material fragment and opt-in instanced
+vertex shaders. Distribution shader verification checks this executable-local
+set separately from the build directory; package tests reject missing manifest
+members before publishing an output. This does not change package schema or
+enable instancing by default.
 
 ## UserDataRoot
 

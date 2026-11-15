@@ -81,7 +81,8 @@ namespace gargantuan {
 	struct ImportedImage {
 		std::uint32_t Width = 0;
 		std::uint32_t Height = 0;
-		std::shared_ptr<const std::vector<std::uint8_t>> Rgba8;
+		std::shared_ptr<const std::vector<std::uint8_t>> Pixels;
+		RenderTextureFormat Format = RenderTextureFormat::Rgba8Unorm;
 	};
 
 	struct ImportedMeshPrimitive {
@@ -168,6 +169,18 @@ namespace gargantuan {
 		AssetMaterialAlphaMode AlphaMode = AssetMaterialAlphaMode::Opaque;
 		float AlphaCutoff = 0.5f;
 		bool DoubleSided = false;
+		std::optional<AssetId> MetallicRoughnessTexture;
+		glm::vec3 EmissiveFactor{0.0f};
+		std::optional<AssetId> EmissiveTexture;
+		std::optional<AssetId> OcclusionTexture;
+		float OcclusionStrength = 1.0f;
+		float NormalScale = 1.0f;
+		RenderMaterialSamplers TextureSamplers{};
+
+		[[nodiscard]] bool HasAdvancedInputs() const {
+			return EmissiveFactor != glm::vec3(0.0f) || EmissiveTexture || OcclusionTexture ||
+				OcclusionStrength != 1.0f || NormalScale != 1.0f || TextureSamplers != RenderMaterialSamplers{};
+		}
 	};
 
 	struct ImportedAudio {

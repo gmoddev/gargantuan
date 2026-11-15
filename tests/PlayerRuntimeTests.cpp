@@ -2,6 +2,7 @@
 #include "gargantuan/classes/Camera.hpp"
 #include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/InputBinding.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Player.hpp"
@@ -32,6 +33,13 @@ namespace gargantuan {
 		}
 		static void EndFrame(ActionMap &Map) {
 			Map.EndFrame();
+		}
+		static void Reset(ActionMap &Map) {
+			Map.Reset();
+		}
+		static std::shared_ptr<InputBinding> Binding(ActionMap &Map, int Id) {
+			const auto Found = Map.Bindings.find(Id);
+			return Found == Map.Bindings.end() ? nullptr : Found->second.lock();
 		}
 	};
 }
@@ -151,6 +159,47 @@ namespace {
 		Check(Rejected, "ActionMap rejects bindings beyond its explicit native resource bound");
 		BoundedMap->UnbindAction("Bounded");
 		Check(BoundedMap->GetBindingCount() == 0, "bounded binding stress releases without retained action state");
+		auto StoppingMap = std::make_shared<ActionMap>();
+		ActionMapTestAccess::Attach(*StoppingMap, Input);
+		Check(StoppingMap->BindKey("StoppingProbe", Enums::KeyCode::W, 1.0f, 0, false) > 0,
+			"ActionMap accepts a legacy binding before native stop");
+		ActionMapTestAccess::Reset(*StoppingMap);
+		ActionMapTestAccess::Reset(*StoppingMap);
+		Check(StoppingMap->GetBindingCount() == 0 &&
+			StoppingMap->BindKey("LateKey", Enums::KeyCode::W, 1.0f, 0, false) == 0 &&
+			StoppingMap->BindMouseButton("LateButton", Enums::UserInputType::MouseButton1, 1.0f, 0, false) == 0 &&
+			StoppingMap->BindPointerDelta("LateLook", Vector2(1.0f, 1.0f), 0, false) == 0,
+			"repeated ActionMap reset remains closed to every facade bind entry");
+		ActionMapTestAccess::Attach(*StoppingMap, {});
+		const auto ReopenedId = StoppingMap->BindKey("Reopened", Enums::KeyCode::W, 1.0f, 0, false);
+		Check(ReopenedId > 1, "a completed reset can reopen through private attach without reusing a binding ID");
+		ActionMapTestAccess::Reset(*StoppingMap);
+
+		auto InterruptedMap = std::make_shared<ActionMap>();
+		ActionMapTestAccess::Attach(*InterruptedMap, Input);
+		const auto FirstId = InterruptedMap->BindKey("First", Enums::KeyCode::W, 1.0f, 0, false);
+		const auto SecondId = InterruptedMap->BindKey("Second", Enums::KeyCode::D, 1.0f, 0, false);
+		auto FirstBinding = ActionMapTestAccess::Binding(*InterruptedMap, FirstId);
+		auto ThrowingConnection = FirstBinding ? FirstBinding->Destroying->Connect([](auto) {
+			throw std::runtime_error("[Input:ActionMap] injected native teardown interruption");
+		}) : nullptr;
+		bool TeardownInterrupted = false;
+		try {
+			ActionMapTestAccess::Reset(*InterruptedMap);
+		} catch (const std::runtime_error &) {
+			TeardownInterrupted = true;
+		}
+		bool AttachRejected = false;
+		try {
+			ActionMapTestAccess::Attach(*InterruptedMap, Input);
+		} catch (const std::logic_error &) {
+			AttachRejected = true;
+		}
+		Check(TeardownInterrupted && AttachRejected && InterruptedMap->GetBindingCount() == 1 &&
+			ActionMapTestAccess::Binding(*InterruptedMap, SecondId) &&
+			InterruptedMap->BindKey("AfterInterruptedStop", Enums::KeyCode::W, 1.0f, 0, false) == 0,
+			"interrupted native reset keeps facade admission closed and rejects reattachment with live bindings");
+		if (ThrowingConnection) ThrowingConnection->Disconnect();
 	}
 
 	std::shared_ptr<gargantuan::Part> MakePart(
@@ -363,17 +412,83 @@ Witness.Parent = game
 			"Player reset destroys the old character and synchronously assembles a replacement"
 		);
 		auto ReplacementCharacter = *LocalPlayer->GetCharacter();
+		const auto ShutdownProbe = Runtime.ActionMap->BindKey(
+			"ShutdownProbe", Enums::KeyCode::W, 1.0f, 0, false);
+		auto ProbeBinding = Game->FindFirstDescendant("Binding" + std::to_string(ShutdownProbe));
+		int DestroyingAttempts = 0, EndedAttempts = 0;
+		int DestroyingHandle = -1, EndedHandle = -1;
+		auto DestroyingConnection = ProbeBinding ? ProbeBinding->Destroying->Connect([&](auto) {
+			++DestroyingAttempts;
+			DestroyingHandle = Runtime.ActionMap->BindKey(
+				"LateDestroyingBinding", Enums::KeyCode::W, 1.0f, 0, false);
+		}) : nullptr;
+		auto EndedConnection = Runtime.ActionMap->ActionEnded->Connect([&](std::string Name) {
+			if (Name != "ShutdownProbe") return;
+			++EndedAttempts;
+			EndedHandle = Runtime.ActionMap->BindPointerDelta(
+				"LateEndedBinding", Vector2(1.0f, 1.0f), 0, false);
+		});
+		(void)Runtime.ProcessEvent(Key(LogicalKey::W, ButtonState::Pressed));
+		Check(ShutdownProbe > 0 && Runtime.ActionMap->GetBindingCount() > 0 &&
+			ProbeBinding && Runtime.ActionMap->IsDown("ShutdownProbe") &&
+			Runtime.Players->FindFirstChild("PlayerRuntimeModules", std::nullopt),
+			"runtime has live facade bindings and default modules before native shutdown");
 		Runtime.Destroy();
 		Check(
 			ReplacementCharacter->GetDestroyed() && !Runtime.Players->GetLocalPlayer() &&
 				Runtime.Players->GetPlayers().empty(),
 			"runtime shutdown deterministically removes character and LocalPlayer lifetimes"
 		);
-		Check(
-			Runtime.ActionMap->GetBindingCount() == 0 &&
-				!Runtime.Players->FindFirstChild("PlayerRuntimeModules", std::nullopt),
-			"default module shutdown releases bindings, signals, and runtime Instances"
-		);
+		Check(Runtime.ActionMap->GetBindingCount() == 0,
+			"native runtime shutdown releases default and extra ActionMap facade bindings after Lua stops");
+		Check(DestroyingAttempts == 1 && EndedAttempts == 1 &&
+			DestroyingHandle == 0 && EndedHandle == 0 &&
+			!Game->FindFirstDescendant("LateDestroyingBinding") &&
+			!Game->FindFirstDescendant("LateEndedBinding"),
+			"native teardown observers cannot admit new ActionMap bindings after shutdown starts");
+		Check(!Runtime.Players->FindFirstChild("PlayerRuntimeModules", std::nullopt),
+			"default module shutdown releases runtime Instances after Lua stops");
+		Runtime.Destroy();
+		Check(Runtime.ActionMap->GetBindingCount() == 0 &&
+			!Runtime.Players->FindFirstChild("PlayerRuntimeModules", std::nullopt),
+			"repeated runtime shutdown leaves bindings and modules retired");
+	}
+
+	void TestEngineReattachAfterShutdown() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		std::shared_ptr<ActionMap> CanonicalMap;
+		int FirstId = 0;
+		{
+			HeadlessRenderer FirstRenderer(Vector2(320.0f, 240.0f));
+			Engine First(Game, &FirstRenderer);
+			CanonicalMap = First.ActionMap;
+			First.ProcessService->Alive = true;
+			First.Step();
+			First.Step();
+			FirstId = First.ActionMap->BindKey("FirstRuntimeProbe", Enums::KeyCode::W, 1.0f, 0, false);
+			Check(First.Players->GetLocalPlayer().has_value() && First.ActionMap->GetBindingCount() > 1 &&
+				FirstId > 0, "first Engine admits default runtime and facade bindings on the shared DataModel");
+			First.Destroy();
+			Check(First.ActionMap->GetBindingCount() == 0 &&
+				!First.Players->FindFirstChild("PlayerRuntimeModules", std::nullopt),
+				"first Engine shutdown retires adapter-owned bindings and default modules");
+		}
+		{
+			HeadlessRenderer SecondRenderer(Vector2(320.0f, 240.0f));
+			Engine Second(Game, &SecondRenderer);
+			Second.ProcessService->Alive = true;
+			Second.Step();
+			Second.Step();
+			const auto SecondId = Second.ActionMap->BindKey("SecondRuntimeProbe", Enums::KeyCode::D, 1.0f, 0, false);
+			Check(Second.ActionMap == CanonicalMap && Second.Players->GetLocalPlayer().has_value() &&
+				Second.ActionMap->GetBindingCount() > 1 && SecondId > FirstId &&
+				Second.Players->FindFirstChild("PlayerRuntimeModules", std::nullopt),
+				"a new Engine on the same live DataModel restarts default bindings with monotonic facade IDs");
+			Second.Destroy();
+			Check(Second.ActionMap->GetBindingCount() == 0,
+				"second Engine shutdown retires reopened facade bindings");
+		}
 	}
 
 	void TestCustomControllerPath() {
@@ -481,6 +596,7 @@ int main() {
 	TestActionMapContract();
 	TestCharacterSchema();
 	TestDefaultPlayerRuntime();
+	TestEngineReattachAfterShutdown();
 	TestCustomControllerPath();
 	if (Failures == 0) std::cout << "All player runtime tests passed\n";
 	return Failures == 0 ? 0 : 1;
