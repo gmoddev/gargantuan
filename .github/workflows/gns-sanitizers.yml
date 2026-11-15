@@ -51,7 +51,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
             clang-19 \
-            clang-format \
             cmake \
             glslc \
             libfreetype-dev \
@@ -95,6 +94,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          FormatterRoot="$RUNNER_TEMP/gargantuan-clang-format-21.1.8"
+          python3 -m pip install --no-deps --require-hashes --target "$FormatterRoot" -r tools/ci/clang-format-requirements.txt
+          export PATH="$FormatterRoot/clang_format/data/bin:$PATH"
+          echo "$FormatterRoot/clang_format/data/bin" >> "$GITHUB_PATH"
+          clang-format --version
+          clang-format --style=file --dump-config > /dev/null
+          python3 tools/tests/ClassgenFormatterFailures.py
           lute tools/classgen
           test -f include/gargantuan/classes/generated/Instance.hpp
           test -f src/classes/generated/Instance.cpp
