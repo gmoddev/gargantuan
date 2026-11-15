@@ -423,6 +423,9 @@ disconnect. Packaged headless server and client processes use the same adapter.
 External authentication tickets, general realtime physics ownership, Node,
 spatial interest management, and Studio multiplayer orchestration remain
 unimplemented.
+The generic GameSession v2 admission provider sits above this adapter; GNS
+transport encryption and its rejected opaque setup hook are unchanged. No
+packaged authenticated host or Node-backed provider is claimed by that boundary.
 
 Foundation 3E.1 narrows the unauthenticated DevelopmentLocal path above this
 adapter: GameSession accepts only parsed IPv4 loopback or exact IPv6 loopback

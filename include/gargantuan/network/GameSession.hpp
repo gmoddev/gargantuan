@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gargantuan/network/GameAdmission.hpp"
 #include "gargantuan/network/Limits.hpp"
 #include "gargantuan/network/Outcome.hpp"
 #include "gargantuan/network/ReplicaApplier.hpp"
@@ -32,6 +33,7 @@ namespace gargantuan::network {
 	inline constexpr std::size_t MaximumGameSessionPeers = 512;
 
 	enum class GameSessionRole : std::uint8_t { Server, Client };
+	enum class GameSessionAdmissionMode : std::uint8_t { DevelopmentLocal, Authenticated };
 	enum class GameSessionStatus : std::uint8_t {
 		Created,
 		Starting,
@@ -53,6 +55,11 @@ namespace gargantuan::network {
 		ReplicationRelevanceConfiguration Relevance;
 		StructuralReplicationConfiguration StructuralReplication;
 		bool AllowInsecureDevelopmentNetwork = false;
+		GameSessionAdmissionMode AdmissionMode = GameSessionAdmissionMode::DevelopmentLocal;
+		// Startup-only trusted server dependency. Never sourced from a client frame.
+		std::shared_ptr<IGameAdmissionProvider> AdmissionProvider;
+		// The client presents an opaque v2 proof; Engine never interprets it.
+		std::optional<std::array<std::byte, GameAdmissionProofBytes>> AdmissionProof;
 		// Trusted startup-only server input; absent means legacy/unqualified.
 		std::optional<ReliableServiceProfile> ReliableService;
 		// Trusted startup-only client declaration of the canonical ordinary source

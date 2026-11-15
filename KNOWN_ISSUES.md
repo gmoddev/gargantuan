@@ -4,6 +4,20 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+## KI-NET-ADMISSION-001: Authenticated hosting is not wired into packaged hosts
+
+- Status: Open integration gap; generic GameSession v2 boundary only.
+- Area: `GameSession`, packaged Player/Server startup, private hosting provider.
+- Source: `devdocs/CurrentArchitecture/GameSessionAdmission.md`.
+
+The generic startup-injected provider can deny or approve an opaque proof before
+Player creation, with bounded pending work and cancellation. Packaged Player and
+Server hosts still use the development path; there is no production provider,
+durable proof redemption, exact workload/session audience binding, or real-client
+hosting qualification. Resolution requires the private adapter, host wiring,
+real-client success and denial tests, and the separate Node/Engine integration
+gates. The existing `DevelopmentLocal` path is not production authentication.
+
 ## KI-RND-002: Invalid asset-mesh change tails can leave publisher work pending
 
 - Status: Open; pre-existing on main before Renderer Foundation 3.

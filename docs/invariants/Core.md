@@ -234,7 +234,11 @@ Tests should enforce them where practical.
     Status values describe lifecycle but never substitute for resource truth.
 21. `DevelopmentLocal` accepts parsed loopback endpoints only unless the native
     host explicitly enables the insecure-development override. That override
-    is not authentication or identity proof.
+    is not authentication or identity proof. Authenticated GameSession v2 requires
+    a startup-injected provider and exact opaque proof; denial, timeout, or
+    provider failure cannot create a Player or fall back to `DevelopmentLocal`.
+    Late completion after disconnect, Stop, or generation replacement has no
+    authority.
 22. Replication relevance is the sole owner of whether a peer knows a
     Character. Network importance applies only to an already-materialized
     Character relationship.

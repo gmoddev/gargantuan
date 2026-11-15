@@ -181,6 +181,10 @@ loopback or exact IPv6 loopback by default. The role-specific Player and Server
 CLIs can explicitly permit insecure LAN development and log
 `[Network:Security]`; the override does not
 turn endpoint reachability into authentication.
+The generic GameSession authenticated mode uses a separate GSES v2 proof and a
+startup-owned asynchronous provider before Player creation. Its proof is an
+application handshake field, not the transport setup hook. The packaged hosts
+do not yet inject a production provider; see `GameSessionAdmission.md`.
 
 `INetworkScheduler`, `SchedulerTickBudget`, structured submit/flush outcomes,
 semantic traffic precedence, and scheduler-only statistics now define the
@@ -204,8 +208,8 @@ documented in `CharacterNetworkingFoundation3E1.md`. Server-private adaptive
 Character publication cadence is documented in
 `CharacterNetworkingFoundation3F.md` and adds no client or wire-policy
 contract. General realtime physics replication, external account
-authentication/ticket validation, Node integration, and multiplayer Studio
-orchestration remain unimplemented. The deterministic in-memory
+production authentication/ticket validation, Node integration, and multiplayer
+Studio orchestration remain unimplemented. The deterministic in-memory
 implementation is documented in `SimulatedTransport.md`; the opt-in real GNS
 adapter is documented in `RealGameTransport.md`. Backend contract types remain
 private; only the schema-backed Remote developer surface is exposed to Luau.
