@@ -41,7 +41,7 @@ namespace {
 	bool ReadBoolean(const Json &Snapshot, std::string_view Name, std::string_view Property) {
 		for (const auto &Object : Snapshot.at("Result").at("Snapshot").at("Objects"))
 			if (Object.at("Name").get<std::string>() == Name)
-				return Object.at("Properties").at(std::string(Property)).at("Value").get<bool>();
+				return Object.at("EditorProperties").at(std::string(Property)).at("Value").get<bool>();
 		throw std::runtime_error("[Character:EditorHost] Missing boolean property " + std::string(Property));
 	}
 
@@ -119,6 +119,8 @@ int main() {
 		const auto Scope = Snapshot.at("Result").at("Snapshot").at("Cursor").at("Scope");
 		const auto Workspace = FindObject(Snapshot, "Workspace");
 		const auto Players = FindObject(Snapshot, "Players");
+		Check(Snapshot.at("Result").at("Snapshot").at("EditorPropertyValuesVersion") == 1,
+			"Saved nonreplicated player policies use the editor property read surface");
 		Check(Success("GetProjectState").at("Result").at("AuthoritativeRevision") == 1,
 			"Canonical player policy root is established before initial project revision");
 		for (const auto &Object : Snapshot.at("Result").at("Snapshot").at("Objects"))
