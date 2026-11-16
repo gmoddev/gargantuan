@@ -2,11 +2,13 @@
 
 ## Minimum project
 
-`CreateProject` creates the smallest canonical persisted project: one `DataModel`
-named by the request and its required `Workspace` service. It uses normal native
+`CreateProject` creates one `DataModel` named by the request and the canonical
+`Workspace`, `AssetService`, `Lighting`, `ReplicatedStorage`, `InputService`, and
+`Players` service roots. The persistent Players root exposes its three saved
+policy switches without starting runtime players or controllers. It uses normal native
 schema bootstrap, service construction, archivable-state marking, and current
 Instance serialization (v5 writer; the creation contract originated with v4).
-It does not add starter parts, scripts, gameplay services, assets,
+It does not add starter parts, scripts, runtime Player objects, assets,
 or a template identity.
 
 The initial project state is explicit:
@@ -63,7 +65,7 @@ destination on the same filesystem.
 Before the final rename, failure removes only the exact staging directory whose
 exclusive creation proves ownership. A pre-existing destination is never
 removed, traversed for rollback, or modified. A successful rename leaves a valid
-reopenable v4 project even if the requesting process disconnects before receiving
+reopenable v5 project even if the requesting process disconnects before receiving
 the response.
 
 ## Session adoption and failure
