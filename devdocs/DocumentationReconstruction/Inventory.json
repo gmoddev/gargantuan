@@ -5752,6 +5752,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "tools/CreatorCharacter/README.md",
+      "Purpose": "ClockworkWisp public authoring harness",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tools/CreatorCharacter/AuthorProject.py"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Inspect owning source before promoting to current authority",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "tools/ci/clang-format-requirements.txt",
       "Purpose": "Exact portable formatter for the repository's clang-format 21 configuration.",
       "LastMeaningfulUpdate": null,

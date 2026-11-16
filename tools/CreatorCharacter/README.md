@@ -26,8 +26,10 @@ The receipt must be a new file outside the project. The client checks the
 handshake, exact schema versions, live project scope, unique catalog identities,
 rig joint paths, clip compatibility, source readback, and Character composition.
 It saves only after every check succeeds and requires a normal EditorHost exit
-after standard-input EOF. Failure exits the owned process
-without a save; reopen the project in Studio to inspect it. The receipt records
+after standard-input EOF. An authoring check failure occurs before SaveProject;
+an EOF, exit, response or receipt-write failure can occur after the save has
+committed. Reopen the project in Studio to inspect its durable state before
+retrying; a missing success receipt does not prove that nothing was saved. The receipt records
 the saved revision, object IDs, asset references, and source hashes, but no
 session token or script body. Run the harness once per fresh project; it refuses
 name collisions rather than replacing existing authored objects.
