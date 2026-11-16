@@ -104,6 +104,15 @@ without a Character until server game code calls `LoadCharacter`. NPC and
 server-owned Characters remain valid without Players and still use generic
 GCHR relevance/state publication.
 
+The GCHR materialization set follows server runtime relevance. A Character
+stored under a replicated service, including a nested `ReplicatedStorage`
+template with a typed `RootPart`, remains available through structural
+replication but is not a runtime GCHR candidate. Client prediction uses the
+same inherited service-policy boundary so a saved template does not advance
+the peer-wide materialization epoch or stale-drop world Character state. A
+game may clone that template into the runtime world and assign the clone as
+`Player.Character`; the clone then has its own ObjectId and control lifetime.
+
 `Character` is permanently Gargantuan's canonical gameplay actor. `Humanoid`,
 `HumanoidController`, `HumanoidStateMachine`, renamed equivalents, and a giant
 native gameplay state machine are prohibited by `docs/invariants/Core.md`.
@@ -170,6 +179,14 @@ semantic action state intact and is retried only while the action remains
 active. An action already past its bounded duration is never replayed from
 zero. Client-created presentation tracks never enable root motion, so remote
 visual playback cannot apply displacement a second time.
+
+Client action registration always retains the bounded pinned definition for
+authoritative state validation and presentation. The `Predictable` flag controls
+only whether `RequestAction` creates a speculative action before server
+acceptance. A false flag still permits later authoritative action state,
+presentation, and `ActionEnded`; it does not change server admission, physics,
+or the GCHR wire. Native callers that omit the flag retain the previous
+predictable behavior.
 
 Script source is intentionally absent from structural replication. Before a
 packaged network client constructs its Engine, `PackageBuilder` hydrates Client

@@ -5,10 +5,12 @@
 
 #include "gargantuan/editor/EditorHost.hpp"
 #include "gargantuan/editor/AnimationPreview.hpp"
+#include "gargantuan/editor/CharacterCompositionInspection.hpp"
 #include "gargantuan/animation/AnimationTrack.hpp"
 
 #include "gargantuan/InstanceProperty.hpp"
 #include "gargantuan/classes/BasePart.hpp"
+#include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/LuaSourceContainer.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
@@ -19,6 +21,7 @@
 #include "gargantuan/reflection/PreRunRegistration.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/Snapshot.hpp"
+#include "gargantuan/runtime/SemanticSpatialResolver.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/runtime/WireJournal.hpp"
 #include "gargantuan/services/AssetService.hpp"
@@ -734,6 +737,64 @@ namespace gargantuan {
 				{"BoundsMaximum", {Mesh->Value.Bounds.Maximum.x, Mesh->Value.Bounds.Maximum.y, Mesh->Value.Bounds.Maximum.z}}};
 		}
 
+		Json EncodeCharacterComposition(const CharacterCompositionResult &Inspection) {
+			auto EncodeId = [](ObjectId Value) -> Json {
+				return Value.IsValid() ? JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Value)) : Json(nullptr);
+			};
+			auto EncodeAsset = [](const CharacterCompositionAsset &Value) {
+				return Json{
+					{"Reference", Value.Reference},
+					{"AssetId", Value.Id ? Json(Value.Id->ToString()) : Json(nullptr)},
+					{"ContentId", Value.ContentId.IsValid() ? Json(Value.ContentId.ToString()) : Json(nullptr)},
+					{"ContentRevision", Value.ContentRevision}, {"State", GetAssetStateName(Value.State)},
+					{"Available", Value.Available},
+				};
+			};
+			Json Meshes = Json::array(), Attachments = Json::array(), Issues = Json::array();
+			for (const auto &Value : Inspection.Meshes) {
+				Meshes.push_back({
+					{"Object", EncodeId(Value.Object)}, {"Mesh", EncodeAsset(Value.Mesh)},
+					{"Material", Value.Material ? EncodeAsset(*Value.Material) : Json(nullptr)},
+					{"SkeletonCompatibilityId", Value.SkeletonCompatibilityId.IsValid()
+						? Json(Value.SkeletonCompatibilityId.ToString()) : Json(nullptr)},
+					{"JointCount", Value.JointCount}, {"AnimatorCount", Value.AnimatorCount},
+					{"IsRootPart", Value.IsRootPart}, {"Anchored", Value.Anchored},
+					{"CanCollide", Value.CanCollide}, {"StaticMeshCollision", Value.StaticMeshCollision},
+				});
+			}
+			for (const auto &Value : Inspection.Attachments) {
+				Attachments.push_back({
+					{"Object", EncodeId(Value.Object)}, {"OwnerMesh", EncodeId(Value.OwnerMesh)},
+					{"JointPath", Value.JointPath}, {"JointPathExists", Value.JointPathExists},
+				});
+			}
+			for (const auto &Value : Inspection.Issues) {
+				Issues.push_back({
+					{"Code", std::string(magic_enum::enum_name(Value.Code))},
+					{"Severity", std::string(magic_enum::enum_name(Value.Severity))},
+					{"Object", EncodeId(Value.Object)}, {"Reference", Value.Reference},
+				});
+			}
+			return {
+				{"Character", EncodeId(Inspection.Character)},
+				{"RootPart", Inspection.RootPart ? EncodeId(*Inspection.RootPart) : Json(nullptr)},
+				{"Complete", Inspection.Complete}, {"Valid", Inspection.Valid},
+				{"ObjectsVisited", Inspection.ObjectsVisited}, {"Meshes", std::move(Meshes)},
+				{"Attachments", std::move(Attachments)}, {"Issues", std::move(Issues)},
+			};
+		}
+
+		void EncodePreviewBlendState(Json &Result, const AnimationPreview &Preview) {
+			Result["BlendVersion"] = 1;
+			Result["BlendWeight"] = Preview.GetBlendWeight();
+			const auto Primary = Preview.GetTrack(AnimationPreviewClipSlot::Primary);
+			const auto Secondary = Preview.GetTrack(AnimationPreviewClipSlot::Secondary);
+			Result["PrimaryTimePosition"] = Primary ? Json(Primary->GetTimePosition()) : Json(nullptr);
+			Result["PrimaryPlaybackState"] = Primary ? Json(magic_enum::enum_name(Primary->GetPlaybackState())) : Json(nullptr);
+			Result["SecondaryTimePosition"] = Secondary ? Json(Secondary->GetTimePosition()) : Json(nullptr);
+			Result["SecondaryPlaybackState"] = Secondary ? Json(magic_enum::enum_name(Secondary->GetPlaybackState())) : Json(nullptr);
+		}
+
 		std::optional<std::filesystem::path> ValidateProjectDestination(const Json &value) {
 			if (!value.is_string()) return std::nullopt;
 			const auto &encoded = value.get_ref<const std::string &>();
@@ -912,6 +973,7 @@ namespace gargantuan {
 
 	EditorHost::~EditorHost() {
 		ActiveAnimationPreview.reset();
+		ResetViewportSpatial();
 		ViewportPresentationActive = false;
 		ViewportLatestFrameMailbox.reset();
 		if (ActivePackageJob) {
@@ -927,6 +989,26 @@ namespace gargantuan {
 		} catch (...) {
 			if (World) World->Transactions.Reset();
 		}
+	}
+
+	void EditorHost::ResetViewportSpatial() {
+		ViewportPublisher.SetSpatialResolver(nullptr);
+		if (ViewportSpatial) ViewportSpatial->Shutdown();
+		ViewportSpatial.reset();
+	}
+
+	void EditorHost::StepViewportSpatial() {
+		if (!World) return;
+		if (!ViewportSpatial) {
+			const auto ExistingAssets = World->FindService("AssetService");
+			const auto Assets = ExistingAssets ? std::dynamic_pointer_cast<AssetService>(*ExistingAssets) : nullptr;
+			if (!Assets) return;
+			ViewportSpatial = std::make_shared<SemanticSpatialResolver>(Assets);
+			ViewportPublisher.SetSpatialResolver(ViewportSpatial);
+		}
+		// The bounded visual producer registers required attachments on extraction.
+		// Existing observations then update without another whole-scene walk.
+		ViewportSpatial->Step();
 	}
 
 	void EditorHost::AdvanceViewportGeneration() {
@@ -1010,6 +1092,7 @@ namespace gargantuan {
 				Metadata.PlaySessionId = ActivePlaySession->GetId().Value;
 			} else {
 				SynchronizeEditorViewportAssets(World, ViewportPublisher);
+				StepViewportSpatial();
 				LastViewportPublication = ViewportPublisher.Publish(
 					*WorkspaceService, *ViewportCamera, ViewportWidth, ViewportHeight
 				);
@@ -1099,7 +1182,10 @@ namespace gargantuan {
 			// Batch failures and diagnostic operations cannot commit an unrelated
 			// expired legacy group. These diagnostics do not edit document state.
 			if (World && method != "SetPropertyBatch" && method != "GetStreamingDiagnostics" &&
-				method != "ConfigureStreamingDiagnostics" && method != "GetPlayInputSnapshot")
+				method != "ConfigureStreamingDiagnostics" && method != "GetPlayInputSnapshot" &&
+				method != "GetCharacterComposition" && method != "GetAnimationRig" &&
+				method != "OpenAnimationPreview" && method != "ControlAnimationPreview" &&
+				method != "CaptureAnimationPreview" && method != "CloseAnimationPreview")
 				(void)World->Transactions.ExpireOwner(*World, TransactionOwner);
 			const auto &parameters = message["Params"];
 			if (ActivePlaySession && IsAuthoringMethodWhilePlaying(method))
@@ -1161,7 +1247,7 @@ namespace gargantuan {
 					"PlaySession", "DiagnosticStream", "SendPlayInput", "StreamingDiagnostics", "PlayInputInspection",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
 					"AdvancedMaterialMetadata",
-					"AnimationRig", "AnimationPreview",
+					"AnimationRig", "AnimationPreview", "AnimationPreviewBlend", "CharacterComposition",
 					"PackageBuild", "PackageBuildProgress", "PackageBuildCancellation",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport",
 					"ViewportLatestFrame", "ViewportPresentationDiagnostics"
@@ -1194,6 +1280,8 @@ namespace gargantuan {
 						{"ProtocolVersion", EditorHostProtocolVersion},
 						{"PropertyBatchVersion", EditorHostPropertyBatchVersion},
 						{"StreamingDiagnosticsVersion", 1},
+						{"AnimationPreviewBlendVersion", 1},
+						{"CharacterCompositionVersion", 1},
 						{"Capabilities", std::move(capabilities)},
 						{"ViewportWireVersion", 2},
 						{"ViewportTransports", std::move(viewportTransports)},
@@ -1863,6 +1951,7 @@ namespace gargantuan {
 				auto root = std::filesystem::weakly_canonical(std::filesystem::path(parameters["Root"].get<std::string>()));
 				if (!std::filesystem::is_directory(root))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectNotFound", "Project root is not a directory"));
+				ResetViewportSpatial();
 				if (World) {
 					(void)World->Transactions.TerminateOwner(*World, TransactionOwner); World->Destroy();
 				}
@@ -1988,6 +2077,7 @@ namespace gargantuan {
 				}
 
 				try {
+					ResetViewportSpatial();
 					if (World) {
 						(void)World->Transactions.TerminateOwner(*World, TransactionOwner);
 						World->Destroy();
@@ -2021,6 +2111,7 @@ namespace gargantuan {
 						throw std::runtime_error("New project has no valid Workspace");
 					ViewportCamera = RenderCameraInput{};
 				} catch (const std::exception &) {
+					ResetViewportSpatial();
 					if (World) {
 						try { World->Destroy(); }
 						catch (...) {}
@@ -2049,6 +2140,42 @@ namespace gargantuan {
 				return SerializeBoundedResponse(SuccessResponse(
 					requestId, EncodeProjectState(World, PersistedRevision, CurrentProject)
 				));
+			}
+
+			if (method == "GetCharacterComposition") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Character inspection requires ReadDataModel"));
+				if (!World || !CurrentProject)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded"));
+				if (!Cursor)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish the project scope"));
+				if (!HasOnlyFields(parameters, {"CharacterCompositionVersion", "Scope", "Object"}) ||
+					!parameters.contains("CharacterCompositionVersion") || !parameters.contains("Scope") || !parameters.contains("Object"))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Character inspection requires version, Scope and Object"));
+				const auto Version = JsonCodec::DecodeUnsigned32(parameters["CharacterCompositionVersion"]);
+				const auto Scope = JsonCodec::DecodeObjectId(parameters["Scope"]);
+				const auto Object = JsonCodec::DecodeObjectId(parameters["Object"]);
+				if (!Version || !Scope || !Object)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Character inspection identities/version are malformed"));
+				if (*Version != 1)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "UnsupportedCapabilityVersion", "Unsupported CharacterComposition version"));
+				if (Scope->ToObjectId() != World->GetObjectId())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleProject", "Character inspection belongs to another project scope"));
+				const auto Target = ObjectRegistry::Get().Lookup(Object->ToObjectId());
+				if (!Target || Target->GetDestroyed() || Target->IsDestroying() ||
+					Target->GetReplicationScopeId() != World->GetObjectId())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleObject", "Character inspection target is not live in this project"));
+				const auto CharacterValue = std::dynamic_pointer_cast<Character>(Target);
+				if (!CharacterValue)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidCharacter", "Select a Character or KinematicCharacter"));
+				const auto ExistingAssets = World->FindService("AssetService");
+				const auto Assets = ExistingAssets ? std::dynamic_pointer_cast<AssetService>(*ExistingAssets) : nullptr;
+				auto Result = EncodeCharacterComposition(InspectCharacterComposition(CharacterValue, Assets));
+				Result["CharacterCompositionVersion"] = 1;
+				Result["Context"] = "Authoring";
+				Result["Scope"] = JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(World->GetObjectId()));
+				Result["AuthoritativeRevision"] = World->GetAuthoritativeRevision();
+				return SerializeBoundedResponse(SuccessResponse(requestId, std::move(Result)));
 			}
 
 			if (method == "GetAnimationRig" || method == "OpenAnimationPreview" ||
@@ -2095,12 +2222,37 @@ namespace gargantuan {
 					return SerializeBoundedResponse(SuccessResponse(requestId, {{"Closed", true}}));
 				}
 				if (method == "ControlAnimationPreview") {
-					if (!HasOnlyFields(parameters, {"PreviewId", "Action", "Value"}) || !parameters.contains("Action") || !parameters["Action"].is_string())
+					if (!HasOnlyFields(parameters, {"PreviewId", "Action", "Value", "Slot", "BlendVersion"}) ||
+						!parameters.contains("Action") || !parameters["Action"].is_string())
 						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Control requires Action and optional Value"));
 					const auto Action = parameters["Action"].get<std::string>();
-					auto Track = Preview.Scene->GetTrack();
+					const bool BlendAction = parameters.contains("Slot") || Action == "BlendWeight" || Action == "ClearSecondaryClip";
+					if (BlendAction || parameters.contains("BlendVersion")) {
+						if (!parameters.contains("BlendVersion") || JsonCodec::DecodeUnsigned32(parameters["BlendVersion"]) != 1)
+							return SerializeBoundedResponse(ErrorResponse(requestId, "UnsupportedCapabilityVersion", "Blend controls require BlendVersion 1"));
+					}
+					auto Slot = AnimationPreviewClipSlot::Primary;
+					if (parameters.contains("Slot")) {
+						if (!parameters["Slot"].is_string() ||
+							(parameters["Slot"] != "Primary" && parameters["Slot"] != "Secondary"))
+							return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Slot must be Primary or Secondary"));
+						if (parameters["Slot"] == "Secondary") Slot = AnimationPreviewClipSlot::Secondary;
+					}
+					auto Track = Preview.Scene->GetTrack(Slot);
 					if (Action == "Clip" && parameters.contains("Value") && parameters["Value"].is_string())
-						Preview.Scene->SelectClip(parameters["Value"].get<std::string>());
+						Preview.Scene->SelectClip(Slot, parameters["Value"].get<std::string>());
+					else if (Action == "ClearSecondaryClip" && !parameters.contains("Value") && !parameters.contains("Slot"))
+						Preview.Scene->ClearSecondaryClip();
+					else if (Action == "BlendWeight" && parameters.contains("Value") &&
+						parameters["Value"].is_number() && !parameters.contains("Slot")) {
+						const auto Value = parameters["Value"].get<float>();
+						if (!std::isfinite(Value) || Value < 0.0f || Value > 1.0f)
+							return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidPlayback", "Blend weight must be finite and within 0..1"));
+						if (!Preview.Scene->GetTrack(AnimationPreviewClipSlot::Primary) ||
+							!Preview.Scene->GetTrack(AnimationPreviewClipSlot::Secondary))
+							return SerializeBoundedResponse(ErrorResponse(requestId, "ClipRequired", "Select both compatible clips before blending"));
+						Preview.Scene->SetBlendWeight(Value);
+					}
 					else if (!Track) return SerializeBoundedResponse(ErrorResponse(requestId, "ClipRequired", "Select a clip first"));
 					else if (Action == "Play" && !parameters.contains("Value")) {
 						if (Track->GetPlaybackState() == Enums::AnimationPlaybackState::Paused) Track->Resume();
@@ -2120,7 +2272,9 @@ namespace gargantuan {
 					} else return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Invalid animation control action/value"));
 					Preview.Scene->Step(0.0f);
 					Preview.LastStep = std::chrono::steady_clock::now();
-					return SerializeBoundedResponse(SuccessResponse(requestId, {{"PreviewId", std::to_string(*Id)}}));
+					Json Result = {{"PreviewId", std::to_string(*Id)}};
+					if (parameters.contains("BlendVersion")) EncodePreviewBlendState(Result, *Preview.Scene);
+					return SerializeBoundedResponse(SuccessResponse(requestId, std::move(Result)));
 				}
 				if (!HasOnlyFields(parameters, {"PreviewId", "Width", "Height", "Position", "Target"}) ||
 					!parameters.contains("Width") || !parameters.contains("Height") ||
@@ -2154,6 +2308,7 @@ namespace gargantuan {
 				if (auto Pose = Preview.Scene->GetPose(); Pose && Pose->JointModelTransforms)
 					for (const auto &Transform : *Pose->JointModelTransforms) Positions.push_back({Transform[3].x, Transform[3].y, Transform[3].z});
 				Result["JointPositions"] = std::move(Positions);
+				EncodePreviewBlendState(Result, *Preview.Scene);
 				return SerializeBoundedResponse(SuccessResponse(requestId, Result));
 			}
 
@@ -2785,6 +2940,7 @@ namespace gargantuan {
 						Mode = "Play";
 					} else {
 						SynchronizeEditorViewportAssets(World, ViewportPublisher);
+						StepViewportSpatial();
 						LastViewportPublication = ViewportPublisher.Publish(*workspace, camera, ViewportWidth, ViewportHeight);
 					}
 					if (ViewportProjection.GetLastPublicationId() != LastViewportPublication->Id)
@@ -2837,6 +2993,7 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportRequired", "ConfigureViewport must succeed first"));
 				if (!LastViewportPublication) {
 					SynchronizeEditorViewportAssets(World, ViewportPublisher);
+					StepViewportSpatial();
 					LastViewportPublication = ViewportPublisher.Publish(*workspace, camera, ViewportWidth, ViewportHeight);
 				}
 				if (ViewportProjection.GetLastPublicationId() != LastViewportPublication->Id)

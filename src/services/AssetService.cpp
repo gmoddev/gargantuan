@@ -6,6 +6,7 @@
 #include "assets/AssetImporter.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/ImageLabel.hpp"
+#include "gargantuan/classes/AttachmentMesh.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/ReflectionProbe.hpp"
 #include "gargantuan/classes/Sky.hpp"
@@ -993,6 +994,11 @@ namespace gargantuan {
 								CommitFailure = Error("AssetReferenced", "Removed generated asset is referenced by MeshPart");
 								break;
 							}
+							if (auto Visual = std::dynamic_pointer_cast<AttachmentMesh>(Object); Visual &&
+								(Visual->GetMesh() == RemovedReference || Visual->GetMaterial() == RemovedReference)) {
+								CommitFailure = Error("AssetReferenced", "Removed generated asset is referenced by AttachmentMesh");
+								break;
+							}
 							if (auto SoundValue = std::dynamic_pointer_cast<Sound>(Object); SoundValue &&
 								SoundValue->GetSoundId() == RemovedReference) {
 								CommitFailure = Error("AssetReferenced", "Removed generated asset is referenced by Sound");
@@ -1199,6 +1205,9 @@ namespace gargantuan {
 					if (auto Mesh = std::dynamic_pointer_cast<MeshPart>(Object); Mesh &&
 						(IsGroupReference(Mesh->GetMesh()) || IsGroupReference(Mesh->GetMaterial())))
 						return {false, Existing->second, Error("AssetReferenced", "Asset source group is referenced by MeshPart")};
+					if (auto Visual = std::dynamic_pointer_cast<AttachmentMesh>(Object); Visual &&
+						(IsGroupReference(Visual->GetMesh()) || IsGroupReference(Visual->GetMaterial())))
+						return {false, Existing->second, Error("AssetReferenced", "Asset source group is referenced by AttachmentMesh")};
 					if (auto SoundValue = std::dynamic_pointer_cast<Sound>(Object); SoundValue &&
 						IsGroupReference(SoundValue->GetSoundId()))
 						return {false, Existing->second, Error("AssetReferenced", "Asset source group is referenced by Sound")};

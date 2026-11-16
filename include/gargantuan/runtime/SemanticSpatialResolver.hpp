@@ -64,6 +64,9 @@ namespace gargantuan {
 		SemanticSpatialResolver &operator=(const SemanticSpatialResolver &) = delete;
 
 		void RegisterAttachment(const std::shared_ptr<Attachment> &AttachmentValue);
+		// Idempotent observation for read-side producers. Unlike explicit
+		// registration, an existing entry keeps its compatibility fence.
+		void ObserveAttachment(const std::shared_ptr<Attachment> &AttachmentValue);
 		void PrepareAnimationRequirements();
 		void Step();
 		void Shutdown();

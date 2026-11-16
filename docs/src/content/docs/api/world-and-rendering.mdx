@@ -11,6 +11,35 @@ description: Parts, physics operations and queries, frame signals, camera, and l
 
 `BasePart:ApplyImpulse(Impulse: Vector3)`, `ApplyAngularImpulse`, `ApplyImpulseAtPosition(Impulse, Position)`, `ApplyForce`, `ApplyTorque`, `SetLinearVelocity`, `SetAngularVelocity`, and `SetAwake` queue physical controls for a safe point or fixed step. `GetLinearVelocity()`, `GetAngularVelocity()`, `GetMass()`, `GetLocalInertia()`, and `GetAwake()` read the latest published state; mass is zero before body admission. `Touched(OtherPart)` and `TouchEnded(OtherPart)` are signals, not collision callbacks that authorize arbitrary cross-thread graph mutation. Rigid bodies and constraint handles are engine-owned; script identity is the Instance.
 
+## Characters and semantic sockets
+
+`Character` is a semantic actor with a saved `CFrame` and nullable `RootPart`.
+The root must be a descendant `BasePart` in the same DataModel; setting a foreign
+or unrelated root fails before commit. A rootless logical Character is valid.
+`Character:Move(Translation, Velocity?)` requests collision-authoritative motion.
+`KinematicCharacter` specializes the existing capsule primitive; its movement
+selection, input, camera and action policy remain replaceable Luau. No Humanoid
+or additional controller aggregate is required. Authoring an initial transform
+does not grant a client authority to move another player's runtime Character.
+
+`Attachment.CFrame` is a relative socket transform. A nonempty `JointPath` names
+a canonical joint in an ancestor skinned MeshPart; `WorldCFrame` is a read-only
+resolved semantic pose. An incompatible skeleton reimport invalidates its bound
+pose until explicit socket reauthoring. A canonical path existing in inspection
+does not establish a compatible live binding.
+
+The advanced creator feature adds `AttachmentMesh`, an `Attachment` subclass
+with saved, replicated visual properties. `Mesh` and optional `Material` use
+strict asset references. Each `Size` component is finite 0.01–1024; linear
+`Color` channels and `Transparency` are 0–1. `Visible` and `CastShadow` control
+presentation. The rigid visual follows the socket's full semantic matrix,
+including joint scale, without a collision body, touch/query identity or
+movement authority. A skinned Mesh is not a rigid accessory. Invalid assets or
+an unresolved socket omit the visual; they do not place it at an origin fallback.
+The publication supports 1,024 visual attachments and omits all of them with an
+incomplete diagnostic if that bound is exceeded. See
+[Character authoring](../../guides/character-authoring/) for availability and setup.
+
 ## World queries
 
 These `WorldRoot` methods are available on `Workspace` and require `ReadDataModel`. Results are owned values. A cast with no hit returns `nil`; an overlap with no matches returns a read-only `{ Parts = {}, Truncated = false }` result. Invalid dimensions, non-finite inputs, or resource limits can raise an error. `RaycastParams?` is optional. Query filters and detailed limits are implemented in `src/classes/WorldRootQueries.cpp` and `src/datatypes/RaycastParams.cpp`.

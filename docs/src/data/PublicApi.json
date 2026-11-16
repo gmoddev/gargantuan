@@ -186,6 +186,99 @@
       "Signals": []
     },
     {
+      "Name": "AttachmentMesh",
+      "Kind": "Class",
+      "Source": "assets/classes/AttachmentMesh.luau",
+      "SourceSha256": "3f7c3c505c272fdddf117219b604d08c9fdaf26438b463ecc5cbb7ac2f1b24c1",
+      "Description": "Rigid visual-only mesh at an Attachment's semantic transform; it has no physics body.",
+      "Extends": "Attachment",
+      "Abstract": false,
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [
+        {
+          "Name": "CastShadow",
+          "Description": "Whether this visual casts a shadow.",
+          "Type": "t.Bool",
+          "Unmodified": "true",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Appearance"
+        },
+        {
+          "Name": "Color",
+          "Description": "Linear visual color multiplier.",
+          "Type": "t.Color3",
+          "Unmodified": "gargantuan::Color3(1.0f, 1.0f, 1.0f)",
+          "OverrideRead": "GetColor",
+          "OverrideWrite": "SetColor",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Appearance",
+          "Range": "{ minimum = 0, maximum = 1 }",
+          "EditorHint": "ColorComponents"
+        },
+        {
+          "Name": "Material",
+          "Description": "Optional whole-mesh Material asset override.",
+          "Type": "t.String",
+          "Unmodified": "'\"\"'",
+          "OverrideRead": "GetMaterial",
+          "OverrideWrite": "SetMaterial",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Appearance",
+          "EditorHint": "AssetReference:Material"
+        },
+        {
+          "Name": "Mesh",
+          "Description": "Strict visual Mesh asset reference.",
+          "Type": "t.String",
+          "Unmodified": "'\"\"'",
+          "OverrideRead": "GetMesh",
+          "OverrideWrite": "SetMesh",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Appearance",
+          "EditorHint": "AssetReference:Mesh"
+        },
+        {
+          "Name": "Size",
+          "Description": "Positive local mesh scale at the semantic Attachment matrix.",
+          "Type": "t.Vector3",
+          "Unmodified": "glm::vec3(1.0f)",
+          "OverrideRead": "GetSize",
+          "OverrideWrite": "SetSize",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Transform"
+        },
+        {
+          "Name": "Transparency",
+          "Description": "Visual transparency from zero through one.",
+          "Type": "t.Float",
+          "Unmodified": "0.0f",
+          "OverrideRead": "GetTransparency",
+          "OverrideWrite": "SetTransparency",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Appearance",
+          "Range": "{ minimum = 0, maximum = 1 }"
+        },
+        {
+          "Name": "Visible",
+          "Description": "Whether this visual is published; variants may retain hidden authored siblings.",
+          "Type": "t.Bool",
+          "Unmodified": "true",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Appearance"
+        }
+      ],
+      "Methods": [],
+      "Signals": []
+    },
+    {
       "Name": "BasePart",
       "Kind": "Class",
       "Source": "assets/classes/BasePart.luau",
@@ -4789,6 +4882,12 @@
       ]
     },
     {
+      "Path": "include/gargantuan/classes/AttachmentMesh.hpp",
+      "Types": [
+        "AttachmentMesh"
+      ]
+    },
+    {
       "Path": "include/gargantuan/classes/BasePart.hpp",
       "Types": [
         "BasePart",
@@ -5296,6 +5395,7 @@
       "Path": "include/gargantuan/editor/AnimationPreview.hpp",
       "Types": [
         "AnimationPreview",
+        "AnimationPreviewClipSlot",
         "AnimationTrack",
         "Animator",
         "AssetService",
@@ -5305,11 +5405,27 @@
       ]
     },
     {
+      "Path": "include/gargantuan/editor/CharacterCompositionInspection.hpp",
+      "Types": [
+        "AssetService",
+        "Character",
+        "CharacterCompositionAsset",
+        "CharacterCompositionAttachment",
+        "CharacterCompositionIssue",
+        "CharacterCompositionIssueCode",
+        "CharacterCompositionLimits",
+        "CharacterCompositionMesh",
+        "CharacterCompositionResult",
+        "CharacterCompositionSeverity"
+      ]
+    },
+    {
       "Path": "include/gargantuan/editor/EditorHost.hpp",
       "Types": [
         "AnimationPreviewJob",
         "EditorHost",
-        "PackageJob"
+        "PackageJob",
+        "SemanticSpatialResolver"
       ]
     },
     {
@@ -5553,6 +5669,7 @@
         "KinematicCharacter",
         "PeerState",
         "PredictedCharacterNetwork",
+        "RegisteredAction",
         "ReplicaState",
         "WorldRoot"
       ]
@@ -6089,6 +6206,7 @@
     {
       "Path": "include/gargantuan/render/RenderExtractor.hpp",
       "Types": [
+        "AttachmentMesh",
         "Camera",
         "PublishedAssetMesh",
         "PublishedDeformable",
@@ -6098,6 +6216,8 @@
         "RenderExtractor",
         "RenderPublisher",
         "RenderPublisherProfile",
+        "SemanticSpatialResolver",
+        "VisualDependency",
         "WorldRoot"
       ]
     },

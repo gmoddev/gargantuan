@@ -857,6 +857,18 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_animation_preview_editorhost_tests PRIVATE gargantuan_core nlohmann_json)
 	target_compile_definitions(gargantuan_animation_preview_editorhost_tests PRIVATE
 		GARGANTUAN_ANIMATION_PREVIEW_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/animation-preview-rig.gltf")
+	add_executable(gargantuan_character_composition_inspection_tests "tests/CharacterCompositionInspectionTests.cpp")
+	target_link_libraries(gargantuan_character_composition_inspection_tests PRIVATE gargantuan_core nlohmann_json)
+	target_compile_definitions(gargantuan_character_composition_inspection_tests PRIVATE
+		GARGANTUAN_ANIMATION_PREVIEW_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/animation-preview-rig.gltf")
+	add_executable(gargantuan_attachment_mesh_tests "tests/AttachmentMeshTests.cpp")
+	target_link_libraries(gargantuan_attachment_mesh_tests PRIVATE gargantuan_core nlohmann_json)
+	target_compile_definitions(gargantuan_attachment_mesh_tests PRIVATE
+		GARGANTUAN_ANIMATION_PREVIEW_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/animation-preview-rig.gltf")
+	add_executable(gargantuan_character_authoring_editorhost_tests "tests/CharacterAuthoringEditorHostTests.cpp")
+	target_link_libraries(gargantuan_character_authoring_editorhost_tests PRIVATE gargantuan_core nlohmann_json)
+	target_compile_definitions(gargantuan_character_authoring_editorhost_tests PRIVATE
+		GARGANTUAN_ANIMATION_PREVIEW_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/animation-preview-rig.gltf")
 	add_executable(gargantuan_animation_foundation_benchmark "tests/AnimationFoundationBenchmark.cpp")
 	target_link_libraries(gargantuan_animation_foundation_benchmark PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_audio_foundation_tests "tests/AudioFoundationTests.cpp")
@@ -1233,6 +1245,8 @@ if(BUILD_TESTING)
 		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
 	)
 	add_test(NAME GameSessionTests COMMAND gargantuan_game_session_tests)
+	add_test(NAME gargantuan_authenticated_creator_lifecycle COMMAND gargantuan_game_session_tests --authenticated-creator-lifecycle)
+	set_tests_properties(gargantuan_authenticated_creator_lifecycle PROPERTIES TIMEOUT 120 LABELS "network;authentication;creator")
 	add_executable(gargantuan_frozen_recovery_quote_tests "tests/FrozenRecoveryQuoteTests.cpp")
 	target_link_libraries(gargantuan_frozen_recovery_quote_tests PRIVATE gargantuan_core)
 	add_test(NAME FrozenRecoveryQuoteTests COMMAND gargantuan_frozen_recovery_quote_tests)
@@ -1488,6 +1502,9 @@ if(BUILD_TESTING)
 			gargantuan_asset_foundation_benchmark
 			gargantuan_animation_foundation_tests
 			gargantuan_animation_preview_editorhost_tests
+			gargantuan_character_composition_inspection_tests
+			gargantuan_attachment_mesh_tests
+			gargantuan_character_authoring_editorhost_tests
 			gargantuan_animation_foundation_benchmark
 			gargantuan_audio_foundation_tests
 			gargantuan_audio_foundation_benchmark
@@ -1641,6 +1658,11 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_asset_foundation COMMAND gargantuan_asset_foundation_tests)
 	add_test(NAME gargantuan_animation_foundation COMMAND gargantuan_animation_foundation_tests)
 	add_test(NAME gargantuan_animation_preview_editorhost COMMAND gargantuan_animation_preview_editorhost_tests)
+	add_test(NAME gargantuan_character_composition_inspection COMMAND gargantuan_character_composition_inspection_tests)
+	add_test(NAME gargantuan_attachment_mesh COMMAND gargantuan_attachment_mesh_tests)
+	add_test(NAME gargantuan_character_authoring_editorhost COMMAND gargantuan_character_authoring_editorhost_tests)
+	set_tests_properties(gargantuan_character_composition_inspection gargantuan_character_authoring_editorhost
+		PROPERTIES LABELS "editor;character;animation;authoring" TIMEOUT 120)
 	add_test(NAME gargantuan_animation_foundation_benchmark_smoke
 		COMMAND gargantuan_animation_foundation_benchmark --quick)
 	add_test(NAME gargantuan_audio_foundation COMMAND gargantuan_audio_foundation_tests)

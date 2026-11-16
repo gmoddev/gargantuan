@@ -223,6 +223,29 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "devdocs/AdvancedCreatorAuthoring/CapabilityMatrix.md",
+      "Purpose": "Advanced creator authoring: integrated baseline and gaps",
+      "LastMeaningfulUpdate": {
+        "Date": "2026-11-15",
+        "Basis": "Document-declared verification/review date; scope remains revision-specific"
+      },
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/animation/AnimationRuntime.cpp",
+        "src/animation/AnimationTrack.cpp",
+        "src/classes/Character.cpp",
+        "src/editor/EditorHost.cpp",
+        "src/render/RenderPublisher.cpp",
+        "src/runtime/SemanticSpatialResolver.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Inspect owning source before promoting to current authority",
+      "ObsoleteTermMentions": [
+        "Avalonia"
+      ]
+    },
+    {
       "Path": "devdocs/Compiling.md",
       "Purpose": "Build and test Gargantuan",
       "LastMeaningfulUpdate": {
@@ -248,7 +271,7 @@
       "Path": "devdocs/CurrentArchitecture/AnimationAuthoringPreview.md",
       "Purpose": "Animation import inspection and disposable preview",
       "LastMeaningfulUpdate": {
-        "Date": "2026-10-29",
+        "Date": "2026-11-16",
         "Basis": "Document-declared verification/review date; scope remains revision-specific"
       },
       "LastPathCommit": {
@@ -511,6 +534,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "devdocs/CurrentArchitecture/AttachmentMesh.md",
+      "Purpose": "AttachmentMesh visual socket composition",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/AttachmentMeshTests.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "devdocs/CurrentArchitecture/AttributesTagsEvaluation.md",
       "Purpose": "Attributes + Tags architecture evaluation",
       "LastMeaningfulUpdate": null,
@@ -671,6 +707,26 @@
       "Status": "Historical",
       "StatusLabel": "Historical evidence requiring preservation",
       "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/CurrentArchitecture/CharacterAuthoringInspection.md",
+      "Purpose": "Read-only Character authoring inspection",
+      "LastMeaningfulUpdate": {
+        "Date": "2026-11-15",
+        "Basis": "Document-declared verification/review date; scope remains revision-specific"
+      },
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "include/gargantuan/editor/CharacterCompositionInspection.hpp",
+        "src/editor/CharacterCompositionInspection.cpp",
+        "src/editor/EditorHost.cpp",
+        "tests/CharacterAuthoringEditorHostTests.cpp",
+        "tests/CharacterCompositionInspectionTests.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
       "ObsoleteTermMentions": []
     },
     {
@@ -5406,6 +5462,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "docs/src/content/docs/guides/character-authoring.mdx",
+      "Purpose": "Character authoring",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Maintain source-linked developer entry point and validate links/examples",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "docs/src/content/docs/guides/first-project.mdx",
       "Purpose": "Your first project",
       "LastMeaningfulUpdate": null,
@@ -5517,6 +5586,19 @@
       "Status": "Current",
       "StatusLabel": "Current and authoritative",
       "ProposedAction": "Maintain source-linked developer entry point and validate links/examples",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "samples/CreatorCharacter/README.md",
+      "Purpose": "Clockwork Wisp creator fixture",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Maintain setup, authority and sample-specific execution limits",
       "ObsoleteTermMentions": []
     },
     {
@@ -5706,6 +5788,19 @@
       "Status": "Incomplete",
       "StatusLabel": "Current but incomplete",
       "ProposedAction": "Retain exact qualification/tool contract; scope certification to recorded source and evidence",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "tools/CreatorCharacter/README.md",
+      "Purpose": "ClockworkWisp public authoring harness",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tools/CreatorCharacter/AuthorProject.py"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Inspect owning source before promoting to current authority",
       "ObsoleteTermMentions": []
     },
     {

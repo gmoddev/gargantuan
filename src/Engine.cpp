@@ -88,6 +88,7 @@ namespace gargantuan {
 			bool Complete = false;
 			~ConstructionLifetime() { if (!Complete) Runtime.Destroy(); }
 		} Construction{*this};
+		RenderPublishing.SetSpatialResolver(Spatial);
 		if (ProviderConfiguration.Entitlements &&
 			!Entitlements->ConfigureProvider(std::move(ProviderConfiguration.Entitlements)))
 			LOG_WARN(

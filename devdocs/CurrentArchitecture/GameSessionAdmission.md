@@ -80,3 +80,13 @@ The generic boundary is exercised by simulated-session tests. Private Node
 binding of the live key into an authenticated ticket, durable proof redemption,
 and real separate-process client/server qualification remain required before
 non-loopback production hosting.
+
+The combined Creator/hosting component regression additionally runs a
+nonpredictable semantic action with a nested ReplicatedStorage Character
+template through authenticated v2 provider approval. It checks no Player before
+approval, the provider-qualified identity, authoritative action presentation and
+end, unchanged runtime materialization epochs, and exactly one Player/seat
+release after disconnect and Stop. This uses the simulated transport and manual
+test provider; it does not establish real Node redemption or private package
+qualification. The original development-local and admission denial tests remain
+separate and unchanged.

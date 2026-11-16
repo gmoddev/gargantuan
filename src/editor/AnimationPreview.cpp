@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <stdexcept>
+#include <utility>
 
 namespace gargantuan {
 	AnimationPreview::AnimationPreview(const AssetProjectSnapshot &Snapshot, std::string MeshReference) {
@@ -42,22 +43,74 @@ namespace gargantuan {
 	}
 
 	void AnimationPreview::SelectClip(std::string Reference) {
+		SelectClip(AnimationPreviewClipSlot::Primary, std::move(Reference));
+	}
+
+	void AnimationPreview::SelectClip(AnimationPreviewClipSlot Slot, std::string Reference) {
+		if (Slot != AnimationPreviewClipSlot::Primary && Slot != AnimationPreviewClipSlot::Secondary)
+			throw std::invalid_argument("[Animation:Preview] Invalid clip slot");
+		if (Slot == AnimationPreviewClipSlot::Secondary && !Track)
+			throw std::logic_error("[Animation:Preview] Select a primary clip first");
+		auto &Selected = Slot == AnimationPreviewClipSlot::Primary ? Track : SecondaryTrack;
 		// Validate/create first. A rejected clip must not stop the previous one.
 		auto Candidate = AnimatorValue->CreateTrack(Reference);
-		if (Track) {
-			Candidate->SetSpeed(Track->GetSpeed());
-			Candidate->SetLooped(Track->GetLooped());
-			Track->Stop();
+		if (Selected) {
+			Candidate->SetSpeed(Selected->GetSpeed());
+			Candidate->SetLooped(Selected->GetLooped());
 		}
-		Track = std::move(Candidate);
-		Track->Play();
-		Track->Pause();
+		const auto NextBlendWeight = Slot == AnimationPreviewClipSlot::Secondary && !SecondaryTrack
+			? 0.5f : BlendWeight;
+		Candidate->SetWeight(Slot == AnimationPreviewClipSlot::Secondary
+			? NextBlendWeight : SecondaryTrack ? 1.0f - BlendWeight : 1.0f);
+		Candidate->Play();
+		Candidate->Pause();
+		if (Selected) {
+			Selected->SetRootMotionEnabled(false);
+			Selected->Stop();
+		}
+		Selected = std::move(Candidate);
+		if (Slot == AnimationPreviewClipSlot::Secondary) {
+			BlendWeight = NextBlendWeight;
+			Track->SetWeight(1.0f - BlendWeight);
+		}
 		Step(0.0f);
+	}
+
+	void AnimationPreview::ClearSecondaryClip() {
+		if (!SecondaryTrack) return;
+		SecondaryTrack->SetRootMotionEnabled(false);
+		SecondaryTrack->Stop();
+		SecondaryTrack.reset();
+		BlendWeight = 0.0f;
+		if (Track) Track->SetWeight(1.0f);
+		Step(0.0f);
+	}
+
+	void AnimationPreview::SetBlendWeight(float Weight) {
+		if (!std::isfinite(Weight) || Weight < 0.0f || Weight > 1.0f)
+			throw std::invalid_argument("[Animation:Preview] Blend weight must be finite and within 0..1");
+		if (!Track || !SecondaryTrack)
+			throw std::logic_error("[Animation:Preview] Both clips are required for blending");
+		Track->SetWeight(1.0f - Weight);
+		SecondaryTrack->SetWeight(Weight);
+		BlendWeight = Weight;
+		Step(0.0f);
+	}
+
+	std::shared_ptr<AnimationTrack> AnimationPreview::GetTrack(AnimationPreviewClipSlot Slot) const {
+		switch (Slot) {
+			case AnimationPreviewClipSlot::Primary: return Track;
+			case AnimationPreviewClipSlot::Secondary: return SecondaryTrack;
+		}
+		throw std::invalid_argument("[Animation:Preview] Invalid clip slot");
 	}
 
 	void AnimationPreview::Step(float DeltaTime) {
 		if (!std::isfinite(DeltaTime) || DeltaTime < 0.0f || DeltaTime > 60.0f)
 			throw std::invalid_argument("[Animation:Preview] Invalid elapsed time");
+		// Preview is visual only, including when a native caller retains a track.
+		if (Track && Track->GetRootMotionEnabled()) Track->SetRootMotionEnabled(false);
+		if (SecondaryTrack && SecondaryTrack->GetRootMotionEnabled()) SecondaryTrack->SetRootMotionEnabled(false);
 		Runtime->Step(DeltaTime);
 		// Several controls may arrive before one frame. Coalesce before entering
 		// RenderPublisher, which accepts one final operation per object/publication.
@@ -73,6 +126,10 @@ namespace gargantuan {
 		const RenderCameraInput &Camera, std::uint32_t Width, std::uint32_t Height) {
 		if (Width == 0 || Height == 0 || Width > 1024 || Height > 1024)
 			throw std::invalid_argument("[Animation:Preview] Invalid viewport dimensions");
+		// EditorViewportRenderer::Resize clears its projection. The next publication
+		// must recreate the complete scene rather than refer to that retired base.
+		if (PublishedWidth != Width || PublishedHeight != Height)
+			Publisher.RequestFullResync();
 		auto Textures = Assets->DrainTextureChanges();
 		Publisher.SetUiTextureChanges(std::move(Textures.Creates), std::move(Textures.Updates), std::move(Textures.Removes));
 		auto Meshes = Assets->DrainMeshChanges();
@@ -80,6 +137,9 @@ namespace gargantuan {
 		if (PendingPose) Publisher.SetAnimationPoseChanges(std::span(&*PendingPose, 1), {});
 		if (PendingRemove) Publisher.SetAnimationPoseChanges({}, std::span(&*PendingRemove, 1));
 		PendingPose.reset(); PendingRemove.reset();
-		return Publisher.Publish(*WorkspaceValue, Camera, Width, Height);
+		auto Publication = Publisher.Publish(*WorkspaceValue, Camera, Width, Height);
+		PublishedWidth = Width;
+		PublishedHeight = Height;
+		return Publication;
 	}
 }

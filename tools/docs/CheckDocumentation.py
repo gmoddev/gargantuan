@@ -295,6 +295,9 @@ def ApiReferences(Paths: list[pathlib.Path], Api: dict) -> list[dict[str, str]]:
         if not Path.is_relative_to(Content / "api") and not Path.is_relative_to(Root / "docs/examples"):
             continue
         Text = Read(Path)
+        # A quoted diagnostic prefix is not a class-qualified method call.
+        # Retain all following source so a typo in a real call still fails.
+        Text = re.sub(r'''(["'])\[[A-Z][A-Za-z0-9_]*:[A-Z][A-Za-z0-9_]*\]''', r"\1", Text)
         # Dot access can name a dynamically authored child (Storage.Ping).
         # Only class-qualified method references are mechanically unambiguous.
         for ClassName, Member in re.findall(r"\b([A-Z][A-Za-z0-9_]*):([A-Za-z_][A-Za-z0-9_]*)", Text):

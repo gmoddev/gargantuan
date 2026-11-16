@@ -47,7 +47,8 @@ namespace gargantuan {
 			return RenderUpdateDomain::Visibility | RenderUpdateDomain::Hierarchy | RenderUpdateDomain::Environment;
 		const auto *Property = std::get_if<PropertyUpdatedChange>(&Payload);
 		if (!Property) return RenderUpdateDomain::None;
-		if (Property->PropertyName == "CFrame" || Property->PropertyName == "Size")
+		if (Property->PropertyName == "CFrame" || Property->PropertyName == "Size" ||
+			Property->PropertyName == "JointPath")
 			return RenderUpdateDomain::Transform;
 		if (Property->PropertyName == "Color" || Property->PropertyName == "Transparency" ||
 			Property->PropertyName == "CastShadow")

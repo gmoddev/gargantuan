@@ -9,9 +9,11 @@
 #include "FarmOrdinaryEvidenceFixture.hpp"
 #include "FarmServiceTimingEvidenceFixture.hpp"
 #include "gargantuan/Engine.hpp"
+#include "gargantuan/classes/Animator.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
+#include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
 #include "gargantuan/classes/Script.hpp"
@@ -1734,7 +1736,8 @@ namespace {
 	}
 
 	void TestProductionLifecycleComposition(
-		bool MeasureHandoff = false, bool WithByteAdmission = false, bool TestControlRebind = false
+		bool MeasureHandoff = false, bool WithByteAdmission = false, bool TestControlRebind = false,
+		bool SessionActionPredictable = true, bool WithReplicatedTemplate = false, bool WithAuthenticatedAdmission = false
 	) {
 		SimulatedTransportConfiguration TransportConfiguration;
 		TransportConfiguration.BaseLatency = 1ms;
@@ -1745,6 +1748,22 @@ namespace {
 		if (!Network || !ServerTransport || !ClientTransport) return;
 
 		auto ServerWorld = std::make_shared<DataModel>();
+		if (WithReplicatedTemplate) {
+			auto Storage = ServerWorld->GetService("ReplicatedStorage");
+			auto Templates = std::make_shared<Folder>();
+			Templates->SetName("StoredCharacterTemplates");
+			Templates->SetParent(Storage);
+			auto Template = std::make_shared<KinematicCharacter>();
+			Template->SetName("StoredCharacter");
+			Template->SetParent(Templates);
+			auto Root = std::make_shared<MeshPart>();
+			Root->SetName("StoredRootPart");
+			Root->SetAnchored(true);
+			Root->SetParent(Template);
+			Template->SetRootPart(Root);
+			auto AnimatorValue = std::make_shared<Animator>();
+			AnimatorValue->SetParent(Root);
+		}
 		if (TestControlRebind) {
 			auto Marker = std::make_shared<Folder>();
 			Marker->SetName("ControlRebindMarker");
@@ -1760,7 +1779,8 @@ namespace {
 		SessionRemote->SetParent(ServerWorld);
 		ServerActionPolicy->SetName("SessionActionPolicy");
 		ServerActionPolicy->SetRunContext(Enums::RunContext::Server);
-		ServerActionPolicy->SetSource(R"(
+		ServerActionPolicy->SetSource(std::string("local SessionActionPredictable = ") +
+			(SessionActionPredictable ? "true\n" : "false\n") + R"(
 local CharacterControl = game:GetService("CharacterControlService")
 local Players = game:GetService("Players")
 local SessionRemote = game:FindFirstChild("SessionRemote")
@@ -1796,7 +1816,7 @@ assert(CharacterControl:RegisterAction(
 	0.5,
 	Vector3.new(0.9, 0, 0),
 	0,
-	true
+	SessionActionPredictable
 ))
 assert(CharacterControl:RegisterAction(
 	"DeniedLunge",
@@ -1821,7 +1841,8 @@ end)
 		auto ClientActionPolicy = std::make_shared<Script>();
 		ClientActionPolicy->SetName("SessionActionRequest");
 		ClientActionPolicy->SetRunContext(Enums::RunContext::Client);
-		ClientActionPolicy->SetSource(R"(
+		ClientActionPolicy->SetSource(std::string("local SessionActionPredictable = ") +
+			(SessionActionPredictable ? "true\n" : "false\n") + R"(
 local CharacterControl = game:GetService("CharacterControlService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -1837,7 +1858,7 @@ assert(CharacterControl:RegisterAction(
 	0.5,
 	Vector3.new(0.9, 0, 0),
 	0,
-	true
+	SessionActionPredictable
 ))
 assert(CharacterControl:RegisterAction(
 	"DeniedLunge",
@@ -1911,7 +1932,10 @@ end)
 			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}
 		);
 		ServerRuntime.ProcessService->Alive = true;
-		auto ServerConfiguration = Configuration(GameSessionRole::Server);
+		const auto AdmissionProvider = WithAuthenticatedAdmission ? std::make_shared<ManualGameAdmissionProvider>() : nullptr;
+		auto ServerConfiguration = WithAuthenticatedAdmission
+			? AuthenticatedConfiguration(GameSessionRole::Server, AdmissionProvider)
+			: Configuration(GameSessionRole::Server);
 		if (WithByteAdmission) {
 			ServerConfiguration.ReliableService.emplace();
 			auto &Profile = *ServerConfiguration.ReliableService;
@@ -1920,7 +1944,9 @@ end)
 			Profile.RequireLatencyCompatibility = true;
 		}
 		GameSession Server(ServerTransport, ServerConfiguration, &ServerRuntime);
-		GameSession Client(ClientTransport, Configuration(GameSessionRole::Client));
+		GameSession Client(ClientTransport, WithAuthenticatedAdmission
+			? AuthenticatedConfiguration(GameSessionRole::Client, AdmissionProvider)
+			: Configuration(GameSessionRole::Client));
 		Check(Server.Start().Succeeded() && Client.Start().Succeeded(), "production session endpoints start");
 		std::shared_ptr<Folder> HandoffMarker;
 		if (MeasureHandoff) {
@@ -1962,8 +1988,18 @@ end)
 
 		std::unique_ptr<HeadlessRenderer> ClientRenderer;
 		std::unique_ptr<Engine> ClientRuntime;
+		bool AdmissionApproved = false;
 		for (std::uint64_t Tick = 1; Tick <= 80; ++Tick) {
 			TraceAdvance(Tick);
+			if (WithAuthenticatedAdmission && !AdmissionApproved && !AdmissionProvider->Requests.empty()) {
+				Check(AdmissionProvider->Requests.size() == 1 &&
+					AdmissionProvider->Requests[0].Proof == TestAdmissionProof() &&
+					AdmissionProvider->Requests[0].Connection.IsValid() &&
+					ServerRuntime.Players->GetPlayers().empty(),
+					"combined Creator lifecycle creates no Player before its exact v2 provider approval");
+				AdmissionProvider->Complete(0, PlayerIdentity{"combined-provider", "creator-account"});
+				AdmissionApproved = true;
+			}
 			if (!ClientRuntime && Client.GetClientDataModel()) {
 				auto ClientAssets = std::dynamic_pointer_cast<AssetService>(
 					Client.GetClientDataModel()->GetService("AssetService")
@@ -1997,17 +2033,34 @@ end)
 			ClientRuntime && Client.GetStatus() == GameSessionStatus::Ready,
 			"client reaches ready only after replicated runtime attachment"
 		);
+		if (WithReplicatedTemplate && Client.GetClientDataModel()) {
+			auto Storage = Client.GetClientDataModel()->GetService("ReplicatedStorage");
+			auto Templates = Storage ? Storage->FindFirstChild("StoredCharacterTemplates", false) : nullptr;
+			auto Template = Templates ? std::dynamic_pointer_cast<KinematicCharacter>(
+			Templates->FindFirstChild("StoredCharacter", false)) : nullptr;
+			Check(Template && Template->GetRootPart() &&
+				std::dynamic_pointer_cast<MeshPart>(*Template->GetRootPart()) &&
+				(*Template->GetRootPart())->FindFirstChildOfClass("Animator", false),
+				"nested ReplicatedStorage Character template keeps its typed RootPart and Animator in the structural replica");
+		}
 		Check(
 			Server.GetMetrics().AcceptedPeers == 1 && Server.GetMetrics().ReadyPeers == 1,
 			"server distinguishes accepted and gameplay-ready peer phases"
 		);
 		auto ServerPlayers = ServerRuntime.Players->GetPlayers();
 		Check(ServerPlayers.size() == 1, "server creates exactly one authoritative Player for the accepted peer");
-		Check(
-			ServerPlayers.empty() || (ServerPlayers[0]->GetAuthenticationIdentity() &&
-									  ServerPlayers[0]->GetAuthenticationIdentity()->Provider == "session-development"),
-			"3D labels development-local identity without claiming external authentication"
-		);
+		if (WithAuthenticatedAdmission) {
+			Check(AdmissionApproved && AdmissionProvider->Requests.size() == 1 && ServerPlayers.size() == 1 &&
+				ServerPlayers[0]->GetAuthenticationIdentity() &&
+				*ServerPlayers[0]->GetAuthenticationIdentity() == PlayerIdentity{"combined-provider", "creator-account"},
+				"combined Creator lifecycle retains the provider-qualified authenticated Player identity");
+		} else {
+			Check(
+				ServerPlayers.empty() || (ServerPlayers[0]->GetAuthenticationIdentity() &&
+										  ServerPlayers[0]->GetAuthenticationIdentity()->Provider == "session-development"),
+				"3D labels development-local identity without claiming external authentication"
+			);
+		}
 		Check(
 			ServerPlayers.empty() || ServerPlayers[0]->GetCharacter().has_value(),
 			"server-shipped Luau owns automatic Character assembly"
@@ -2078,6 +2131,9 @@ end)
 				Client.GetMetrics().ActionsPresented >= 1 && Client.GetMetrics().ActionPresentationStops >= 1,
 				"client starts and terminates bounded action presentation from authoritative phase state"
 			);
+			if (WithReplicatedTemplate)
+				Check(Client.GetMetrics().ClientMaterializationEpochMismatches == 0,
+					"stored Character template does not advance the runtime GCHR materialization epoch");
 			if (auto LocalPlayer = ClientRuntime->Players->GetLocalPlayer();
 				LocalPlayer && (*LocalPlayer)->GetCharacter()) {
 				Check(
@@ -2238,6 +2294,16 @@ end)
 
 		Client.Stop();
 		Server.Stop();
+		if (WithAuthenticatedAdmission) {
+			Check(AdmissionProvider->Requests.size() == 1 && AdmissionProvider->ReleaseCount == 1 &&
+				std::ranges::count(AdmissionProvider->Released, AdmissionProvider->Requests[0].RequestId) == 1 &&
+				Server.GetMetrics().PlayersCreated == 1 && Server.GetMetrics().PlayersRemoved == 1,
+				"combined Creator lifecycle releases its one v2 seat and Player exactly once after disconnect and Stop");
+			std::cout << "[Network:AuthenticatedCreator] approved=" << AdmissionApproved
+				<< " requests=" << AdmissionProvider->Requests.size() << " releases=" << AdmissionProvider->ReleaseCount
+				<< " created=" << Server.GetMetrics().PlayersCreated << " removed=" << Server.GetMetrics().PlayersRemoved
+				<< " epoch_mismatches=" << Client.GetMetrics().ClientMaterializationEpochMismatches << '\n';
+		}
 		if (ClientRuntime) ClientRuntime->Destroy();
 		ServerRuntime.Destroy();
 	}
@@ -2846,6 +2912,18 @@ int main(int ArgumentCount, char **Arguments) {
 			TestProductionLifecycleComposition(false, false, true);
 			return Failures == 0 ? 0 : 1;
 		}
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--nonpredictable-action") {
+			TestProductionLifecycleComposition(false, false, false, false);
+			return Failures == 0 ? 0 : 1;
+		}
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--replicated-character-template") {
+			TestProductionLifecycleComposition(false, false, false, false, true);
+			return Failures == 0 ? 0 : 1;
+		}
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--authenticated-creator-lifecycle") {
+			TestProductionLifecycleComposition(false, false, false, false, true, true);
+			return Failures == 0 ? 0 : 1;
+		}
 		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--scale-counter") {
 			TestPhysicalScaleCounterDecoding();
 			TestRecoveryConvergenceBound();
@@ -2886,6 +2964,9 @@ int main(int ArgumentCount, char **Arguments) {
 		TestAcceptedConnectionChurn();
 		for (int Cycle = 0; Cycle < 100; ++Cycle)
 			TestProductionLifecycleComposition();
+		TestProductionLifecycleComposition(false, false, false, false);
+		TestProductionLifecycleComposition(false, false, false, false, true);
+		TestProductionLifecycleComposition(false, false, false, false, true, true);
 		TestTwoClientIdentityAndControlIsolation();
 		TestProductionLifecycleComposition(false, false, true);
 		TestCharacterRetirementAcrossStructuralFrames();
