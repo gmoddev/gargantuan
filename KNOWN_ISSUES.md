@@ -6,19 +6,24 @@ open until its resolution criteria are implemented and verified.
 
 ## KI-ANIM-001: Preview capture can reject a resized frame
 
-- Status: Correction implemented on the Advanced Creator branch; native GPU and Studio requalification pending.
+- Status: Resolved on the Advanced Creator branch; headless, native GPU and Studio resize-stage verification passed 2026-11-16.
 - Area: Disposable Animation Preview publication and offscreen renderer resize.
 - Evidence: The E3 Studio GUI captured at 790x251, then received `RequestRejected`
   after requesting 790x471. `EditorViewportRenderer::Resize` recreates targets
   and clears its RenderProjection, while the preview previously continued
   publishing an incremental frame based on the retired projection identity.
 
-The candidate correction requests a complete publication whenever preview
+The correction requests a complete publication whenever preview
 dimensions change and records the dimensions only after publication succeeds.
 A headless publication regression and public GPU 320x240→320x420→320x240
-capture regression cover the specific contract. Closure requires the actual
-native rejection message, a red run on the original source, green native GPU
-and Studio GUI runs on the corrected source, and unchanged saved project state.
+capture regression cover the specific contract. The public E3 probe reports
+`Render projection rejects a stale or out-of-order publication`; the test-only
+`a02382b0` GPU run fails there and corrected `eb66ea51` passes both directions.
+Studio E5 with runtime code `189b74fe` also passes repeated reads, camera change,
+resize and restoration while preserving the saved project. Its later reload
+readiness check fails separately because it expects the old revision 3 instead
+of the correctly reopened revision 1. That failed overall run remains retained;
+complete campaign and final paired GUI qualification are separate gates.
 
 ## KI-CHR-001: Replicated Character templates can desynchronize GCHR epochs
 
