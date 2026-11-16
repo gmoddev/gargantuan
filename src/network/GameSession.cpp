@@ -428,7 +428,7 @@ namespace gargantuan::network {
 					return Prediction->RequestAction(Connection, Action, Tick);
 				},
 				[this](const CharacterActionDefinition &Definition, bool Predictable) {
-					return !Predictable || Prediction->RegisterAction(Definition);
+					return Prediction->RegisterAction(Definition, Predictable);
 				},
 				[this](bool Enabled) { Prediction->SetPredictionEnabled(Enabled); }
 			);

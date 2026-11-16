@@ -4,6 +4,22 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+## KI-CHR-001: Nonpredictable client actions lose authoritative lifetime
+
+- Status: Fix implemented on the Advanced Creator branch; native qualification pending.
+- Area: Client Character action registration and authoritative presentation.
+- Evidence: Packaged Wisp network run `ACNET25c5000000` accepted `CreatorLunge`
+  and applied server root motion, but reported no client action presentation or
+  `ActionEnded`. `GameSession.cpp` skipped client definition registration when
+  `Predictable=false`; owning-character reconciliation then rejected the
+  authoritative action as unknown.
+
+The correction retains every bounded client action definition for authoritative
+content validation and gates only speculative preaccept prediction on the flag.
+Keep this entry open until focused nonpredictable and predictable session tests
+and a fresh packaged Wisp run verify accepted presentation, lifetime end and
+server collision admission. The failed c5 receipt remains historical evidence.
+
 ## KI-RND-002: Invalid asset-mesh change tails can leave publisher work pending
 
 - Status: Open; pre-existing on main before Renderer Foundation 3.

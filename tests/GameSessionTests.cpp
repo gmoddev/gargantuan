@@ -1396,7 +1396,8 @@ namespace {
 	}
 
 	void TestProductionLifecycleComposition(
-		bool MeasureHandoff = false, bool WithByteAdmission = false, bool TestControlRebind = false
+		bool MeasureHandoff = false, bool WithByteAdmission = false, bool TestControlRebind = false,
+		bool SessionActionPredictable = true
 	) {
 		SimulatedTransportConfiguration TransportConfiguration;
 		TransportConfiguration.BaseLatency = 1ms;
@@ -1422,7 +1423,8 @@ namespace {
 		SessionRemote->SetParent(ServerWorld);
 		ServerActionPolicy->SetName("SessionActionPolicy");
 		ServerActionPolicy->SetRunContext(Enums::RunContext::Server);
-		ServerActionPolicy->SetSource(R"(
+		ServerActionPolicy->SetSource(std::string("local SessionActionPredictable = ") +
+			(SessionActionPredictable ? "true\n" : "false\n") + R"(
 local CharacterControl = game:GetService("CharacterControlService")
 local Players = game:GetService("Players")
 local SessionRemote = game:FindFirstChild("SessionRemote")
@@ -1458,7 +1460,7 @@ assert(CharacterControl:RegisterAction(
 	0.5,
 	Vector3.new(0.9, 0, 0),
 	0,
-	true
+	SessionActionPredictable
 ))
 assert(CharacterControl:RegisterAction(
 	"DeniedLunge",
@@ -1483,7 +1485,8 @@ end)
 		auto ClientActionPolicy = std::make_shared<Script>();
 		ClientActionPolicy->SetName("SessionActionRequest");
 		ClientActionPolicy->SetRunContext(Enums::RunContext::Client);
-		ClientActionPolicy->SetSource(R"(
+		ClientActionPolicy->SetSource(std::string("local SessionActionPredictable = ") +
+			(SessionActionPredictable ? "true\n" : "false\n") + R"(
 local CharacterControl = game:GetService("CharacterControlService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -1499,7 +1502,7 @@ assert(CharacterControl:RegisterAction(
 	0.5,
 	Vector3.new(0.9, 0, 0),
 	0,
-	true
+	SessionActionPredictable
 ))
 assert(CharacterControl:RegisterAction(
 	"DeniedLunge",
@@ -2508,6 +2511,10 @@ int main(int ArgumentCount, char **Arguments) {
 			TestProductionLifecycleComposition(false, false, true);
 			return Failures == 0 ? 0 : 1;
 		}
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--nonpredictable-action") {
+			TestProductionLifecycleComposition(false, false, false, false);
+			return Failures == 0 ? 0 : 1;
+		}
 		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--scale-counter") {
 			TestPhysicalScaleCounterDecoding();
 			TestRecoveryConvergenceBound();
@@ -2547,6 +2554,7 @@ int main(int ArgumentCount, char **Arguments) {
 		TestAcceptedConnectionChurn();
 		for (int Cycle = 0; Cycle < 100; ++Cycle)
 			TestProductionLifecycleComposition();
+		TestProductionLifecycleComposition(false, false, false, false);
 		TestTwoClientIdentityAndControlIsolation();
 		TestProductionLifecycleComposition(false, false, true);
 		TestCharacterRetirementAcrossStructuralFrames();

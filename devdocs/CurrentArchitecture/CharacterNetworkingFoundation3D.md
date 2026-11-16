@@ -171,6 +171,14 @@ active. An action already past its bounded duration is never replayed from
 zero. Client-created presentation tracks never enable root motion, so remote
 visual playback cannot apply displacement a second time.
 
+Client action registration always retains the bounded pinned definition for
+authoritative state validation and presentation. The `Predictable` flag controls
+only whether `RequestAction` creates a speculative action before server
+acceptance. A false flag still permits later authoritative action state,
+presentation, and `ActionEnded`; it does not change server admission, physics,
+or the GCHR wire. Native callers that omit the flag retain the previous
+predictable behavior.
+
 Script source is intentionally absent from structural replication. Before a
 packaged network client constructs its Engine, `PackageBuilder` hydrates Client
 Scripts and ModuleScripts from the already validated local package into exact,
