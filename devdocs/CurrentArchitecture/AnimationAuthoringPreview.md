@@ -1,7 +1,7 @@
 ---
 status: current
 owner: editor-host-animation
-last_verified: 2026-10-29
+last_verified: 2026-11-16
 related_code:
   - src/editor/AnimationPreview.cpp
   - src/editor/EditorHost.cpp
@@ -64,6 +64,12 @@ track. No control writes the authoring journal, revision, history or dirty state
 
 Multiple controls before a frame coalesce into the final pose/removal before
 the RenderPublisher operation, preserving its one-operation-per-object contract.
+The preview publisher requests a complete RenderPublication when capture
+dimensions change. The offscreen renderer recreates its targets and clears its
+projection on resize; its next publication must rebuild that projection rather
+than refer to the previous publication identity. Repeated captures at the same
+dimensions remain incremental. The preview records the new dimensions only
+after a successful publication.
 Each offscreen renderer owns an SDL video reference, so destroying the authoring
 viewport cannot shut down a concurrently live preview (or vice versa).
 
@@ -88,6 +94,10 @@ it introduces no external content license. Existing animation tests retain
 attachment, incompatible reimport, package/relocation and runtime coverage.
 Headless tests are not a claim of native visual acceptance. Native UI/GPU evidence
 and source-bound test/CI results belong in the milestone validation receipt.
+The headless preview test checks first, repeated-size, resized and restored-size
+publication modes. The explicit GPU gate also captures 320x240, 320x420 and
+320x240 through public EditorHost methods. The resize correction still requires
+native red/green GPU and Studio GUI qualification before closure.
 
 ## Optional two-clip blend extension, version 1
 

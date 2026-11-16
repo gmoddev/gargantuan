@@ -130,6 +130,14 @@ int main(int ArgumentCount, char **Arguments) {
 			Check(Rejects([&] { Scene.SelectClip(AnimationPreviewClipSlot::Secondary, LungeClip); }) &&
 				Rejects([&] { Scene.SetBlendWeight(0.5f); }), "Secondary and blend controls require a primary pair");
 			Scene.SelectClip(PulseClip);
+			const auto PublicationCamera = MakeLookAtRenderCameraInput({2, 2, -4}, {0, .5f, 0}, {0, 1, 0});
+			const auto FirstPublication = Scene.Publish(PublicationCamera, 320, 240);
+			const auto SameSizePublication = Scene.Publish(PublicationCamera, 320, 240);
+			const auto ResizedPublication = Scene.Publish(PublicationCamera, 320, 420);
+			const auto RestoredPublication = Scene.Publish(PublicationCamera, 320, 240);
+			Check(FirstPublication->FullResync && !SameSizePublication->FullResync &&
+				ResizedPublication->FullResync && RestoredPublication->FullResync,
+				"Preview publications resync after size changes and stay incremental at the same size");
 			Check(Scene.GetTrack() == Scene.GetTrack(AnimationPreviewClipSlot::Primary) &&
 				!Scene.GetTrack(AnimationPreviewClipSlot::Secondary) && Scene.GetBlendWeight() == 0.0f,
 				"Existing single-clip API remains primary-only");
