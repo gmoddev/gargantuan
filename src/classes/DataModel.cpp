@@ -129,8 +129,10 @@ namespace gargantuan {
 		std::ranges::sort(CustomServices);
 		for (const auto &Name : CustomServices) (void)GetService(Name);
 		// The editor cannot insert protected services through CreateInstance.
-		// Establish a visible, persistent input root before publishing revision 1.
+		// Establish persistent input and player-policy roots before revision 1.
+		// Players construction does not initialize runtime players or controllers.
 		GetService("InputService")->SetArchivable(true);
+		GetService("Players")->SetArchivable(true);
 		AuthoritativeRevision = InitialProjectRevision;
 		Transactions.Reset();
 	}

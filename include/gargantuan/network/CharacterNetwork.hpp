@@ -346,7 +346,7 @@ namespace gargantuan::network {
 		bool RemovePeer(ConnectionId Connection);
 		bool MarkMaterialized(ObjectId Character, const std::shared_ptr<KinematicCharacter> &Replica);
 		bool MarkUnmaterialized(ObjectId Character);
-		bool RegisterAction(CharacterActionDefinition Definition);
+		bool RegisterAction(CharacterActionDefinition Definition, bool Predictable = true);
 		void SetTerminalHandler(CharacterTerminalHandler Handler);
 		bool HandleTransportEvent(const TransportEvent &Event);
 		bool SubmitInput(
@@ -383,7 +383,11 @@ namespace gargantuan::network {
 		CharacterNetworkConfiguration Configuration;
 		std::map<ConnectionId, PeerState> Peers;
 		std::map<ObjectId, ReplicaState> Replicas;
-		std::map<std::uint32_t, CharacterActionDefinition> Actions;
+		struct RegisteredAction {
+			CharacterActionDefinition Definition;
+			bool Predictable = true;
+		};
+		std::map<std::uint32_t, RegisteredAction> Actions;
 		std::vector<CharacterActionResolution> ActionResolutions;
 		std::vector<CharacterActionEnded> ActionEndings;
 		bool PredictionEnabled = true;

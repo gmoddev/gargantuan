@@ -340,19 +340,17 @@ const function assembleImplFile(state: GenerationState)
 		end
 		output:untab():line("},")
 	end
-	output
-		:line(".Properties = {")
-		:tab()
-		:pushIndented(stringext.trim(state.definitionProperties:build()))
-		:newline()
+	output:line(".Properties = {"):tab()
+	const Properties = stringext.trim(state.definitionProperties:build())
+	if Properties ~= "" then output:pushIndented(Properties) end
+	output:newline()
 		:untab()
 		:pushIndented("},")
 		:newline()
-	output
-		:line(".Methods = {")
-		:tab()
-		:pushIndented(stringext.trim(state.definitionMethods:build()))
-		:newline()
+	output:line(".Methods = {"):tab()
+	const Methods = stringext.trim(state.definitionMethods:build())
+	if Methods ~= "" then output:pushIndented(Methods) end
+	output:newline()
 		:untab()
 		:pushIndented("},")
 		:newline()
@@ -447,12 +445,18 @@ const function assembleFile(target: Target, inputFilepath: path.Pathlike)
 
 	if not isHeaderUpdated then
 		fs.writeStringToFile(headerOutput, assembleHeaderFile(state):build())
-		process.run({ "clang-format", "-i", path.format(headerOutput) })
+		if process.run({ "clang-format", "-i", path.format(headerOutput) }).exitcode ~= 0 then
+			fs.remove(headerOutput)
+			error("[Tools:ClassGen] clang-format failed for generated header")
+		end
 	end
 
 	if not isImplUpdated then
 		fs.writeStringToFile(implOutput, assembleImplFile(state):build())
-		process.run({ "clang-format", "-i", path.format(implOutput) })
+		if process.run({ "clang-format", "-i", path.format(implOutput) }).exitcode ~= 0 then
+			fs.remove(implOutput)
+			error("[Tools:ClassGen] clang-format failed for generated implementation")
+		end
 	end
 end
 

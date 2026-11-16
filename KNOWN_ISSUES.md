@@ -4,6 +4,56 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+## KI-ANIM-001: Preview capture can reject a resized frame
+
+- Status: Resolved on the Advanced Creator branch; headless, native GPU and Studio resize-stage verification passed 2026-11-16.
+- Area: Disposable Animation Preview publication and offscreen renderer resize.
+- Evidence: The E3 Studio GUI captured at 790x251, then received `RequestRejected`
+  after requesting 790x471. `EditorViewportRenderer::Resize` recreates targets
+  and clears its RenderProjection, while the preview previously continued
+  publishing an incremental frame based on the retired projection identity.
+
+The correction requests a complete publication whenever preview
+dimensions change and records the dimensions only after publication succeeds.
+A headless publication regression and public GPU 320x240→320x420→320x240
+capture regression cover the specific contract. The public E3 probe reports
+`Render projection rejects a stale or out-of-order publication`; the test-only
+`a02382b0` GPU run fails there and corrected `eb66ea51` passes both directions.
+Studio E5 with runtime code `189b74fe` also passes repeated reads, camera change,
+resize and restoration while preserving the saved project. Its later reload
+readiness check fails separately because it expects the old revision 3 instead
+of the correctly reopened revision 1. That failed overall run remains retained;
+complete campaign and final paired GUI qualification are separate gates.
+
+## KI-CHR-001: Replicated Character templates can desynchronize GCHR epochs
+
+- Status: Resolved on the Advanced Creator branch; focused native and packaged-runtime verification passed 2026-11-16.
+- Area: Client Character materialization and authoritative action presentation.
+- Evidence: Packaged Wisp runs accepted `CreatorLunge` and applied server root
+  motion, but had no client presentation or `ActionEnded`. The bounded
+  `ACND25d0000000` diagnostic received an active state for Character `51:1` at
+  server epoch 2 while the client expected epoch 3 after also materializing the
+  saved `ReplicatedStorage` Character template `21:1`; the entire frame was
+  dropped. The first failed run `ACNET25c5000000` remains historical evidence.
+
+The earlier registration correction retains every bounded client definition for
+authoritative validation and gates only speculative preaccept prediction on
+`Predictable`. The materialization correction applies the server relevance
+policy to client GCHR membership: replicated-service templates remain in the
+structural graph but do not advance the runtime Character epoch.
+
+The test-only `06abcbc6` reproduces the epoch mismatch and missing semantic end.
+Fixed runtime source `62022dc5` passes that template case and eight focused
+native checks, including the ordinary predictable/nonpredictable session
+coverage. Its fresh packaged Wisp run `ACND25d5000000` completes three accepted
+and ended actions, reports three presentations and stops, rejects the denied
+action, and clips the third server-admitted lunge to X=2.505. Player and server
+exit zero; the checked Job retires normally with zero active processes. The
+existing network proof parser validates the retained source/content and ordered
+markers. This resolves the defect; complete campaign CI, final paired Studio
+GUI and performance qualification remain separate gates. Original failures and
+diagnostic receipts remain immutable.
+
 ## KI-RND-002: Invalid asset-mesh change tails can leave publisher work pending
 
 - Status: Open; pre-existing on main before Renderer Foundation 3.

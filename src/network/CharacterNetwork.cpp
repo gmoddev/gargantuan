@@ -2076,9 +2076,10 @@ namespace gargantuan::network {
 		return true;
 	}
 
-	bool PredictedCharacterNetwork::RegisterAction(CharacterActionDefinition Definition) {
-		return Definition.IsValid() && Actions.size() < MaximumNetworkCharacters &&
-			   Actions.emplace(Definition.Token, std::move(Definition)).second;
+	bool PredictedCharacterNetwork::RegisterAction(CharacterActionDefinition Definition, bool Predictable) {
+		if (!Definition.IsValid() || Actions.size() >= MaximumNetworkCharacters) return false;
+		const auto Token = Definition.Token;
+		return Actions.emplace(Token, RegisteredAction{std::move(Definition), Predictable}).second;
 	}
 
 	void PredictedCharacterNetwork::SetTerminalHandler(CharacterTerminalHandler Handler) {
@@ -2226,8 +2227,8 @@ namespace gargantuan::network {
 											? Actions.find(Result->AuthoritativeAction->ActionToken)
 											: Actions.end();
 				if (Result->Accepted && Result->AuthoritativeAction && Definition != Actions.end() &&
-					Definition->second.Animation == Result->AuthoritativeAction->Animation &&
-					Definition->second.ContentRevision == Result->AuthoritativeAction->ContentRevision) {
+					Definition->second.Definition.Animation == Result->AuthoritativeAction->Animation &&
+					Definition->second.Definition.ContentRevision == Result->AuthoritativeAction->ContentRevision) {
 					Peer.PredictedAction = Result->AuthoritativeAction;
 					Peer.LastActionEvaluationTick = std::max(
 						Peer.LastActionEvaluationTick, Result->AuthoritativeAction->StartTick
@@ -2299,8 +2300,8 @@ namespace gargantuan::network {
 		if (Replica->second.LastState.IsValid() && !State.StateSequence.IsNewerThan(Replica->second.LastState)) {
 			if (ReliableState && State.ActiveAction && State.ResolvedAction == Replica->second.LastResolvedAction) {
 				auto Definition = Actions.find(State.ActiveAction->ActionToken);
-				if (Definition != Actions.end() && Definition->second.Animation == State.ActiveAction->Animation &&
-					Definition->second.ContentRevision == State.ActiveAction->ContentRevision) {
+				if (Definition != Actions.end() && Definition->second.Definition.Animation == State.ActiveAction->Animation &&
+					Definition->second.Definition.ContentRevision == State.ActiveAction->ContentRevision) {
 					Replica->second.ActiveAction = State.ActiveAction;
 					SaturatingIncrement(Metrics.StaleStatesDropped);
 					return true;
@@ -2406,7 +2407,7 @@ namespace gargantuan::network {
 				if (Definition != Actions.end()) {
 					const auto ActionEnd = Peer.PredictedAction->StartTick + Peer.PredictedAction->DurationTicks;
 					const auto EvaluationTick = std::min(Command.SimulationTick, ActionEnd);
-					auto Delta = Definition->second.EvaluateRootMotion(Peer.LastActionEvaluationTick, EvaluationTick);
+					auto Delta = Definition->second.Definition.EvaluateRootMotion(Peer.LastActionEvaluationTick, EvaluationTick);
 					Peer.LastActionEvaluationTick = EvaluationTick;
 					if (Delta) {
 						auto RootResult = CharacterValue->AdmitMotion(
@@ -2517,14 +2518,14 @@ namespace gargantuan::network {
 			return false;
 		}
 		Peer.PendingActions[Peer.PendingActionCount++] = {Request.ActionSequence, ActionToken};
-		if (PredictionEnabled && Definition != Actions.end()) {
+		if (PredictionEnabled && Definition != Actions.end() && Definition->second.Predictable) {
 			Peer.PredictedAction = CharacterActionState{
 				Request.ActionSequence,
-				Definition->second.Token,
-				Definition->second.Animation,
-				Definition->second.ContentRevision,
+				Definition->second.Definition.Token,
+				Definition->second.Definition.Animation,
+				Definition->second.Definition.ContentRevision,
 				SimulationTick,
-				Definition->second.DurationTicks,
+				Definition->second.Definition.DurationTicks,
 			};
 			Peer.LastActionEvaluationTick = SimulationTick;
 		}
@@ -2615,8 +2616,8 @@ namespace gargantuan::network {
 				Peer.LastActionEvaluationTick = PreviousActionTick;
 			} else if (State.ActiveAction && PredictionEnabled) {
 				auto Definition = Actions.find(State.ActiveAction->ActionToken);
-				if (Definition == Actions.end() || Definition->second.Animation != State.ActiveAction->Animation ||
-					Definition->second.ContentRevision != State.ActiveAction->ContentRevision) {
+				if (Definition == Actions.end() || Definition->second.Definition.Animation != State.ActiveAction->Animation ||
+					Definition->second.Definition.ContentRevision != State.ActiveAction->ContentRevision) {
 					Reset = true;
 				} else {
 					Peer.PredictedAction = State.ActiveAction;

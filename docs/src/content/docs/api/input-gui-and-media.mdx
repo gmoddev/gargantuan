@@ -36,3 +36,10 @@ Radiance `.hdr` square faces and 2:1 panoramas can be imported through the trust
 `Animator:LoadAnimation(AnimationId: string) -> AnimationTrack` requires a strict available Animation asset. The `Animator` must be a direct child of a live `MeshPart` with a compatible skinned mesh. Missing assets, incompatible skeletons, and track capacity errors raise script errors; wrap optional content loads with `pcall`. The returned `AnimationTrack` is runtime-only userdata, with `Play()`, `Pause()`, `Resume()`, `Stop()`, `AdjustSpeed()`, and `AdjustWeight()`, plus `Duration`, `Ended`, `Looped`, `PlaybackState`, `RootMotionEnabled`, `Speed`, `TimePosition`, and `Weight`. `Speed` is finite 0–16; `Weight` is finite 0–1. Destroying the owner invalidates retained tracks. Clips and tracks are not themselves persisted Instances.
 
 `Sound` is an Instance with `Play()`, `Pause()`, `Resume()`, `Stop()`, `Ended`, and authored audio properties. Playback is a runtime voice; saving the Instance does not save an active voice or its device handle. `Sound` and animation content availability may vary by packaged asset catalog. For an optional clip, inspect metadata then handle `LoadAnimation` failure without assuming availability guarantees every compatibility condition.
+
+For the advanced creator workflow, see [Character authoring](../../guides/character-authoring/).
+Its project-owned Luau examples choose locomotion/action clips and crossfades,
+replace an initial Character with an authored skinned template on the server,
+and request registered actions through CharacterControlService. Clip selection
+is game policy. Disposable Studio blend preview does not save active tracks or
+apply root motion to a Character.

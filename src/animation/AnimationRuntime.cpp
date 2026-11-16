@@ -757,6 +757,17 @@ namespace gargantuan {
 
 	void AnimationRuntime::Step(float DeltaTime, const AnimationUpdateContext &Context) {
 		if (!State || State->ShutDown) return;
+		// Keep tracks alive through pose evaluation and Ended dispatch, then
+		// release every per-step snapshot even if evaluation throws.
+		struct TrackSnapshotScope {
+			Impl &Runtime;
+			~TrackSnapshotScope() {
+				for (auto &[Object, Tracked] : Runtime.Animators) {
+					(void)Object;
+					Tracked.TrackSnapshot.clear();
+				}
+			}
+		} TrackSnapshots{*State};
 		const auto Started = std::chrono::steady_clock::now();
 		State->PoseUpdates.clear();
 		State->PoseRemoves.clear();

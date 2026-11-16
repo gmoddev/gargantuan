@@ -1,0 +1,5 @@
+# Exact portable formatter for the repository's clang-format 21 configuration.
+# Wheels cover the required Windows x64 and Ubuntu x64 CI profiles.
+clang-format==21.1.8 \
+    --hash=sha256:a7606da55e31ebf5b63dd75800392e6cca7c595a74100c2cebcda2d742130732 \
+    --hash=sha256:d12b864b596b80810cdd7f97556c485dc09cfe2952503958535f01359e025fbb

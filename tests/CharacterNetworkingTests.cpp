@@ -669,6 +669,53 @@ namespace {
 		);
 	}
 
+	void TestNonPredictableActionUsesAuthoritativeLifetime() {
+		Fixture Value;
+		auto Definition = Action(4, 44, 0.05f);
+		Definition.DurationTicks = 24;
+		Check(
+			Value.Server->RegisterAction(Definition) && Value.Client->RegisterAction(Definition, false),
+			"nonpredictable action registers client content metadata without granting prediction"
+		);
+		const auto Before = Value.ClientCharacter->GetPosition();
+		Check(
+			Value.Client->RequestAction(Value.ClientConnection, Definition.Token, Value.Tick) &&
+				!Value.Client->GetPresentationAction(Value.SourceCharacter),
+			"nonpredictable request has no speculative action presentation before authority responds"
+		);
+		Check(
+			Value.Client->SubmitInput(
+				Value.ClientConnection, *Value.ClientWorld, Value.Tick, 1.0f / 60.0f, {}, 0.0f, false
+			) && Near(Value.ClientCharacter->GetPosition(), Before),
+			"nonpredictable request does not apply local root motion before acceptance"
+		);
+		int Accepted = 0;
+		bool Presented = false;
+		bool Authoritative = false;
+		int Ended = 0;
+		for (int Index = 0; Index < 64; ++Index) {
+			Value.Cycle();
+			for (const auto &Resolution : Value.Client->DrainActionResolutions())
+				if (Resolution.RequestedActionToken == Definition.Token && Resolution.Accepted) ++Accepted;
+			for (const auto &Ending : Value.Client->DrainActionEndings())
+				if (Ending.ActionToken == Definition.Token) ++Ended;
+			if (auto Action = Value.Client->GetAuthoritativeAction(Value.SourceCharacter);
+				Action && Action->ActionToken == Definition.Token)
+				Authoritative = true;
+			if (auto Presentation = Value.Client->GetPresentationAction(Value.SourceCharacter);
+				Presentation && Presentation->Action.ActionToken == Definition.Token)
+				Presented = true;
+			(void)Value.Client->SubmitInput(
+				Value.ClientConnection, *Value.ClientWorld, Value.Tick, 1.0f / 60.0f, {}, 0.0f, false
+			);
+		}
+		Check(Accepted == 1 && Authoritative && Presented && Ended == 1,
+			"authoritative nonpredictable action resolves, presents and ends exactly once");
+		Check(Value.ServerCharacter->GetPosition().x > Before.x + 0.5f &&
+				Near(Value.ClientCharacter->GetPosition(), Value.ServerCharacter->GetPosition(), 0.05f),
+			"nonpredictable action retains server root-motion admission and client convergence");
+	}
+
 	void TestStaleControlRelevanceAndNpc() {
 		Fixture Value;
 		const auto FirstControl = *Value.Client->GetControl(Value.ClientConnection);
@@ -3134,6 +3181,7 @@ int main() {
 		TestCodec();
 		TestPredictionAuthorityAndActions();
 		TestServerAuthoritativePredictionMode();
+		TestNonPredictableActionUsesAuthoritativeLifetime();
 		TestStaleControlRelevanceAndNpc();
 		TestControlDeferralReconnectAndReplay();
 		TestClientPolicyCannotChangeAuthority();
