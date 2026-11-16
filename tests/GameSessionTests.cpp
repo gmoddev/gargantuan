@@ -11,7 +11,9 @@
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/Animator.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
+#include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
 #include "gargantuan/classes/Script.hpp"
@@ -1397,7 +1399,7 @@ namespace {
 
 	void TestProductionLifecycleComposition(
 		bool MeasureHandoff = false, bool WithByteAdmission = false, bool TestControlRebind = false,
-		bool SessionActionPredictable = true
+		bool SessionActionPredictable = true, bool WithReplicatedTemplate = false
 	) {
 		SimulatedTransportConfiguration TransportConfiguration;
 		TransportConfiguration.BaseLatency = 1ms;
@@ -1408,6 +1410,22 @@ namespace {
 		if (!Network || !ServerTransport || !ClientTransport) return;
 
 		auto ServerWorld = std::make_shared<DataModel>();
+		if (WithReplicatedTemplate) {
+			auto Storage = ServerWorld->GetService("ReplicatedStorage");
+			auto Templates = std::make_shared<Folder>();
+			Templates->SetName("StoredCharacterTemplates");
+			Templates->SetParent(Storage);
+			auto Template = std::make_shared<KinematicCharacter>();
+			Template->SetName("StoredCharacter");
+			Template->SetParent(Templates);
+			auto Root = std::make_shared<MeshPart>();
+			Root->SetName("StoredRootPart");
+			Root->SetAnchored(true);
+			Root->SetParent(Template);
+			Template->SetRootPart(Root);
+			auto AnimatorValue = std::make_shared<Animator>();
+			AnimatorValue->SetParent(Root);
+		}
 		if (TestControlRebind) {
 			auto Marker = std::make_shared<Folder>();
 			Marker->SetName("ControlRebindMarker");
@@ -1662,6 +1680,16 @@ end)
 			ClientRuntime && Client.GetStatus() == GameSessionStatus::Ready,
 			"client reaches ready only after replicated runtime attachment"
 		);
+		if (WithReplicatedTemplate && Client.GetClientDataModel()) {
+			auto Storage = Client.GetClientDataModel()->GetService("ReplicatedStorage");
+			auto Templates = Storage ? Storage->FindFirstChild("StoredCharacterTemplates") : nullptr;
+			auto Template = Templates ? std::dynamic_pointer_cast<KinematicCharacter>(
+			Templates->FindFirstChild("StoredCharacter")) : nullptr;
+			Check(Template && Template->GetRootPart() &&
+				std::dynamic_pointer_cast<MeshPart>(*Template->GetRootPart()) &&
+				(*Template->GetRootPart())->FindFirstChildOfClass("Animator", false),
+				"nested ReplicatedStorage Character template keeps its typed RootPart and Animator in the structural replica");
+		}
 		Check(
 			Server.GetMetrics().AcceptedPeers == 1 && Server.GetMetrics().ReadyPeers == 1,
 			"server distinguishes accepted and gameplay-ready peer phases"
@@ -1743,6 +1771,9 @@ end)
 				Client.GetMetrics().ActionsPresented >= 1 && Client.GetMetrics().ActionPresentationStops >= 1,
 				"client starts and terminates bounded action presentation from authoritative phase state"
 			);
+			if (WithReplicatedTemplate)
+				Check(Client.GetMetrics().ClientMaterializationEpochMismatches == 0,
+					"stored Character template does not advance the runtime GCHR materialization epoch");
 			if (auto LocalPlayer = ClientRuntime->Players->GetLocalPlayer();
 				LocalPlayer && (*LocalPlayer)->GetCharacter()) {
 				Check(
@@ -2513,6 +2544,10 @@ int main(int ArgumentCount, char **Arguments) {
 		}
 		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--nonpredictable-action") {
 			TestProductionLifecycleComposition(false, false, false, false);
+			return Failures == 0 ? 0 : 1;
+		}
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--replicated-character-template") {
+			TestProductionLifecycleComposition(false, false, false, false, true);
 			return Failures == 0 ? 0 : 1;
 		}
 		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--scale-counter") {
