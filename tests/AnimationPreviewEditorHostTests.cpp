@@ -7,6 +7,7 @@
 #include <SDL3/SDL.h>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -14,6 +15,7 @@
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 int main(int ArgumentCount, char **Arguments) {
@@ -256,6 +258,25 @@ int main(int ArgumentCount, char **Arguments) {
 			"Save/reopen retains canonical rig and clip references");
 		// Explicit manual GPU gate; ordinary CI remains genuinely headless.
 		if ((ArgumentCount == 2 || ArgumentCount == 3) && std::string_view(Arguments[1]) == "--gpu") {
+			const auto BeforePublicCapture = Call("GetProjectState", Json::object())["Result"];
+			auto PublicPreview = Call("OpenAnimationPreview", {{"Reference", Reference}});
+			Check(PublicPreview["Ok"], "Open public GPU preview for resize coverage");
+			const auto PublicId = PublicPreview["Result"]["PreviewId"];
+			Check(Call("ControlAnimationPreview", {{"PreviewId", PublicId}, {"Action", "Clip"},
+				{"Value", PulseClip}})["Ok"], "Select public preview clip before resize");
+			auto CapturePublic = [&](std::uint32_t Width, std::uint32_t Height) {
+				return Call("CaptureAnimationPreview", {{"PreviewId", PublicId}, {"Width", Width}, {"Height", Height},
+					{"Position", {2, 2, -4}}, {"Target", {0, .5f, 0}}});
+			};
+			for (const auto [Width, Height] : {std::pair{320u, 240u}, std::pair{320u, 420u}, std::pair{320u, 240u}}) {
+				auto Frame = CapturePublic(Width, Height);
+				Check(Frame["Ok"] && Frame["Result"]["Width"] == Width && Frame["Result"]["Height"] == Height,
+					"Public GPU capture survives preview resize in both directions");
+			}
+			Check(Call("CloseAnimationPreview", {{"PreviewId", PublicId}})["Ok"],
+				"Close public GPU preview after resize");
+			Check(Call("GetProjectState", Json::object())["Result"] == BeforePublicCapture,
+				"Public GPU resize does not change authoring state");
 			DiskFilesystem Filesystem(Root);
 			auto ProjectValue = Project::fromExisting(&Filesystem);
 			auto SourceWorld = ProjectValue.DeserializeGame();
