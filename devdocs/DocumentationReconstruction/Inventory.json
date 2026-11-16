@@ -1432,6 +1432,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "devdocs/CurrentArchitecture/GameSessionAdmission.md",
+      "Purpose": "GameSession admission and GSES v2",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "devdocs/CurrentArchitecture/GameSessionReliableAdmissionAttribution.md",
       "Purpose": "Profiled GameSession reliable-admission assertion attribution",
       "LastMeaningfulUpdate": {
@@ -4849,6 +4862,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "docs/adr/D05-game-session-admission-boundary.md",
+      "Purpose": "D05 — Game session admission boundary",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Preserve accepted decision authority and explicit amendments; acceptance is not implementation proof",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "docs/architecture/README.md",
       "Purpose": "Gargantuan architecture documentation",
       "LastMeaningfulUpdate": {
@@ -4893,6 +4919,19 @@
       "Status": "Current",
       "StatusLabel": "Current and authoritative",
       "ProposedAction": "Maintain setup, authority and sample-specific execution limits",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/hosting-player-join.md",
+      "Purpose": "Authenticated Player join input",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Inspect owning source before promoting to current authority",
       "ObsoleteTermMentions": []
     },
     {
@@ -5667,6 +5706,19 @@
       "Status": "Incomplete",
       "StatusLabel": "Current but incomplete",
       "ProposedAction": "Retain exact qualification/tool contract; scope certification to recorded source and evidence",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "tools/ci/clang-format-requirements.txt",
+      "Purpose": "Exact portable formatter for the repository's clang-format 21 configuration.",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Inspect owning source before promoting to current authority",
       "ObsoleteTermMentions": []
     },
     {

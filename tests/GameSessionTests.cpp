@@ -28,6 +28,7 @@
 #include "gargantuan/services/CharacterControlService.hpp"
 #include "gargantuan/services/Players.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -39,6 +40,8 @@
 #include <iterator>
 #include <memory>
 #include <limits>
+#include <set>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -592,9 +595,129 @@ namespace {
 		};
 	}
 
+	class ManualGameAdmissionProvider final : public IGameAdmissionProvider {
+	  public:
+		bool Begin(GameAdmissionRequest Request, GameAdmissionCompletion Completion) override {
+			if (!StartAllowed) return false;
+			const bool Repeated = RejectRepeatedProofs && !SeenProofs.insert(Request.Proof).second;
+			Requests.push_back(Request);
+			if (Repeated) {
+				Completion(std::nullopt);
+				return true;
+			}
+			Completions.push_back(std::move(Completion));
+			return true;
+		}
+		void Release(std::uint64_t RequestId) noexcept override {
+			if (ReleaseCount < Released.size()) Released[ReleaseCount++] = RequestId;
+		}
+		void Complete(std::size_t Index, std::optional<PlayerIdentity> Identity) {
+			if (Index < Completions.size()) Completions[Index](std::move(Identity));
+		}
+		bool StartAllowed = true;
+		bool RejectRepeatedProofs = false;
+		std::set<std::array<std::byte, GameAdmissionProofBytes>> SeenProofs;
+		std::vector<GameAdmissionRequest> Requests;
+		std::vector<GameAdmissionCompletion> Completions;
+		std::array<std::uint64_t, 16> Released{};
+		std::size_t ReleaseCount = 0;
+	};
+
+	class UntrustedServerTransport final : public IGameTransport {
+	  public:
+		explicit UntrustedServerTransport(std::shared_ptr<IGameTransport> Value) : Inner(std::move(Value)) {}
+		TransportOperationResult Start(const TransportStartConfiguration &Value) override { return Inner->Start(Value); }
+		TransportOperationResult Stop(DisconnectInfo Value) override { return Inner->Stop(std::move(Value)); }
+		TransportOperationResult Disconnect(ConnectionId Id, DisconnectInfo Value) override {
+			return Inner->Disconnect(Id, std::move(Value));
+		}
+		TransportOperationResult Send(const NetworkMessageIntent &Value) override {
+			++SentMessages;
+			return Inner->Send(Value);
+		}
+		std::size_t PollEvents(std::span<TransportEvent> Output) override { return Inner->PollEvents(Output); }
+		std::optional<std::size_t> GetAvailableDatagramBytes(ConnectionId Id) const override {
+			return Inner->GetAvailableDatagramBytes(Id);
+		}
+		std::optional<NetworkStatistics> GetStatistics(ConnectionId Id) const override {
+			return Inner->GetStatistics(Id);
+		}
+		std::size_t SentMessages = 0;
+	  private:
+		std::shared_ptr<IGameTransport> Inner;
+	};
+
+	std::array<std::byte, GameAdmissionProofBytes> TestAdmissionProof() {
+		std::array<std::byte, GameAdmissionProofBytes> Proof{};
+		for (std::size_t Index = 0; Index < Proof.size(); ++Index)
+			Proof[Index] = static_cast<std::byte>(Index + 1);
+		return Proof;
+	}
+
+	GameSessionConfiguration AuthenticatedConfiguration(GameSessionRole Role,
+		const std::shared_ptr<ManualGameAdmissionProvider> &Provider, std::uint64_t Timeout = 120) {
+		auto Result = Configuration(Role, "127.0.0.1");
+		Result.AllowInsecureDevelopmentNetwork = false;
+		Result.AdmissionMode = GameSessionAdmissionMode::Authenticated;
+		Result.HandshakeTimeoutTicks = Timeout;
+		if (Role == GameSessionRole::Server) Result.AdmissionProvider = Provider;
+		else Result.AdmissionProof = TestAdmissionProof();
+		return Result;
+	}
+
+	void Advance(const std::shared_ptr<SimulatedNetwork> &Network, GameSession &Server,
+		GameSession &Client, std::uint64_t Tick, runtime_detail::WorkSample *ServerWork = nullptr);
+
+	struct AdmissionFixture {
+		std::shared_ptr<SimulatedNetwork> Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
+		std::shared_ptr<DataModel> ServerWorld = std::make_shared<DataModel>();
+		HeadlessRenderer ServerRenderer{Vector2(64, 64)};
+		Engine ServerRuntime{ServerWorld, &ServerRenderer, nullptr,
+			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}};
+		std::shared_ptr<ManualGameAdmissionProvider> Provider;
+		GameSession Server;
+		GameSession Client;
+		std::unique_ptr<HeadlessRenderer> ClientRenderer;
+		std::unique_ptr<Engine> ClientRuntime;
+		std::uint64_t Tick = 1;
+
+		explicit AdmissionFixture(std::uint64_t Timeout = 120,
+			std::shared_ptr<ManualGameAdmissionProvider> SharedProvider = {})
+			: Provider(SharedProvider ? std::move(SharedProvider) : std::make_shared<ManualGameAdmissionProvider>()),
+			  Server(Network->CreateTransport(), AuthenticatedConfiguration(GameSessionRole::Server, Provider, Timeout),
+				&ServerRuntime),
+			  Client(Network->CreateTransport(), AuthenticatedConfiguration(GameSessionRole::Client, Provider, Timeout)) {
+			ServerRuntime.ProcessService->Alive = true;
+			Check(Server.Start().Succeeded() && Client.Start().Succeeded(), "authenticated fixture sessions start");
+		}
+		~AdmissionFixture() {
+			Client.Stop();
+			Server.Stop();
+			if (ClientRuntime) ClientRuntime->Destroy();
+			ServerRuntime.Destroy();
+		}
+		void AdvanceTick(bool AttachClient = false) {
+			Advance(Network, Server, Client, Tick++);
+			if (AttachClient && !ClientRuntime && Client.GetClientDataModel()) {
+				ClientRenderer = std::make_unique<HeadlessRenderer>(Vector2(64, 64));
+				ClientRuntime = std::make_unique<Engine>(Client.GetClientDataModel(), ClientRenderer.get(), nullptr,
+					EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient});
+				ClientRuntime->ProcessService->Alive = true;
+				Check(Client.AttachClientRuntime(*ClientRuntime), "authenticated client attaches after trusted bootstrap");
+			}
+			if (ClientRuntime) ClientRuntime->Step();
+			ServerRuntime.Step();
+		}
+		void AwaitRequest() {
+			for (int Index = 0; Index < 20 && Provider->Requests.empty(); ++Index) AdvanceTick();
+			Check(Provider->Requests.size() == 1, "v2 hello reaches exactly one trusted provider request");
+			if (Provider->Requests.empty()) throw std::runtime_error("authenticated fixture received no provider request");
+		}
+	};
+
 	void Advance(
 		const std::shared_ptr<SimulatedNetwork> &Network, GameSession &Server, GameSession &Client, std::uint64_t Tick,
-		runtime_detail::WorkSample *ServerWork = nullptr
+		runtime_detail::WorkSample *ServerWork
 	) {
 		(void)Network->Advance(2ms);
 		Network->Pump();
@@ -656,6 +779,221 @@ namespace {
 		if (Accepted) {
 			(*Accepted)[44] = std::byte{0xff};
 			Check(!DecodeGameSessionMessage(*Accepted), "GSES rejects an unknown session identity kind");
+		}
+		auto AuthenticatedHello = EncodeGameSessionMessage(GameSessionAuthenticatedClientHello{
+			77, Limits, TestAdmissionProof()});
+		Check(AuthenticatedHello && AuthenticatedHello->size() <= MaximumGameSessionFrameBytes,
+			"v2 proof has a bounded representation");
+		if (AuthenticatedHello) {
+			auto Decoded = DecodeGameSessionMessage(*AuthenticatedHello);
+			const auto *Hello = Decoded ? std::get_if<GameSessionAuthenticatedClientHello>(&*Decoded) : nullptr;
+			Check(Hello && Hello->Proof == TestAdmissionProof(), "v2 proof round-trips without reinterpretation");
+			for (std::size_t Size = 0; Size < AuthenticatedHello->size(); ++Size)
+				Check(!DecodeGameSessionMessage(std::span(*AuthenticatedHello).first(Size)),
+					"every truncated v2 proof is rejected");
+			auto WrongVersionHello = *AuthenticatedHello;
+			WrongVersionHello[4] = std::byte{1};
+			Check(!DecodeGameSessionMessage(WrongVersionHello), "v2 proof cannot be interpreted as v1 hello");
+		}
+		Check(!EncodeGameSessionMessage(GameSessionServerAccepted{
+			.Nonce = 77, .SessionEpoch = 1, .Replication = ReplicationEpoch(1), .Player = {1, 1},
+			.PlayerId = 1, .Identity = SessionIdentityKind::DevelopmentLocal, .NegotiatedLimits = Limits,
+			.Version = AuthenticatedGameSessionProtocolVersion}),
+			"v2 acceptance cannot claim DevelopmentLocal identity");
+		Check(EncodeGameSessionMessage(GameSessionServerAccepted{
+			.Nonce = 77, .SessionEpoch = 1, .Replication = ReplicationEpoch(1), .Player = {1, 1},
+			.PlayerId = 1, .Identity = SessionIdentityKind::Authenticated, .NegotiatedLimits = Limits,
+			.Version = AuthenticatedGameSessionProtocolVersion}).has_value(),
+			"v2 acceptance requires authenticated identity kind");
+	}
+
+	void TestAuthenticatedAdmission() {
+		const auto Provider = std::make_shared<ManualGameAdmissionProvider>();
+		Provider->RejectRepeatedProofs = true;
+		auto NonLoopback = AuthenticatedConfiguration(GameSessionRole::Server, Provider);
+		NonLoopback.Endpoint = {"10.0.0.2", 27020};
+		Check(!NonLoopback.IsValid(), "a ticket provider alone cannot authorize an unauthenticated remote transport");
+		NonLoopback.RequireServerIdentity = true;
+		Check(NonLoopback.IsValid(), "remote authenticated server requires native listener identity");
+		NonLoopback.RequireServerIdentity = false;
+		NonLoopback.AllowInsecureDevelopmentNetwork = true;
+		Check(!NonLoopback.IsValid(), "authenticated hosting cannot use the development escape hatch");
+		NonLoopback.AdmissionProvider.reset();
+		Check(!NonLoopback.IsValid(), "authenticated server cannot start without its provider");
+		auto RemoteClient = AuthenticatedConfiguration(GameSessionRole::Client, Provider);
+		RemoteClient.Endpoint = {"10.0.0.2", 27020};
+		Check(!RemoteClient.IsValid(), "a valid ticket does not establish remote server identity");
+		TransportServerPublicKey ServerKey{};
+		ServerKey[0] = std::byte{1};
+		RemoteClient.ExpectedServerPublicKey = ServerKey;
+		Check(RemoteClient.IsValid(), "remote authenticated client requires an exact nonzero server key");
+		RemoteClient.ExpectedServerPublicKey = TransportServerPublicKey{};
+		Check(!RemoteClient.IsValid(), "zero server key cannot authorize remote authenticated admission");
+		{
+			auto Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
+			auto ServerWorld = std::make_shared<DataModel>();
+			HeadlessRenderer ServerRenderer{Vector2(64, 64)};
+			Engine ServerRuntime{ServerWorld, &ServerRenderer, nullptr,
+				EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}};
+			GameSession Server(Network->CreateTransport(),
+				AuthenticatedConfiguration(GameSessionRole::Server, Provider), &ServerRuntime);
+			auto ClientTransport = std::make_shared<UntrustedServerTransport>(Network->CreateTransport());
+			auto ClientConfiguration = AuthenticatedConfiguration(GameSessionRole::Client, Provider);
+			ClientConfiguration.ExpectedServerPublicKey = ServerKey;
+			GameSession Client(ClientTransport, ClientConfiguration);
+			ServerRuntime.ProcessService->Alive = true;
+			Check(Server.Start().Succeeded() && Client.Start().Succeeded(),
+				"server-key negative fixture starts both transports");
+			for (int Index = 0; Index < 12; ++Index) {
+				(void)Server.Poll();
+				(void)Client.Poll();
+			}
+			Check(ClientTransport->SentMessages == 0 && Provider->Requests.empty(),
+				"missing authenticated transport key sends no v2 proof or admission request");
+			(void)Client.Stop();
+			(void)Server.Stop();
+			ServerRuntime.Destroy();
+		}
+		auto MissingProof = AuthenticatedConfiguration(GameSessionRole::Client, Provider);
+		MissingProof.AdmissionProof.reset();
+		Check(!MissingProof.IsValid(), "authenticated client cannot silently send a v1 hello");
+		auto Development = Configuration(GameSessionRole::Server, "127.0.0.1");
+		Development.AdmissionProvider = Provider;
+		Check(!Development.IsValid(), "DevelopmentLocal cannot inherit a trusted provider accidentally");
+
+		{
+			AdmissionFixture Fixture(120, Provider);
+			Fixture.AwaitRequest();
+			Check(Fixture.Provider->Requests[0].Proof == TestAdmissionProof() &&
+				Fixture.Provider->Requests[0].Connection.IsValid() &&
+				Fixture.Provider->Requests[0].ClientNonce != 0,
+				"provider receives a bounded proof and generation-safe connection context");
+			Check(Fixture.ServerRuntime.Players->GetPlayers().empty() &&
+				Fixture.Server.GetPeerIdentities().empty(),
+				"authenticated hello creates no Player before provider completion");
+			Fixture.Provider->Complete(0, PlayerIdentity{"test-provider", "account-1"});
+			for (int Index = 0; Index < 150 && Fixture.Server.GetMetrics().ReadyPeers == 0; ++Index)
+				Fixture.AdvanceTick(true);
+			Check(Fixture.Server.GetMetrics().ReadyPeers == 1 && Fixture.Client.GetStatus() == GameSessionStatus::Ready,
+				"approved v2 peer reaches the existing ready and replication path");
+			const auto Peers = Fixture.Server.GetPeerIdentities();
+			const auto PlayerValue = Peers.empty() ? nullptr : Fixture.Server.GetAcceptedPlayer(Peers.front().Connection);
+			Check(PlayerValue && PlayerValue->GetAuthenticationIdentity() &&
+				*PlayerValue->GetAuthenticationIdentity() == PlayerIdentity{"test-provider", "account-1"},
+				"Player is created with the provider-qualified identity");
+			const auto RequestId = Provider->Requests[0].RequestId;
+			Fixture.Client.Stop();
+			for (int Index = 0; Index < 10 && !Fixture.ServerRuntime.Players->GetPlayers().empty(); ++Index) {
+				(void)Fixture.Network->Advance(2ms);
+				Fixture.Network->Pump();
+				(void)Fixture.Server.Poll();
+			}
+			Check(Fixture.ServerRuntime.Players->GetPlayers().empty() &&
+				std::ranges::count(Provider->Released, RequestId) == 1,
+				"accepted disconnect releases the provider request exactly once");
+		}
+		{
+			AdmissionFixture Replay(120, Provider);
+			for (int Index = 0; Index < 20 && Provider->Requests.size() < 2; ++Index) Replay.AdvanceTick();
+			Check(Provider->Requests.size() == 2 && Provider->Requests[1].Proof == Provider->Requests[0].Proof &&
+				Provider->Requests[1].RequestId != Provider->Requests[0].RequestId &&
+				Replay.ServerRuntime.Players->GetPlayers().empty() &&
+				Replay.Server.GetMetrics().RejectedHandshakes > 0,
+				"one-use provider replay denial never creates a DevelopmentLocal Player");
+		}
+		{
+			AdmissionFixture Fixture;
+			Fixture.AwaitRequest();
+			Fixture.Provider->Complete(0, std::nullopt);
+			Fixture.AdvanceTick();
+			Check(Fixture.ServerRuntime.Players->GetPlayers().empty() &&
+				Fixture.Server.GetMetrics().RejectedHandshakes > 0,
+				"provider denial cannot fall back to DevelopmentLocal Player creation");
+		}
+		{
+			AdmissionFixture Fixture;
+			Fixture.Provider->StartAllowed = false;
+			for (int Index = 0; Index < 20 && Fixture.Server.GetMetrics().RejectedHandshakes == 0; ++Index)
+				Fixture.AdvanceTick();
+			Check(Fixture.Server.GetMetrics().RejectedHandshakes > 0 &&
+				Fixture.ServerRuntime.Players->GetPlayers().empty(),
+				"unavailable provider fails closed before Player creation");
+		}
+		{
+			AdmissionFixture Fixture;
+			Fixture.AwaitRequest();
+			Fixture.Provider->Complete(0, PlayerIdentity{"invalid provider", "account"});
+			Fixture.AdvanceTick();
+			Check(Fixture.Server.GetMetrics().RejectedHandshakes > 0 &&
+				Fixture.ServerRuntime.Players->GetPlayers().empty(),
+				"invalid provider identity is rejected before Player creation");
+		}
+		{
+			AdmissionFixture Fixture;
+			Fixture.AwaitRequest();
+			const auto RequestId = Fixture.Provider->Requests[0].RequestId;
+			const auto OriginalConnection = Fixture.Provider->Requests[0].Connection;
+			Fixture.Client.Stop();
+			Fixture.Network->Pump();
+			(void)Fixture.Server.Poll();
+			GameSession Replacement(Fixture.Network->CreateTransport(),
+				AuthenticatedConfiguration(GameSessionRole::Client, Fixture.Provider));
+			Check(Replacement.Start().Succeeded(), "replacement authenticated client starts");
+			for (int Index = 0; Index < 20 && Fixture.Provider->Requests.size() < 2; ++Index) {
+				(void)Fixture.Network->Advance(2ms);
+				Fixture.Network->Pump();
+				(void)Replacement.Poll();
+				(void)Fixture.Server.Poll();
+				Fixture.Server.Step(Fixture.Tick);
+				Replacement.Step(Fixture.Tick++);
+				Fixture.ServerRuntime.Step();
+			}
+			Check(Fixture.Provider->Requests.size() == 2 &&
+				Fixture.Provider->Requests[1].Connection != OriginalConnection,
+				"replacement peer has a distinct generation-safe connection identity");
+			Fixture.Provider->Complete(0, PlayerIdentity{"test-provider", "late-disconnect"});
+			Fixture.Server.Step(Fixture.Tick++);
+			Check(Fixture.ServerRuntime.Players->GetPlayers().empty() &&
+				std::ranges::count(Fixture.Provider->Released, RequestId) == 1,
+				"disconnect cancels verification and ignores stale approval after replacement");
+			Replacement.Stop();
+		}
+		{
+			AdmissionFixture Fixture;
+			Fixture.AwaitRequest();
+			const auto RequestId = Fixture.Provider->Requests[0].RequestId;
+			Fixture.Server.Stop();
+			Fixture.Provider->Complete(0, PlayerIdentity{"test-provider", "late-stop"});
+			Fixture.Server.Step(Fixture.Tick++);
+			Check(Fixture.ServerRuntime.Players->GetPlayers().empty() &&
+				std::ranges::count(Fixture.Provider->Released, RequestId) == 1,
+				"Stop cancels verification and cannot resurrect a Player");
+		}
+		{
+			AdmissionFixture Fixture;
+			Fixture.AwaitRequest();
+			const auto RequestId = Fixture.Provider->Requests[0].RequestId;
+			Fixture.Provider->Complete(0, PlayerIdentity{"test-provider", "accepted-stop"});
+			Fixture.Server.Step(Fixture.Tick++);
+			Check(Fixture.ServerRuntime.Players->GetPlayers().size() == 1,
+				"accepted-stop fixture creates its Player only after approval");
+			Fixture.Server.Stop();
+			Fixture.Server.Stop();
+			Check(Fixture.ServerRuntime.Players->GetPlayers().empty() &&
+				std::ranges::count(Fixture.Provider->Released, RequestId) == 1,
+				"Stop releases an accepted provider request exactly once");
+		}
+		{
+			AdmissionFixture Fixture(3);
+			Fixture.AwaitRequest();
+			const auto RequestId = Fixture.Provider->Requests[0].RequestId;
+			for (int Index = 0; Index < 4; ++Index) Fixture.AdvanceTick();
+			Fixture.Provider->Complete(0, PlayerIdentity{"test-provider", "late-timeout"});
+			Fixture.Server.Step(Fixture.Tick++);
+			Check(Fixture.Server.GetMetrics().HandshakeTimeouts == 1 &&
+				Fixture.ServerRuntime.Players->GetPlayers().empty() &&
+				std::ranges::count(Fixture.Provider->Released, RequestId) == 1,
+				"verification timeout cancels and rejects late approval before Player creation");
 		}
 	}
 
@@ -2533,6 +2871,7 @@ int main(int ArgumentCount, char **Arguments) {
 		TestFarmServiceTimingEvidence();
 		TestFarmOrdinaryEvidence();
 		TestProtocolBounds();
+		TestAuthenticatedAdmission();
 		TestServerSessionSignalLifetime();
 		TestSessionOwnershipAndEndpointPolicy();
 		TestRegistrationCommitAfterCapacityFailure();

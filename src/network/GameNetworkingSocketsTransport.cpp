@@ -7,6 +7,7 @@
 #include "OrdinaryServicePolicy.hpp"
 #include "../../cmake/gns/ReliableServiceFeedback.hpp"
 #include "../../cmake/gns/ServiceTimingDiagnostics.hpp"
+#include "../../cmake/gns/ServerIdentity.hpp"
 #include "../runtime/PublicationLatencyDiagnostics.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 
@@ -324,6 +325,7 @@ namespace gargantuan::network {
 			bool OrdinaryPolicyInvalid = false;
 			std::uint64_t NativeTerminalGeneration = 0;
 			std::optional<DisconnectInfo> ClosingInformation;
+			std::optional<TransportServerPublicKey> AuthenticatedServerKey;
 		};
 
 		explicit Impl(GameNetworkingSocketsTransportConfiguration Value) : Configuration(std::move(Value)) {}
@@ -333,6 +335,9 @@ namespace gargantuan::network {
 		bool RetainServiceTerminals = false;
 		bool OwnsGlobalReference = false;
 		bool NativeWorkerConfigured = false;
+		bool RequireServerIdentity = false;
+		std::optional<TransportServerPublicKey> ExpectedServerPublicKey;
+		std::optional<TransportServerPublicKey> ServerPublicKey;
 		// Serializes explicit close/Stop while either operation releases the
 		// adapter mutex for a bounded native worker wait. GNS callbacks never
 		// acquire this mutex.
@@ -412,7 +417,7 @@ namespace gargantuan::network {
 		bool AcquireGlobal() {
 			auto &Global = GlobalState();
 			if (Global.ExclusivePooledOwner ||
-				(Configuration.RequireExclusivePooledDomain && Global.ReferenceCount)) return false;
+				((Configuration.RequireExclusivePooledDomain || RequireServerIdentity) && Global.ReferenceCount)) return false;
 			if (Global.ReferenceCount == 0) {
 				SteamNetworkingErrMsg Error{};
 				if (!GameNetworkingSockets_Init(nullptr, Error)) return false;
@@ -425,7 +430,8 @@ namespace gargantuan::network {
 			if (Global.ReferenceCount == std::numeric_limits<std::uint32_t>::max()) return false;
 			++Global.ReferenceCount;
 			OwnsGlobalReference = true;
-			if (Configuration.RequireExclusivePooledDomain) Global.ExclusivePooledOwner = this;
+			if (Configuration.RequireExclusivePooledDomain || RequireServerIdentity)
+				Global.ExclusivePooledOwner = this;
 			return true;
 		}
 
@@ -434,6 +440,9 @@ namespace gargantuan::network {
 			auto &Global = GlobalState();
 			OwnsGlobalReference = false;
 			if (Global.ExclusivePooledOwner == this) Global.ExclusivePooledOwner = nullptr;
+			ServerPublicKey.reset();
+			RequireServerIdentity = false;
+			ExpectedServerPublicKey.reset();
 			if (--Global.ReferenceCount == 0) {
 				Global.ConnectionOwners.clear();
 				Global.ListenerOwners.clear();
@@ -615,6 +624,20 @@ namespace gargantuan::network {
 					Connection->second.State = ConnectionState::Authenticating;
 				}
 			if (Connection->second.State == ConnectionState::Authenticating) {
+				if (ExpectedServerPublicKey) {
+					SteamNetworkingSocketsLib::GargantuanServerPublicKey Actual{};
+					if (!SteamNetworkingSocketsLib::GargantuanReadAuthenticatedServerKey(
+						GlobalState().Interface, Information.m_hConn, Actual) ||
+						!std::equal(Actual.begin(), Actual.end(),
+							reinterpret_cast<const std::uint8_t *>(ExpectedServerPublicKey->data()))) {
+						FailConnection(Id, DisconnectReason::AuthenticationFailure,
+							"Pinned GNS server identity mismatch");
+						return;
+					}
+					TransportServerPublicKey Key{};
+					std::memcpy(Key.data(), Actual.data(), Actual.size());
+					Connection->second.AuthenticatedServerKey = Key;
+				}
 				if (Configuration.EnableNativeEgressWorker) {
 					std::uint64_t Generation = 0;
 					if (!SteamNetworkingSocketsLib::GargantuanConfigureNativeEgress(
@@ -784,13 +807,15 @@ namespace gargantuan::network {
 			return Operation(TransportOperationStatus::MessageRejected);
 		if (!Configuration.OpaqueHandshakeMaterial.empty())
 			return Operation(TransportOperationStatus::MessageRejected);
+		State->RequireServerIdentity = Configuration.RequireServerIdentity;
+		State->ExpectedServerPublicKey = Configuration.ExpectedServerPublicKey;
 		SteamNetworkingIPAddr Address;
 		Address.Clear();
 		if (!SteamAPI_SteamNetworkingIPAddr_ParseString(&Address, Configuration.Endpoint.Host.c_str()))
 			return Operation(TransportOperationStatus::MessageRejected);
 		Address.m_port = Configuration.Endpoint.Port;
 		if (Global.ExclusivePooledOwner ||
-			(State->Configuration.RequireExclusivePooledDomain && Global.ReferenceCount))
+			((State->Configuration.RequireExclusivePooledDomain || Configuration.RequireServerIdentity) && Global.ReferenceCount))
 			return TerminalOperation(TransportOperationStatus::InvalidState,
 				{DisconnectReason::TransportFailure,
 				 "[Network:GNS] Exclusive pooled execution domain conflicts with an active adapter"});
@@ -844,6 +869,15 @@ namespace gargantuan::network {
 		State->Role = Configuration.Role;
 		State->Endpoint = Configuration.Endpoint;
 		State->Limits = Configuration.AdvertisedLimits;
+		if (Configuration.RequireServerIdentity) {
+			SteamNetworkingSocketsLib::GargantuanServerPublicKey Actual{};
+			if (!SteamNetworkingSocketsLib::GargantuanEnableServerIdentity(Global.Interface, Actual))
+				return TerminalOperation(TransportOperationStatus::TransportFailure,
+					{DisconnectReason::TransportFailure, "Unable to establish GNS server identity"});
+			TransportServerPublicKey Key{};
+			std::memcpy(Key.data(), Actual.data(), Actual.size());
+			State->ServerPublicKey = Key;
+		}
 
 		std::array<SteamNetworkingConfigValue_t, 6> Options;
 		int OptionCount = 4;
@@ -1242,6 +1276,22 @@ namespace gargantuan::network {
 				Result.EstimatedRoundTripTime = std::chrono::milliseconds(Status.m_nPing);
 		}
 		return Result.IsValid() ? std::optional<NetworkStatistics>(Result) : std::nullopt;
+	}
+
+	std::optional<TransportServerPublicKey> GameNetworkingSocketsTransport::LocalServerPublicKey() const {
+		auto &Global = GlobalState();
+		std::lock_guard Lock(Global.Mutex);
+		return State->Started && State->Role == TransportRole::Server ? State->ServerPublicKey : std::nullopt;
+	}
+
+	std::optional<TransportServerPublicKey> GameNetworkingSocketsTransport::AuthenticatedServerPublicKey(
+		ConnectionId Connection) const {
+		auto &Global = GlobalState();
+		std::lock_guard Lock(Global.Mutex);
+		if (!State->Started || State->Role != TransportRole::Client) return std::nullopt;
+		const auto Iterator = State->Connections.find(Connection);
+		return Iterator != State->Connections.end() && Iterator->second.State == ConnectionState::Connected
+			? Iterator->second.AuthenticatedServerKey : std::nullopt;
 	}
 
 	bool detail::NativeDiagnosticQuiescent() noexcept {

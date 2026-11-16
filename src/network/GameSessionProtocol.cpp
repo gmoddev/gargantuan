@@ -62,11 +62,21 @@ namespace gargantuan::network {
 	SerializationResult<std::vector<std::byte>> EncodeGameSessionMessage(const GameSessionMessage &Message) {
 		GameBinaryWriter Output(MaximumGameSessionFrameBytes);
 		Output.Integer(GameSessionMagic);
-		Output.Integer(GameSessionProtocolVersion);
+		const auto Version = std::visit([](const auto &Value) -> std::uint16_t {
+			using ValueType = std::decay_t<decltype(Value)>;
+			if constexpr (std::is_same_v<ValueType, GameSessionClientHello>)
+				return GameSessionProtocolVersion;
+			else if constexpr (std::is_same_v<ValueType, GameSessionAuthenticatedClientHello>)
+				return AuthenticatedGameSessionProtocolVersion;
+			else
+				return Value.Version;
+		}, Message);
+		Output.Integer(Version);
 		const auto Kind = std::visit(
 			[](const auto &Value) {
 				using ValueType = std::decay_t<decltype(Value)>;
-				if constexpr (std::is_same_v<ValueType, GameSessionClientHello>)
+				if constexpr (std::is_same_v<ValueType, GameSessionClientHello> ||
+					std::is_same_v<ValueType, GameSessionAuthenticatedClientHello>)
 					return GameSessionMessageKind::ClientHello;
 				if constexpr (std::is_same_v<ValueType, GameSessionServerAccepted>)
 					return GameSessionMessageKind::ServerAccepted;
@@ -83,6 +93,11 @@ namespace gargantuan::network {
 				if constexpr (std::is_same_v<ValueType, GameSessionClientHello>) {
 					Output.Integer(Value.Nonce);
 					return Value.Nonce != 0 && WriteLimits(Output, Value.AdvertisedLimits);
+				} else if constexpr (std::is_same_v<ValueType, GameSessionAuthenticatedClientHello>) {
+					Output.Integer(Value.Nonce);
+					const bool LimitsValid = WriteLimits(Output, Value.AdvertisedLimits);
+					Output.Append(std::span<const std::byte>(Value.Proof));
+					return Value.Nonce != 0 && LimitsValid;
 				} else if constexpr (std::is_same_v<ValueType, GameSessionServerAccepted>) {
 					Output.Integer(Value.Nonce);
 					Output.Integer(Value.SessionEpoch);
@@ -94,13 +109,18 @@ namespace gargantuan::network {
 					Output.Integer<std::uint16_t>(0);
 					return Value.Nonce != 0 && Value.SessionEpoch != 0 && Value.Replication.IsValid() &&
 						   Value.Player.IsValid() && Value.PlayerId != 0 &&
-						   Value.Identity == SessionIdentityKind::DevelopmentLocal &&
+						   ((Version == GameSessionProtocolVersion &&
+							Value.Identity == SessionIdentityKind::DevelopmentLocal) ||
+							(Version == AuthenticatedGameSessionProtocolVersion &&
+							Value.Identity == SessionIdentityKind::Authenticated)) &&
 						   WriteLimits(Output, Value.NegotiatedLimits);
 				} else {
 					Output.Integer(Value.SessionEpoch);
 					Output.Integer(Value.Replication.Value());
 					WriteBinaryObjectId(Output, Value.Player);
-					return Value.SessionEpoch != 0 && Value.Replication.IsValid() && Value.Player.IsValid();
+					return (Version == GameSessionProtocolVersion ||
+						Version == AuthenticatedGameSessionProtocolVersion) &&
+						Value.SessionEpoch != 0 && Value.Replication.IsValid() && Value.Player.IsValid();
 				}
 			},
 			Message
@@ -122,7 +142,7 @@ namespace gargantuan::network {
 			return SerializationFailure(ErrorCode(Input), Input.Error);
 		if (Magic != GameSessionMagic)
 			return SerializationFailure(SerializationErrorCode::InvalidSyntax, "Game session magic is invalid");
-		if (Version != GameSessionProtocolVersion)
+		if (Version != GameSessionProtocolVersion && Version != AuthenticatedGameSessionProtocolVersion)
 			return SerializationFailure(
 				SerializationErrorCode::UnsupportedVersion, "Game session version is unsupported"
 			);
@@ -138,7 +158,17 @@ namespace gargantuan::network {
 				return SerializationFailure(
 					ErrorCode(Input), Input.Error.empty() ? "Game session client hello is invalid" : Input.Error
 				);
-			Result = Value;
+			if (Version == GameSessionProtocolVersion) {
+				Result = Value;
+			} else {
+				GameSessionAuthenticatedClientHello Authenticated{Value.Nonce, Value.AdvertisedLimits};
+				for (auto &Byte : Authenticated.Proof) {
+					std::uint8_t Encoded;
+					if (!Input.Integer(Encoded)) return SerializationFailure(ErrorCode(Input), Input.Error);
+					Byte = static_cast<std::byte>(Encoded);
+				}
+				Result = Authenticated;
+			}
 		} else if (KindValue == static_cast<std::uint8_t>(GameSessionMessageKind::ServerAccepted)) {
 			GameSessionServerAccepted Value;
 			std::uint64_t Replication;
@@ -152,9 +182,12 @@ namespace gargantuan::network {
 				return SerializationFailure(ErrorCode(Input), Input.Error);
 			Value.Replication = ReplicationEpoch(Replication);
 			Value.Identity = static_cast<SessionIdentityKind>(Identity);
+			Value.Version = Version;
 			if (Value.Nonce == 0 || Value.SessionEpoch == 0 || !Value.Replication.IsValid() ||
 				!Value.Player.IsValid() || Value.PlayerId == 0 ||
-				Value.Identity != SessionIdentityKind::DevelopmentLocal || Reserved8 != 0 || Reserved16 != 0)
+				!((Version == GameSessionProtocolVersion && Value.Identity == SessionIdentityKind::DevelopmentLocal) ||
+				  (Version == AuthenticatedGameSessionProtocolVersion && Value.Identity == SessionIdentityKind::Authenticated)) ||
+				Reserved8 != 0 || Reserved16 != 0)
 				return SerializationFailure(SerializationErrorCode::InvalidValue, "Game session acceptance is invalid");
 			Result = Value;
 		} else if (KindValue == static_cast<std::uint8_t>(GameSessionMessageKind::ClientReady)) {
@@ -164,6 +197,7 @@ namespace gargantuan::network {
 				!ReadBinaryObjectId(Input, Value.Player))
 				return SerializationFailure(ErrorCode(Input), Input.Error);
 			Value.Replication = ReplicationEpoch(Replication);
+			Value.Version = Version;
 			if (Value.SessionEpoch == 0 || !Value.Replication.IsValid() || !Value.Player.IsValid())
 				return SerializationFailure(SerializationErrorCode::InvalidValue, "Game session readiness is invalid");
 			Result = Value;

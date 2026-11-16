@@ -16,6 +16,23 @@ related_adrs:
 
 # Real game transport
 
+## Managed server leaf identity (unqualified)
+
+The managed ServerHost opts into a process-local GNS Ed25519 leaf identity before
+it opens a listener. The pinned GNS source uses that key to sign its existing
+per-connection key-exchange data; ordinary unsigned connections retain fresh
+keys. The native client checks the peer certificate key, completed crypto
+handshake, and AES-GCM cipher before it publishes Connected. The key comparison
+precedes any GameSession v2 proof send. The actual public key is copied into
+managed listening evidence; the private key remains inside GNS and is discarded
+when the exclusive GNS instance stops. Default DevelopmentLocal transport and
+GSES v1 behavior are unchanged.
+
+This implementation does not by itself qualify remote hosting. Node must bind
+the exact live public key into an authenticated ticket for the selected
+server/session. Separate-process GNS and complete Node/Engine client tests are
+required before lifting the private loopback deployment boundary.
+
 ## Current D03 non-real-time contract (2026-10-20)
 
 `PooledServiceNonRealtime()` / Server `POOLED_SERVICE` select
@@ -423,6 +440,9 @@ disconnect. Packaged headless server and client processes use the same adapter.
 External authentication tickets, general realtime physics ownership, Node,
 spatial interest management, and Studio multiplayer orchestration remain
 unimplemented.
+The generic GameSession v2 admission provider sits above this adapter; GNS
+transport encryption and its rejected opaque setup hook are unchanged. No
+packaged authenticated host or Node-backed provider is claimed by that boundary.
 
 Foundation 3E.1 narrows the unauthenticated DevelopmentLocal path above this
 adapter: GameSession accepts only parsed IPv4 loopback or exact IPv6 loopback

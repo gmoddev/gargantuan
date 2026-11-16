@@ -1,4 +1,5 @@
 #include "host/player/PlayerHost.hpp"
+#include "host/player/JoinProof.hpp"
 
 #include "host/common/PackagedHost.hpp"
 #include "host/common/FarmPublicationEvidence.hpp"
@@ -50,6 +51,10 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	Program.add_argument("--session-smoke").flag().help("require a bounded packaged game-session acceptance proof");
 	Program.add_argument("--max-frames").scan<'i', int>().default_value(0).help("bounded test-only frame count");
 	Program.add_argument("--connect").default_value(std::string()).help("host:port for a network game client");
+	Program.add_argument("--join-proof-env").default_value(std::string())
+		.help("environment variable containing an opaque authenticated join proof (64 lowercase hex digits)");
+	Program.add_argument("--server-key-env").default_value(std::string())
+		.help("environment variable containing the pinned GNS server public key (64 lowercase hex digits)");
 	Program.add_argument("--farm-run-id").default_value(std::string()).help("bounded test-only client farm run identity");
 	Program.add_argument("--farm-slot").scan<'i', int>().default_value(-1).help("test-only client farm slot, 0 through 31");
 	Program.add_argument("--farm-client-nonce").scan<'u', std::uint64_t>().default_value(std::uint64_t{0})
@@ -102,9 +107,24 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	}
 	const bool AllowInsecureDevelopmentNetwork = Program.is_used("--allow-insecure-development-network");
 	const auto ClientEndpoint = ClientText.empty() ? std::nullopt : host::ParseEndpoint(ClientText);
+	const bool AuthenticatedJoin = Program.is_used("--join-proof-env");
+	const auto JoinProof = AuthenticatedJoin
+		? host::detail::ReadPlayerJoinProof(Program.get<std::string>("--join-proof-env")) : std::nullopt;
+	const bool ServerKeySupplied = Program.is_used("--server-key-env");
+	const auto ServerPublicKey = ServerKeySupplied
+		? host::detail::ReadPlayerServerPublicKey(Program.get<std::string>("--server-key-env")) : std::nullopt;
+	if (AuthenticatedJoin && (!JoinProof || !ClientEndpoint || AllowInsecureDevelopmentNetwork ||
+		(!network::IsLoopbackTransportEndpoint(*ClientEndpoint) && !ServerPublicKey))) {
+		std::cerr << "[Network:Admission] Authenticated join arguments are invalid.\n";
+		return 2;
+	}
+	if (ServerKeySupplied && (!AuthenticatedJoin || !ServerPublicKey)) {
+		std::cerr << "[Network:Admission] Server identity arguments are invalid.\n";
+		return 2;
+	}
 	if ((!ClientText.empty() && !ClientEndpoint) ||
 		(ClientEndpoint && !network::IsLoopbackTransportEndpoint(*ClientEndpoint) &&
-		 !AllowInsecureDevelopmentNetwork) ||
+		 !AllowInsecureDevelopmentNetwork && !AuthenticatedJoin) ||
 		(Program.is_used("--session-smoke") && ClientText.empty())) {
 		std::cerr << "GargantuanPlayer network endpoint arguments are invalid.\n";
 		return 2;
@@ -207,6 +227,10 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 					.Limits = network::GameSessionConfiguration::DefaultLimits(),
 					.ClientNonce = FarmEnabled ? FarmClientNonce : 0,
 					.AllowInsecureDevelopmentNetwork = AllowInsecureDevelopmentNetwork,
+					.AdmissionMode = AuthenticatedJoin ? network::GameSessionAdmissionMode::Authenticated :
+						network::GameSessionAdmissionMode::DevelopmentLocal,
+					.AdmissionProof = JoinProof,
+					.ExpectedServerPublicKey = ServerPublicKey,
 					.DeclareNormalOrdinaryService = true,
 				}
 			);

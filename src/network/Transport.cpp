@@ -4,6 +4,7 @@
 
 #include "gargantuan/runtime/ProtocolInput.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <type_traits>
@@ -56,7 +57,16 @@ namespace gargantuan::network {
 	bool TransportStartConfiguration::IsValid() const {
 		const bool ValidRole = Role == TransportRole::Client || Role == TransportRole::Server;
 		return ValidRole && Endpoint.IsValid() && AdvertisedLimits.IsValid() &&
-			OpaqueHandshakeMaterial.size() <= MaximumOpaqueHandshakeMaterialBytes;
+			OpaqueHandshakeMaterial.size() <= MaximumOpaqueHandshakeMaterialBytes &&
+			(!RequireServerIdentity || (Role == TransportRole::Server && !ExpectedServerPublicKey)) &&
+			(!ExpectedServerPublicKey || (Role == TransportRole::Client &&
+				std::any_of(ExpectedServerPublicKey->begin(), ExpectedServerPublicKey->end(),
+					[](std::byte Value) { return Value != std::byte{}; })));
+	}
+
+	std::optional<TransportServerPublicKey> IGameTransport::LocalServerPublicKey() const { return std::nullopt; }
+	std::optional<TransportServerPublicKey> IGameTransport::AuthenticatedServerPublicKey(ConnectionId) const {
+		return std::nullopt;
 	}
 
 	bool IsValidTransportEvent(const TransportEvent &Event, const NetworkLimits &Limits) {

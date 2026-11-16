@@ -34,9 +34,11 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -47,6 +49,17 @@ namespace gargantuan::network {
 		constexpr std::uint32_t CharacterMagic = 0x52484347;
 		constexpr std::uint32_t RemoteMagic = 0x544d5247;
 		constexpr std::size_t MaximumGameSessionPollEventsPerCall = 128;
+		std::atomic<std::uint64_t> NextGameAdmissionRequestId{1};
+
+		std::uint64_t AllocateGameAdmissionRequestId() {
+			auto Current = NextGameAdmissionRequestId.load(std::memory_order_relaxed);
+			while (Current != 0) {
+				const auto Next = Current == std::numeric_limits<std::uint64_t>::max() ? 0 : Current + 1;
+				if (NextGameAdmissionRequestId.compare_exchange_weak(Current, Next,
+					std::memory_order_relaxed)) return Current;
+			}
+			return 0;
+		}
 
 		enum class PeerPhase : std::uint8_t { TransportConnected, BootstrapPending, Accepted, Ready };
 
@@ -92,13 +105,23 @@ namespace gargantuan::network {
 	}
 
 	bool GameSessionConfiguration::IsValid() const {
+		const bool AdmissionValid = AdmissionMode == GameSessionAdmissionMode::DevelopmentLocal
+			? !AdmissionProvider && !AdmissionProof && !RequireServerIdentity && !ExpectedServerPublicKey &&
+			  (AllowInsecureDevelopmentNetwork || IsLoopbackTransportEndpoint(Endpoint))
+			: AdmissionMode == GameSessionAdmissionMode::Authenticated && !AllowInsecureDevelopmentNetwork &&
+			  (IsLoopbackTransportEndpoint(Endpoint) ||
+				(Role == GameSessionRole::Server ? RequireServerIdentity : ExpectedServerPublicKey.has_value())) &&
+			  (Role == GameSessionRole::Server ? static_cast<bool>(AdmissionProvider) && !AdmissionProof
+											   && !ExpectedServerPublicKey
+											   : !AdmissionProvider && AdmissionProof.has_value() && !RequireServerIdentity &&
+												 (!ExpectedServerPublicKey || std::any_of(ExpectedServerPublicKey->begin(),
+													 ExpectedServerPublicKey->end(), [](std::byte Value) { return Value != std::byte{}; })));
 		return Endpoint.IsValid() && Limits.IsValid() && HandshakeTimeoutTicks > 0 &&
 			   HandshakeTimeoutTicks <= DefaultGameSessionHandshakeTimeoutTicks * 10 && Relevance.IsValid() &&
 			   StructuralReplication.IsValid() &&
 			   (!ReliableService || (Role == GameSessionRole::Server && ReliableService->IsValid() &&
 				ReliableService->MaximumConnections <= MaximumGameSessionPeers)) &&
-			   (!DeclareNormalOrdinaryService || Role == GameSessionRole::Client) &&
-			   (AllowInsecureDevelopmentNetwork || IsLoopbackTransportEndpoint(Endpoint));
+			   (!DeclareNormalOrdinaryService || Role == GameSessionRole::Client) && AdmissionValid;
 	}
 
 	NetworkLimits GameSessionConfiguration::DefaultLimits() {
@@ -115,6 +138,12 @@ namespace gargantuan::network {
 	}
 
 	struct GameSession::Implementation {
+		struct AdmissionSlot {
+			std::mutex Mutex;
+			std::optional<std::optional<PlayerIdentity>> Result;
+			bool Closed = false;
+		};
+
 		struct PresentedAction {
 			CharacterActionState Action;
 			std::shared_ptr<AnimationTrack> Track;
@@ -125,6 +154,9 @@ namespace gargantuan::network {
 			std::uint64_t ConnectedTick = 0;
 			std::uint64_t Nonce = 0;
 			std::uint64_t SessionEpoch = 0;
+			std::uint16_t ProtocolVersion = GameSessionProtocolVersion;
+			std::uint64_t AdmissionRequestId = 0;
+			std::shared_ptr<AdmissionSlot> Admission;
 			ReplicationEpoch Replication;
 			NetworkLimits Limits;
 			ObjectId PlayerObject;
@@ -488,7 +520,16 @@ namespace gargantuan::network {
 				.Role = Configuration.Role == GameSessionRole::Server ? TransportRole::Server : TransportRole::Client,
 				.Endpoint = Configuration.Endpoint,
 				.AdvertisedLimits = Configuration.Limits,
+				.RequireServerIdentity = Configuration.RequireServerIdentity,
+				.ExpectedServerPublicKey = Configuration.ExpectedServerPublicKey,
 			});
+			if (Result.Succeeded() && Configuration.RequireServerIdentity &&
+				!Transport->LocalServerPublicKey()) {
+				FailSession({DisconnectReason::TransportFailure, "Server transport identity unavailable"});
+				return {.Status = TransportOperationStatus::TransportFailure,
+					.TerminalDisconnect = DisconnectInfo{DisconnectReason::TransportFailure,
+						"Server transport identity unavailable"}};
+			}
 			if (Result.Succeeded() && InjectFailure(detail::GameSessionFailurePoint::TransportStart)) {
 				FailSession({DisconnectReason::ResourceExhaustion, "Injected transport-start acquisition failure"});
 				return {
@@ -655,6 +696,11 @@ namespace gargantuan::network {
 		}
 
 		void OnConnected(ConnectionId Connection) {
+			if (Configuration.Role == GameSessionRole::Client && Configuration.ExpectedServerPublicKey &&
+				Transport->AuthenticatedServerPublicKey(Connection) != Configuration.ExpectedServerPublicKey) {
+				Reject(Connection, DisconnectReason::ProtocolViolation, "Server transport identity differs");
+				return;
+			}
 			if (!Connection.IsValid() || Peers.size() >= MaximumGameSessionPeers ||
 				(Configuration.ReliableService && Peers.size() >= Configuration.ReliableService->MaximumConnections)) {
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Game session peer capacity reached");
@@ -688,38 +734,22 @@ namespace gargantuan::network {
 			PeerValue.Nonce = Configuration.ClientNonce != 0
 								  ? Configuration.ClientNonce
 								  : (static_cast<std::uint64_t>(Connection.Generation) << 32) | Connection.Slot;
-			if (!QueueSession(
-					Connection, GameSessionClientHello{PeerValue.Nonce, Configuration.Limits}, Configuration.Limits
-				))
+			const GameSessionMessage Hello = Configuration.AdmissionMode == GameSessionAdmissionMode::Authenticated
+				? GameSessionMessage(GameSessionAuthenticatedClientHello{
+					PeerValue.Nonce, Configuration.Limits, *Configuration.AdmissionProof})
+				: GameSessionMessage(GameSessionClientHello{PeerValue.Nonce, Configuration.Limits});
+			if (!QueueSession(Connection, Hello, Configuration.Limits))
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Client hello could not be queued");
 		}
 
-		void AcceptServerPeer(ConnectionId Connection, const GameSessionClientHello &Hello) {
+		void FinishServerPeer(ConnectionId Connection, PlayerIdentity Identity) {
 			const auto AcceptanceStarted = std::chrono::steady_clock::now();
 			auto Iterator = Peers.find(Connection);
-			if (Iterator == Peers.end() || Iterator->second.Phase != PeerPhase::TransportConnected) {
-				++Metrics.RejectedHandshakes;
-				Reject(Connection, DisconnectReason::ProtocolViolation, "Duplicate or out-of-order client hello");
-				return;
-			}
-			auto Limits = NegotiateNetworkLimits(Configuration.Limits, Hello.AdvertisedLimits);
-			if (!Limits || !Scheduler.RegisterConnection(Connection, *Limits) || NextSessionEpoch == 0 ||
-				NextReplicationEpoch == 0) {
-				++Metrics.RejectedHandshakes;
-				Reject(Connection, DisconnectReason::ResourceExhaustion, "Game session negotiation failed");
-				return;
-			}
+			if (Iterator == Peers.end() || Iterator->second.Phase != PeerPhase::TransportConnected) return;
 			auto &PeerValue = Iterator->second;
-			PeerValue.Nonce = Hello.Nonce;
-			PeerValue.SessionEpoch = NextSessionEpoch++;
-			PeerValue.Replication = ReplicationEpoch(NextReplicationEpoch++);
-			PeerValue.Limits = *Limits;
 			const auto PlayerCreationStarted = std::chrono::steady_clock::now();
 			try {
-				PeerValue.PlayerValue = Runtime->Players->CreateSessionPlayer({
-					"session-development",
-					"peer-" + std::to_string(PeerValue.SessionEpoch),
-				});
+				PeerValue.PlayerValue = Runtime->Players->CreateSessionPlayer(std::move(Identity));
 			} catch (const std::exception &) {
 				++Metrics.RejectedHandshakes;
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Server Player creation failed");
@@ -728,15 +758,13 @@ namespace gargantuan::network {
 			Metrics.PlayerCreationCpuNanoseconds += static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(
 					std::chrono::steady_clock::now() - PlayerCreationStarted
-				)
-					.count()
-			);
+				).count());
 			PeerValue.PlayerObject = PeerValue.PlayerValue->GetObjectId();
 			PeerValue.PlayerId = static_cast<std::uint32_t>(PeerValue.PlayerValue->GetPlayerId());
 			++Metrics.PlayersCreated;
 			auto CharacterValue = PeerValue.PlayerValue->GetCharacter() ? std::dynamic_pointer_cast<KinematicCharacter>(
-																			  *PeerValue.PlayerValue->GetCharacter()
-																		  )
+																		  *PeerValue.PlayerValue->GetCharacter()
+																	  )
 																		: nullptr;
 			const auto OwnerCharacter = CharacterValue ? CharacterValue->GetObjectId() : ObjectId{};
 			const auto RelevanceStarted = std::chrono::steady_clock::now();
@@ -747,9 +775,7 @@ namespace gargantuan::network {
 			Metrics.RelevanceInitializationCpuNanoseconds += static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(
 					std::chrono::steady_clock::now() - RelevanceStarted
-				)
-					.count()
-			);
+				).count());
 			const auto *Selection = Relevance->GetSelection(Connection);
 			if (!Selection) {
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Server relevance selection is unavailable");
@@ -764,15 +790,111 @@ namespace gargantuan::network {
 			Metrics.SessionAcceptanceCpuNanoseconds += static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(
 					std::chrono::steady_clock::now() - AcceptanceStarted
-				)
-					.count()
-			);
+				).count());
+		}
+
+		void AcceptServerPeer(ConnectionId Connection, std::uint64_t Nonce,
+			const NetworkLimits &AdvertisedLimits, std::uint16_t ProtocolVersion,
+			const std::array<std::byte, GameAdmissionProofBytes> *Proof = nullptr) {
+			auto Iterator = Peers.find(Connection);
+			if (Iterator == Peers.end() || Iterator->second.Phase != PeerPhase::TransportConnected ||
+				Iterator->second.Admission) {
+				++Metrics.RejectedHandshakes;
+				Reject(Connection, DisconnectReason::ProtocolViolation, "Duplicate or out-of-order client hello");
+				return;
+			}
+			const bool Authenticated = Configuration.AdmissionMode == GameSessionAdmissionMode::Authenticated;
+			if (Authenticated != (ProtocolVersion == AuthenticatedGameSessionProtocolVersion) ||
+				Authenticated != (Proof != nullptr)) {
+				++Metrics.RejectedHandshakes;
+				Reject(Connection, DisconnectReason::IncompatibleVersion, "Game session admission mode does not match");
+				return;
+			}
+			auto Limits = NegotiateNetworkLimits(Configuration.Limits, AdvertisedLimits);
+			if (!Limits || !Scheduler.RegisterConnection(Connection, *Limits) || NextSessionEpoch == 0 ||
+				NextReplicationEpoch == 0) {
+				++Metrics.RejectedHandshakes;
+				Reject(Connection, DisconnectReason::ResourceExhaustion, "Game session negotiation failed");
+				return;
+			}
+			auto &PeerValue = Iterator->second;
+			PeerValue.Nonce = Nonce;
+			PeerValue.SessionEpoch = NextSessionEpoch++;
+			PeerValue.Replication = ReplicationEpoch(NextReplicationEpoch++);
+			PeerValue.Limits = *Limits;
+			PeerValue.ProtocolVersion = ProtocolVersion;
+			if (!Authenticated) {
+				FinishServerPeer(Connection, {"session-development", "peer-" + std::to_string(PeerValue.SessionEpoch)});
+				return;
+			}
+			std::size_t Pending = 0;
+			for (const auto &[OtherConnection, OtherPeer] : Peers) {
+				(void)OtherConnection;
+				Pending += OtherPeer.Admission != nullptr;
+			}
+			const auto RequestId = Pending < MaximumPendingGameAdmissions ? AllocateGameAdmissionRequestId() : 0;
+			if (RequestId == 0) {
+				++Metrics.RejectedHandshakes;
+				Reject(Connection, DisconnectReason::ResourceExhaustion, "Game admission capacity reached");
+				return;
+			}
+			PeerValue.AdmissionRequestId = RequestId;
+			PeerValue.Admission = std::make_shared<AdmissionSlot>();
+			std::weak_ptr<AdmissionSlot> WeakSlot = PeerValue.Admission;
+			const GameAdmissionRequest Request{PeerValue.AdmissionRequestId, Connection, Nonce, *Proof};
+			bool Started = false;
+			try {
+				Started = Configuration.AdmissionProvider->Begin(Request, [WeakSlot](std::optional<PlayerIdentity> Identity) {
+					if (auto Slot = WeakSlot.lock()) {
+						std::scoped_lock Lock(Slot->Mutex);
+						if (!Slot->Closed && !Slot->Result) Slot->Result.emplace(std::move(Identity));
+					}
+				});
+			} catch (...) {
+				Started = false;
+			}
+			if (!Started) {
+				++Metrics.RejectedHandshakes;
+				Reject(Connection, DisconnectReason::AuthenticationFailure, "Game admission provider unavailable");
+			}
+		}
+
+		void ProcessPendingAdmissions() {
+			std::vector<std::pair<ConnectionId, std::optional<PlayerIdentity>>> Completed;
+			for (auto &[Connection, PeerValue] : Peers) {
+				if (!PeerValue.Admission) continue;
+				std::scoped_lock Lock(PeerValue.Admission->Mutex);
+				if (PeerValue.Admission->Closed || !PeerValue.Admission->Result) continue;
+				Completed.emplace_back(Connection, std::move(*PeerValue.Admission->Result));
+				PeerValue.Admission->Closed = true;
+			}
+			for (auto &[Connection, Identity] : Completed) {
+				auto Iterator = Peers.find(Connection);
+				if (Iterator == Peers.end() || !Iterator->second.Admission ||
+					Iterator->second.Phase != PeerPhase::TransportConnected) continue;
+				Iterator->second.Admission.reset();
+				if (!Identity) {
+					++Metrics.RejectedHandshakes;
+					Reject(Connection, DisconnectReason::AuthenticationFailure, "Game admission denied");
+					continue;
+				}
+				try {
+					ValidatePlayerIdentity(*Identity);
+				} catch (const std::exception &) {
+					++Metrics.RejectedHandshakes;
+					Reject(Connection, DisconnectReason::AuthenticationFailure, "Game admission identity invalid");
+					continue;
+				}
+				FinishServerPeer(Connection, std::move(*Identity));
+			}
 		}
 
 		void AcceptClientSession(ConnectionId Connection, const GameSessionServerAccepted &Accepted) {
 			auto Iterator = Peers.find(Connection);
 			if (Iterator == Peers.end() || Iterator->second.Phase != PeerPhase::TransportConnected ||
-				Accepted.Nonce != Iterator->second.Nonce) {
+				Accepted.Nonce != Iterator->second.Nonce ||
+				Accepted.Version != (Configuration.AdmissionMode == GameSessionAdmissionMode::Authenticated
+					? AuthenticatedGameSessionProtocolVersion : GameSessionProtocolVersion)) {
 				++Metrics.RejectedHandshakes;
 				Reject(
 					Connection, DisconnectReason::ProtocolViolation, "Server acceptance does not match the client hello"
@@ -794,6 +916,7 @@ namespace gargantuan::network {
 			}
 			auto &PeerValue = Iterator->second;
 			PeerValue.Phase = PeerPhase::Accepted;
+			PeerValue.ProtocolVersion = Accepted.Version;
 			PeerValue.SessionEpoch = Accepted.SessionEpoch;
 			PeerValue.Replication = Accepted.Replication;
 			PeerValue.Limits = Accepted.NegotiatedLimits;
@@ -939,6 +1062,7 @@ namespace gargantuan::network {
 			const auto RegistrationStarted = std::chrono::steady_clock::now();
 			auto Iterator = Peers.find(Connection);
 			if (Iterator == Peers.end() || Iterator->second.Phase != PeerPhase::Accepted ||
+				Ready.Version != Iterator->second.ProtocolVersion ||
 				Ready.SessionEpoch != Iterator->second.SessionEpoch ||
 				Ready.Replication != Iterator->second.Replication || Ready.Player != Iterator->second.PlayerObject) {
 				Reject(
@@ -1006,7 +1130,10 @@ namespace gargantuan::network {
 			}
 			if (Configuration.Role == GameSessionRole::Server) {
 				if (const auto *Hello = std::get_if<GameSessionClientHello>(&*Decoded))
-					AcceptServerPeer(Connection, *Hello);
+					AcceptServerPeer(Connection, Hello->Nonce, Hello->AdvertisedLimits, GameSessionProtocolVersion);
+				else if (const auto *Hello = std::get_if<GameSessionAuthenticatedClientHello>(&*Decoded))
+					AcceptServerPeer(Connection, Hello->Nonce, Hello->AdvertisedLimits,
+						AuthenticatedGameSessionProtocolVersion, &Hello->Proof);
 				else if (const auto *Ready = std::get_if<GameSessionClientReady>(&*Decoded))
 					ReadyServerPeer(Connection, *Ready);
 				else
@@ -1432,6 +1559,13 @@ namespace gargantuan::network {
 		void TearDownPeer(ConnectionId Connection) {
 			RecordPooledLifecycle(detail::PooledLifecyclePoint::PeerTeardown, Connection, DisconnectReason::LocalShutdown);
 			auto Iterator = Peers.find(Connection);
+			if (Iterator != Peers.end() && Iterator->second.AdmissionRequestId != 0) {
+				if (Iterator->second.Admission) {
+					std::scoped_lock Lock(Iterator->second.Admission->Mutex);
+					Iterator->second.Admission->Closed = true;
+					Iterator->second.Admission->Result.reset();
+				}
+			}
 			if (IsPooled()) {
 				// Closing is not a release. Purge first, reconcile the immutable
 				// old-generation receipt, cancel unsent work, then release the slot.
@@ -1487,6 +1621,8 @@ namespace gargantuan::network {
 				ClientKnownObjects.clear();
 				PrimaryConnection.reset();
 			}
+			if (PeerValue.AdmissionRequestId != 0)
+				Configuration.AdmissionProvider->Release(PeerValue.AdmissionRequestId);
 		}
 
 		void ObserveOrdinaryQueue(ConnectionId Connection, Peer &PeerValue, std::uint64_t Now) {
@@ -1588,6 +1724,7 @@ namespace gargantuan::network {
 				++Metrics.HandshakeTimeouts;
 				Reject(Connection, DisconnectReason::Timeout, "Game session handshake timed out");
 			}
+			if (Configuration.Role == GameSessionRole::Server) ProcessPendingAdmissions();
 
 			if (Configuration.Role == GameSessionRole::Server) {
 				for (auto &[Connection, PeerValue] : Peers) {
@@ -2063,8 +2200,10 @@ namespace gargantuan::network {
 											.Replication = Peer->second.Replication,
 											.Player = Peer->second.PlayerObject,
 											.PlayerId = Peer->second.PlayerId,
-											.Identity = SessionIdentityKind::DevelopmentLocal,
+											.Identity = Peer->second.ProtocolVersion == AuthenticatedGameSessionProtocolVersion
+												? SessionIdentityKind::Authenticated : SessionIdentityKind::DevelopmentLocal,
 											.NegotiatedLimits = Peer->second.Limits,
+											.Version = Peer->second.ProtocolVersion,
 										},
 										Peer->second.Limits
 									)) {
@@ -2344,6 +2483,7 @@ namespace gargantuan::network {
 									   PeerValue.SessionEpoch,
 									   PeerValue.Replication,
 									   PeerValue.PlayerObject,
+									   PeerValue.ProtocolVersion,
 								   }
 							   );
 			auto ReadyIntent = Ready ? MakeNetworkMessageIntent(
