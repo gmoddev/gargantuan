@@ -9,9 +9,9 @@
 #include "FarmOrdinaryEvidenceFixture.hpp"
 #include "FarmServiceTimingEvidenceFixture.hpp"
 #include "gargantuan/Engine.hpp"
+#include "gargantuan/classes/Animator.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
-#include "gargantuan/classes/Animator.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Player.hpp"
@@ -1682,9 +1682,9 @@ end)
 		);
 		if (WithReplicatedTemplate && Client.GetClientDataModel()) {
 			auto Storage = Client.GetClientDataModel()->GetService("ReplicatedStorage");
-			auto Templates = Storage ? Storage->FindFirstChild("StoredCharacterTemplates") : nullptr;
+			auto Templates = Storage ? Storage->FindFirstChild("StoredCharacterTemplates", false) : nullptr;
 			auto Template = Templates ? std::dynamic_pointer_cast<KinematicCharacter>(
-			Templates->FindFirstChild("StoredCharacter")) : nullptr;
+			Templates->FindFirstChild("StoredCharacter", false)) : nullptr;
 			Check(Template && Template->GetRootPart() &&
 				std::dynamic_pointer_cast<MeshPart>(*Template->GetRootPart()) &&
 				(*Template->GetRootPart())->FindFirstChildOfClass("Animator", false),
@@ -2590,6 +2590,7 @@ int main(int ArgumentCount, char **Arguments) {
 		for (int Cycle = 0; Cycle < 100; ++Cycle)
 			TestProductionLifecycleComposition();
 		TestProductionLifecycleComposition(false, false, false, false);
+		TestProductionLifecycleComposition(false, false, false, false, true);
 		TestTwoClientIdentityAndControlIsolation();
 		TestProductionLifecycleComposition(false, false, true);
 		TestCharacterRetirementAcrossStructuralFrames();
