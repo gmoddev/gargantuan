@@ -64,6 +64,7 @@ int main(int ArgumentCount, char *Arguments[]) {
 	if (ArgumentCount < 4) return 2;
 	const std::string_view Case = Arguments[1];
 	if (Case != "ReadyDrain" && Case != "AuthorityLoss" && Case != "NeverReady" &&
+		Case != "ListenerUnavailable" &&
 		Case != "PreReady" && Case != "MissingProvider" && Case != "MissingLifecycle" &&
 		Case != "InsecureOverride") return 2;
 	std::vector<char *> HostArguments{Arguments[0]};
@@ -95,16 +96,20 @@ int main(int ArgumentCount, char *Arguments[]) {
 	Worker.join();
 	const bool RejectedBeforeListening = Case == "MissingProvider" || Case == "MissingLifecycle" ||
 		Case == "InsecureOverride";
-	const bool HasListener = Case != "PreReady" && !RejectedBeforeListening;
+	const bool ListenerUnavailable = Case == "ListenerUnavailable";
+	const bool HasListener = Case != "PreReady" && !RejectedBeforeListening && !ListenerUnavailable;
 	const bool Expected = Result == ((Case == "ReadyDrain") ? 0 :
 		RejectedBeforeListening ? 2 : 7) &&
 		Observer->ListeningCount.load() == (HasListener ? 1 : 0) &&
-		Observer->DrainingCount.load() == (RejectedBeforeListening ? 0 : 1) &&
-		Observer->StoppedCount.load() == (RejectedBeforeListening ? 0 : 1) &&
+		Observer->DrainingCount.load() == (RejectedBeforeListening || ListenerUnavailable ? 0 : 1) &&
+		Observer->StoppedCount.load() == (RejectedBeforeListening || ListenerUnavailable ? 0 : 1) &&
 		(!HasListener || Observer->EvidenceValid.load()) &&
-		(RejectedBeforeListening || Observer->DrainedBeforeStop.load()) &&
+		(RejectedBeforeListening || ListenerUnavailable || Observer->DrainedBeforeStop.load()) &&
 		(Case != "ReadyDrain" || Observer->DrainRequested.load()) &&
 		(Case != "AuthorityLoss" || !Observer->AuthorityCurrent.load()) &&
+		(!ListenerUnavailable ||
+			(!Observer->EvidenceValid.load() && !Observer->DrainedBeforeStop.load() &&
+				!Observer->ReadyAcknowledged.load())) &&
 		(Case != "NeverReady" ||
 			(Elapsed >= StartupBudget && !Observer->ReadyAcknowledged.load()));
 	std::cout << "[Runtime:ManagedServerTest] case=" << Case
