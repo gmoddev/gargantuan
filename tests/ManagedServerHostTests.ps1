@@ -44,6 +44,11 @@ try {
 			}
 			$Output = $StandardOutput.GetAwaiter().GetResult()
 			$ErrorOutput = $StandardError.GetAwaiter().GetResult()
+			if ($Case -eq 'NeverReady' -and
+				@($ErrorOutput -split '\r?\n') -cnotcontains 'GargantuanServer stopped because packaged runtime startup failed: managed server authority or readiness expired') {
+				throw ("Managed host fixture NeverReady did not report the readiness deadline: Exit={0} Out={1} Err={2}" -f
+					$Process.ExitCode, $Output, $ErrorOutput)
+			}
 			if ($Process.ExitCode -ne 0 -or -not $Output.Contains('[Runtime:ManagedServerTest] lifecycle case passed')) {
 				throw ("Managed host fixture {0} failed: Exit={1} Out={2} Err={3}" -f $Case, $Process.ExitCode, $Output, $ErrorOutput)
 			}

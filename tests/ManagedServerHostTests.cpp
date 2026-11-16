@@ -72,7 +72,7 @@ int main(int ArgumentCount, char *Arguments[]) {
 	gargantuan::host::ServerHostConfiguration Configuration;
 	Configuration.ManagedLifecycle = Case == "MissingLifecycle" ? nullptr : Observer;
 	Configuration.AdmissionProvider = Case == "MissingProvider" ? nullptr : std::make_shared<DenyingProvider>();
-	Configuration.ManagedStartupTimeout = Case == "NeverReady" ? 150ms : 6s;
+	const auto StartupBudget = Configuration.ManagedStartupTimeout;
 	if (Case == "PreReady") Observer->ReadyAcknowledged.store(true);
 	std::jthread Worker([&](std::stop_token Stop) {
 		while (!Stop.stop_requested() && Observer->ListeningCount.load() == 0)
@@ -86,8 +86,11 @@ int main(int ArgumentCount, char *Arguments[]) {
 			else Observer->AuthorityCurrent.store(false);
 		}
 	});
+	const auto Started = std::chrono::steady_clock::now();
 	const int Result = gargantuan::host::RunDedicatedServer(
 		static_cast<int>(HostArguments.size()), HostArguments.data(), std::move(Configuration));
+	const auto Elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now() - Started);
 	Worker.request_stop();
 	Worker.join();
 	const bool RejectedBeforeListening = Case == "MissingProvider" || Case == "MissingLifecycle" ||
@@ -101,7 +104,20 @@ int main(int ArgumentCount, char *Arguments[]) {
 		(!HasListener || Observer->EvidenceValid.load()) &&
 		(RejectedBeforeListening || Observer->DrainedBeforeStop.load()) &&
 		(Case != "ReadyDrain" || Observer->DrainRequested.load()) &&
-		(Case != "AuthorityLoss" || !Observer->AuthorityCurrent.load());
+		(Case != "AuthorityLoss" || !Observer->AuthorityCurrent.load()) &&
+		(Case != "NeverReady" ||
+			(Elapsed >= StartupBudget && !Observer->ReadyAcknowledged.load()));
+	std::cout << "[Runtime:ManagedServerTest] case=" << Case
+		<< " result=" << Result
+		<< " listening=" << Observer->ListeningCount.load()
+		<< " draining=" << Observer->DrainingCount.load()
+		<< " stopped=" << Observer->StoppedCount.load()
+		<< " evidence=" << Observer->EvidenceValid.load()
+		<< " drained_before_stop=" << Observer->DrainedBeforeStop.load()
+		<< " ready_acknowledged=" << Observer->ReadyAcknowledged.load()
+		<< " elapsed_ms=" << Elapsed.count()
+		<< " startup_budget_ms=" << StartupBudget.count()
+		<< " expected=" << Expected << '\n';
 	if (!Expected) {
 		std::cerr << "[Runtime:ManagedServerTest] lifecycle case failed\n";
 		return 1;
