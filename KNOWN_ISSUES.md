@@ -6,7 +6,7 @@ open until its resolution criteria are implemented and verified.
 
 ## KI-CHR-001: Replicated Character templates can desynchronize GCHR epochs
 
-- Status: Fix implemented on the Advanced Creator branch; native and fresh packaged qualification pending.
+- Status: Resolved on the Advanced Creator branch; focused native and packaged-runtime verification passed 2026-11-16.
 - Area: Client Character materialization and authoritative action presentation.
 - Evidence: Packaged Wisp runs accepted `CreatorLunge` and applied server root
   motion, but had no client presentation or `ActionEnded`. The bounded
@@ -19,10 +19,19 @@ The earlier registration correction retains every bounded client definition for
 authoritative validation and gates only speculative preaccept prediction on
 `Predictable`. The materialization correction applies the server relevance
 policy to client GCHR membership: replicated-service templates remain in the
-structural graph but do not advance the runtime Character epoch. Keep this
-entry open until the focused template, nonpredictable and predictable session
-tests and a fresh packaged Wisp run verify presentation, lifetime end and
-server collision admission.
+structural graph but do not advance the runtime Character epoch.
+
+The test-only `06abcbc6` reproduces the epoch mismatch and missing semantic end.
+Fixed runtime source `62022dc5` passes that template case and eight focused
+native checks, including the ordinary predictable/nonpredictable session
+coverage. Its fresh packaged Wisp run `ACND25d5000000` completes three accepted
+and ended actions, reports three presentations and stops, rejects the denied
+action, and clips the third server-admitted lunge to X=2.505. Player and server
+exit zero; the checked Job retires normally with zero active processes. The
+existing network proof parser validates the retained source/content and ordered
+markers. This resolves the defect; complete campaign CI, final paired Studio
+GUI and performance qualification remain separate gates. Original failures and
+diagnostic receipts remain immutable.
 
 ## KI-RND-002: Invalid asset-mesh change tails can leave publisher work pending
 
