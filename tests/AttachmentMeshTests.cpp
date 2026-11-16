@@ -357,10 +357,13 @@ int main() {
 			"rigid accessory and canonical skinned rig import");
 		std::string RigReference;
 		std::string ClipReference;
-		for (const auto &Record : RigImport.Records)
+		for (const auto &Record : RigImport.Records) {
 			if (Record.Kind == AssetKind::Mesh) RigReference = Record.Reference.Value;
-			else if (Record.Kind == AssetKind::Animation) ClipReference = Record.Reference.Value;
-		Check(!RigReference.empty() && !ClipReference.empty(), "rig fixture has a skinned mesh and clip");
+			else if (Record.Kind == AssetKind::Animation && Record.Name == "BeaconPulse")
+				ClipReference = Record.Reference.Value;
+		}
+		Check(!RigReference.empty() && !ClipReference.empty(),
+			"rig fixture has a skinned mesh and the moving BeaconPulse clip");
 
 		auto CharacterValue = std::make_shared<Character>();
 		CharacterValue->SetCFrame(CFrame(0.0f, 0.0f, -4.0f));
@@ -493,10 +496,12 @@ int main() {
 		Animation.ClearChanges();
 		auto PoseMoved = Publisher.Publish(*World, Camera, 640, 360);
 		const auto PoseMovedItem = FindUpdate(*PoseMoved, Visual->GetObjectId());
-		Check(PoseMovedItem && !Near(PoseStartItem->Item.ModelMatrix, PoseMovedItem->Item.ModelMatrix) &&
-			Game->GetAuthoritativeRevision() == PoseHistoryRevision &&
+		Check(PoseMovedItem, "animated socket publishes an incremental pose update");
+		Check(!Near(PoseStartItem->Item.ModelMatrix, PoseMovedItem->Item.ModelMatrix),
+			"named moving BeaconPulse clip changes the published socket matrix");
+		Check(Game->GetAuthoritativeRevision() == PoseHistoryRevision &&
 			ChangeJournal::Get().GetRetentionWindow(Game->GetObjectId()).NextSequence == PoseHistorySequence,
-			"animated socket follows pose without persisting transient motion or changing authored history");
+			"animated socket pose does not alter authored revision or journal history");
 		const auto SemanticBeforePresentation = AnimatedSpatial->ResolveAttachment(Visual);
 		CharacterValue->ApplyRuntimePresentationOffset(CFrame(0.0f, 0.0f, 1.0f));
 		auto Presented = Publisher.Publish(*World, Camera, 640, 360);

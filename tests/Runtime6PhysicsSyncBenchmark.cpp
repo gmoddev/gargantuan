@@ -281,7 +281,13 @@ namespace {
 				RenderRemoved = Change.Removed;
 				if (Publication->FullResync || Test.Projection->GetObjects().size() != Total ||
 					RenderCreated != Creates || RenderRemoved != Destroys)
-					throw std::runtime_error("[Runtime6:PhysicsSync] Render lifecycle/count mismatch");
+					throw std::runtime_error(
+						"[Runtime6:PhysicsSync] Render lifecycle/count mismatch full_resync=" +
+						std::to_string(Publication->FullResync) + " objects=" +
+						std::to_string(Test.Projection->GetObjects().size()) + " total=" +
+						std::to_string(Total) + " created=" + std::to_string(RenderCreated) +
+						" expected_creates=" + std::to_string(Creates) + " removed=" +
+						std::to_string(RenderRemoved) + " expected_removes=" + std::to_string(Destroys));
 			}
 			const auto ValidateStart = Clock::now();
 			if (WorldRootTestAccess::BodyCount(*Test.World) != Total ||
