@@ -58,6 +58,36 @@ function Get-DocumentObjectCount {
 	return $Count
 }
 
+function Move-AnimatedBeaconToBootstrap {
+	param($ProjectDocument)
+	$Workspaces = @($ProjectDocument.Children | Where-Object { $_.ClassName -ceq 'Workspace' -and $_.Name -ceq 'Workspace' })
+	if ($Workspaces.Count -ne 1 -or @($Workspaces[0].Children).Count -ne 1) {
+		throw 'Official Node host fixture Workspace layout differs'
+	}
+	$Workspace = $Workspaces[0]
+	$Courses = @($Workspace.Children | Where-Object { $_.ClassName -ceq 'Folder' -and $_.Name -ceq 'CollectionCourse' })
+	if ($Courses.Count -ne 1) { throw 'Official Node host fixture course layout differs' }
+	$Course = $Courses[0]
+	$Expected = @('Ground','StepBlock','MovingObstacle','ImportedBeacon','Collectibles','AnimatedBeacon')
+	$Names = @($Course.Children | ForEach-Object { $_.Name })
+	if ($Names.Count -ne $Expected.Count -or
+		(@($Names | Sort-Object) -join "`n") -cne (@($Expected | Sort-Object) -join "`n")) {
+		throw 'Official Node host fixture course members differ'
+	}
+	$Beacons = @($Course.Children | Where-Object { $_.Name -ceq 'AnimatedBeacon' -and $_.ClassName -ceq 'MeshPart' })
+	if ($Beacons.Count -ne 1) { throw 'Official Node host fixture animated beacon differs' }
+	$Before = Get-DocumentObjectCount -Node $ProjectDocument
+	$Beacon = $Beacons[0]
+	$Course.Children = @($Course.Children | Where-Object { $_.Name -cne 'AnimatedBeacon' })
+	$Workspace.Children = @($Course,$Beacon)
+	if (-not [object]::ReferenceEquals($Workspace.Children[1],$Beacon) -or
+		(Get-DocumentObjectCount -Node $ProjectDocument) -ne $Before) {
+		throw 'Official Node host fixture object identity differs'
+	}
+	# The skinned MeshPart and Attachment remain in bootstrap. The supported
+	# static CollectionCourse still has to produce exactly one real content unit.
+}
+
 function New-RemoteNode {
 	param([string]$Name, [string]$ClassName, [string]$ClassSchemaId)
 	return [pscustomobject][ordered]@{
@@ -174,6 +204,7 @@ if ($Mode -eq 'Prepare') {
 	$ProjectDocumentPath = Join-Path $FixtureRoot '.gargantuan\project.instance.json'
 	$ProjectDocument = Get-Content -LiteralPath $ProjectDocumentPath -Raw | ConvertFrom-Json
 	Disable-ProjectScripts -Node $ProjectDocument
+	Move-AnimatedBeaconToBootstrap -ProjectDocument $ProjectDocument
 	if ($ContentObjectCount -ne 0) {
 		$WorkspaceNode = $ProjectDocument.Children | Where-Object Name -eq 'Workspace'
 		$CourseNode = $WorkspaceNode.Children | Where-Object Name -eq 'CollectionCourse'

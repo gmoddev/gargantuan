@@ -368,3 +368,23 @@ full-rate, action start/end state bypasses replaceable cadence reliably, and
 re-entering observers receive the current action phase with a fresh
 materialization epoch. The packaged/runtime and graphical proofs remain part
 of Native CI; 3F adds no sample dashboard or client-facing importance API.
+
+## Official Node host streaming fixture correction candidate (2026-11-16)
+
+The saved `FirstCompleteGame` sample is unchanged. The test-only
+`OfficialNodeHostVertical.ps1 -Mode Prepare` copies it into an isolated fixture.
+In that copy, the intact `AnimatedBeacon` MeshPart subtree is placed directly
+under `Workspace` as a bootstrap sibling of `CollectionCourse` before any
+content-size profile is applied. This preserves its Animator, semantic
+Attachment, Sound, ProximityPrompt, properties, scripts, and assets.
+
+The exact package producer keeps skinned meshes and non-Part spatial members
+with authored `CFrame` in bootstrap because it cannot derive a qualified
+static envelope for them. The original course contains the skinned
+`AnimatedBeacon` and its `BeaconTipAnchor` Attachment; packaging the whole
+course as one subtree therefore yielded zero streamable units in the retained
+V16 private adapter attempt. The unskinned course geometry stays together as
+the one candidate content unit after the fixture move. The original
+one-unit assertion, actual Player visibility, eviction/reload, and package
+validation gates remain mandatory. This source-only correction has local
+PowerShell layout/denial checks; the packaged runtime outcome is still unrun.
