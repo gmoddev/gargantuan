@@ -68,6 +68,18 @@ try {
 				if ($Process.ExitCode -ne 0 -or -not $Output.Contains('[Runtime:ManagedServerTest] lifecycle case passed')) {
 					throw ("Managed host fixture {0} failed: Exit={1} Out={2} Err={3}" -f $Case, $Process.ExitCode, $Output, $ErrorOutput)
 				}
+				$DiagnosticLines = @($Output -split '\r?\n' | Where-Object {
+					$_.StartsWith('[Runtime:ManagedServerTest] case=', [StringComparison]::Ordinal)
+				})
+				$DiagnosticPattern = '^\[Runtime:ManagedServerTest\] case=' + [Regex]::Escape($Case) +
+					' result=[0-9]{1,2} listening=[0-9]{1,3} draining=[0-9]{1,3} stopped=[0-9]{1,3}' +
+					' evidence=[01] drained_before_stop=[01] ready_acknowledged=[01]' +
+					' elapsed_ms=[0-9]{1,8} startup_budget_ms=6000 expected=1$'
+				if ($DiagnosticLines.Count -ne 1 -or $DiagnosticLines[0].Length -gt 512 -or
+					$DiagnosticLines[0] -cnotmatch $DiagnosticPattern) {
+					throw ("Managed host fixture {0} did not produce one bounded successful case diagnostic" -f $Case)
+				}
+				Write-Output $DiagnosticLines[0]
 			} finally {
 				$Process.Dispose()
 			}
