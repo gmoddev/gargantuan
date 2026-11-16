@@ -28,6 +28,7 @@
 #include "gargantuan/network/ReplicationTransport.hpp"
 #include "gargantuan/network/Scheduler.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
+#include "gargantuan/runtime/ServicePolicy.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/services/CharacterControlService.hpp"
 #include "gargantuan/services/Players.hpp"
@@ -1245,7 +1246,12 @@ namespace gargantuan::network {
 			std::set<ObjectId> DesiredCharacters;
 			for (const auto Object : ClientCharacterObjects) {
 				auto CharacterValue = std::dynamic_pointer_cast<KinematicCharacter>(Replica.Resolve(Object));
-				if (CharacterValue && CharacterValue->GetRootPart()) DesiredCharacters.insert(Object);
+				// Replicated-service Characters are shared templates, not runtime
+				// spatial candidates in the authoritative relevance graph. Keep
+				// their structural replica without advancing the peer GCHR epoch.
+				if (CharacterValue && CharacterValue->GetRootPart() &&
+					GetInstanceServicePolicy(*CharacterValue) != SchemaServicePolicy::Replicated)
+					DesiredCharacters.insert(Object);
 			}
 			for (const auto Object : ClientMaterializedCharacters)
 				if (!DesiredCharacters.contains(Object) && !Prediction->MarkUnmaterialized(Object)) return false;

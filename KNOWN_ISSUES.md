@@ -4,21 +4,25 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
-## KI-CHR-001: Nonpredictable client actions lose authoritative lifetime
+## KI-CHR-001: Replicated Character templates can desynchronize GCHR epochs
 
-- Status: Fix implemented on the Advanced Creator branch; native qualification pending.
-- Area: Client Character action registration and authoritative presentation.
-- Evidence: Packaged Wisp network run `ACNET25c5000000` accepted `CreatorLunge`
-  and applied server root motion, but reported no client action presentation or
-  `ActionEnded`. `GameSession.cpp` skipped client definition registration when
-  `Predictable=false`; owning-character reconciliation then rejected the
-  authoritative action as unknown.
+- Status: Fix implemented on the Advanced Creator branch; native and fresh packaged qualification pending.
+- Area: Client Character materialization and authoritative action presentation.
+- Evidence: Packaged Wisp runs accepted `CreatorLunge` and applied server root
+  motion, but had no client presentation or `ActionEnded`. The bounded
+  `ACND25d0000000` diagnostic received an active state for Character `51:1` at
+  server epoch 2 while the client expected epoch 3 after also materializing the
+  saved `ReplicatedStorage` Character template `21:1`; the entire frame was
+  dropped. The first failed run `ACNET25c5000000` remains historical evidence.
 
-The correction retains every bounded client action definition for authoritative
-content validation and gates only speculative preaccept prediction on the flag.
-Keep this entry open until focused nonpredictable and predictable session tests
-and a fresh packaged Wisp run verify accepted presentation, lifetime end and
-server collision admission. The failed c5 receipt remains historical evidence.
+The earlier registration correction retains every bounded client definition for
+authoritative validation and gates only speculative preaccept prediction on
+`Predictable`. The materialization correction applies the server relevance
+policy to client GCHR membership: replicated-service templates remain in the
+structural graph but do not advance the runtime Character epoch. Keep this
+entry open until the focused template, nonpredictable and predictable session
+tests and a fresh packaged Wisp run verify presentation, lifetime end and
+server collision admission.
 
 ## KI-RND-002: Invalid asset-mesh change tails can leave publisher work pending
 
