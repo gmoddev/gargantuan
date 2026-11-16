@@ -5587,6 +5587,13 @@
       ]
     },
     {
+      "Path": "include/gargantuan/network/GameAdmission.hpp",
+      "Types": [
+        "GameAdmissionRequest",
+        "IGameAdmissionProvider"
+      ]
+    },
+    {
       "Path": "include/gargantuan/network/GameNetworkingSocketsTransport.hpp",
       "Types": [
         "GameNetworkingSocketsTransport",
@@ -5600,6 +5607,7 @@
         "DataModel",
         "Engine",
         "GameSession",
+        "GameSessionAdmissionMode",
         "GameSessionConfiguration",
         "GameSessionMetrics",
         "GameSessionPeerIdentity",
@@ -5613,6 +5621,7 @@
     {
       "Path": "include/gargantuan/network/GameSessionProtocol.hpp",
       "Types": [
+        "GameSessionAuthenticatedClientHello",
         "GameSessionClientHello",
         "GameSessionClientReady",
         "GameSessionMessageKind",
