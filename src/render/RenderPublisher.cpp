@@ -1379,7 +1379,11 @@ namespace gargantuan {
 			if (auto Assets = Service ? std::dynamic_pointer_cast<AssetService>(*Service) : nullptr) {
 				auto Changes = Assets->ReadChanges(VisualAssetChangeSequence);
 				VisualAssetChangeSequence = Changes.NextSequence;
-				if (Changes.RescanRequired) return FullResync();
+				// Physics can create AssetService after the first Part-only render
+				// publication. With no indexed visual attachments there is no asset
+				// dependent state to rebuild; the cursor is already advanced above.
+				if (Changes.RescanRequired && (!VisualDependencies.empty() || VisualIncomplete))
+					return FullResync();
 				for (const auto &Change : Changes.Changes)
 					if (const auto Dependents = VisualAssetDependents.find(Change.Reference);
 						Dependents != VisualAssetDependents.end())
