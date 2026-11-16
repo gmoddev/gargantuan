@@ -5669,6 +5669,7 @@
         "KinematicCharacter",
         "PeerState",
         "PredictedCharacterNetwork",
+        "RegisteredAction",
         "ReplicaState",
         "WorldRoot"
       ]
