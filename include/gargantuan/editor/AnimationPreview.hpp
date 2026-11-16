@@ -5,6 +5,7 @@
 #include "gargantuan/animation/AnimationRuntime.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -52,5 +53,7 @@ namespace gargantuan {
 		std::optional<RenderAnimationPoseState> PendingPose;
 		std::optional<RenderAnimationPoseRemove> PendingRemove;
 		RenderPublisher Publisher;
+		std::uint32_t PublishedWidth = 0;
+		std::uint32_t PublishedHeight = 0;
 	};
 }

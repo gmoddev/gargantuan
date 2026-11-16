@@ -126,6 +126,10 @@ namespace gargantuan {
 		const RenderCameraInput &Camera, std::uint32_t Width, std::uint32_t Height) {
 		if (Width == 0 || Height == 0 || Width > 1024 || Height > 1024)
 			throw std::invalid_argument("[Animation:Preview] Invalid viewport dimensions");
+		// EditorViewportRenderer::Resize clears its projection. The next publication
+		// must recreate the complete scene rather than refer to that retired base.
+		if (PublishedWidth != Width || PublishedHeight != Height)
+			Publisher.RequestFullResync();
 		auto Textures = Assets->DrainTextureChanges();
 		Publisher.SetUiTextureChanges(std::move(Textures.Creates), std::move(Textures.Updates), std::move(Textures.Removes));
 		auto Meshes = Assets->DrainMeshChanges();
@@ -133,6 +137,9 @@ namespace gargantuan {
 		if (PendingPose) Publisher.SetAnimationPoseChanges(std::span(&*PendingPose, 1), {});
 		if (PendingRemove) Publisher.SetAnimationPoseChanges({}, std::span(&*PendingRemove, 1));
 		PendingPose.reset(); PendingRemove.reset();
-		return Publisher.Publish(*WorkspaceValue, Camera, Width, Height);
+		auto Publication = Publisher.Publish(*WorkspaceValue, Camera, Width, Height);
+		PublishedWidth = Width;
+		PublishedHeight = Height;
+		return Publication;
 	}
 }
