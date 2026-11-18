@@ -21,7 +21,7 @@ try {
 	if ($LASTEXITCODE -ne 0) { throw 'Managed host fixture package build failed' }
 	$TestExecutable = Join-Path $PackageRoot 'GargantuanServer.exe'
 	$CaseIndex = 0
-	foreach ($Case in @('ReadyDrain', 'AuthorityLoss', 'NeverReady', 'ListenerUnavailable', 'PreReady', 'MissingProvider', 'MissingLifecycle', 'InsecureOverride')) {
+	foreach ($Case in @('ReadyDrain', 'AuthorityLoss', 'RevokedDrain', 'NeverReady', 'ListenerUnavailable', 'PreReady', 'MissingProvider', 'MissingLifecycle', 'InsecureOverride')) {
 		$Port = 41000 + ($PID % 1000) + $CaseIndex
 		$CaseIndex++
 		$ListenerSocket = $null

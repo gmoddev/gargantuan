@@ -58,6 +58,9 @@ namespace gargantuan::host {
 	};
 
 	struct ManagedServerSnapshot final {
+		// An authenticated DRAIN may retain local control readiness for one
+		// host observation after the admission gate closes. Unexpected revoke
+		// clears both readiness flags and must remain a failed host exit.
 		bool AuthorityCurrent = false;
 		bool ReadyAcknowledged = false;
 		bool DrainRequested = false;

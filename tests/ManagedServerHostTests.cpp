@@ -72,7 +72,7 @@ int main(int ArgumentCount, char *Arguments[]) {
 #endif
 	if (ArgumentCount < 4) return 2;
 	const std::string_view Case = Arguments[1];
-	if (Case != "ReadyDrain" && Case != "AuthorityLoss" && Case != "NeverReady" &&
+	if (Case != "ReadyDrain" && Case != "AuthorityLoss" && Case != "RevokedDrain" && Case != "NeverReady" &&
 		Case != "ListenerUnavailable" &&
 		Case != "PreReady" && Case != "MissingProvider" && Case != "MissingLifecycle" &&
 		Case != "InsecureOverride") return 2;
@@ -88,12 +88,16 @@ int main(int ArgumentCount, char *Arguments[]) {
 		while (!Stop.stop_requested() && Observer->ListeningCount.load() == 0)
 			std::this_thread::sleep_for(1ms);
 		if (Stop.stop_requested()) return;
-		if (Case == "ReadyDrain" || Case == "AuthorityLoss") {
+		if (Case == "ReadyDrain" || Case == "AuthorityLoss" || Case == "RevokedDrain") {
 			std::this_thread::sleep_for(20ms);
 			Observer->ReadyAcknowledged.store(true);
 			std::this_thread::sleep_for(1s);
 			if (Case == "ReadyDrain") Observer->DrainRequested.store(true);
-			else Observer->AuthorityCurrent.store(false);
+			else if (Case == "RevokedDrain") {
+				Observer->AuthorityCurrent.store(false);
+				Observer->ReadyAcknowledged.store(false);
+				Observer->DrainRequested.store(true);
+			} else Observer->AuthorityCurrent.store(false);
 		}
 	});
 	const auto Started = std::chrono::steady_clock::now();
@@ -107,7 +111,8 @@ int main(int ArgumentCount, char *Arguments[]) {
 		Case == "InsecureOverride";
 	const bool ListenerUnavailable = Case == "ListenerUnavailable";
 	const bool HasListener = Case != "PreReady" && !RejectedBeforeListening && !ListenerUnavailable;
-	const bool SessionEvidenceExpected = Case == "ReadyDrain" || Case == "AuthorityLoss" || Case == "PreReady";
+	const bool SessionEvidenceExpected = Case == "ReadyDrain" || Case == "AuthorityLoss" ||
+		Case == "RevokedDrain" || Case == "PreReady";
 	const bool Expected = Result == ((Case == "ReadyDrain") ? 0 :
 		RejectedBeforeListening ? 2 : 7) &&
 		Observer->ListeningCount.load() == (HasListener ? 1 : 0) &&
@@ -120,6 +125,8 @@ int main(int ArgumentCount, char *Arguments[]) {
 		(!(RejectedBeforeListening || ListenerUnavailable) || Observer->SessionStoppedCount.load() == 0) &&
 		(Case != "ReadyDrain" || Observer->DrainRequested.load()) &&
 		(Case != "AuthorityLoss" || !Observer->AuthorityCurrent.load()) &&
+		(Case != "RevokedDrain" || (!Observer->AuthorityCurrent.load() &&
+			!Observer->ReadyAcknowledged.load() && Observer->DrainRequested.load())) &&
 		(!ListenerUnavailable ||
 			(!Observer->EvidenceValid.load() && !Observer->DrainedBeforeStop.load() &&
 				!Observer->ReadyAcknowledged.load())) &&
