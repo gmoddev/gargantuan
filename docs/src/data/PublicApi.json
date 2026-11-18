@@ -5726,6 +5726,7 @@
         "GameSession",
         "GameSessionAdmissionMode",
         "GameSessionConfiguration",
+        "GameSessionLifecycleCounts",
         "GameSessionMetrics",
         "GameSessionPeerIdentity",
         "GameSessionRole",
