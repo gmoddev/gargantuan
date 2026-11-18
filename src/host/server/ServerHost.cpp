@@ -1372,7 +1372,10 @@ namespace gargantuan::host {
 				HostConfiguration.ManagedLifecycle->OnStopped();
 				ManagedListening = false;
 			}
-			if (ManagedAuthorityLost && ExitCode == 0) ExitCode = 7;
+			if (ManagedAuthorityLost && ExitCode == 0) {
+				std::cerr << "[Runtime:ManagedServer] reason=authority-lost\n";
+				ExitCode = 7;
+			}
 #if defined(GARGANTUAN_WITH_GNS)
 			if (ServiceTimingEvidence) {
 				FarmTransport.reset(); // Last transport owner: native shutdown/join.

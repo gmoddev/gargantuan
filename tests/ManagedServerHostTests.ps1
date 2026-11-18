@@ -65,6 +65,11 @@ try {
 					throw ("Managed host fixture ListenerUnavailable did not report the bind failure: Exit={0} Out={1} Err={2}" -f
 						$Process.ExitCode, $Output, $ErrorOutput)
 				}
+				if ($Case -eq 'RevokedDrain' -and
+					@($ErrorOutput -split '\r?\n') -cnotcontains '[Runtime:ManagedServer] reason=authority-lost') {
+					throw ("Managed host fixture RevokedDrain did not report authority loss: Exit={0} Out={1} Err={2}" -f
+						$Process.ExitCode, $Output, $ErrorOutput)
+				}
 				if ($Process.ExitCode -ne 0 -or -not $Output.Contains('[Runtime:ManagedServerTest] lifecycle case passed')) {
 					throw ("Managed host fixture {0} failed: Exit={1} Out={2} Err={3}" -f $Case, $Process.ExitCode, $Output, $ErrorOutput)
 				}
