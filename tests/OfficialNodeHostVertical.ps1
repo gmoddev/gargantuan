@@ -715,10 +715,10 @@ if ($Mode -eq 'Node' -or $Mode -eq 'NodeCycle') {
 	$NodeSemanticDigest = $null
 	try {
 		$UseExtendedBudget = $Mode -eq 'Node' -or [int]$Descriptor.RemoteFunctionCallCount -gt 5
-		$ServerMaximumTicks = if ($UseExtendedBudget) { '1200' } else { '720' }
 		$PlayerMaximumFrames = if ($UseExtendedBudget) { '900' } else { '600' }
+		# Match the managed host's unbounded lifetime while still requiring eviction and reload.
 		$ServerArguments = @(
-			'--bind', $GameEndpoint, '--session-smoke', '--max-ticks', $ServerMaximumTicks,
+			'--bind', $GameEndpoint, '--session-smoke',
 			'--content-lifecycle-smoke', $ContentKey
 		) + $NodeArguments + $ReliableArguments
 		$ServerProcess = Start-RuntimeProcess -Executable $Server -WorkingDirectory $Descriptor.ServerPackageRoot -Arguments $ServerArguments

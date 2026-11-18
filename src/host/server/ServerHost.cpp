@@ -788,7 +788,7 @@ namespace gargantuan::host {
 			const auto RequestedTicks = Program.get<int>("--max-ticks");
 			const auto MaximumTicks = RequestedTicks > 0 ? RequestedTicks
 				: (StartupSmoke ? 12 : (!StopInFlightKey.empty() ? 180 : 0));
-			int Ticks = 0;
+			std::uint64_t Ticks = 0;
 			enum class ContentSmokeStage : std::uint8_t {
 				WaitingForPeer,
 				WaitingForFirstResident,
@@ -809,7 +809,7 @@ namespace gargantuan::host {
 					BootstrapWorkspaceObjects.insert(Child->GetObjectId());
 			std::shared_ptr<Instance> FirstContentRoot;
 			ObjectId FirstContentObjectId;
-			int ContentStageTick = 0;
+			std::uint64_t ContentStageTick = 0;
 			int CompletedContentCycles = 0;
 			bool StopRequestSubmitted = false;
 			std::optional<std::chrono::steady_clock::time_point> StopRequestObserved;
@@ -1027,7 +1027,7 @@ namespace gargantuan::host {
 				}
 				PreviousTickStarted = TickStarted;
 				if (!ContentLifecycleKey.empty()) {
-					const int ContentHoldTicks = ContentChurnCycles == 0 || CompletedContentCycles <= 1 ? 45 : 6;
+					const std::uint64_t ContentHoldTicks = ContentChurnCycles == 0 || CompletedContentCycles <= 1 ? 45 : 6;
 					switch (ContentStage) {
 					case ContentSmokeStage::WaitingForPeer:
 						if (!Session || Session->GetMetrics().ReadyPeers >= 1) {
@@ -1211,7 +1211,9 @@ namespace gargantuan::host {
 						std::chrono::steady_clock::now() - *StopRequestObserved >= std::chrono::milliseconds(250))
 						Runtime->ProcessService->MarkExit(0);
 				}
-				if (MaximumTicks > 0 && ++Ticks >= MaximumTicks) {
+				// Lifecycle deadlines advance even when this host has no tick limit.
+				++Ticks;
+				if (MaximumTicks > 0 && Ticks >= static_cast<std::uint64_t>(MaximumTicks)) {
 					const bool ContentIncomplete = !ContentLifecycleKey.empty() && ContentStage != ContentSmokeStage::Complete;
 					const bool FarmIncomplete = FarmMode && (FarmReadyHighWater != static_cast<std::size_t>(FarmPeers) ||
 						FarmIdentities.size() != static_cast<std::size_t>(FarmPeers) || FarmIdentityConflict ||
