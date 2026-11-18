@@ -31,8 +31,11 @@ namespace {
 		std::atomic<bool> DrainRequested{false};
 		std::atomic<int> ListeningCount{0};
 		std::atomic<int> DrainingCount{0};
+		std::atomic<int> SessionStoppedCount{0};
 		std::atomic<int> StoppedCount{0};
 		std::atomic<bool> EvidenceValid{false};
+		std::atomic<bool> SessionStoppedAfterDrain{false};
+		std::atomic<bool> StoppedAfterSession{false};
 		std::atomic<bool> DrainedBeforeStop{false};
 
 		gargantuan::host::ManagedServerSnapshot Snapshot() const noexcept override {
@@ -50,8 +53,14 @@ namespace {
 			ListeningCount.fetch_add(1);
 		}
 		void OnDraining() noexcept override { DrainingCount.fetch_add(1); }
+		void OnSessionStopped(gargantuan::host::ManagedSessionEvidence Evidence) noexcept override {
+			SessionStoppedAfterDrain.store(DrainingCount.load() == 1 && StoppedCount.load() == 0 &&
+				Evidence.PlayersCreated >= Evidence.PlayersRemoved);
+			SessionStoppedCount.fetch_add(1);
+		}
 		void OnStopped() noexcept override {
 			DrainedBeforeStop.store(DrainingCount.load() == 1);
+			StoppedAfterSession.store(SessionStoppedCount.load() == 1);
 			StoppedCount.fetch_add(1);
 		}
 	};
@@ -98,6 +107,7 @@ int main(int ArgumentCount, char *Arguments[]) {
 		Case == "InsecureOverride";
 	const bool ListenerUnavailable = Case == "ListenerUnavailable";
 	const bool HasListener = Case != "PreReady" && !RejectedBeforeListening && !ListenerUnavailable;
+	const bool SessionEvidenceExpected = Case == "ReadyDrain" || Case == "AuthorityLoss" || Case == "PreReady";
 	const bool Expected = Result == ((Case == "ReadyDrain") ? 0 :
 		RejectedBeforeListening ? 2 : 7) &&
 		Observer->ListeningCount.load() == (HasListener ? 1 : 0) &&
@@ -105,6 +115,9 @@ int main(int ArgumentCount, char *Arguments[]) {
 		Observer->StoppedCount.load() == (RejectedBeforeListening || ListenerUnavailable ? 0 : 1) &&
 		(!HasListener || Observer->EvidenceValid.load()) &&
 		(RejectedBeforeListening || ListenerUnavailable || Observer->DrainedBeforeStop.load()) &&
+		(!SessionEvidenceExpected || (Observer->SessionStoppedCount.load() == 1 &&
+			Observer->SessionStoppedAfterDrain.load() && Observer->StoppedAfterSession.load())) &&
+		(!(RejectedBeforeListening || ListenerUnavailable) || Observer->SessionStoppedCount.load() == 0) &&
 		(Case != "ReadyDrain" || Observer->DrainRequested.load()) &&
 		(Case != "AuthorityLoss" || !Observer->AuthorityCurrent.load()) &&
 		(!ListenerUnavailable ||
@@ -116,6 +129,9 @@ int main(int ArgumentCount, char *Arguments[]) {
 		<< " result=" << Result
 		<< " listening=" << Observer->ListeningCount.load()
 		<< " draining=" << Observer->DrainingCount.load()
+		<< " session_stopped=" << Observer->SessionStoppedCount.load()
+		<< " session_stopped_after_drain=" << Observer->SessionStoppedAfterDrain.load()
+		<< " stopped_after_session=" << Observer->StoppedAfterSession.load()
 		<< " stopped=" << Observer->StoppedCount.load()
 		<< " evidence=" << Observer->EvidenceValid.load()
 		<< " drained_before_stop=" << Observer->DrainedBeforeStop.load()

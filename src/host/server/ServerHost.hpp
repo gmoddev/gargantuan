@@ -6,6 +6,7 @@
 #include "gargantuan/network/Transport.hpp"
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -13,6 +14,11 @@
 #include <variant>
 
 namespace gargantuan::host {
+	// Native managed-host ABI v2 adds the stopped-session accounting callback.
+	// A v2 adapter links this symbol so an older Engine binary cannot pair.
+	[[nodiscard]] std::uint32_t GetManagedHostLifecycleContractVersion() noexcept;
+	inline constexpr std::uint32_t ManagedHostLifecycleContractVersion = 2;
+
 	struct LocalServerContentConfiguration final {
 		ContentResidencyMode Mode = ContentResidencyMode::FullyResident;
 	};
@@ -45,6 +51,12 @@ namespace gargantuan::host {
 		network::TransportServerPublicKey ServerPublicKey{};
 	};
 
+	struct ManagedSessionEvidence final {
+		std::uint64_t AcceptedPeers = 0;
+		std::uint64_t PlayersCreated = 0;
+		std::uint64_t PlayersRemoved = 0;
+	};
+
 	struct ManagedServerSnapshot final {
 		bool AuthorityCurrent = false;
 		bool ReadyAcknowledged = false;
@@ -61,6 +73,9 @@ namespace gargantuan::host {
 		[[nodiscard]] virtual ManagedServerSnapshot Snapshot() const noexcept = 0;
 		virtual void OnListening(ServerListeningEvidence Evidence) noexcept = 0;
 		virtual void OnDraining() noexcept = 0;
+		// An optional native accounting witness. Ordinary managed hosts retain
+		// their existing lifecycle contract when they do not consume it.
+		virtual void OnSessionStopped(ManagedSessionEvidence) noexcept {}
 		virtual void OnStopped() noexcept = 0;
 	};
 

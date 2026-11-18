@@ -2565,6 +2565,13 @@ namespace gargantuan::network {
 	const std::string &GameSession::GetFailure() const {
 		return State->Failure;
 	}
+	GameSessionLifecycleCounts GameSession::GetLifecycleCounts() const noexcept {
+		return {
+			.AcceptedPeers = State->Metrics.AcceptedPeers,
+			.PlayersCreated = State->Metrics.PlayersCreated,
+			.PlayersRemoved = State->Metrics.PlayersRemoved,
+		};
+	}
 	GameSessionMetrics GameSession::GetMetrics() const {
 		// Bounded aggregates only; no peer labels or retained per-message history.
 		auto Result = State->Metrics;

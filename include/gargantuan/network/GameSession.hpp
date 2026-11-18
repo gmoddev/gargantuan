@@ -271,6 +271,12 @@ namespace gargantuan::network {
 		std::uint64_t CharacterMaximumCurrentPublicationAgeTicks = 0;
 	};
 
+	struct GameSessionLifecycleCounts final {
+		std::uint64_t AcceptedPeers = 0;
+		std::uint64_t PlayersCreated = 0;
+		std::uint64_t PlayersRemoved = 0;
+	};
+
 	class GameSession final {
 	  public:
 		GameSession(
@@ -292,6 +298,8 @@ namespace gargantuan::network {
 		[[nodiscard]] GameSessionStatus GetStatus() const;
 		[[nodiscard]] const std::string &GetFailure() const;
 		[[nodiscard]] GameSessionMetrics GetMetrics() const;
+		// Stored counters only: safe to sample after Stop during host cleanup.
+		[[nodiscard]] GameSessionLifecycleCounts GetLifecycleCounts() const noexcept;
 		[[nodiscard]] std::shared_ptr<DataModel> GetClientDataModel() const;
 		[[nodiscard]] std::optional<ConnectionId> GetPrimaryConnection() const;
 		[[nodiscard]] std::shared_ptr<Player> GetAcceptedPlayer(ConnectionId Connection) const;

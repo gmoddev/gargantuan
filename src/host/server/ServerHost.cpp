@@ -57,6 +57,9 @@
 #endif
 
 namespace gargantuan::host {
+	std::uint32_t GetManagedHostLifecycleContractVersion() noexcept {
+		return ManagedHostLifecycleContractVersion;
+	}
 	namespace {
 		struct FarmExecutionFaultContext {
 			detail::FarmD03FirstFault *Evidence = nullptr;
@@ -510,6 +513,20 @@ namespace gargantuan::host {
 		bool F1EvidenceWritten = false;
 		std::unique_ptr<network::GameSession> Session;
 		bool ManagedListening = false;
+		bool SessionEvidencePublished = false;
+		auto StopSession = [&]() {
+			if (!Session) return;
+			Session->Stop();
+			if (ManagedListening && !SessionEvidencePublished) {
+				const auto Metrics = Session->GetLifecycleCounts();
+				SessionEvidencePublished = true;
+				HostConfiguration.ManagedLifecycle->OnSessionStopped({
+					.AcceptedPeers = Metrics.AcceptedPeers,
+					.PlayersCreated = Metrics.PlayersCreated,
+					.PlayersRemoved = Metrics.PlayersRemoved,
+				});
+			}
+		};
 		bool ManagedDraining = false;
 		bool ManagedAuthorityLost = false;
 		auto RequestManagedDrain = [&]() noexcept {
@@ -1218,7 +1235,7 @@ namespace gargantuan::host {
 			// accounting, and before Engine or content-provider teardown.
 			if (Managed) {
 				RequestManagedDrain();
-				if (Session) Session->Stop();
+				StopSession();
 			}
 			if (ScaleQualification) ScaleQualification->DumpRecoveryEvidence();
 			if (AdmissionEvidence) AdmissionEvidence->Dump();
@@ -1338,7 +1355,7 @@ namespace gargantuan::host {
 			detail::FarmLifecycleEvidence Lifecycle;
 			LOG_INFO(App, "[Runtime:Server] Stopping peer acceptance and game session");
 			RequestManagedDrain();
-			if (Session) Session->Stop();
+			StopSession();
 			if (FarmScaleWorkload && Session) Lifecycle.ObserveSession(*Session);
 			Session.reset();
 			LOG_INFO(App, "[Runtime:Server] Stopping authoritative runtime and content provider");
@@ -1387,7 +1404,7 @@ namespace gargantuan::host {
 			}
 			F1Evidence.reset(); // Restore the borrowed previous sink before teardown.
 			RequestManagedDrain();
-			if (Session) Session->Stop();
+			StopSession();
 			Session.reset();
 			if (Runtime) Runtime->Destroy();
 			Runtime.reset();
