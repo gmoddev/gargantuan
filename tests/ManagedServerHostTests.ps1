@@ -72,11 +72,17 @@ try {
 					$_.StartsWith('[Runtime:ManagedServerTest] case=', [StringComparison]::Ordinal)
 				})
 				$DiagnosticPattern = '^\[Runtime:ManagedServerTest\] case=' + [Regex]::Escape($Case) +
-					' result=[0-9]{1,2} listening=[0-9]{1,3} draining=[0-9]{1,3} stopped=[0-9]{1,3}' +
+					' result=[0-9]{1,2} listening=[0-9]{1,3} draining=[0-9]{1,3}' +
+					' session_stopped=[01] session_stopped_after_drain=[01] stopped_after_session=[01]' +
+					' stopped=[0-9]{1,3}' +
 					' evidence=[01] drained_before_stop=[01] ready_acknowledged=[01]' +
 					' elapsed_ms=[0-9]{1,8} startup_budget_ms=6000 expected=1$'
 				if ($DiagnosticLines.Count -ne 1 -or $DiagnosticLines[0].Length -gt 512 -or
 					$DiagnosticLines[0] -cnotmatch $DiagnosticPattern) {
+					if ($DiagnosticLines.Count -gt 0) {
+						$RejectedLine = $DiagnosticLines[0]
+						Write-Output $RejectedLine.Substring(0, [Math]::Min(512, $RejectedLine.Length))
+					}
 					throw ("Managed host fixture {0} did not produce one bounded successful case diagnostic" -f $Case)
 				}
 				Write-Output $DiagnosticLines[0]
