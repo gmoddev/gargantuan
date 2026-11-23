@@ -380,13 +380,14 @@ namespace gargantuan {
 						History.Retain(std::move(Action));
 
 						std::vector<BufferedChangeRecord> Records;
+						std::vector<std::shared_ptr<Instance>> DeferredNotifications;
 						bool Changed = false;
 						{
 							ScopedAuthoritativeRevisionDeferral DeferRevision(*World, Changed);
 							try {
 								{
 									ScopedChangeJournalSuppression Suppression;
-									Root->SetParent(Parent);
+									Root->SetParentInternal(Parent, &DeferredNotifications);
 								}
 								ScopedChangeJournalCapture Capture;
 								Root->PublishReplicationSubtree(World->GetObjectId());
@@ -403,6 +404,7 @@ namespace gargantuan {
 								Journal.Release();
 							} catch (...) {
 								ScopedChangeJournalSuppression Suppression;
+								if (Root->GetParent()) Root->SetParentInternal(std::nullopt, &DeferredNotifications);
 								Root->Destroy();
 								throw;
 							}
@@ -411,6 +413,8 @@ namespace gargantuan {
 							try { RenderDirtyAccumulator::Get().RecordChange(Record.Scope, Record.Object, Record.Payload); }
 							catch (...) {} // Render recovery can request a full projection after commit.
 						}
+						try { Root->NotifyParentChanged(Root, nullptr, Parent, DeferredNotifications); }
+						catch (...) {} // Observer failure cannot reject already committed history.
 						return {MutationStatus::Success, NewRoot, {}};
 					} else if constexpr (std::is_same_v<Command, RestoreSubtreeCommand>) {
 						if (Authority.GetOrigin() != MutationCommandOrigin::LocalInternal)
