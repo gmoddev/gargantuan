@@ -103,7 +103,7 @@ namespace {
 			GeometryOf(Value.GetShape()), Value.GetCastShadow()};
 	}
 
-	RenderItem Project(ObjectId Object, const SourceState &State) {
+	RenderItem ProjectRenderItem(ObjectId Object, const SourceState &State) {
 		const auto Model = glm::translate(glm::mat4(1.0f), State.Frame.Position) *
 			glm::mat4(State.Frame.Rotation) * glm::scale(glm::mat4(1.0f), State.Size);
 		return {Object, State.Geometry, Model, glm::inverse(Model), State.Color, State.CastShadow};
@@ -126,7 +126,7 @@ namespace {
 		Output.reserve(Objects.size());
 		for (const auto Object : Objects) {
 			auto Value = Resolve(Object);
-			Output.emplace_back(Value ? std::optional(Project(Object, ReadSource(*Value))) : std::nullopt);
+			Output.emplace_back(Value ? std::optional(ProjectRenderItem(Object, ReadSource(*Value))) : std::nullopt);
 		}
 		return Output;
 	}
@@ -146,7 +146,7 @@ namespace {
 		Output.reserve(Objects.size());
 		for (const auto Object : Objects) {
 			auto State = Slots.Get(Object);
-			Output.emplace_back(State ? std::optional(Project(Object, *State)) : std::nullopt);
+			Output.emplace_back(State ? std::optional(ProjectRenderItem(Object, *State)) : std::nullopt);
 		}
 		return Output;
 	}
@@ -159,7 +159,7 @@ namespace {
 		for (const auto Object : Objects) {
 			auto Value = Resolve(Object);
 			if (Value) Items.insert_or_assign(Object,
-				std::make_shared<const RenderItem>(Project(Object, ReadSource(*Value))));
+				std::make_shared<const RenderItem>(ProjectRenderItem(Object, ReadSource(*Value))));
 			else Items.erase(Object);
 		}
 	}
@@ -274,7 +274,7 @@ int main(int ArgCount, char **Args) {
 			const auto Object = Value->GetObjectId();
 			const auto Source = ReadSource(*Value);
 			Slots.Set(Object, Source);
-			Items.emplace(Object, std::make_shared<const gargantuan::RenderItem>(Project(Object, Source)));
+			Items.emplace(Object, std::make_shared<const gargantuan::RenderItem>(ProjectRenderItem(Object, Source)));
 		}
 		Dirty.Clear();
 		const auto Consumer = Dirty.CreateConsumer();
@@ -417,7 +417,7 @@ int main(int ArgCount, char **Args) {
 			const auto Object = Value->GetObjectId();
 			const auto Source = ReadSource(*Value);
 			FullSlots.Set(Object, Source);
-			FullItems.emplace(Object, std::make_shared<const gargantuan::RenderItem>(Project(Object, Source)));
+			FullItems.emplace(Object, std::make_shared<const gargantuan::RenderItem>(ProjectRenderItem(Object, Source)));
 		}
 		const auto FullSyncMs = Milliseconds(Clock::now() - FullSyncStart);
 		const auto FullConsumeStart = Clock::now();
