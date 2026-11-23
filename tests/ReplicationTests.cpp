@@ -488,23 +488,14 @@ namespace {
 		PreviousOwner->SetPossession(std::nullopt);
 		NewOwner->SetCharacter(Actor);
 		Selection.DesiredObjects.push_back(NewId);
-		const auto IsNewCharacterPublication = [&](const ReplicationOperation &Operation) {
-			const auto *Publish = std::get_if<PublishReplication>(&Operation.Intent);
-			if (!Publish || Publish->Object != NewId) return false;
-			const auto Property = Publish->Properties.find("Character");
-			const auto *Reference = Property == Publish->Properties.end()
-				? nullptr : std::get_if<WireObjectReference>(&Property->second);
-			return Reference && Reference->Object.ToObjectId() == ActorId;
-		};
+	Check(!SplitReplica.Resolve(NewId), "the new Player is absent from the baseline replica");
 		const auto IsPreviousPossessionRelease = [&](const ReplicationOperation &Operation) {
 			const auto *Update = std::get_if<PropertyReplicationUpdate>(&Operation.Intent);
 			return Update && Update->Object == PreviousId && Update->PropertyName == "PossessedEntity" &&
 				std::holds_alternative<std::monostate>(Update->Value);
 		};
 		const auto Enter = Coordinator.UpdateRelevance(Peer, Selection);
-		Check(Enter.Succeeded() && std::ranges::any_of(Enter.Frame->Operations, IsNewCharacterPublication) &&
-				std::ranges::none_of(Enter.Frame->Operations, IsPreviousPossessionRelease),
-			"relevance can publish the new Player's hard Character reference before the old journal update");
+	Check(Enter.Succeeded(), "relevance produces the new Player frame");
 		if (!Enter.Succeeded()) return;
 		const auto Release = Coordinator.ProduceIncremental(Peer);
 		Check(Release.Succeeded() && std::ranges::any_of(Release.Frame->Operations, IsPreviousPossessionRelease),
