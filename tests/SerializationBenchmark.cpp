@@ -1,6 +1,10 @@
+#include "gargantuan/assets/GasInstanceSerialization.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/Script.hpp"
+#include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/editor/EditorHost.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/Snapshot.hpp"
@@ -170,14 +174,141 @@ namespace {
 			Milliseconds(DecodeBegin, DecodeEnd) << ',' << Milliseconds(ConstructBegin, DecodeEnd) << ",Ok\n";
 		return Decoded.Ok;
 	}
+
+	gargantuan::ProjectId BenchmarkIdentity(std::uint64_t Index) {
+		gargantuan::ProjectId Id;
+		Id.Bytes.front() = 0x47;
+		for (std::size_t Byte = 0; Byte < sizeof(Index); ++Byte)
+			Id.Bytes[8 + Byte] = static_cast<std::uint8_t>(Index >> (Byte * 8));
+		return Id;
+	}
+
+	std::shared_ptr<gargantuan::Instance> MakeGasBenchmarkProject(std::size_t ObjectCount) {
+		using namespace gargantuan;
+		constexpr std::size_t Branching = 8;
+		const auto LastParent = (ObjectCount - 2) / Branching;
+		const auto Security = ScriptSecurityContext::CoreTrusted();
+		auto Root = std::make_shared<DataModel>();
+		Root->SetName("BenchmarkProject");
+		Root->SetArchivable(true);
+		std::vector<std::shared_ptr<Instance>> Nodes{Root};
+		Nodes.reserve(ObjectCount);
+		for (std::size_t Index = 1; Index < ObjectCount; ++Index) {
+			std::shared_ptr<Instance> Node;
+			std::shared_ptr<WeldConstraint> Weld;
+			if (Index <= LastParent) {
+				Node = std::make_shared<Folder>();
+			} else if (Index % 16 == 4) {
+				auto ScriptValue = std::make_shared<Script>();
+				ScriptValue->SetEnabled(false);
+				ScriptValue->SetSourceId(BenchmarkIdentity(Index).ToString());
+				ScriptValue->SetSource("local Index = " + std::to_string(Index) + "\nreturn Index\n");
+				Node = std::move(ScriptValue);
+			} else if (Index % 16 == 7 && Index - 2 > LastParent) {
+				Weld = std::make_shared<WeldConstraint>();
+				Node = Weld;
+			} else {
+				auto PartValue = std::make_shared<Part>();
+				PartValue->SetAnchored(true);
+				PartValue->SetSize({1.0f + static_cast<float>(Index % 8), 1.5f, 2.0f});
+				Node = std::move(PartValue);
+			}
+			Node->SetName("Object" + std::to_string(Index));
+			Node->SetArchivable(true);
+			Node->SetParent(Nodes[(Index - 1) / Branching]);
+			if (Weld) {
+				Weld->SetPart0(std::static_pointer_cast<Part>(Nodes[Index - 2]));
+				Weld->SetPart1(std::static_pointer_cast<Part>(Nodes[Index - 1]));
+			}
+			if (Node->ApplyAttributeMutation("Index", WireValue(static_cast<int>(Index)), Security) !=
+				MutationStatus::Success)
+				throw std::runtime_error("Could not set the GAS benchmark attribute");
+			if (Index % 7 == 0 && !Root->Tags.Add(Root->GetObjectId(), Node->GetObjectId(), "Benchmark", Security))
+				throw std::runtime_error("Could not set the GAS benchmark tag");
+			Nodes.push_back(std::move(Node));
+		}
+		return Root;
+	}
+
+	void BenchmarkGasProject(std::size_t ObjectCount, std::size_t RunCount) {
+		using namespace gargantuan;
+		const auto ConstructBegin = Clock::now();
+		auto Root = MakeGasBenchmarkProject(ObjectCount);
+		const auto ConstructEnd = Clock::now();
+		const Gas::PlaceMetadata Metadata{BenchmarkIdentity(0), std::nullopt};
+		auto Capture = [&](const std::shared_ptr<Instance> &ProjectRoot) {
+			auto Document = InstanceSerialization::CaptureGasDocument(std::span(&ProjectRoot, 1),
+				Gas::DocumentKind::Place, Metadata);
+			if (!Document) throw std::runtime_error(Document.error().Format());
+			return std::move(*Document);
+		};
+		const auto Expected = Capture(Root);
+		if (Expected.Nodes.size() != ObjectCount) throw std::runtime_error("Unexpected GAS benchmark graph size");
+
+		auto Run = [&](std::string_view Backend, auto Encode, auto Decode) {
+			std::optional<decltype(Encode())> FirstBytes;
+			double EncodeMs = 0;
+			double DecodeMs = 0;
+			for (std::size_t RunIndex = 0; RunIndex <= RunCount; ++RunIndex) {
+				const auto EncodeBegin = Clock::now();
+				auto Bytes = Encode();
+				const auto EncodeEnd = Clock::now();
+				if (RunIndex == 0) FirstBytes = Bytes;
+				else if (Bytes != *FirstBytes) throw std::runtime_error("Benchmark export bytes changed");
+				const auto DecodeBegin = Clock::now();
+				auto Restored = Decode(std::move(Bytes));
+				const auto DecodeEnd = Clock::now();
+				auto Actual = Capture(Restored);
+				Restored->Destroy();
+				if (Actual != Expected) throw std::runtime_error("Benchmark round-trip changed persistent state");
+				if (RunIndex > 0) {
+					EncodeMs += Milliseconds(EncodeBegin, EncodeEnd);
+					DecodeMs += Milliseconds(DecodeBegin, DecodeEnd);
+				}
+			}
+			EncodeMs /= RunCount;
+			DecodeMs /= RunCount;
+			std::cout << Backend << ",PlaceGraph," << ObjectCount << ',' << FirstBytes->size() << ','
+					  << Milliseconds(ConstructBegin, ConstructEnd) << ',' << EncodeMs << ',' << DecodeMs << ','
+					  << EncodeMs + DecodeMs << ",Ok\n";
+		};
+
+		Run("JSON", [&] { return InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Root); },
+			[](std::string Text) {
+				std::istringstream Input(std::move(Text));
+				auto Result = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Input);
+				if (!Result.Ok) throw std::runtime_error("Benchmark JSON project could not be deserialized");
+				Result.Instance->MarkPersistenceSubtreeArchivable();
+				return std::move(Result.Instance);
+			});
+		Run("GAS", [&] {
+			auto Bytes = Gas::Encode(Capture(Root));
+			if (!Bytes) throw std::runtime_error(Bytes.error().Format());
+			return std::move(*Bytes);
+		}, [](Gas::Binary Bytes) {
+			auto Document = Gas::Decode(Bytes);
+			if (!Document) throw std::runtime_error(Document.error().Format());
+			auto Result = InstanceSerialization::MaterializeGasDocument(*Document, true);
+			if (!Result.Succeeded() || Result.Roots.size() != 1)
+				throw std::runtime_error(Result.Errors.empty() ? "Benchmark GAS place could not be materialized" :
+					Result.Errors.front());
+			return std::move(Result.Roots.front());
+		});
+		Root->Destroy();
+	}
 }
 
 int main(int ArgumentCount, char **Arguments) {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
+		const bool Gas = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--gas";
 		const bool Full = ArgumentCount > 1 && std::string_view(Arguments[1]) == "--full";
 		const std::size_t RunCount = Full ? 5 : 1;
 		std::cout << "Backend,Workload,Items,Bytes,ConstructMs,EncodeMs,DecodeMs,CodecTotalMs,Status\n";
+		if (Gas) {
+			for (const auto Count : {100, 1000, 5000}) BenchmarkGasProject(Count, 5);
+			return 0;
+		}
 		bool Ok = true;
 		for (const auto Count : Full ? std::vector<std::size_t>{1000, 10000, 20000} : std::vector<std::size_t>{1000})
 			Ok = BenchmarkSnapshot(Count, RunCount) && Ok;

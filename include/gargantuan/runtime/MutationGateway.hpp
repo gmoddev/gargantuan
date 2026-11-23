@@ -17,6 +17,7 @@
 #include <vector>
 
 namespace gargantuan {
+	namespace Gas { struct Document; }
 	inline constexpr std::size_t MaximumPendingMutations = 4096;
 
 	enum class MutationCommandOrigin { LocalInternal, Studio, AuthenticatedPeer };
@@ -101,6 +102,11 @@ namespace gargantuan {
 		ObjectId Parent;
 		std::size_t ExpectedObjectCount = 0;
 	};
+	struct ImportGasModelCommand {
+		std::shared_ptr<const Gas::Document> DocumentValue;
+		ObjectId Parent;
+		std::uint64_t ExpectedRevision = 0;
+	};
 	using MutationCommand = std::variant<
 		CreateObjectCommand,
 		UpdatePropertyCommand,
@@ -114,7 +120,8 @@ namespace gargantuan {
 		ReparentObjectCommand,
 		DestroyObjectCommand,
 		DuplicateObjectCommand,
-		RestoreSubtreeCommand
+		RestoreSubtreeCommand,
+		ImportGasModelCommand
 	>;
 
 	enum class MutationStatus {

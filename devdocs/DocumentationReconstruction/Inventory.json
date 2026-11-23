@@ -5027,6 +5027,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "docs/protocols/GAS-Authoring-v1.md",
+      "Purpose": "GAS authoring and package input",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Inspect owning source before promoting to current authority",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "docs/protocols/GAS-v1.md",
       "Purpose": "Gargantuan Asset Serialization v1",
       "LastMeaningfulUpdate": null,

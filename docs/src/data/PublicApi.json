@@ -4873,6 +4873,16 @@
       ]
     },
     {
+      "Path": "include/gargantuan/assets/GasDependencies.hpp",
+      "Types": []
+    },
+    {
+      "Path": "include/gargantuan/assets/GasInstanceSerialization.hpp",
+      "Types": [
+        "GasMaterializationResult"
+      ]
+    },
+    {
       "Path": "include/gargantuan/assets/InstanceSerialization.hpp",
       "Types": [
         "DeserializationState",
@@ -6454,6 +6464,7 @@
         "CreateObjectCommand",
         "DestroyObjectCommand",
         "DuplicateObjectCommand",
+        "ImportGasModelCommand",
         "InitialPropertyMutation",
         "MutationAuthorityContext",
         "MutationCommandOrigin",

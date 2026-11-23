@@ -42,6 +42,7 @@ namespace gargantuan {
 	  private:
 		friend class ScopedAuthoritativeRevisionDeferral;
 		friend class AssetService;
+		friend class MutationGateway;
 		friend class PreparedPropertyCommit;
 		friend struct PreparedPropertyTestAccess;
 		[[nodiscard]] bool HasDeferredRevision() const noexcept;

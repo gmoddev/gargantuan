@@ -1,4 +1,5 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
+#include "gargantuan/assets/GasInstanceSerialization.hpp"
 #include "assets/PreparedInstanceSerialization.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -12,6 +13,7 @@
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/AttributeValidation.hpp"
+#include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/TagIndex.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
@@ -74,6 +76,74 @@ namespace gargantuan::InstanceSerialization {
 	using Serializable =
 		std::variant<bool, CFrame, Color3, double, EnumItem, float, glm::vec3, int, std::string_view, UDim, UDim2, Vector2>;
 
+	namespace {
+		using DocumentNodeIds = std::unordered_map<const Instance *, std::uint32_t>;
+
+		template <class Visit>
+		void CollectDocumentNodes(std::span<const std::shared_ptr<Instance>> Roots, DocumentNodeIds &Ids,
+			Visit VisitNode) {
+			if (Roots.size() > MaximumPersistenceObjects)
+				throw std::length_error("Instance persistence hierarchy exceeds its object limit");
+			struct PendingNode {
+				std::shared_ptr<Instance> Object;
+				std::size_t Depth;
+				std::uint32_t Parent;
+			};
+			std::vector<PendingNode> Pending;
+			for (auto Root = Roots.rbegin(); Root != Roots.rend(); ++Root) Pending.push_back({*Root, 1, 0});
+			while (!Pending.empty()) {
+				auto [Node, Depth, Parent] = std::move(Pending.back());
+				Pending.pop_back();
+				if (!Node || Depth > MaximumProtocolJsonDepth || Ids.size() >= MaximumPersistenceObjects)
+					throw std::length_error("Instance persistence hierarchy exceeds its depth or object limit");
+				const auto Id = static_cast<std::uint32_t>(Ids.size() + 1);
+				if (!Ids.emplace(Node.get(), Id).second)
+					throw std::invalid_argument("Instance persistence hierarchy repeats an object");
+				VisitNode(*Node, Parent);
+				// A non-Archivable node is included, while its descendants remain outside the document.
+				if (Node->GetArchivable()) {
+					if (Node->Children.size() > MaximumPersistenceObjects - Ids.size() -
+						std::min(Pending.size(), MaximumPersistenceObjects - Ids.size()))
+						throw std::length_error("Instance persistence hierarchy exceeds its object limit");
+					for (auto Child = Node->Children.rbegin(); Child != Node->Children.rend(); ++Child)
+						Pending.push_back({*Child, Depth + 1, Id});
+				}
+			}
+		}
+
+		bool IsNativeSavedProperty(std::string_view Name, const InstanceProperty &Property) {
+			return Name != "Parent" && !Property.CustomSchemaPropertyType &&
+				Property.PersistencePolicy == InstanceProperty::Persistence::Saved &&
+				Property.Read && Property.Write;
+		}
+
+		template <class Visit>
+		void VisitSavedProperties(const InstanceClassDefinition &Class, const Visit &VisitProperty) {
+			for (const auto &[Name, Property] : Class.Properties)
+				if (IsNativeSavedProperty(Name, Property)) VisitProperty(Name, Property);
+			if (Class.BaseSchemaId) {
+				const auto *Base = InstanceClassRegistry::GetDefinitionBySchemaId(*Class.BaseSchemaId);
+				if (!Base) throw std::runtime_error("Published class has no registered base SchemaId");
+				VisitSavedProperties(*Base, VisitProperty);
+			}
+		}
+
+		WireEnumItem ReadSavedEnum(Instance &Node, const InstanceProperty &Property) {
+			const auto [TypeName, Value] = Property.ReadEnumValue(&Node);
+			const auto Type = Enums::GetEnums().find(TypeName);
+			const auto Item = Type == Enums::GetEnums().end()
+				? std::optional<EnumItem>{} : Type->second->FromValue(Value);
+			if (!Item) throw std::runtime_error("Persisted native enum property has an unknown canonical value");
+			return {std::string(TypeName), std::string(Item->Name)};
+		}
+
+		void CollectSourceId(Instance &Node, std::unordered_set<std::string> &Seen) {
+			if (auto *Script = dynamic_cast<LuaSourceContainer *>(&Node))
+				if (!ProjectId::Parse(Script->GetSourceId()) || !Seen.insert(Script->GetSourceId()).second)
+					throw std::invalid_argument("Persisted Script SourceId is invalid or duplicated");
+		}
+	}
+
 	namespace Json {
 		// NOTE: InstanceFormat is based off Rojo's model format with a few exceptions:
 		// - All properties are assumed to be explicit for forward compatibility
@@ -85,31 +155,9 @@ namespace gargantuan::InstanceSerialization {
 
 		struct SerializationState {
 			std::unordered_map<std::shared_ptr<Instance>, json> InstanceMap;
-			std::unordered_map<const Instance *, std::uint32_t> NodeIds;
+			DocumentNodeIds NodeIds;
 			std::unordered_set<std::string> SourceIds;
 		};
-
-		void CollectDocumentNodes(const std::shared_ptr<Instance> &Root, SerializationState &State) {
-			std::vector<std::pair<std::shared_ptr<Instance>, std::size_t>> Pending{{Root, 1}};
-			while (!Pending.empty()) {
-				auto [Node, Depth] = std::move(Pending.back());
-				Pending.pop_back();
-				if (!Node || Depth > MaximumProtocolJsonDepth || State.NodeIds.size() >= MaximumPersistenceObjects)
-					throw std::length_error("Instance persistence hierarchy exceeds its depth or object limit");
-				const auto Id = static_cast<std::uint32_t>(State.NodeIds.size() + 1);
-				if (!State.NodeIds.emplace(Node.get(), Id).second)
-					throw std::invalid_argument("Instance persistence hierarchy repeats an object");
-				// Preserve the existing archive rule: a non-Archivable node is included,
-				// but its descendants are omitted from this document.
-				if (Node->GetArchivable()) {
-					if (Node->Children.size() > MaximumPersistenceObjects - State.NodeIds.size() -
-						std::min(Pending.size(), MaximumPersistenceObjects - State.NodeIds.size()))
-						throw std::length_error("Instance persistence hierarchy exceeds its object limit");
-					for (auto Child = Node->Children.rbegin(); Child != Node->Children.rend(); ++Child)
-						Pending.emplace_back(*Child, Depth + 1);
-				}
-			}
-		}
 
 		using SerializedPair = std::pair<const char *, json>;
 		std::optional<SerializedPair> TrySerializeValue(std::any unknown) {
@@ -169,23 +217,11 @@ namespace gargantuan::InstanceSerialization {
 			const SerializationState &state,
 			json &properties
 		) {
-			for (auto &[key, property] : definition->Properties) {
-				if (key == "Parent" || property.CustomSchemaPropertyType ||
-					property.PersistencePolicy != InstanceProperty::Persistence::Saved ||
-					!property.Read || !property.Write)
-					continue;
-
+			VisitSavedProperties(*definition, [&](const std::string &key, const InstanceProperty &property) {
 				if (property.ReadEnumValue) {
-					auto [EnumTypeName, EnumValue] = property.ReadEnumValue(instance.get());
-					auto EnumType = Enums::GetEnums().find(EnumTypeName);
-					auto EnumItemValue = EnumType == Enums::GetEnums().end()
-						? std::optional<EnumItem>{} : EnumType->second->FromValue(EnumValue);
-					if (!EnumItemValue)
-						throw std::runtime_error("Persisted native enum property has an unknown canonical value");
-					properties[key] = json::object({SerializedPair{
-						"EnumItem", {EnumTypeName, EnumItemValue->Name}
-					}});
-					continue;
+					const auto Enum = ReadSavedEnum(*instance, property);
+					properties[key] = json::object({SerializedPair{"EnumItem", {Enum.EnumType, Enum.Item}}});
+					return;
 				}
 				if (property.ReadObjectReference) {
 					auto Referenced = property.ReadObjectReference(instance.get());
@@ -194,29 +230,21 @@ namespace gargantuan::InstanceSerialization {
 						properties[key] = json::object({{"InstanceReference", Found->second}});
 					else if (property.Nullable) properties[key] = json::object({{"InstanceReference", nullptr}});
 					else throw std::invalid_argument("Non-nullable persisted reference leaves the serialized document");
-					continue;
+					return;
 				}
 
 				auto value = property.Read(instance.get());
 				if (auto serialized = TrySerializeValue(value); serialized.has_value()) {
 					properties[key] = json::object({serialized.value()});
 				}
-			}
-
-			if (definition->BaseSchemaId) {
-				auto *superclass = InstanceClassRegistry::GetDefinitionBySchemaId(*definition->BaseSchemaId);
-				if (!superclass) throw std::runtime_error("Published class has no registered base SchemaId");
-				SerializeProperties(superclass, instance, state, properties);
-			}
+			});
 		}
 
 		json SerializeInstance(std::shared_ptr<Instance> instance, SerializationState &state) {
 			if (state.InstanceMap.contains(instance)) {
 				return state.InstanceMap.at(instance);
 			}
-			if (auto Script = std::dynamic_pointer_cast<LuaSourceContainer>(instance))
-				if (!ProjectId::Parse(Script->GetSourceId()) || !state.SourceIds.insert(Script->GetSourceId()).second)
-					throw std::invalid_argument("Persisted Script SourceId is invalid or duplicated");
+			CollectSourceId(*instance, state.SourceIds);
 
 			std::vector<json> children;
 			children.reserve(instance->Children.size());
@@ -285,7 +313,7 @@ namespace gargantuan::InstanceSerialization {
 		switch (format) {
 		case InstanceFormat::Json: {
 			Json::SerializationState state;
-			Json::CollectDocumentNodes(instance, state);
+			CollectDocumentNodes(std::span(&instance, 1), state.NodeIds, [](Instance &, std::uint32_t) {});
 			auto serialized = Json::SerializeInstance(instance, state);
 			serialized["Version"] = 5;
 			auto Encoded = JsonCodec::Encode(serialized, "Instance persistence");
@@ -311,6 +339,129 @@ namespace gargantuan::InstanceSerialization {
 		auto Encoded = JsonCodec::Encode(Placeholder, "Empty project");
 		if (!Encoded) throw std::runtime_error(Encoded.error().Format());
 		return std::move(*Encoded);
+	}
+
+	namespace {
+		struct GasCaptureBudget {
+			std::size_t ValueCount = 0;
+			std::size_t TextBytes = 0;
+
+			void AddText(std::string_view Text) {
+				if (Text.size() > Gas::MaximumDocumentBytes - TextBytes)
+					throw std::length_error("GAS document exceeds its byte limit");
+				TextBytes += Text.size();
+			}
+
+			void AddValue(std::string_view Name, const Gas::Value &Value) {
+				if (++ValueCount > Gas::MaximumValues)
+					throw std::length_error("GAS document exceeds its value-count limit");
+				AddText(Name);
+				const auto *Wire = std::get_if<WireValue>(&Value);
+				if (!Wire) return;
+				if (const auto *Text = std::get_if<std::string>(Wire)) AddText(*Text);
+				if (const auto *Enum = std::get_if<WireEnumItem>(Wire)) {
+					AddText(Enum->EnumType);
+					AddText(Enum->Item);
+				}
+			}
+		};
+
+		Gas::Properties CaptureGasProperties(const std::map<std::string, WireValue> &Values,
+			GasCaptureBudget &Budget) {
+			Gas::Properties Result;
+			for (const auto &[Name, Value] : Values) {
+				const auto Entry = Result.emplace_hint(Result.end(), Name, Value);
+				Budget.AddValue(Name, Entry->second);
+			}
+			return Result;
+		}
+
+		Gas::Value CaptureGasProperty(Instance &Node, const std::string &Name,
+			const InstanceProperty &Property, const DocumentNodeIds &Ids) {
+			if (Property.ReadEnumValue) return WireValue(ReadSavedEnum(Node, Property));
+			if (Property.ReadObjectReference) {
+				const auto Target = Property.ReadObjectReference(&Node);
+				if (!Target && Property.Nullable) return Gas::LocalReference{};
+				if (Target) {
+					const auto Found = Ids.find(Target.get());
+					if (Found != Ids.end()) return Gas::LocalReference{Found->second};
+				}
+				throw std::invalid_argument("GAS reference is unresolved or leaves the selected graph: " + Name);
+			}
+			auto Encoded = EncodeNativeWireValue(Property.Read(&Node));
+			if (!Encoded || std::holds_alternative<WireSchemaEnumValue>(*Encoded))
+				throw std::invalid_argument("GAS has no persistence adapter for native property " + Name);
+			return std::move(*Encoded);
+		}
+
+		Gas::Node CaptureGasNode(Instance &Object, std::uint32_t Parent, const DocumentNodeIds &Ids,
+			GasCaptureBudget &Budget) {
+			if (Object.GetDestroyed() || Object.IsDestroying())
+				throw std::invalid_argument("GAS graph contains a destroyed Instance");
+			const auto *Definition = InstanceClassRegistry::GetDefinition(&Object);
+			if (!Definition || !InstanceClassRegistry::IsConstructible(*Definition))
+				throw std::invalid_argument("GAS graph contains an unavailable class");
+			Gas::Node Node;
+			Node.Parent = Parent;
+			Node.Class = Definition->Id;
+			Node.DefinitionVersion = Definition->DefinitionVersion;
+			Node.Name = Object.GetName();
+			Budget.AddText(Node.Name);
+			VisitSavedProperties(*Definition, [&](const std::string &Name, const InstanceProperty &Property) {
+				auto Value = CaptureGasProperty(Object, Name, Property, Ids);
+				Budget.AddValue(Name, Value);
+				Node.SavedProperties.insert_or_assign(Name, std::move(Value));
+			});
+			const auto Security = ScriptSecurityContext::CoreTrusted();
+			const auto &Schema = GetActiveRuntimeSchemaRegistry();
+			Node.Attributes = CaptureGasProperties(Object.GetAttributeValues(Security), Budget);
+			for (const auto &[Id, Properties] : Object.GetExtensionPropertyOverrides(Security)) {
+				const auto *Extension = Schema.FindExtensionById(Id);
+				if (!Extension) throw std::invalid_argument("GAS extension definition is missing");
+				Node.Extensions.push_back({Id, Extension->DefinitionVersion, CaptureGasProperties(Properties, Budget)});
+			}
+			for (const auto &[Id, Properties] : Object.GetCustomClassPropertyOverrides(Security)) {
+				const auto *DeclaringClass = Schema.FindClassById(Id);
+				if (!DeclaringClass) throw std::invalid_argument("GAS custom property class is missing");
+				Node.CustomProperties.push_back({Id, DeclaringClass->DefinitionVersion,
+					CaptureGasProperties(Properties, Budget)});
+			}
+			if (auto World = Object.GetDataModel())
+				Node.Tags = World->Tags.GetTags(World->GetObjectId(), Object.GetObjectId(), Security);
+			else Node.Tags = Object.GetDetachedTagsForAdoption();
+			for (const auto &Tag : Node.Tags) Budget.AddText(Tag);
+			return Node;
+		}
+	}
+
+	SerializationResult<Gas::Document> CaptureGasDocument(
+		std::span<const std::shared_ptr<Instance>> Roots, Gas::DocumentKind Kind,
+		std::optional<Gas::PlaceMetadata> Place, std::vector<Gas::Dependency> Dependencies) {
+		try {
+			AssertAuthoritativeMutation("CaptureGasDocument");
+			RequireFrozenRuntimeSchema("CaptureGasDocument");
+			Gas::Document Result{.Kind = Kind, .Dependencies = std::move(Dependencies), .Place = std::move(Place)};
+			DocumentNodeIds Ids;
+			std::vector<std::pair<Instance *, std::uint32_t>> Ordered;
+			CollectDocumentNodes(Roots, Ids, [&](Instance &Object, std::uint32_t Parent) {
+				Ordered.emplace_back(&Object, Parent);
+			});
+			Result.Nodes.reserve(Ordered.size());
+			GasCaptureBudget Budget;
+			std::unordered_set<std::string> SourceIds;
+			for (const auto &[Object, Parent] : Ordered) {
+				CollectSourceId(*Object, SourceIds);
+				Result.Nodes.push_back(CaptureGasNode(*Object, Parent, Ids, Budget));
+			}
+			if (auto Validated = Gas::Encode(Result); !Validated) return std::unexpected(Validated.error());
+			return Result;
+		} catch (const std::length_error &Error) {
+			return SerializationFailure(SerializationErrorCode::LimitExceeded, Error.what(), "GAS graph capture");
+		} catch (const std::bad_alloc &) {
+			return SerializationFailure(SerializationErrorCode::InternalFailure, "Allocation failed", "GAS graph capture");
+		} catch (const std::exception &Error) {
+			return SerializationFailure(SerializationErrorCode::InvalidValue, Error.what(), "GAS graph capture");
+		}
 	}
 
 	// Deserialization
@@ -956,72 +1107,75 @@ namespace gargantuan::InstanceSerialization {
 			return std::move(*Parsed);
 		}
 
-		DeserializationState MaterializeJson(const json &Contents, bool ApplyPendingTags, bool PreserveSourceIds = true) {
+		DeserializationState MaterializeJsonRoots(std::span<const json> Documents, int Version,
+			bool ApplyPendingTags, bool PreserveSourceIds, std::vector<std::shared_ptr<Instance>> &Roots) {
 			DeserializationState state;
 			state.PreserveSourceIds = PreserveSourceIds;
-			const auto version = Contents["Version"].get<int>();
-			state.FormatVersion = static_cast<std::uint32_t>(version);
+			state.FormatVersion = static_cast<std::uint32_t>(Version);
 			auto Rollback = [&] {
-			// A failed child attachment can leave detached, already constructed nodes
-			// outside the root's hierarchy. Both indexes own those nodes until cleared.
-			for (const auto &[_, Node] : state.DocumentNodes)
-				if (Node && !Node->GetDestroyed()) Node->Destroy();
-			for (const auto &[Node, _] : state.PendingTags)
-				if (Node && !Node->GetDestroyed()) Node->Destroy();
-			state.PendingTags.clear();
-			state.PendingReferences.clear();
-			state.DocumentNodes.clear();
-		};
-			std::optional<std::shared_ptr<Instance>> maybeInstance;
+				// Failed child attachment can leave constructed nodes outside any root.
+				for (const auto &[_, Node] : state.DocumentNodes)
+					if (Node && !Node->GetDestroyed()) Node->Destroy();
+				for (const auto &[Node, _] : state.PendingTags)
+					if (Node && !Node->GetDestroyed()) Node->Destroy();
+				state.PendingTags.clear();
+				state.PendingReferences.clear();
+				state.DocumentNodes.clear();
+				Roots.clear();
+			};
 			try {
-				maybeInstance = TryDeserializeInstance(
-					Contents, state, version >= 1, version >= 2, version >= 3, version >= 4, version >= 4
-				);
+				Roots.reserve(Documents.size());
+				for (const auto &Contents : Documents) {
+					auto Root = TryDeserializeInstance(
+						Contents, state, Version >= 1, Version >= 2, Version >= 3, Version >= 4, Version >= 4);
+					if (!Root) {
+						Rollback();
+						return state;
+					}
+					Roots.push_back(std::move(*Root));
+				}
 			} catch (const std::exception &Error) {
 				state.PushError("Failed to validate instance document: {}", Error.what());
 				Rollback();
 				return state;
 			}
-			if (maybeInstance.has_value()) {
-				try {
-					for (const auto &Pending : state.PendingReferences) {
-						WireValue Value = std::monostate{};
-						if (Pending.TargetId) {
-							auto Found = state.DocumentNodes.find(*Pending.TargetId);
-							if (Found == state.DocumentNodes.end())
-								throw std::invalid_argument("Persisted reference target is absent from this document");
-							Value = WireObjectReference{WireObjectId::FromObjectId(Found->second->GetObjectId())};
-						}
-						if (Pending.Owner->ValidatePropertyWireMutation(
-							Pending.Property, Value, Enums::Permission::Engine,
-							ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success)
-							throw std::invalid_argument("Persisted reference target has an invalid type or scope");
+			try {
+				for (const auto &Pending : state.PendingReferences) {
+					WireValue Value = std::monostate{};
+					if (Pending.TargetId) {
+						auto Found = state.DocumentNodes.find(*Pending.TargetId);
+						if (Found == state.DocumentNodes.end())
+							throw std::invalid_argument("Persisted reference target is absent from this document");
+						Value = WireObjectReference{WireObjectId::FromObjectId(Found->second->GetObjectId())};
 					}
-					for (const auto &Pending : state.PendingReferences) {
-						WireValue Value = std::monostate{};
-						if (Pending.TargetId)
-							Value = WireObjectReference{WireObjectId::FromObjectId(
-								state.DocumentNodes.at(*Pending.TargetId)->GetObjectId())};
-						if (Pending.Owner->ApplyPropertyWireMutation(
-							Pending.Property, Value, Enums::Permission::Engine,
-							ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success)
-							throw std::invalid_argument("Persisted reference mutation was rejected");
-					}
-					for (const auto &[instance, tags] : state.PendingTags) {
-						if (!ApplyPendingTags) {
-							instance->SetDetachedTagsForAdoption(tags);
-							continue;
-						}
-						auto dataModel = instance->GetDataModel();
-						if (!dataModel && !tags.empty()) throw std::runtime_error("Tagged Instance is not owned by a DataModel");
-						if (dataModel) for (const auto &tag : tags)
-							(void)dataModel->Tags.Add(dataModel->GetObjectId(), instance->GetObjectId(), tag, ScriptSecurityContext::CoreTrusted());
-					}
-					state.Ok = true;
-					state.Instance = maybeInstance.value();
-				} catch (const std::exception &error) {
-					state.PushError("Failed to resolve references or rebuild tag index: {}", error.what());
+					if (Pending.Owner->ValidatePropertyWireMutation(
+						Pending.Property, Value, Enums::Permission::Engine,
+						ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success)
+						throw std::invalid_argument("Persisted reference target has an invalid type or scope");
 				}
+				for (const auto &Pending : state.PendingReferences) {
+					WireValue Value = std::monostate{};
+					if (Pending.TargetId)
+						Value = WireObjectReference{WireObjectId::FromObjectId(
+							state.DocumentNodes.at(*Pending.TargetId)->GetObjectId())};
+					if (Pending.Owner->ApplyPropertyWireMutation(
+						Pending.Property, Value, Enums::Permission::Engine,
+						ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success)
+						throw std::invalid_argument("Persisted reference mutation was rejected");
+				}
+				for (const auto &[instance, tags] : state.PendingTags) {
+					if (!ApplyPendingTags) {
+						instance->SetDetachedTagsForAdoption(tags);
+						continue;
+					}
+					auto dataModel = instance->GetDataModel();
+					if (!dataModel && !tags.empty()) throw std::runtime_error("Tagged Instance is not owned by a DataModel");
+					if (dataModel) for (const auto &tag : tags)
+						(void)dataModel->Tags.Add(dataModel->GetObjectId(), instance->GetObjectId(), tag, ScriptSecurityContext::CoreTrusted());
+				}
+				state.Ok = true;
+			} catch (const std::exception &error) {
+				state.PushError("Failed to resolve references or rebuild tag index: {}", error.what());
 			}
 			if (!state.Ok) Rollback();
 			else {
@@ -1030,6 +1184,14 @@ namespace gargantuan::InstanceSerialization {
 			}
 
 			return state;
+		}
+
+		DeserializationState MaterializeJson(const json &Contents, bool ApplyPendingTags, bool PreserveSourceIds = true) {
+			std::vector<std::shared_ptr<Instance>> Roots;
+			auto State = MaterializeJsonRoots(std::span(&Contents, 1), Contents["Version"].get<int>(),
+				ApplyPendingTags, PreserveSourceIds, Roots);
+			if (State.Ok) State.Instance = std::move(Roots.front());
+			return State;
 		}
 
 		DeserializationState DeserializeImpl(InstanceFormat format, std::istream &input, bool ApplyPendingTags, bool PreserveSourceIds = true) {
@@ -1053,6 +1215,128 @@ namespace gargantuan::InstanceSerialization {
 				return state;
 			}
 			return MaterializeJson(*Prepared, ApplyPendingTags, PreserveSourceIds);
+		}
+
+		json ProjectGasNativeProperty(const Gas::Value &Value, const InstanceProperty &Property) {
+			if (const auto *Reference = std::get_if<Gas::LocalReference>(&Value)) {
+				if (Property.SemanticType != InstanceProperty::DataType::ObjectReference ||
+					(!Property.Nullable && Reference->Target == 0))
+					throw std::invalid_argument("GAS reference has an incompatible reflected property type");
+				return json::object({{"InstanceReference", Reference->Target == 0
+					? json(nullptr) : json(Reference->Target)}});
+			}
+			const auto *Wire = std::get_if<WireValue>(&Value);
+			if (!Wire || std::holds_alternative<std::monostate>(*Wire) ||
+				std::holds_alternative<WireSchemaEnumValue>(*Wire) ||
+				Property.SemanticType == InstanceProperty::DataType::ObjectReference)
+				throw std::invalid_argument("GAS native property value has no persistence adapter");
+			if (const auto *Enum = std::get_if<WireEnumItem>(Wire))
+				return json::object({{"EnumItem", {Enum->EnumType, Enum->Item}}});
+			auto Encoded = JsonCodec::EncodeWireValue(*Wire);
+			const auto Type = Encoded["Type"].get<std::string>();
+			return json::object({{Type, std::move(Encoded["Value"])}});
+		}
+
+		json ProjectGasWireProperties(const Gas::Properties &Properties) {
+			auto Result = json::object();
+			for (const auto &[Name, Value] : Properties) {
+				const auto *Wire = std::get_if<WireValue>(&Value);
+				if (!Wire) throw std::invalid_argument("GAS grouped property or attribute has an unsupported value");
+				Result[Name] = JsonCodec::EncodeWireValue(*Wire);
+			}
+			return Result;
+		}
+
+		json ProjectGasGroups(const std::vector<Gas::PropertyGroup> &Groups, std::string_view IdentityField) {
+			std::map<SchemaId, const Gas::PropertyGroup *> Ordered;
+			for (const auto &Group : Groups) Ordered.emplace(Group.Owner, &Group);
+			auto Result = json::array();
+			for (const auto &[Id, Group] : Ordered) {
+				Result.push_back({
+					{std::string(IdentityField), Id.ToString()},
+					{"DefinitionVersion", Group->DefinitionVersion},
+					{"Properties", ProjectGasWireProperties(Group->Values)},
+				});
+			}
+			return Result;
+		}
+
+		json ProjectGasNode(const Gas::Node &Node, std::uint32_t Id,
+			std::unordered_set<std::string> &SourceIds) {
+			const auto *Definition = InstanceClassRegistry::GetDefinitionBySchemaId(Node.Class);
+			if (!Definition || Definition->DefinitionVersion != Node.DefinitionVersion ||
+				!InstanceClassRegistry::IsConstructible(*Definition))
+				throw std::invalid_argument("GAS Instance class or definition version is unavailable");
+			auto Properties = json::object();
+			for (const auto &[Name, Value] : Node.SavedProperties) {
+				const auto Property = Definition->AllProperties.find(Name);
+				if (Property == Definition->AllProperties.end() || !IsNativeSavedProperty(Name, *Property->second))
+					throw std::invalid_argument("GAS property is unknown or no longer saved: " + Name);
+				Properties[Name] = ProjectGasNativeProperty(Value, *Property->second);
+			}
+			constexpr auto ScriptBase = SchemaId::FromNativeName("Engine", "LuaSourceContainer");
+			if (GetActiveRuntimeSchemaRegistry().IsClassDerivedFrom(Node.Class, ScriptBase)) {
+				const auto SourceId = Node.SavedProperties.find("SourceId");
+				const auto *Wire = SourceId == Node.SavedProperties.end()
+					? nullptr : std::get_if<WireValue>(&SourceId->second);
+				const auto *Text = Wire ? std::get_if<std::string>(Wire) : nullptr;
+				if (!Text || !ProjectId::Parse(*Text) || !SourceIds.insert(*Text).second)
+					throw std::invalid_argument("GAS Script SourceId is missing, invalid or duplicated");
+			}
+			return json{
+				{"Name", Node.Name},
+				{"ClassName", Definition->ConstructionKind == SchemaClassConstructionKind::CustomData
+					? Definition->CanonicalName : Definition->ClassName},
+				{"ClassSchemaId", Node.Class.ToString()},
+				{"ClassDefinitionVersion", Node.DefinitionVersion},
+				{"NodeId", Id},
+				{"Properties", std::move(Properties)},
+				{"Attributes", ProjectGasWireProperties(Node.Attributes)},
+				{"Extensions", ProjectGasGroups(Node.Extensions, "ExtensionSchemaId")},
+				{"CustomProperties", ProjectGasGroups(Node.CustomProperties, "DeclaringClassSchemaId")},
+				{"Tags", Node.Tags},
+				{"Children", json::array()},
+			};
+		}
+
+		std::vector<json> ProjectGasForest(const Gas::Document &Document) {
+			// GAS and the JSON project format share this private hydration path.
+			// The projection contains no file I/O, JSON text, or executable state.
+			std::vector<json> Roots;
+			std::vector<std::pair<std::uint32_t, json>> Ancestors;
+			std::unordered_set<std::string> SourceIds;
+			auto CompleteNode = [&] {
+				auto Node = std::move(Ancestors.back().second);
+				Ancestors.pop_back();
+				if (Ancestors.empty()) Roots.push_back(std::move(Node));
+				else Ancestors.back().second["Children"].push_back(std::move(Node));
+			};
+			std::uint32_t Id = 0;
+			for (const auto &Node : Document.Nodes) {
+				while (!Ancestors.empty() && Ancestors.back().first != Node.Parent) CompleteNode();
+				++Id;
+				Ancestors.emplace_back(Id, ProjectGasNode(Node, Id, SourceIds));
+			}
+			while (!Ancestors.empty()) CompleteNode();
+			return Roots;
+		}
+	}
+
+	GasMaterializationResult MaterializeGasDocument(const Gas::Document &Document, bool PreserveSourceIds) {
+		try {
+			AssertAuthoritativeMutation("MaterializeGasDocument");
+			RequireFrozenRuntimeSchema("MaterializeGasDocument");
+			// Native callers can assemble DTOs without decoding a file first.
+			if (auto Validated = Gas::Encode(Document); !Validated) return {{}, {Validated.error().Format()}};
+			const auto Projected = ProjectGasForest(Document);
+			GasMaterializationResult Result;
+			auto State = MaterializeJsonRoots(Projected, 5, Document.Kind == Gas::DocumentKind::Place,
+				PreserveSourceIds, Result.Roots);
+			for (const auto &Root : Result.Roots) Root->MarkPersistenceSubtreeArchivable();
+			Result.Errors = std::move(State.Errors);
+			return Result;
+		} catch (const std::exception &Error) {
+			return {{}, {std::string("GAS materialization failed: ") + Error.what()}};
 		}
 	}
 

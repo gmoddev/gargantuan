@@ -210,6 +210,7 @@ namespace gargantuan {
 		}
 
 	  private:
+		friend class MutationGateway;
 		friend class PreparedPropertyCommit;
 		static TransactionId AllocatePreparedIdentity();
 		void InstallPrepared(AuthoritativeTransactionHistory &Candidate) noexcept;

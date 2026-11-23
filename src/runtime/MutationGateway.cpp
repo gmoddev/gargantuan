@@ -3,14 +3,19 @@
 #include "PreparedPropertyCommit.hpp"
 
 #include "gargantuan/assets/InstanceSerialization.hpp"
+#include "gargantuan/assets/GasDependencies.hpp"
+#include "gargantuan/assets/GasInstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/LuaSourceContainer.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
+#include "gargantuan/render/RenderDirtyAccumulator.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
+#include "gargantuan/services/AssetService.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -207,7 +212,8 @@ namespace gargantuan {
 				using Command = std::decay_t<decltype(CommandValue)>;
 				if constexpr (requires { CommandValue.Object; })
 					if (Shared(CommandValue.Object)) return true;
-				if constexpr (std::is_same_v<Command, CreateObjectCommand> || std::is_same_v<Command, RestoreSubtreeCommand>)
+				if constexpr (std::is_same_v<Command, CreateObjectCommand> ||
+					std::is_same_v<Command, RestoreSubtreeCommand> || std::is_same_v<Command, ImportGasModelCommand>)
 					return Shared(CommandValue.Parent);
 				if constexpr (std::is_same_v<Command, ReparentObjectCommand>)
 					return CommandValue.Parent && Shared(*CommandValue.Parent);
@@ -288,7 +294,125 @@ namespace gargantuan {
 			return std::visit(
 				[&](auto &CommandValue) -> MutationResult {
 					using Command = std::decay_t<decltype(CommandValue)>;
-					if constexpr (std::is_same_v<Command, RestoreSubtreeCommand>) {
+					if constexpr (std::is_same_v<Command, ImportGasModelCommand>) {
+						if (Authority.GetOrigin() != MutationCommandOrigin::Studio ||
+							!securityContext.HasCapability(ScriptCapability::EditorCommands))
+							return {MutationStatus::Unauthorized, {}, "GASM insertion requires Studio authoring authority"};
+						if (Authority.GetTransactionId())
+							return {MutationStatus::Conflict, {}, "GASM insertion uses a single implicit authoring transaction"};
+						const auto Parent = ObjectRegistry::Get().Lookup(CommandValue.Parent);
+						if (!Parent) return {MutationStatus::StaleObject, {}, "Import parent identity is stale"};
+						const auto World = Parent->GetDataModel();
+						if (!World || Authority.GetScope() != World->GetObjectId())
+							return {MutationStatus::InvalidParent, {}, "Import parent is outside the project scope"};
+						if (CommandValue.ExpectedRevision != World->GetAuthoritativeRevision())
+							return {MutationStatus::Conflict, {}, "Project changed before GASM insertion"};
+						if (World->Transactions.GetOpenCount() != 0 || World->HasDeferredRevision())
+							return {MutationStatus::Conflict, {}, "Commit the open transaction before importing a model"};
+						World->EnsureAuthoritativeRevisionAvailable();
+						const auto &Document = CommandValue.DocumentValue;
+						if (!Document || Document->Kind != Gas::DocumentKind::Model || Document->Nodes.empty() ||
+							Document->Nodes.size() > Gas::MaximumInstances)
+							return {MutationStatus::ValidationFailed, {}, "GASM model document is invalid"};
+						const auto RootCount = std::ranges::count(Document->Nodes, std::uint32_t{0}, &Gas::Node::Parent);
+						const auto Count = Document->Nodes.size() + static_cast<std::size_t>(RootCount > 1);
+						if (!World->CanAdoptInstances(Count))
+							return {MutationStatus::ResourceLimit, {}, "GASM insertion exceeds the project object limit"};
+						for (const auto &Node : Document->Nodes) {
+							const auto *Class = InstanceClassRegistry::GetDefinitionBySchemaId(Node.Class);
+							if (!Class || !Class->EditorVisible || !InstanceClassRegistry::IsConstructible(*Class) ||
+								World->IsProtectedServiceClass(Node.Class))
+								return {MutationStatus::InvalidClass, {}, "GASM contains a class that cannot be inserted"};
+							if (Node.Class == SchemaId::FromNativeName("Engine", "FileLink"))
+								return {MutationStatus::ValidationFailed, {}, "GASM insertion does not link destination source mounts"};
+						}
+						const auto Assets = std::dynamic_pointer_cast<AssetService>(
+							World->FindFirstChildOfClass("AssetService", false));
+						const auto Pins = Gas::ResolveDependencies(*Document, Assets.get(), false);
+						if (!Pins || *Pins != Document->Dependencies)
+							return {MutationStatus::ValidationFailed, {}, "GASM asset pins do not match the destination catalog"};
+
+						std::shared_ptr<Instance> Root;
+						SubtreeTransactionChange Change;
+						{
+							ScopedChangeJournalSuppression Suppression;
+							auto Staged = InstanceSerialization::MaterializeGasDocument(*Document, false);
+							if (!Staged.Succeeded())
+								return {MutationStatus::ValidationFailed, {}, "GASM state is incompatible with the active schema"};
+							if (Staged.Roots.size() == 1) {
+								Root = std::move(Staged.Roots.front());
+							} else {
+								// Adopt a forest as one subtree so cross-root references become
+								// DataModel-owned together using the existing adoption contract.
+								Root = std::make_shared<Folder>();
+								Root->SetName("Imported Model");
+								for (const auto &Child : Staged.Roots) Child->SetParent(Root);
+							}
+							Root->MarkPersistenceSubtreeArchivable();
+							if (AncestryDepth(Parent) + SubtreeDepth(Root) > MaximumProtocolJsonDepth)
+								return {MutationStatus::ResourceLimit, {}, "GASM insertion exceeds the project hierarchy limit"};
+							auto Snapshot = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Root);
+							if (Snapshot.size() > MaximumTransactionSubtreeBytes)
+								return {MutationStatus::TransactionLimit, {}, "GASM insertion exceeds the Undo history size limit"};
+							Change = {SubtreeTransactionKind::Create, Root->GetObjectId(), Parent->GetObjectId(), {},
+								std::move(Snapshot)};
+							std::vector<std::shared_ptr<Instance>> Nodes{Root};
+							Root->CollectDescendants(Nodes);
+							Change.Objects.reserve(Nodes.size());
+							for (const auto &Node : Nodes) Change.Objects.push_back(Node->GetObjectId());
+						}
+						const auto NewRoot = Change.Root;
+						CommittedTransaction Action{
+							.Id = AuthoritativeTransactionHistory::AllocatePreparedIdentity(),
+							.Label = "Import GAS model",
+							.Origin = TransactionOrigin::Studio,
+							.StartingRevision = CommandValue.ExpectedRevision,
+							.ResultingRevision = CommandValue.ExpectedRevision + 1,
+						};
+						Action.Changes.emplace_back(std::move(Change));
+						Action.SemanticBytes = EstimateTransactionChangeBytes(Action.Changes.front());
+						auto History = World->Transactions;
+						if (!Action.Id.IsValid() || Action.SemanticBytes > MaximumTransactionSemanticBytes ||
+							Action.SemanticBytes > History.RetainedByteLimit)
+							return {MutationStatus::TransactionLimit, {}, "GASM insertion exceeds the Undo history bounds"};
+						const auto CurrentUndo = World->Transactions.GetUndoTransaction();
+						const auto CurrentRedo = World->Transactions.GetRedoTransaction();
+						History.Retain(std::move(Action));
+
+						std::vector<BufferedChangeRecord> Records;
+						bool Changed = false;
+						{
+							ScopedAuthoritativeRevisionDeferral DeferRevision(*World, Changed);
+							try {
+								{
+									ScopedChangeJournalSuppression Suppression;
+									Root->SetParent(Parent);
+								}
+								ScopedChangeJournalCapture Capture;
+								Root->PublishReplicationSubtree(World->GetObjectId());
+								Records = Capture.Take();
+								if (!Changed || Root->GetParent() != Parent || Root->GetDestroyed() ||
+									World->Transactions.GetOpenCount() ||
+									World->Transactions.GetUndoTransaction() != CurrentUndo ||
+									World->Transactions.GetRedoTransaction() != CurrentRedo)
+									throw std::invalid_argument("Authoring state changed during model insertion");
+								ChangeJournal::PreparedJournalBatch Journal(ChangeJournal::Get(), Records);
+								World->Transactions.InstallPrepared(History);
+								Journal.Install();
+								++World->AuthoritativeRevision;
+								Journal.Release();
+							} catch (...) {
+								ScopedChangeJournalSuppression Suppression;
+								Root->Destroy();
+								throw;
+							}
+						}
+						for (const auto &Record : Records) {
+							try { RenderDirtyAccumulator::Get().RecordChange(Record.Scope, Record.Object, Record.Payload); }
+							catch (...) {} // Render recovery can request a full projection after commit.
+						}
+						return {MutationStatus::Success, NewRoot, {}};
+					} else if constexpr (std::is_same_v<Command, RestoreSubtreeCommand>) {
 						if (Authority.GetOrigin() != MutationCommandOrigin::LocalInternal)
 							return {MutationStatus::Unauthorized, std::nullopt, "Subtree restoration is internal-only"};
 						auto Parent = ObjectRegistry::Get().Lookup(CommandValue.Parent);
