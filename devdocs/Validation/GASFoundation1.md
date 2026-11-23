@@ -64,9 +64,16 @@ ceiling and a 1,024 MiB memory ceiling reported 1,225,185 executions,
 | Native checks with hierarchy notification deferral | `1750c03ba98c3e60a152e01627a7f85bf07e07cc` | [Native CI](https://github.com/gmoddev/gargantuan/actions/runs/45252274625) |
 | Relay Rescue place round trip, packages, two-player mission and animated model | `ba3fd78b9cc273f9044c702fd8edf45f8725b86d` | [Ubuntu Clang 19 ASan/UBSan](https://github.com/gmoddev/gargantuan/actions/runs/45250180300/job/137957435891) passed the Relay test, asset-backed GASM test, package input test and graph benchmark. The full job reported 121/122 due to an authoring lifecycle leak. |
 | Native suite after world cleanup and Windows test syntax correction | `70b2953f76e47952323b65914a921ec945e6783b` | [Ubuntu 24.04, Clang 19 ASan/UBSan/LSan](https://github.com/gmoddev/gargantuan/actions/runs/45258517284/job/137986638371) passed 123/123 CTest cases. [Windows native CI](https://github.com/gmoddev/gargantuan/actions/runs/45258517284/job/137986638926) stopped on a name collision in the rendering extraction probe. |
-| Native suite with the rendering probe name collision fixed | `13dbc8fbb760da6a36f2ff76c357036e0fae6f9a` | MSVC 19.50.35728 passed the corrected probe translation unit with `/Zs /std:c++23preview`. [Native CI replay](https://github.com/gmoddev/gargantuan/actions/runs/45267168825). |
+| Native suite with the rendering probe name collision fixed | `13dbc8fbb760da6a36f2ff76c357036e0fae6f9a` | MSVC 19.50.35728 passed the corrected probe translation unit with `/Zs /std:c++23preview`. The first [hosted Windows replay](https://github.com/gmoddev/gargantuan/actions/runs/45267168825/job/138017038001) stopped at the Chocolatey shader SDK download. |
+| Complete hosted native qualification | `32159720b21007cbf1406f1130e8774eafab8b54` | [Windows x64 MSVC 19.52.37029 Release](https://github.com/gmoddev/gargantuan/actions/runs/45267885565/job/138019541598) passed 176/176 CTest cases and the existing Release workload gates. [Linux Ubuntu 24.04, Clang 19 ASan/UBSan/LSan](https://github.com/gmoddev/gargantuan/actions/runs/45267885565/job/138019541237) passed 123/123 CTest cases. |
 | Windows Release GAS, persistence, package and Relay tests | `cca3d151c09b613ce019574416607e2ca8ab346c` | Worker CTest passed 18/18 cases using GNS, including both missions, both package roles, and animated model import |
 | Linux GAS codec, EditorHost and model tests after teardown fixes | `cca3d151c09b613ce019574416607e2ca8ab346c` | Worker CTest passed 3/3 cases under ASan, UBSan and LeakSanitizer |
+
+The complete hosted run uploaded `ctest-results.xml` with SHA-256
+`fa9b1c56808ed338b81cae8fa1f58944451f0f1331e41af28d83dc8f0fdc8bf9`
+for Windows and
+`379f236350d9e1ac6a8039b9a31ab6305feef82827347d111feab30c41473757`
+for Linux.
 
 The focused Linux worker used Ubuntu 24.04 in toolchain image
 `sha256:4eeae307153445eff9e085c872580bc65ee05b43d80c9561ddd3e9a20d269f2d`,
