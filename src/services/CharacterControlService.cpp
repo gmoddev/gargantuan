@@ -93,7 +93,10 @@ namespace gargantuan {
 		ClientSubmitHandler Submit,
 		ClientActionHandler Action,
 		ActionRegistrationHandler Register,
-		PredictionModeHandler Prediction
+		PredictionModeHandler Prediction,
+		PossessionSubmitHandler SubmitPossession,
+		PossessionInputHandler ReadPossession,
+		PossessionMotionHandler MovePossession
 	) {
 		if (RuntimeAttachmentGeneration != 0 || NextRuntimeAttachmentGeneration == 0) return std::nullopt;
 		for (const auto &[Name, Registered] : ActionsByName) {
@@ -106,6 +109,9 @@ namespace gargantuan {
 		ClientAction = std::move(Action);
 		ActionRegistration = std::move(Register);
 		PredictionMode = std::move(Prediction);
+		PossessionSubmit = std::move(SubmitPossession);
+		PossessionInput = std::move(ReadPossession);
+		PossessionMotion = std::move(MovePossession);
 		auto Self = std::dynamic_pointer_cast<CharacterControlService>(shared_from_this());
 		if (!Self) {
 			DetachRuntime(Generation);
@@ -127,6 +133,9 @@ namespace gargantuan {
 		ClientAction = {};
 		ActionRegistration = {};
 		PredictionMode = {};
+		PossessionSubmit = {};
+		PossessionInput = {};
+		PossessionMotion = {};
 		SimulationTick = 0;
 		SimulationDeltaSeconds = 0.0f;
 		ClearPolicyReferences();
@@ -139,6 +148,9 @@ namespace gargantuan {
 		ClientAction = {};
 		ActionRegistration = {};
 		PredictionMode = {};
+		PossessionSubmit = {};
+		PossessionInput = {};
+		PossessionMotion = {};
 		SimulationTick = 0;
 		SimulationDeltaSeconds = 0.0f;
 	}
@@ -268,6 +280,65 @@ namespace gargantuan {
 			Found != Service->ActionsByName.end() && Service->ClientAction && Service->SimulationTick != 0 &&
 				Service->ClientAction(Found->second.Definition.Token, Service->SimulationTick)
 		);
+		return 1;
+	}
+
+	int CharacterControlService::SubmitPossessionIntent(lua_State *L, Instance *InstanceValue) {
+		auto *Service = CheckedService(InstanceValue);
+		RequireDomain(Service->Mode, "SubmitPossessionIntent");
+		if (Service->Mode != RuntimeMode::NetworkClient ||
+			!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::NetworkSend))
+			throw std::runtime_error("[Character:Control] Possession submission requires client network authority");
+		const auto Move = CheckStackValue<Vector2>(L, 2).Value;
+		const auto Facing = CheckStackValue<float>(L, 3);
+		const auto Jump = CheckStackValue<bool>(L, 4);
+		lua_pushboolean(L, Service->PossessionSubmit && Service->SimulationTick != 0 &&
+			Service->PossessionSubmit(Service->SimulationTick, Move, Facing, Jump));
+		return 1;
+	}
+
+	int CharacterControlService::GetPossessionInput(lua_State *L, Instance *InstanceValue) {
+		auto *Service = CheckedService(InstanceValue);
+		RequireDomain(Service->Mode, "GetPossessionInput");
+		if (Service->Mode != RuntimeMode::NetworkServer ||
+			!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::NetworkReceive))
+			throw std::runtime_error("[Character:Control] Possession input requires server network authority");
+		const auto PlayerValue = CheckStackValue<std::shared_ptr<Player>>(L, 2);
+		const auto Sample = PlayerValue && Service->PossessionInput && Service->PreSimulationActive
+			? Service->PossessionInput(*PlayerValue, Service->SimulationTick)
+			: std::nullopt;
+		if (!Sample) {
+			lua_pushnil(L);
+			return 1;
+		}
+		lua_createtable(L, 0, 7);
+		StackValue<Vector2>::Push(L, Vector2(Sample->Movement));
+		lua_setfield(L, -2, "Movement");
+		lua_pushnumber(L, Sample->FacingYawRadians);
+		lua_setfield(L, -2, "FacingYawRadians");
+		lua_pushboolean(L, Sample->JumpRequested);
+		lua_setfield(L, -2, "JumpRequested");
+		lua_pushnumber(L, static_cast<double>(Sample->AuthoritativeTick));
+		lua_setfield(L, -2, "Tick");
+		lua_pushnumber(L, static_cast<double>(Sample->AcknowledgedInput.Value()));
+		lua_setfield(L, -2, "AcknowledgedInput");
+		lua_pushnumber(L, static_cast<double>(Sample->AgeTicks));
+		lua_setfield(L, -2, "AgeTicks");
+		lua_pushboolean(L, Sample->Fresh);
+		lua_setfield(L, -2, "Fresh");
+		return 1;
+	}
+
+	int CharacterControlService::MovePossessedPart(lua_State *L, Instance *InstanceValue) {
+		auto *Service = CheckedService(InstanceValue);
+		RequireDomain(Service->Mode, "MovePossessedPart");
+		if (Service->Mode != RuntimeMode::NetworkServer ||
+			!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::MutateDataModel))
+			throw std::runtime_error("[Character:Control] Possessed movement requires server authority");
+		const auto PlayerValue = CheckStackValue<std::shared_ptr<Player>>(L, 2);
+		const auto Transform = CheckStackValue<CFrame>(L, 3);
+		lua_pushboolean(L, PlayerValue && Service->PossessionMotion && Service->PreSimulationActive &&
+			Service->PossessionMotion(*PlayerValue, Service->SimulationTick, Transform));
 		return 1;
 	}
 

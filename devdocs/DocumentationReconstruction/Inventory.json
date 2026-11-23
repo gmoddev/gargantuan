@@ -4985,6 +4985,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "docs/protocols/gameplay-possession.md",
+      "Purpose": "Gameplay possession wire formats",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Inspect owning source before promoting to current authority",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "docs/src/content/docs/api/datatypes-and-globals.mdx",
       "Purpose": "Datatypes and globals",
       "LastMeaningfulUpdate": null,

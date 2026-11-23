@@ -22,6 +22,21 @@ return c({
 			asLuau = true,
 			luauSignature = "(self: CharacterControlService, MoveIntent: Vector2, FacingYawRadians: number, JumpRequested: boolean) -> boolean",
 		},
+		SubmitPossessionIntent = {
+			description = "Submits one bounded movement intent for the local Player's current possessed entity.",
+			asLuau = true,
+			luauSignature = "(self: CharacterControlService, MoveIntent: Vector2, FacingYawRadians: number, JumpRequested: boolean) -> boolean",
+		},
+		GetPossessionInput = {
+			description = "Consumes the authoritative possession input for a Player once per simulation tick. Server only.",
+			asLuau = true,
+			luauSignature = "(self: CharacterControlService, Player: Player) -> { Movement: Vector2, FacingYawRadians: number, JumpRequested: boolean, Tick: number, AcknowledgedInput: number, AgeTicks: number, Fresh: boolean }?",
+		},
+		MovePossessedPart = {
+			description = "Commits one bounded server-chosen pose per simulation tick for a possessed anchored BasePart.",
+			asLuau = true,
+			luauSignature = "(self: CharacterControlService, Player: Player, Transform: CFrame) -> boolean",
+		},
 		RequestAction = {
 			description = "Requests a registered semantic action for the trusted local Character.",
 			asLuau = true,

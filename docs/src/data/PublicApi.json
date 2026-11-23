@@ -707,7 +707,7 @@
       "Name": "CharacterControlService",
       "Kind": "Service",
       "Source": "assets/services/CharacterControlService.luau",
-      "SourceSha256": "4d412883fae3289e3a8b4f511eaac8114c7a7dffaf28b69c7782cf447aaed1ff",
+      "SourceSha256": "80e9fd6597f9d83dca389e7802e04339c283b3d2311b1ea885e9a4651cf937a4",
       "Description": "A narrow runtime bridge between replaceable Character policy and native network authority.",
       "Extends": "Instance",
       "Abstract": false,
@@ -715,6 +715,18 @@
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
       "Methods": [
+        {
+          "Name": "GetPossessionInput",
+          "Description": "Consumes the authoritative possession input for a Player once per simulation tick. Server only.",
+          "AsLuau": true,
+          "LuauSignature": "(self: CharacterControlService, Player: Player) -> { Movement: Vector2, FacingYawRadians: number, JumpRequested: boolean, Tick: number, AcknowledgedInput: number, AgeTicks: number, Fresh: boolean }?"
+        },
+        {
+          "Name": "MovePossessedPart",
+          "Description": "Commits one bounded server-chosen pose per simulation tick for a possessed anchored BasePart.",
+          "AsLuau": true,
+          "LuauSignature": "(self: CharacterControlService, Player: Player, Transform: CFrame) -> boolean"
+        },
         {
           "Name": "RegisterAction",
           "Description": "Registers bounded runtime action policy and pinned animation identity.",
@@ -748,6 +760,12 @@
         {
           "Name": "SubmitMoveIntent",
           "Description": "Submits bounded semantic movement intent for the trusted local Character.",
+          "AsLuau": true,
+          "LuauSignature": "(self: CharacterControlService, MoveIntent: Vector2, FacingYawRadians: number, JumpRequested: boolean) -> boolean"
+        },
+        {
+          "Name": "SubmitPossessionIntent",
+          "Description": "Submits one bounded movement intent for the local Player's current possessed entity.",
           "AsLuau": true,
           "LuauSignature": "(self: CharacterControlService, MoveIntent: Vector2, FacingYawRadians: number, JumpRequested: boolean) -> boolean"
         }
@@ -5748,6 +5766,31 @@
         "GameSessionMessageKind",
         "GameSessionServerAccepted",
         "SessionIdentityKind"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/network/GameplayInput.hpp",
+      "Types": [
+        "GameplayInputClient",
+        "GameplayInputLeaseEpochDomain",
+        "GameplayInputMetrics",
+        "GameplayInputSample",
+        "GameplayInputSequenceDomain",
+        "GameplayInputServer",
+        "INetworkScheduler",
+        "Lease",
+        "NetworkLimits",
+        "ReceivedMessageEvent"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/network/GameplayPose.hpp",
+      "Types": [
+        "GameplayPoseControl",
+        "GameplayPosePresentation",
+        "GameplayPoseSnapshot",
+        "ReceivedMessageEvent",
+        "Replica"
       ]
     },
     {

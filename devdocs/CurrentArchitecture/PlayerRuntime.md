@@ -150,6 +150,48 @@ assignments preserve the existing relationship. Observers can use
 this notification is rejected. `Player.Character` retains its existing
 assembly and teardown contract.
 
+### Network possession input and pose
+
+`CharacterControlService:SubmitPossessionIntent(Movement, Facing, Jump)`
+accepts local client intent for the trusted LocalPlayer. The client compares
+the replicated possession with the live replica resolved from the server's
+lease. Admission requires a ready connection, a structurally materialized
+target, a fresh control epoch, a monotonic input sequence, and bounded intent.
+Packet processing retains only the newest analog sample and a latched jump
+edge. It runs on Main without executing a project callback at packet ingress.
+Rebinding retires old leases before admitting new owners.
+
+Server project code consumes one input sample per Player per authoritative
+frame through `GetPossessionInput(Player)` in `RunService.PreSimulation`.
+A neutral sample has `Fresh = false`. A missing lease or second read returns
+`nil`. The Luau table carries the authoritative tick, acknowledged input,
+input age, yaw, movement vector and jump edge. Stock Character control is
+suspended while a distinct entity is possessed. Restoring stock control
+uses the existing Character assembly and input contracts.
+
+`MovePossessedPart(Player, Transform)` admits one finite rigid transform for
+the ready Player's independent anchored BasePart per `PreSimulation` frame.
+Translation is capped at 16 metres per update. The controller chooses
+collision policy through the existing world queries. The accepted transform
+updates the authoritative part, spatial projection and physics synchronization
+through existing property observers. Runtime movement avoids per-frame
+structural writes. Leaving this mode commits the final pose for later
+structural readers.
+
+After simulation, the session publishes the current pose to structurally
+materialized recipients every three simulation ticks. A peer receives
+at most 16 active pose streams, with its own target selected first. The client
+applies the latest valid authoritative sample to the local anchored body.
+Render extraction uses a bounded, interpolated presentation offset without
+extrapolation. A part nested under a Character leaves this pose mode so it
+cannot compete with the Character transform owner.
+
+The generic relationship accepts any eligible Instance. The realtime
+pose primitive currently supports anchored BaseParts outside Character
+hierarchies. Dynamic bodies use the existing physics APIs and structural
+readback policy. GCHR still owns Character prediction, correction and
+network animation actions.
+
 `Character` is a Folder-based semantic root with authoritative `CFrame`, its
 `Position` alias, an optional descendant `RootPart`, and the bounded
 `Character:Move` admission method. `KinematicCharacter : Character` adds only

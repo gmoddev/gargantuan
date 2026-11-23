@@ -396,7 +396,14 @@ namespace gargantuan {
 
 			{
 				G_PROFILE("Simulation");
-				RunService->PreSimulation->Fire(deltaTime);
+				if (CharacterControl) CharacterControl->SetPreSimulationActive(true);
+				try {
+					RunService->PreSimulation->Fire(deltaTime);
+				} catch (...) {
+					if (CharacterControl) CharacterControl->SetPreSimulationActive(false);
+					throw;
+				}
+				if (CharacterControl) CharacterControl->SetPreSimulationActive(false);
 				if (Destroyed) return;
 				runtime_detail::MeasureWork(runtime_detail::WorkPhase::Physics,
 					[&] { WorldRoot->StepPhysics(deltaTime, std::nullopt); });

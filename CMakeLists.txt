@@ -1240,6 +1240,21 @@ if(BUILD_TESTING)
 		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
 	)
 	add_test(NAME GameSessionTests COMMAND gargantuan_game_session_tests)
+	add_test(NAME gargantuan_gameplay_possession_session COMMAND gargantuan_game_session_tests --generic-possession)
+	set_tests_properties(gargantuan_gameplay_possession_session PROPERTIES LABELS "networking;runtime;security" TIMEOUT 45)
+	if(GARGANTUAN_WITH_GNS)
+		target_link_libraries(gargantuan_game_session_tests PRIVATE gargantuan_gns_transport)
+		add_test(NAME gargantuan_gameplay_possession_gns COMMAND gargantuan_game_session_tests --generic-possession-gns)
+		set_tests_properties(gargantuan_gameplay_possession_gns PROPERTIES LABELS "networking;runtime;security;gns" TIMEOUT 45)
+	endif()
+	add_executable(gargantuan_gameplay_input_tests "tests/GameplayInputTests.cpp")
+	target_link_libraries(gargantuan_gameplay_input_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_gameplay_input COMMAND gargantuan_gameplay_input_tests)
+	set_tests_properties(gargantuan_gameplay_input PROPERTIES LABELS "networking;runtime;security" TIMEOUT 180)
+	add_executable(gargantuan_gameplay_pose_tests "tests/GameplayPoseTests.cpp")
+	target_link_libraries(gargantuan_gameplay_pose_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_gameplay_pose COMMAND gargantuan_gameplay_pose_tests)
+	set_tests_properties(gargantuan_gameplay_pose PROPERTIES LABELS "networking;runtime;security" TIMEOUT 180)
 	add_executable(gargantuan_frozen_recovery_quote_tests "tests/FrozenRecoveryQuoteTests.cpp")
 	target_link_libraries(gargantuan_frozen_recovery_quote_tests PRIVATE gargantuan_core)
 	add_test(NAME FrozenRecoveryQuoteTests COMMAND gargantuan_frozen_recovery_quote_tests)
@@ -1538,6 +1553,9 @@ if(BUILD_TESTING)
 			gargantuan_remote_luau_tests
 			gargantuan_runtime6_luau_mutation_benchmark
 			gargantuan_character_networking_tests
+			gargantuan_game_session_tests
+			gargantuan_gameplay_input_tests
+			gargantuan_gameplay_pose_tests
 			gargantuan_character_networking_benchmark
 			gargantuan_content_availability_tests
 			gargantuan_content_coarse_policy_tests
@@ -1586,6 +1604,11 @@ if(BUILD_TESTING)
 				endif()
 			endif()
 			foreach(GARGANTUAN_PROTOBUF_RUNTIME IN LISTS GARGANTUAN_PROTOBUF_RUNTIMES)
+				add_custom_command(TARGET gargantuan_game_session_tests POST_BUILD
+					COMMAND ${CMAKE_COMMAND} -E copy_if_different
+						"${GARGANTUAN_PROTOBUF_RUNTIME}"
+						"$<TARGET_FILE_DIR:gargantuan_game_session_tests>"
+				)
 				add_custom_command(TARGET gargantuan_gns_capacity_benchmark POST_BUILD
 					COMMAND ${CMAKE_COMMAND} -E copy_if_different
 						"${GARGANTUAN_PROTOBUF_RUNTIME}"

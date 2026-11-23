@@ -120,6 +120,7 @@ namespace gargantuan::network {
 		[[nodiscard]] const PeerRelevanceSelection *GetSelection(ConnectionId Connection) const;
 		[[nodiscard]] std::shared_ptr<const PeerRelevanceSelection> GetSelectionSnapshot(ConnectionId Connection) const;
 		[[nodiscard]] std::span<const glm::vec3> GetResolvedFocus(ConnectionId Connection) const;
+		[[nodiscard]] ObjectId GetSpatialRoot(ObjectId Object) const;
 		// Derived typed subset of the last evaluated spatial-root result. Callers
 		// must still validate live registration and committed structural knowledge.
 		// An absent candidate does not itself commit a structural Leave.

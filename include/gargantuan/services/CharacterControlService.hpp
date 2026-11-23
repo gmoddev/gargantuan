@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gargantuan/network/CharacterNetwork.hpp"
+#include "gargantuan/network/GameplayInput.hpp"
 #include "gargantuan/runtime/RuntimeMode.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "gargantuan/services/generated/CharacterControlService.hpp"
@@ -31,6 +32,10 @@ namespace gargantuan {
 		using ClientActionHandler = std::function<bool(std::uint32_t, std::uint64_t)>;
 		using ActionRegistrationHandler = std::function<bool(const network::CharacterActionDefinition &, bool)>;
 		using PredictionModeHandler = std::function<void(bool)>;
+		using PossessionSubmitHandler = std::function<bool(std::uint64_t, glm::vec2, float, bool)>;
+		using PossessionInputHandler =
+			std::function<std::optional<network::GameplayInputSample>(const Player &, std::uint64_t)>;
+		using PossessionMotionHandler = std::function<bool(const Player &, std::uint64_t, const CFrame &)>;
 
 		class RuntimeAttachment final {
 			friend class CharacterControlService;
@@ -58,9 +63,13 @@ namespace gargantuan {
 			ClientSubmitHandler Submit,
 			ClientActionHandler Action,
 			ActionRegistrationHandler Register,
-			PredictionModeHandler Prediction
+			PredictionModeHandler Prediction,
+			PossessionSubmitHandler SubmitPossession = {},
+			PossessionInputHandler ReadPossession = {},
+			PossessionMotionHandler MovePossession = {}
 		);
 		void BeginSimulationFrame(std::uint64_t Tick, float DeltaSeconds);
+		void SetPreSimulationActive(bool Active) { PreSimulationActive = Active; }
 		void DetachRuntime();
 
 		[[nodiscard]] CharacterMotionRequest
@@ -87,10 +96,14 @@ namespace gargantuan {
 		ClientActionHandler ClientAction;
 		ActionRegistrationHandler ActionRegistration;
 		PredictionModeHandler PredictionMode;
+		PossessionSubmitHandler PossessionSubmit;
+		PossessionInputHandler PossessionInput;
+		PossessionMotionHandler PossessionMotion;
 		std::uint64_t RuntimeAttachmentGeneration = 0;
 		std::uint64_t NextRuntimeAttachmentGeneration = 1;
 		std::uint64_t SimulationTick = 0;
 		float SimulationDeltaSeconds = 0.0f;
+		bool PreSimulationActive = false;
 		lua_State *PolicyState = nullptr;
 		int MovementPolicyReference = LUA_NOREF;
 		int ActionPolicyReference = LUA_NOREF;

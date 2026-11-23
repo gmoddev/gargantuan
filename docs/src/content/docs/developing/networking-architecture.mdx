@@ -142,6 +142,15 @@ relevant objects, active baselines, visibility, ownership, subscriptions, and
 bandwidth state. Interest management lives above the journal and produces
 publish, update, and unpublish intent per peer.
 
+Gameplay Foundation 7 uses two versioned GameSession frame families for
+generic possession. GPIN carries client intent and reliable lease changes.
+GPOS carries reliable publication changes and server-to-client pose samples.
+GPOS applies its own materialization epoch and a reliable structural sequence
+watermark so pending snapshots cannot bind to a previous local lifetime.
+Both frame families use the existing scheduler and remain separate from
+the Character-specific GCHR and application Remotes.
+[Frame layouts and limits](../../../../protocols/gameplay-possession.md).
+
 ### Familiar remote semantics with stricter contracts
 
 Gargantuan should preserve the familiar Roblox developer model while fixing
