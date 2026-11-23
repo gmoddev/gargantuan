@@ -2,6 +2,7 @@
 
 #include "../src/runtime/PublicationLatencyDiagnostics.hpp"
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
+#include "../src/runtime/RuntimeWorkTrace.hpp"
 #include "WorkloadTimingEvidence.hpp"
 
 #include <array>
@@ -54,6 +55,11 @@ namespace gargantuan::test_detail {
 		std::vector<Frame> Frames;
 		std::vector<Phases> Samples;
 		std::vector<Packet> Packets;
+#if defined(GARGANTUAN_WORK_TRACE)
+		std::unique_ptr<runtime_detail::WorkTrace> Trace = runtime_detail::WorkTrace::FromEnvironment();
+		std::unique_ptr<Phases> TracePhases = Trace ? std::make_unique<Phases>() : nullptr;
+		bool TraceFrame = false;
+#endif
 		runtime_detail::PublicationLatencySink Sink;
 		runtime_detail::PublicationLatencySink *PreviousSink = nullptr;
 		WorkloadCpuSample CpuBegin{}, CpuEnd{};
@@ -139,9 +145,18 @@ namespace gargantuan::test_detail {
 			Frames[Index].Tick = Tick;
 			Frames[Index].Interval = Elapsed(FrameStarted, Now);
 			FrameStarted = Now;
+#if defined(GARGANTUAN_WORK_TRACE)
+			TraceFrame = Trace && Trace->SelectFrame(FrameIndex, Tick);
+			if (TraceFrame) *TracePhases = Phases{};
+#endif
 		}
 
-		void SetEndpoint(std::uint32_t Value) { Endpoint = Value; }
+		void SetEndpoint(std::uint32_t Value) {
+			Endpoint = Value;
+#if defined(GARGANTUAN_WORK_TRACE)
+			if (TraceFrame) runtime_detail::WorkTrace::Region::SetCurrentLane(Value);
+#endif
+		}
 
 		void RecordDeadline(Clock::time_point Deadline, Clock::time_point BeforeWait) {
 			auto &Row = Frames[Index];
@@ -162,6 +177,16 @@ namespace gargantuan::test_detail {
 			Row.Applied = Applied;
 			Row.StructuralApply = StructuralApply;
 			Row.MaximumClientStructuralApply = MaximumClientStructuralApply;
+#if defined(GARGANTUAN_WORK_TRACE)
+			if (TraceFrame) {
+				const auto At = runtime_detail::WorkTimestamp();
+				Trace->RecordFrame(Row.Tick, 0, WorkloadTimestamp(FrameStarted), Row.Interval,
+					Row.DeadlineLateness, Row.MissedDeadlineBeforeWait);
+				const auto *PhasesAt = !Samples.empty() && Index % PhaseStride == 0 ? &Samples[Index / PhaseStride] : TracePhases.get();
+				Trace->RecordSample(Row.Tick, 0, At, PhasesAt->Server);
+				Trace->RecordSample(Row.Tick, 1, At, PhasesAt->Client);
+			}
+#endif
 		}
 
 		template <typename Operation>
@@ -186,8 +211,19 @@ namespace gargantuan::test_detail {
 			const auto BeforeBytes = Bytes();
 			const auto Before = Clock::now();
 			{
+#if defined(GARGANTUAN_WORK_TRACE)
+				if (TraceFrame) {
+					if (!Sample) Sample = Server ? &TracePhases->Server : &TracePhases->Client;
+					runtime_detail::WorkTrace::Region Region(Trace.get(), Frames[Index].Tick, Server ? 0 : 1);
+					runtime_detail::WorkCapture Capture(Sample, Allocations, Bytes);
+					Run();
+				} else {
+#endif
 				runtime_detail::WorkCapture Capture(Sample);
 				Run();
+#if defined(GARGANTUAN_WORK_TRACE)
+				}
+#endif
 			}
 			auto &Row = Frames[Index];
 			Row.*Fields[static_cast<std::size_t>(Work)] += Elapsed(Before, Clock::now());
@@ -198,6 +234,9 @@ namespace gargantuan::test_detail {
 		}
 
 		void Print(std::ostream &Output) const {
+#if defined(GARGANTUAN_WORK_TRACE)
+			if (Trace) Trace->Write();
+#endif
 			const auto ExportStarted = Clock::now();
 			for (std::size_t Step = 0; Step < Frames.size(); ++Step) {
 				const auto &Row = Frames[Step];

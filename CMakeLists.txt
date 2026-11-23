@@ -267,6 +267,7 @@ configure_file(
 ################################################################################
 
 option(GARGANTUAN_TRACY "Compile in the Tracy client" OFF)
+option(GARGANTUAN_WORK_TRACE "Enable bounded local Engine work traces" OFF)
 option(GARGANTUAN_BUILD_RENDERER_BENCHMARKS "Build the manual renderer feasibility benchmark" ON)
 option(GARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS "Build the serialization baseline benchmark" ON)
 option(GARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE "Build the private Glaze codec evaluation targets" OFF)
@@ -384,6 +385,9 @@ list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/network/Gam
 include(cmake/Manifold.cmake)
 add_library(gargantuan_core OBJECT ${GARGANTUAN_SOURCES})
 target_link_libraries(gargantuan_core PUBLIC GargantuanManifold)
+if(GARGANTUAN_WORK_TRACE)
+	target_compile_definitions(gargantuan_core PUBLIC GARGANTUAN_WORK_TRACE=1)
+endif()
 add_executable(gargantuan "src/Main.cpp" ${GARGANTUAN_TELEMETRY_HOST_SOURCES} ${SHADER_OUTPUTS})
 target_link_libraries(gargantuan PRIVATE gargantuan_core ${CMAKE_DL_LIBS})
 add_library(gargantuan_runtime_host STATIC "src/host/common/PackagedHost.cpp")
@@ -691,6 +695,9 @@ if(GARGANTUAN_WITH_GNS)
 	)
 	target_compile_features(gargantuan_gns_transport PUBLIC cxx_std_23)
 	target_compile_definitions(gargantuan_gns_transport PUBLIC GARGANTUAN_WITH_GNS=1)
+	if(GARGANTUAN_WORK_TRACE)
+		target_compile_definitions(gargantuan_gns_transport PRIVATE GARGANTUAN_WORK_TRACE=1)
+	endif()
 	target_include_directories(gargantuan_gns_transport PUBLIC "include")
 	target_include_directories(gargantuan_gns_transport PRIVATE "cmake/gns")
 	target_link_libraries(gargantuan_gns_transport PUBLIC GameNetworkingSockets::static)
@@ -714,6 +721,11 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_gas_animated_model COMMAND gargantuan_gas_authoring_tests --model-fixture
 		"${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame" AnimatedBeacon)
 	set_tests_properties(gargantuan_gas_animated_model PROPERTIES LABELS "persistence;editor;assets")
+	if(GARGANTUAN_WORK_TRACE)
+		add_executable(gargantuan_work_trace_tests "tests/RuntimeWorkTraceTests.cpp")
+		target_link_libraries(gargantuan_work_trace_tests PRIVATE gargantuan_core)
+		add_test(NAME gargantuan_work_trace COMMAND gargantuan_work_trace_tests)
+	endif()
 	add_test(NAME gargantuan_runtime_host_roles
 		COMMAND ${CMAKE_COMMAND}
 			-DGARGANTUAN_PLAYER=$<TARGET_FILE:gargantuan_player>
