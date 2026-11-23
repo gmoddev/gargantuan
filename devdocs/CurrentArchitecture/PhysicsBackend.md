@@ -274,6 +274,11 @@ result is published through the ordinary authoritative `SetCFrame` path. A
 narrow publication guard prevents that physics-authored write from being queued
 back into the backend. Fuzzy equality suppresses no-op publication.
 
+The soft-body step reuses the fixed-step order. When the WorldRoot has no
+registered deformables, it supplies an empty collider list to the soft-body
+backend. An active deformable receives the same ObjectId-ordered rigid
+collider list on the next fixed step.
+
 The experimental selective readback path retains the ordered Part list and
 authoritative backend state. `WorldRoot` counts tracked bodies from accepted
 create/update state and removal, without a new backend API. An unavailable

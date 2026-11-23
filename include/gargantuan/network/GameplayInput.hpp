@@ -41,6 +41,7 @@ namespace gargantuan::network {
 		std::uint64_t Revocations = 0;
 		std::uint64_t InputsAccepted = 0;
 		std::uint64_t InputsConsumed = 0;
+		std::uint64_t InputsCoalesced = 0;
 		std::uint64_t MalformedInputs = 0;
 		std::uint64_t UnauthorizedInputs = 0;
 		std::uint64_t StaleInputs = 0;
@@ -102,6 +103,7 @@ namespace gargantuan::network {
 		[[nodiscard]] bool Submit(ConnectionId Connection, ObjectId CurrentEntity, std::uint64_t ClientTick,
 			glm::vec2 Movement, float FacingYawRadians, bool JumpRequested, const NetworkLimits &Limits);
 		[[nodiscard]] ObjectId GetPossessedEntity() const { return Entity; }
+		[[nodiscard]] std::uint64_t GetInputsProduced() const { return InputsProduced; }
 		void Reset();
 
 	  private:
@@ -112,5 +114,6 @@ namespace gargantuan::network {
 		GameplayInputSequence NextInput{1};
 		std::uint64_t LastControlTick = 0;
 		std::uint64_t LastSubmittedTick = 0;
+		std::uint64_t InputsProduced = 0;
 	};
 }

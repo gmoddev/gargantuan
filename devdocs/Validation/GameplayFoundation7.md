@@ -91,6 +91,56 @@ are scheduler-admitted GPOS bytes. The allocation count covers scalar C++
 allocation requests on the server Main phases. Luau, aligned allocation,
 worker and provider memory have separate accounting.
 
+## Extended possession scaling
+
+Run one cohort per process with the same headless possession fixture. The
+original `--generic-possession-workload` entry point still runs its short
+two-peer and eight-peer cohorts.
+
+```sh
+gargantuan_gameplay_allocation_workload --generic-possession-scale sim 40 3000 off
+gargantuan_gameplay_allocation_workload --generic-possession-scale gns 40 3000 on
+gargantuan_gameplay_allocation_workload --generic-possession-scale gns 40 3000 on deadline
+```
+
+The supported cohort sizes are 2, 8, 16, 24, 32 and 40. Each measured run
+warms for 180 server frames after the initial possession assignment. The
+simulator advances by 17 ms per frame and has configured 6 ms base latency.
+The GNS fixture uses actual loopback sockets, a 16 ms wait before each frame,
+and one process with a separate headless Engine for each client. The workload
+retains production relevance and the limit of 16 realtime pose streams per
+recipient, including their own. Moving bodies can leave another player's
+relevance domain over a long run.
+
+Both modes record server and client phase envelopes, server Main scalar
+allocation requests, achieved wall-clock cadence, and per-peer transport and
+scheduler counters. The `on` mode also samples internal phases every eighth
+frame and packet events at every 32nd eligible input sequence or pose tick.
+Each capture allocates its buffers before measurement and exports after its
+timed region. Packet buffer overflow has an explicit counter. The trace holds
+numeric identities, phases, and durations. It discards packet payloads.
+
+Frame envelopes and internal phases measure monotonic elapsed time, including
+time spent descheduled or waiting on a lock inside a measured scope. Process
+and Main thread CPU totals are separate observations on Windows. Parent
+phases report inclusive and exclusive time. The simulator clock and the GNS
+RTT estimate have separate meanings. A same-process handoff-to-callback
+interval includes transport and polling, while the input acceptance-to-consume
+interval ends at the authoritative controller. Client pose presentation is
+timed independently. These measurements give no physical multi-host or
+rendered input-to-display result.
+
+Use the explicit `deadline` mode for scheduled GNS tests. It applies cumulative
+16.667 ms deadlines to the measured frames. The default `relative` mode
+preserves the original sleep-first cadence for historical comparisons. The
+fixture records actual lateness and separately marks deadlines already missed
+before the wait. It also records intended and executed frames, GPIN submissions
+accepted by the client scheduler, server admission, distinct sequence consumption,
+pending inputs replaced before consumption, and possession snapshots offered by
+the server and applied by the client. A held input can still drive motion.
+Application samples join the GPOS handoff to the client simulation transform
+update on the fixture's monotonic clock. They do not time visual presentation.
+
 ## Full Relay Rescue mission
 
 The follow-on source `fd84bb398048412593cb896a8c892d5cd7b81902` adds the

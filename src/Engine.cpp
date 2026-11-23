@@ -398,7 +398,8 @@ namespace gargantuan {
 				G_PROFILE("Simulation");
 				if (CharacterControl) CharacterControl->SetPreSimulationActive(true);
 				try {
-					RunService->PreSimulation->Fire(deltaTime);
+					runtime_detail::MeasureWork(runtime_detail::WorkPhase::PreSimulation,
+						[&] { RunService->PreSimulation->Fire(deltaTime); });
 				} catch (...) {
 					if (CharacterControl) CharacterControl->SetPreSimulationActive(false);
 					throw;

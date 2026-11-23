@@ -15,6 +15,7 @@
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "physics/SoftBodyTestHooks.hpp"
+#include "runtime/RuntimeWorkDiagnostics.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -257,18 +258,25 @@ namespace {
 		auto Game = std::make_shared<DataModel>();
 		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
 		World->SetGravity(0.0f);
+		auto Collider = std::make_shared<Part>();
+		Collider->SetAnchored(true);
+		Collider->SetSize({1.0f, 4.0f, 1.0f});
+		Collider->SetCFrame(CFrame(0.0f, 5.0f, 2.0f));
+		Collider->SetParent(World);
+		const auto StepAndCountColliderBuilds = [&] {
+			runtime_detail::WorkSample Work{};
+			runtime_detail::WorkCapture Capture(&Work);
+			World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+			return Work[static_cast<std::size_t>(runtime_detail::WorkPhase::PhysicsSoftColliders)].Calls;
+		};
+		Check(StepAndCountColliderBuilds() == 0, "a rigid-only world skips soft-body collider construction");
 		auto ClothBody = std::make_shared<Cloth>();
 		ClothBody->SetResolutionX(8);
 		ClothBody->SetResolutionY(8);
 		ClothBody->SetPosition({0.0f, 5.0f, 0.0f});
 		ClothBody->SetSize({2.0f, 2.0f, 0.5f});
 		ClothBody->SetParent(World);
-		auto Collider = std::make_shared<Part>();
-		Collider->SetAnchored(true);
-		Collider->SetSize({1.0f, 4.0f, 1.0f});
-		Collider->SetCFrame(CFrame(0.0f, 5.0f, 2.0f));
-		Collider->SetParent(World);
-		World->StepPhysics(SoftBodyStepInterval, std::nullopt);
+		Check(StepAndCountColliderBuilds() > 0, "registering cloth resumes soft-body collider construction");
 		const auto Before = World->GetDeformableVertex(ClothBody->GetObjectId(), 27);
 		Collider->SetCFrame(CFrame(0.0f, 5.0f, 0.3f));
 		World->StepPhysics(SoftBodyStepInterval, std::nullopt);
@@ -276,6 +284,10 @@ namespace {
 		Check(Before && After && std::isfinite(After->z) && Distance(*Before, *After) > 0.05f &&
 			World->GetLastSoftBodyProfile().CandidateColliders > 0,
 			"WorldRoot feeds a moved rigid primitive to the cloth contact step");
+		ClothBody->Destroy();
+		Check(StepAndCountColliderBuilds() == 0 &&
+			World->GetLastSoftBodyProfile().SimulatedBodies == 0,
+			"removing the last body retires collider construction and clears the simulated-body count");
 		Game->Destroy();
 	}
 

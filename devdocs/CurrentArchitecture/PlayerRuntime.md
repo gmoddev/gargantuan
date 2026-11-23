@@ -183,9 +183,18 @@ structural writes. Leaving this mode commits the final pose for later
 structural readers.
 
 After simulation, the session publishes the current pose to structurally
-materialized recipients every three simulation ticks. A peer receives
+materialized recipients every three simulation ticks. Reliable publication
+control is queued immediately. The initial snapshot aligns to the recipient's
+connection-slot phase, with at most two ticks of scheduling delay while the
+scheduler can accept work. Once admitted, the existing three-tick interval is
+measured from the last successful admission. A failed admission can be retried
+on the next eligible tick. A peer receives
 at most 16 active pose streams, with its own target selected first. The client
 applies the latest valid authoritative sample to the local anchored body.
+The client can reuse the weak replica binding while its accepted structural
+sequence stays current. It rechecks anchoring, hierarchy and destruction before
+applying any sample. A structural advance or materialization change invalidates
+the cached resolution.
 Render extraction uses a bounded, interpolated presentation offset without
 extrapolation. A part nested under a Character leaves this pose mode so it
 cannot compete with the Character transform owner.

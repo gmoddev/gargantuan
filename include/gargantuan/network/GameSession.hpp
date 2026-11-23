@@ -80,6 +80,7 @@ namespace gargantuan::network {
 		std::uint64_t PossessionMotionNanoseconds = 0;
 		std::uint64_t PossessionPoseSnapshotsAccepted = 0;
 		std::uint64_t PossessionPoseBytesAccepted = 0;
+		std::uint64_t ClientPossessionPoseSnapshotsApplied = 0;
 		ReliableByteAdmissionMetrics ReliableAdmission;
 		std::uint64_t ReliableAdmissionPeerStates = 0;
 		std::uint64_t ReliableAdmissionLogicalBytes = 0;

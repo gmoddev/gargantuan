@@ -94,7 +94,11 @@ session-owned map rather than forcing them into the local registry.
 
 ## JobSystem and execution domains
 
-`JobSystem` owns a fixed worker pool. Its initial API provides thread-safe
+`JobSystem` owns a fixed-capacity worker pool. Asset import, entitlement
+dispatch, and soft-body solve pools start on first submission. Constructing
+temporary validation replicas therefore does not start those workers. First
+submission and shutdown share the existing queue lock. Pools configured for
+immediate startup retain that behavior. The API provides thread-safe
 submission, `JobGroup` completion, draining, and explicit shutdown. Shutdown
 drains by default; non-draining shutdown drops queued jobs but allows active jobs
 to finish. New submissions are rejected after shutdown.

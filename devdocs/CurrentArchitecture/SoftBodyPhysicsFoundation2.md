@@ -82,7 +82,9 @@ simulation clock and no queued elapsed-time replay.
 
 Foundation 2 uses the repository's existing `JobSystem` and its `Worker`
 execution-domain scope. It does not introduce a second executor implementation.
-One bounded `JobSystem` instance is owned by each XPBD backend, with
+One bounded `JobSystem` instance is owned by each XPBD backend. Its workers
+start on the first asynchronous batch submission. Empty and synchronous-only
+worlds can complete their entire lifetime without starting workers. The pool has
 `min(hardware_concurrency - 1, 8)` workers and a minimum of one. That ownership
 keeps backend shutdown explicit today and leaves a narrow replacement seam for
 a future shared scheduler.

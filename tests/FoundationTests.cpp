@@ -754,6 +754,23 @@ namespace {
 		for (int i = 0; i < 50; ++i) drainingJobs.Submit([&] { ++drainedCount; }, drainingGroup);
 		drainingJobs.Shutdown(true);
 		Check(drainingGroup->IsComplete() && drainedCount == 50, "draining shutdown completes queued jobs");
+
+		JobSystem Unused(2, JobSystem::StartPolicy::OnFirstSubmission);
+		Check(Unused.GetWorkerCount() == 0, "an unused deferred pool starts no threads");
+		Unused.Drain();
+		Unused.Shutdown();
+		Check(Unused.GetWorkerCount() == 0, "unused deferred pool shutdown starts no threads");
+		CheckThrows<std::runtime_error>([&] { Unused.Submit([] {}); }, "unused deferred pool stays shut down");
+
+		JobSystem Deferred(3, JobSystem::StartPolicy::OnFirstSubmission);
+		auto DeferredGroup = std::make_shared<JobGroup>();
+		std::atomic<int> DeferredCount = 0;
+		std::thread First([&] { Deferred.Submit([&] { ++DeferredCount; }, DeferredGroup); });
+		std::thread Second([&] { Deferred.Submit([&] { ++DeferredCount; }, DeferredGroup); });
+		First.join();
+		Second.join();
+		DeferredGroup->Wait();
+		Check(Deferred.GetWorkerCount() == 3 && DeferredCount == 2, "concurrent first submission starts one bounded pool");
 	}
 
 	void TestSchemaMetadata() {

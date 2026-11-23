@@ -150,6 +150,7 @@ namespace gargantuan::network {
 			struct PoseBinding {
 				std::uint64_t Epoch = 0;
 				std::uint64_t LastSentTick = 0;
+				std::uint64_t FirstDueTick = 0;
 			};
 			PeerPhase Phase = PeerPhase::TransportConnected;
 			std::uint64_t ConnectedTick = 0;
@@ -200,6 +201,8 @@ namespace gargantuan::network {
 			std::uint64_t RequiredStructuralSequence;
 			std::weak_ptr<BasePart> ReplicaPart;
 			std::uint64_t AppliedTick = 0;
+			std::uint64_t ResolvedAtSequence = 0;
+			ReplicationEpoch ResolvedAtEpoch;
 		};
 		std::map<ObjectId, ActivePose> ActivePossessionPoses;
 		std::map<ObjectId, ClientPoseBinding> ClientPossessionPoses;
@@ -1167,7 +1170,9 @@ namespace gargantuan::network {
 		std::size_t Poll() {
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::SessionPoll);
 			std::array<TransportEvent, MaximumGameSessionPollEventsPerCall> Buffer;
-			const auto Count = Transport->PollEvents(Buffer);
+			const auto Count = runtime_detail::MeasureWork(runtime_detail::WorkPhase::TransportPoll,
+				[&] { return Transport->PollEvents(Buffer); });
+			runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::TransportPoll, Count);
 			for (std::size_t Index = 0; Index < Count; ++Index) {
 				auto Event = std::move(Buffer[Index]);
 				if (const auto *Changed = std::get_if<ConnectionStateEvent>(&Event)) {
@@ -1336,8 +1341,13 @@ namespace gargantuan::network {
 			if (PeerIterator == Peers.end() || PeerIterator->second.Phase != PeerPhase::Ready ||
 				PeerIterator->second.PlayerValue.get() != &PlayerValue || !Entity)
 				return std::nullopt;
-			return ServerPossessionInput.Consume(Connection->second, Entity->GetObjectId(),
+			const auto Sample = ServerPossessionInput.Consume(Connection->second, Entity->GetObjectId(),
 				Tick, PlayerValue.GetPossessionRevision());
+			if (Sample && Sample->Fresh && runtime_detail::ActivePublicationLatency &&
+				runtime_detail::ActivePublicationLatency->CapturePossession)
+				runtime_detail::RecordPublicationLatency({.Stage = "PossessionConsumed", .Connection = Connection->second,
+					.Object = Entity->GetObjectId(), .Tick = Tick, .Sequence = Sample->AcknowledgedInput.Value()});
+			return Sample;
 		}
 
 		void SynchronizePossessionInput() {
@@ -1380,6 +1390,7 @@ namespace gargantuan::network {
 		}
 
 		bool MovePossessedPart(const Player &PlayerValue, std::uint64_t Tick, const CFrame &Transform) {
+			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::GameplayMotion);
 			const auto Started = std::chrono::steady_clock::now();
 			if (PlayerValue.GetDestroyed() || PlayerValue.IsDestroying() || !IsValidGameplayPoseTransform(Transform))
 				return false;
@@ -1404,7 +1415,8 @@ namespace gargantuan::network {
 			if (Existing == ActivePossessionPoses.end() && ActivePossessionPoses.size() >= MaximumGameSessionPeers)
 				return false;
 			ActivePossessionPoses.insert_or_assign(Object, ActivePose{Owner, Revision, Tick});
-			Part->SetSimulationCFrame(Transform);
+			runtime_detail::MeasureWork(runtime_detail::WorkPhase::GameplayPoseCommit,
+				[&] { Part->SetSimulationCFrame(Transform); });
 			SaturatingAdd(Metrics.PossessionMotionAccepted, 1);
 			SaturatingAdd(Metrics.PossessionMotionNanoseconds, static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - Started).count()));
@@ -1412,10 +1424,14 @@ namespace gargantuan::network {
 		}
 
 		bool QueuePossessionPose(ConnectionId Connection, const Peer &PeerValue, const GameplayPoseMessage &Message) {
-			auto Intent = MakeGameplayPoseIntent(Connection, Message, PeerValue.Limits);
+			auto Intent = runtime_detail::MeasureWork(runtime_detail::WorkPhase::GameplayPoseEncode,
+				[&] { return MakeGameplayPoseIntent(Connection, Message, PeerValue.Limits); });
 			if (!Intent) return false;
 			const auto Bytes = Intent->Payload().size();
-			if (!Scheduler.Submit(std::move(*Intent)).Accepted()) return false;
+			const auto Accepted = runtime_detail::MeasureWork(runtime_detail::WorkPhase::GameplayPoseEnqueue,
+				[&] { return Scheduler.Submit(std::move(*Intent)).Accepted(); });
+			runtime_detail::RecordWorkDisposition(runtime_detail::WorkPhase::GameplayPoseEnqueue, Accepted);
+			if (!Accepted) return false;
 			SaturatingAdd(Metrics.PossessionPoseBytesAccepted, Bytes);
 			if (std::holds_alternative<GameplayPoseSnapshot>(Message))
 				SaturatingAdd(Metrics.PossessionPoseSnapshotsAccepted, 1);
@@ -1434,6 +1450,7 @@ namespace gargantuan::network {
 		}
 
 		void PublishPossessionPoses(std::uint64_t Tick) {
+			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::GameplayPosePublish);
 			if (ActivePossessionPoses.empty()) {
 				const auto HasBindings = std::ranges::any_of(Peers, [](const auto &Entry) {
 					return !Entry.second.PossessionPoses.empty();
@@ -1459,12 +1476,18 @@ namespace gargantuan::network {
 				const auto Owned = PeerValue.ControlledPossession;
 				std::array<ObjectId, MaximumPossessionPosesPerPeer> Desired{};
 				std::size_t Count = 0;
-				if (Owned.IsValid() && ActivePossessionPoses.contains(Owned) && View->Knows(Owned))
-					Desired[Count++] = Owned;
-				for (const auto &[Object, Pose] : ActivePossessionPoses) {
-					(void)Pose;
-					if (Count == Desired.size()) break;
-					if (Object != Owned && View->Knows(Object)) Desired[Count++] = Object;
+				{
+					runtime_detail::WorkScope Selection(runtime_detail::WorkPhase::GameplayPoseRelevance);
+					std::size_t Visited = 0;
+					if (Owned.IsValid() && ActivePossessionPoses.contains(Owned) && View->Knows(Owned))
+						Desired[Count++] = Owned;
+					for (const auto &[Object, Pose] : ActivePossessionPoses) {
+						(void)Pose;
+						if (Count == Desired.size()) break;
+						++Visited;
+						if (Object != Owned && View->Knows(Object)) Desired[Count++] = Object;
+					}
+					runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::GameplayPoseRelevance, Visited);
 				}
 				const auto Selected = std::span(Desired).first(Count);
 				for (auto Iterator = PeerValue.PossessionPoses.begin(); Iterator != PeerValue.PossessionPoses.end();) {
@@ -1484,11 +1507,20 @@ namespace gargantuan::network {
 								DisconnectReason::ResourceExhaustion, "[Gameplay:Pose] Control publication failed"});
 							break;
 						}
-						Found = PeerValue.PossessionPoses.emplace(Object, Peer::PoseBinding{NextGameplayPoseEpoch++}).first;
+						// Publish control immediately. Align only the initial snapshot
+						// so a peer has a stable phase without extra snapshots.
+						const auto Phase = Connection.Slot % PossessionPoseIntervalTicks;
+						const auto Delay = (Phase + PossessionPoseIntervalTicks - Tick % PossessionPoseIntervalTicks) %
+							PossessionPoseIntervalTicks;
+						const auto FirstDueTick = Tick + std::min(Delay, std::numeric_limits<std::uint64_t>::max() - Tick);
+						Found = PeerValue.PossessionPoses.emplace(Object,
+							Peer::PoseBinding{.Epoch = NextGameplayPoseEpoch++, .FirstDueTick = FirstDueTick}).first;
 					}
 					auto &Binding = Found->second;
-					if (Binding.LastSentTick != 0 &&
-						(Tick <= Binding.LastSentTick || Tick - Binding.LastSentTick < PossessionPoseIntervalTicks)) continue;
+					if (Binding.LastSentTick == 0) {
+						if (Tick < Binding.FirstDueTick) continue;
+					} else if (Tick <= Binding.LastSentTick || Tick - Binding.LastSentTick < PossessionPoseIntervalTicks)
+						continue;
 					const auto Part = std::dynamic_pointer_cast<BasePart>(ObjectRegistry::Get().Lookup(Object));
 					if (Part && QueuePossessionPose(Connection, PeerValue, GameplayPoseSnapshot{
 						.Part = Object, .MaterializationEpoch = Binding.Epoch, .ServerTick = Tick,
@@ -1499,7 +1531,9 @@ namespace gargantuan::network {
 		}
 
 		void HandlePossessionPose(const ReceivedMessageEvent &Received) {
-			auto Message = DecodeGameplayPose(Received);
+			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::GameplayPoseReceive);
+			auto Message = runtime_detail::MeasureWork(runtime_detail::WorkPhase::GameplayPoseDecode,
+				[&] { return DecodeGameplayPose(Received); });
 			if (!Message) return;
 			if (const auto *Control = std::get_if<GameplayPoseControl>(&*Message)) {
 				if (!ClientPosePresentation.ApplyControl(*Control)) return;
@@ -1511,15 +1545,22 @@ namespace gargantuan::network {
 				if (Control->Published)
 					ClientPossessionPoses.emplace(Control->Part, ClientPoseBinding{Control->RequiredStructuralSequence});
 			} else {
-				(void)ClientPosePresentation.Accept(std::get<GameplayPoseSnapshot>(*Message),
+				const auto Accepted = ClientPosePresentation.Accept(std::get<GameplayPoseSnapshot>(*Message),
 					std::max(CurrentTick, std::uint64_t{1}));
+				runtime_detail::RecordWorkDisposition(runtime_detail::WorkPhase::GameplayPoseReceive, Accepted);
 			}
 		}
 
 		void UpdatePossessionPresentation(std::uint64_t Tick) {
+			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::GameplayPosePresentation);
+			runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::GameplayPosePresentation, ClientPossessionPoses.size());
 			for (auto &[Object, Binding] : ClientPossessionPoses) {
-				if (Replica.GetNextSequence().Value() <= Binding.RequiredStructuralSequence) continue;
-				const auto Part = std::dynamic_pointer_cast<BasePart>(Replica.Resolve(Object));
+				const auto StructuralSequence = Replica.GetNextSequence().Value();
+				if (StructuralSequence <= Binding.RequiredStructuralSequence) continue;
+				const auto StructuralEpoch = Replica.GetEpoch();
+				auto Part = Binding.ResolvedAtSequence == StructuralSequence && Binding.ResolvedAtEpoch == StructuralEpoch
+					? Binding.ReplicaPart.lock() : nullptr;
+				if (!Part) Part = std::dynamic_pointer_cast<BasePart>(Replica.Resolve(Object));
 				if (!IsIndependentPosePart(Part)) {
 					if (const auto Previous = Binding.ReplicaPart.lock(); Previous && !Previous->GetDestroyed())
 						Previous->SetCharacterPresentationOffset(std::nullopt);
@@ -1527,9 +1568,17 @@ namespace gargantuan::network {
 					continue;
 				}
 				Binding.ReplicaPart = Part;
+				Binding.ResolvedAtSequence = StructuralSequence;
+				Binding.ResolvedAtEpoch = StructuralEpoch;
 				if (const auto Latest = ClientPosePresentation.GetLatest(Object); Latest && Latest->ServerTick > Binding.AppliedTick) {
 					Part->SetSimulationCFrame(Latest->Transform);
 					Binding.AppliedTick = Latest->ServerTick;
+					SaturatingAdd(Metrics.ClientPossessionPoseSnapshotsApplied, 1);
+					if (PrimaryConnection && runtime_detail::ActivePublicationLatency &&
+						runtime_detail::ActivePublicationLatency->CapturePossession)
+						runtime_detail::RecordPublicationLatency({.Stage = "PoseApplied", .Connection = *PrimaryConnection,
+							.Object = Object, .Tick = Latest->ServerTick, .Sequence = Latest->ServerTick,
+							.Epoch = Latest->MaterializationEpoch});
 				}
 				if (const auto RenderPose = ClientPosePresentation.Sample(Object, Tick))
 					Part->SetCharacterPresentationOffset(Part->GetCFrame().ToObjectSpace(*RenderPose));
@@ -3084,6 +3133,16 @@ namespace gargantuan::network {
 	}
 	ReplicationMetrics detail::GameSessionTestAccess::GetReplicationMetrics(const GameSession &Session) {
 		return Session.State->Replication ? Session.State->Replication->GetMetrics() : ReplicationMetrics{};
+	}
+	std::optional<SchedulerStatistics> detail::GameSessionTestAccess::GetSchedulerStatistics(
+		const GameSession &Session, ConnectionId Connection) {
+		return Session.State->Scheduler.GetStatistics(Connection);
+	}
+	detail::GameSessionTestAccess::GameplayClientCounters detail::GameSessionTestAccess::GetGameplayClientCounters(
+		const GameSession &Session) {
+		const auto &State = *Session.State;
+		return {State.ClientPossessionInput.GetInputsProduced(), State.Metrics.ClientPossessionPoseSnapshotsApplied,
+			State.Metrics.ClientStructuralApplyNanoseconds};
 	}
 	std::optional<std::vector<detail::StructuralCausalSnapshot>>
 	detail::GameSessionTestAccess::CaptureStructuralCausalSnapshot(const GameSession &Session, std::string &Error,
