@@ -299,15 +299,15 @@ namespace {
 		using Json = nlohmann::ordered_json;
 		EditorHost Host("gas-authoring-test");
 		std::uint64_t Request = 0;
-		const auto Call = [&](std::string_view Method, Json Params = Json::object()) {
+		const auto Call = [&](std::string_view Method, const Json &Parameters) {
 			return Json::parse(Host.HandleRequest(Json{
 				{"Version", EditorHostProtocolVersion}, {"RequestId", std::to_string(++Request)},
-				{"SessionToken", "gas-authoring-test"}, {"Method", Method}, {"Params", std::move(Params)},
+				{"SessionToken", "gas-authoring-test"}, {"Method", Method}, {"Params", Parameters},
 			}.dump()));
 		};
 		const auto Opened = Call("OpenProject", {{"Root", Root.generic_string()}});
 		Require(Opened.at("Ok") == true, "EditorHost opens the restored JSON project");
-		const auto Snapshot = Call("GetSnapshot");
+		const auto Snapshot = Call("GetSnapshot", Json::object());
 		const auto &Objects = Snapshot.at("Result").at("Snapshot").at("Objects");
 		const auto Workspace = std::ranges::find_if(Objects, [](const Json &Object) {
 			return Object.at("ClassName") == "Workspace";
@@ -318,7 +318,7 @@ namespace {
 		Require(Workspace != Objects.end() && Panel != Objects.end(), "Find scoped model and parent identities");
 		const auto Revision = Opened.at("Result").at("ProjectState").at("AuthoritativeRevision");
 		const auto Model = Call("ExportGasModel", {{"Roots", Json::array({Panel->at("Id")})}});
-		const auto Place = Call("ExportGasPlace");
+		const auto Place = Call("ExportGasPlace", Json::object());
 		Require(Model.at("Ok") == true && Place.at("Ok") == true, "Export both GAS profiles through EditorHost");
 		const auto WrongKind = Call("ImportGasModel", {
 			{"Parent", Workspace->at("Id")}, {"ExpectedRevision", Revision},
@@ -336,7 +336,7 @@ namespace {
 		Require(Reopened.at("Ok") == true &&
 			Reopened.at("Result").at("Root") != Opened.at("Result").at("Root"),
 			"Open a staged place through EditorHost in a new scope");
-		Require(Call("GetSnapshot").at("Ok") == true, "Refresh the snapshot after the place changes scope");
+		Require(Call("GetSnapshot", Json::object()).at("Ok") == true, "Refresh the snapshot after the place changes scope");
 	}
 
 	void TestPlace() {
