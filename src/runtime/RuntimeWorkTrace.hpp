@@ -8,6 +8,7 @@
 #include <bitset>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace gargantuan::runtime_detail {
@@ -77,6 +78,38 @@ private:
 
 	void Append(Record Value) noexcept;
 	[[nodiscard]] bool Includes(std::size_t Phase) const noexcept { return Configuration.Phases[Phase]; }
+};
+
+// Adapts an existing single-threaded host loop without changing its pacing.
+class HostWorkTrace final {
+	using Time = std::chrono::steady_clock::time_point;
+
+public:
+	HostWorkTrace();
+	void Write() const;
+
+	class Frame final {
+	public:
+		Frame(HostWorkTrace &Loop, Time Started, Time Previous, std::uint64_t PriorTick) noexcept;
+		~Frame();
+		Frame(const Frame &) = delete;
+		Frame &operator=(const Frame &) = delete;
+
+		void SetDeadline(Time Deadline, Time BeforeWait) noexcept;
+
+	private:
+		WorkTrace *Trace = nullptr;
+		WorkSample *Sample = nullptr;
+		std::optional<WorkTrace::Region> Region;
+		std::optional<WorkCapture> Capture;
+		std::uint64_t Tick, StartedNanoseconds, IntervalNanoseconds;
+		Time Scheduled{};
+		bool Missed = false;
+	};
+
+private:
+	std::unique_ptr<WorkTrace> Trace;
+	std::unique_ptr<WorkSample> Sample;
 };
 
 }

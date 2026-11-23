@@ -525,6 +525,9 @@ namespace gargantuan {
 					[&] { return RenderPublishing.Publish(
 						*WorldRoot, MakeRenderCameraInput(*camera), viewportWidth, viewportHeight); });
 				try {
+#if defined(GARGANTUAN_WORK_TRACE)
+					runtime_detail::WorkScope DrawWork(runtime_detail::WorkPhase::RenderDraw);
+#endif
 					Renderer->Draw(std::move(Publication));
 				} catch (...) {
 					RenderPublishing.RequestFullResync();

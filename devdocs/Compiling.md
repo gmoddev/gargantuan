@@ -125,8 +125,9 @@ Studio and Lute have independent runtime pins.
 
 Use the usual optimized configuration and add
 `-DGARGANTUAN_WORK_TRACE=ON`. Build `gargantuan` for the development
-Engine loop or `gargantuan_gameplay_allocation_workload` for the scripted
-possession comparison. The latter needs `BUILD_TESTING=ON` and uses
+Engine loop, `gargantuan_player` and `gargantuan_server` for packaged
+play, or `gargantuan_gameplay_allocation_workload` for the scripted
+possession comparison. The workload needs `BUILD_TESTING=ON` and uses
 `GARGANTUAN_WITH_GNS=ON` for the real loopback transport. Use
 `ctest --test-dir <build> -R ^gargantuan_work_trace$` to check the bounded
 recorder, export, and thread-local scope behavior.
@@ -168,14 +169,26 @@ queue depth, age, and deferrals. Timing export happens after collection; a
 full buffer drops later records and reports the exact count in
 `otherData.dropped`. Check this count before interpreting a timeline.
 
+For packaged play, launch each Player or Server with a distinct trace file.
+Choose a bounded `--max-frames` on Player or `--max-ticks` on Server for
+local diagnostic runs. The host loop captures existing session polling,
+Engine updates and session steps. Render publication and CPU time inside
+`Renderer::Draw` have separate scopes. The draw measurement covers the
+selected backend's submission and blocking time, including any blocking
+inside the renderer. GPU time and input-to-display latency need separate
+measurements. Network-paced hosts also record the existing wait deadline
+and time at the end of the wait. Trace setup and export errors emit one
+`[Runtime:WorkTrace]` line on stderr and the packaged runtime retains its
+ordinary exit status.
+
 Thread tracks have process-local IDs. The gameplay fixture uses lane 0 for
 the server and 1 through 40 for per-client spans. Its aggregate client
 samples use lane 1. A frame or tick can correlate scopes across attached
 threads. Callers supply the tick and lane and attach a separate scoped
 region and work sample on each collecting thread. Automatic worker
 attachment and cross-process clocks are outside this trace contract.
-Use the existing Tracy zones and native platform traces for worker
-scheduling and thread lifecycle. Exported names come from fixed Engine
+Use the existing Tracy zones for surrounding Engine stages and native platform
+traces for worker scheduling and thread lifecycle. Exported names come from fixed Engine
 tables. No packet body, player name, file path or credential is exported.
 
 Keep source, build optimizer, machine, fixture arguments and output path

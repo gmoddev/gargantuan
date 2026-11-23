@@ -15,6 +15,7 @@
 #include "gargantuan/network/GameSession.hpp"
 #include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/render/Renderer.hpp"
+#include "runtime/RuntimeWorkTrace.hpp"
 
 #include <argparse/argparse.hpp>
 #include <algorithm>
@@ -791,12 +792,18 @@ namespace gargantuan::host {
 					<< " provider=" << ProviderName << " expected=" << FarmPeers << '\n';
 			if (SessionSmoke)
 				std::cout << "[Runtime:ServerFrame] unix_us,tick,interval_ns,poll_ns,engine_ns,session_ns,encode_ns,relevance_ns,materialize_ns,selected,committed,pending,wire_bytes\n";
+#if defined(GARGANTUAN_WORK_TRACE)
+			runtime_detail::HostWorkTrace WorkTrace;
+#endif
 			while (Runtime->ProcessService->Alive && StopRequested == 0) {
 				if (DiagnosticStop.Requested()) {
 					std::cout << "[Qualification:Server] event=diagnostic_stop run=" << FarmRunId << '\n';
 					break;
 				}
 				const auto TickStarted = std::chrono::steady_clock::now();
+#if defined(GARGANTUAN_WORK_TRACE)
+				runtime_detail::HostWorkTrace::Frame TraceFrame(WorkTrace, TickStarted, PreviousTickStarted, Runtime->GetSimulationTick());
+#endif
 				auto MarkExecutionStage = [&](detail::FarmD03FirstFault::Stage Stage,
 					std::chrono::steady_clock::time_point At) {
 					if (ExecutionFault) ExecutionFault->MarkStage(Stage, Runtime->GetSimulationTick() +
@@ -1137,6 +1144,10 @@ namespace gargantuan::host {
 				if (BindEndpoint) {
 					TickDeadline += std::chrono::microseconds(16'667);
 					const auto Now = std::chrono::steady_clock::now();
+#if defined(GARGANTUAN_WORK_TRACE)
+					TraceFrame.SetDeadline(TickDeadline, Now);
+					runtime_detail::WorkScope Pacing(runtime_detail::WorkPhase::HostFramePacing);
+#endif
 					MarkExecutionStage(detail::FarmD03FirstFault::Stage::Sleep, Now);
 					if (TickDeadline > Now)
 						std::this_thread::sleep_until(TickDeadline);
@@ -1291,6 +1302,9 @@ namespace gargantuan::host {
 							 std::chrono::steady_clock::now() - ShutdownStarted
 						 ).count()
 					  << '\n';
+#if defined(GARGANTUAN_WORK_TRACE)
+			WorkTrace.Write();
+#endif
 			return ExitCode;
 		} catch (const std::exception &Error) {
 			const bool CapturedExecutionFault = ExecutionFault && ExecutionFault->HasFault();

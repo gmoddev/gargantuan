@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <locale>
 #include <stdexcept>
 #include <system_error>
@@ -27,6 +28,10 @@ namespace {
 		if (Error != std::errc{} || End != Text.data() + Text.size() || Result == 0 || Result > Maximum)
 			throw std::invalid_argument(std::string("Invalid ") + Setting);
 		return Result;
+	}
+
+	std::uint64_t Nanoseconds(std::chrono::steady_clock::duration Duration) noexcept {
+		return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(Duration).count());
 	}
 }
 
@@ -184,6 +189,52 @@ void WorkTrace::Write() const {
 		<< ",\"last_tick\":" << Configuration.LastTick << ",\"mode\":\""
 		<< (Configuration.Detailed ? "detailed" : "summary") << "\"}}\n";
 	Output.close();
+}
+
+HostWorkTrace::HostWorkTrace() {
+	try {
+		auto Collector = WorkTrace::FromEnvironment();
+		if (Collector) Sample = std::make_unique<WorkSample>();
+		Trace = std::move(Collector);
+	} catch (const std::exception &Error) {
+		std::cerr << "[Runtime:WorkTrace] " << Error.what() << '\n';
+	}
+}
+
+void HostWorkTrace::Write() const {
+	try {
+		if (Trace) Trace->Write();
+	} catch (const std::exception &Error) {
+		std::cerr << "[Runtime:WorkTrace] " << Error.what() << '\n';
+	}
+}
+
+HostWorkTrace::Frame::Frame(HostWorkTrace &Loop, Time Started, Time Previous, std::uint64_t PriorTick) noexcept
+	: Tick(PriorTick + (PriorTick < std::numeric_limits<std::uint64_t>::max())) {
+	if (!Loop.Trace || !Loop.Trace->SelectFrame(PriorTick, Tick)) return;
+	Trace = Loop.Trace.get();
+	Sample = Loop.Sample.get();
+	*Sample = WorkSample{};
+	Region.emplace(Trace, Tick, 0);
+	Capture.emplace(Sample);
+	StartedNanoseconds = Nanoseconds(Started.time_since_epoch());
+	IntervalNanoseconds = Nanoseconds(Started - Previous);
+}
+
+HostWorkTrace::Frame::~Frame() {
+	if (!Trace) return;
+	const auto Now = std::chrono::steady_clock::now();
+	const auto Late = Scheduled != Time{} && Now > Scheduled ? Nanoseconds(Now - Scheduled) : 0;
+	Capture.reset();
+	Region.reset();
+	Trace->RecordFrame(Tick, 0, StartedNanoseconds, IntervalNanoseconds, Late, Missed);
+	Trace->RecordSample(Tick, 0, Nanoseconds(Now.time_since_epoch()), *Sample);
+}
+
+void HostWorkTrace::Frame::SetDeadline(Time Deadline, Time BeforeWait) noexcept {
+	if (!Trace) return;
+	Scheduled = Deadline;
+	Missed = BeforeWait > Deadline;
 }
 
 }
