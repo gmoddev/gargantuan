@@ -184,8 +184,9 @@ namespace gargantuan {
 				for (const auto &Child : PlayersValue->Children) {
 					auto Other = std::dynamic_pointer_cast<Player>(Child);
 					if (Other && Other.get() != this && !Other->GetDestroyed() &&
-						Other->GetPossessedEntity().value_or(nullptr) == Replacement)
-						throw std::invalid_argument("[Player:Possession] Character is already possessed");
+						(Other->GetCharacter().value_or(nullptr) == Replacement ||
+						 Other->GetPossessedEntity().value_or(nullptr) == Replacement))
+						throw std::invalid_argument("[Player:Possession] Character is already assigned to another Player");
 				}
 			}
 		}

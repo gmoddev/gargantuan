@@ -671,6 +671,22 @@ Vehicle:SetAttribute("DeniedClientPossession", true)
 		auto StockCharacter = std::make_shared<KinematicCharacter>();
 		StockCharacter->SetParent(WorkspaceValue);
 		Second->SetCharacter(StockCharacter);
+		auto StockDuplicateScript = std::make_shared<Script>();
+		StockDuplicateScript->SetRunContext(Enums::RunContext::Server);
+		StockDuplicateScript->SetSource(R"(
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local AssignedCharacter = Players:GetPlayers()[2].Character
+assert(AssignedCharacter and AssignedCharacter ~= LocalPlayer.Character)
+local Assigned = pcall(function() LocalPlayer.Character = AssignedCharacter end)
+LocalPlayer:RemoveCharacter()
+LocalPlayer:SetAttribute("RejectedDuplicateCharacter", not Assigned)
+)");
+		StockDuplicateScript->SetParent(Game);
+		Runtime.Script->Step();
+		Check(Local->GetAttributeValue("RejectedDuplicateCharacter") == std::optional<WireValue>(true) &&
+				!Local->GetCharacter() && Second->GetCharacter() == StockCharacter && !StockCharacter->GetDestroyed(),
+			"ordinary server Luau cannot take ownership of another Player's Character or destroy it through removal");
 		bool StockTargetRejected = false;
 		try {
 			Local->SetPossession(StockCharacter);
@@ -678,6 +694,8 @@ Vehicle:SetAttribute("DeniedClientPossession", true)
 			StockTargetRejected = true;
 		}
 		Second->RemoveCharacter();
+		Check(StockCharacter->GetDestroyed() && !Second->GetCharacter(),
+			"the owning Player still retires its Character");
 		auto CustomCharacter = std::make_shared<KinematicCharacter>();
 		CustomCharacter->SetParent(WorkspaceValue);
 		Second->SetPossession(CustomCharacter);
@@ -691,7 +709,10 @@ Vehicle:SetAttribute("DeniedClientPossession", true)
 				Local->GetPossessedEntity() == Vehicle && Second->GetPossessedEntity() == CustomCharacter,
 			"stock and explicit possession reject a target currently owned by another Player");
 		Second->SetPossession(std::nullopt);
-		CustomCharacter->Destroy();
+		Local->SetCharacter(CustomCharacter);
+		Check(Local->GetCharacter() == CustomCharacter && !CustomCharacter->GetDestroyed(),
+			"a Character remains assignable after its other Player releases explicit possession");
+		Local->RemoveCharacter();
 
 		bool ReentrantRejected = false;
 		auto Changed = Local->GetPropertyChangedSignal("PossessedEntity")->Connect([&](auto) {

@@ -124,7 +124,9 @@ method, or signal can return a fresh userdata wrapper for the same Player.
 Those wrappers compare equal, while Luau table keys use raw userdata identity.
 
 `Player.Character` is nullable and accepts any live canonical `Character` in
-the same DataModel. The default assembly chooses `KinematicCharacter`, but an
+the same DataModel that is not already assigned as another Player's Character
+or explicit possession. A failed assignment leaves both Player relationships
+intact. The default assembly chooses `KinematicCharacter`, but an
 NPC can use Character semantics without a Player and future movement
 specializations do not require changing the Player schema. The lifecycle is:
 
