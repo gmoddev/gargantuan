@@ -110,3 +110,10 @@ peak resident memory and measured-thread C++ allocation requests in
 encode and decode. Run each backend and size separately to keep process
 high-water memory comparable. Use ordinary `--gas` timings for comparisons
 without allocation interposition.
+
+`gargantuan_serialization_benchmark --gas-project-load <origin> <file.gasp>`
+compares a saved JSON scene with a matching GASP in an existing trusted
+origin. It reports five warm-cache opens after one warmup per format.
+Disk reads, asset resolution, service initialization and revision setup
+are included. The shared schema bootstrap, script activation and
+semantic equivalence checks are outside the timed interval.
