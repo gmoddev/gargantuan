@@ -79,14 +79,14 @@ namespace {
 
 	int Failures = 0;
 
-	std::uint64_t GameplayWorkloadAllocationBytes() {
+	std::uint64_t GameplayWorkloadAllocationBytes() noexcept {
 #if defined(GARGANTUAN_GAMEPLAY_WORKLOAD_ALLOCATIONS)
 		return GameplayWorkloadAllocatedBytes;
 #else
 		return 0;
 #endif
 	}
-	std::uint64_t GameplayWorkloadAllocationCount() {
+	std::uint64_t GameplayWorkloadAllocationCount() noexcept {
 #if defined(GARGANTUAN_GAMEPLAY_WORKLOAD_ALLOCATIONS)
 		return GameplayWorkloadAllocations;
 #else
