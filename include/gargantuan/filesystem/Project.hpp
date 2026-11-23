@@ -6,6 +6,7 @@
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/filesystem/BaseFilesystem.hpp"
 #include "gargantuan/filesystem/ProjectIdentity.hpp"
+#include "gargantuan/serialization/GasDocument.hpp"
 
 #include <filesystem>
 #include <functional>
@@ -38,8 +39,20 @@ namespace gargantuan {
 
 		static Project fromExisting(BaseFilesystem *fs);
 		static Project forDestination(BaseFilesystem *fs, InstanceSerialization::InstanceFormat format);
+		// Read a trusted GAS origin without migrating metadata or opening an Instance file.
+		[[nodiscard]] static Project FromGasOrigin(BaseFilesystem *Filesystem);
 
 		std::shared_ptr<DataModel> DeserializeGame();
+		// Capture a place from a world owned by this project's filesystem.
+		[[nodiscard]] SerializationResult<Gas::Document> CaptureGasPlace(const std::shared_ptr<DataModel> &World) const;
+		void ExportGasPlace(const std::shared_ptr<DataModel> &World, const std::filesystem::path &Destination,
+			const std::optional<std::string> &ExpectedPreRunSource) const;
+		// The caller establishes this origin's trusted schema before loading.
+		// As with DeserializeGame, the caller establishes the loaded revision before publication.
+		[[nodiscard]] std::shared_ptr<DataModel> LoadGasPlace(const Gas::Document &Document) const;
+		// Publish JSON into an origin whose Instance file is absent.
+		void RestoreGasPlace(const std::shared_ptr<DataModel> &World,
+			const std::optional<std::string> &ExpectedPreRunSource) const;
 		[[nodiscard]] PersistenceSnapshot CaptureGame(
 			const std::shared_ptr<DataModel> &game,
 			std::uint64_t revision

@@ -9,6 +9,8 @@
 #include "gargantuan/animation/AnimationTrack.hpp"
 
 #include "gargantuan/InstanceProperty.hpp"
+#include "gargantuan/assets/GasDependencies.hpp"
+#include "gargantuan/assets/GasInstanceSerialization.hpp"
 #include "gargantuan/classes/BasePart.hpp"
 #include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/LuaSourceContainer.hpp"
@@ -54,6 +56,7 @@
 namespace gargantuan {
 	namespace {
 		using Json = JsonCodec::Json;
+		constexpr std::size_t MaximumGasTransferBytes = 512 * 1024;
 
 		enum class LineReadStatus { Complete, End, Oversized };
 
@@ -416,6 +419,7 @@ namespace gargantuan {
 				Method == "SetProperty" || Method == "SetPropertyBatch" || Method == "SetTransform" || Method == "SetAttribute" || Method == "SetExtensionProperty" ||
 				Method == "SetCustomProperty" || Method == "AddTag" || Method == "RemoveTag" ||
 				Method == "CreateInstance" || Method == "DestroyInstance" ||
+				Method == "ImportGasModel" || Method == "OpenGasPlace" ||
 				Method == "DuplicateInstance" || Method == "ReparentInstance" ||
 				Method == "ImportAsset" || Method == "ReimportAsset" || Method == "DeleteAsset" ||
 				Method == "StartPackageBuild";
@@ -891,9 +895,8 @@ namespace gargantuan {
 			return AssetContentId::Hash(std::span(reinterpret_cast<const std::uint8_t *>(Source->data()), Source->size())).ToString();
 		}
 
-		Json EncodePreRunSource(std::string_view Source) {
-			ValidateProtocolString(Source, MaximumPreRunSourceBytes, "PreRun source");
-			const auto Encoded = EncodeBase64(std::vector<std::uint8_t>(Source.begin(), Source.end()));
+		Json EncodeBase64Chunks(const std::vector<std::uint8_t> &Bytes) {
+			const auto Encoded = EncodeBase64(Bytes);
 			Json Chunks = Json::array();
 			for (std::size_t Offset = 0; Offset < Encoded.size(); Offset += MaximumProtocolStringBytes)
 				Chunks.push_back(Encoded.substr(Offset, MaximumProtocolStringBytes));
@@ -901,18 +904,20 @@ namespace gargantuan {
 			return Chunks;
 		}
 
-		std::string DecodePreRunSource(const Json &Chunks) {
-			if (!Chunks.is_array() || Chunks.empty() || Chunks.size() > 6)
-				throw std::invalid_argument("PreRun SourceBase64 requires one to six bounded chunks");
+		std::vector<std::uint8_t> DecodeBase64Chunks(const Json &Chunks, std::size_t MaximumBytes) {
+			const auto MaximumEncoded = ((MaximumBytes + 2) / 3) * 4;
+			const auto MaximumChunks = (MaximumEncoded + MaximumProtocolStringBytes - 1) / MaximumProtocolStringBytes;
+			if (!Chunks.is_array() || Chunks.empty() || Chunks.size() > MaximumChunks)
+				throw std::invalid_argument("Base64 chunk count exceeds its limit");
 			std::string Encoded;
 			for (const auto &Chunk : Chunks) {
-				if (!Chunk.is_string()) throw std::invalid_argument("PreRun source chunk must be a string");
+				if (!Chunk.is_string()) throw std::invalid_argument("Base64 chunk must be a string");
 				const auto &Text = Chunk.get_ref<const std::string &>();
-				if (Text.size() > MaximumProtocolStringBytes || Encoded.size() + Text.size() > ((MaximumPreRunSourceBytes + 2) / 3) * 4)
-					throw std::invalid_argument("PreRun source exceeds its byte limit");
+				if (Text.size() > MaximumProtocolStringBytes || Text.size() > MaximumEncoded - Encoded.size())
+					throw std::invalid_argument("Base64 data exceeds its byte limit");
 				Encoded += Text;
 			}
-			if (Encoded.size() % 4 != 0) throw std::invalid_argument("PreRun source Base64 length is invalid");
+			if (Encoded.size() % 4 != 0) throw std::invalid_argument("Base64 length is invalid");
 			constexpr std::string_view Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 			std::vector<std::uint8_t> Bytes;
 			Bytes.reserve(Encoded.size() / 4 * 3);
@@ -922,14 +927,25 @@ namespace gargantuan {
 					const char Character = Encoded[Offset + Index];
 					const auto Digit = Alphabet.find(Character);
 					if (Digit == std::string_view::npos && !(Character == '=' && Index >= 2 && Offset + 4 == Encoded.size()))
-						throw std::invalid_argument("PreRun source Base64 is invalid");
+						throw std::invalid_argument("Base64 is invalid");
 					Value = (Value << 6) | (Character == '=' ? 0 : static_cast<std::uint32_t>(Digit));
 				}
 				Bytes.push_back(static_cast<std::uint8_t>(Value >> 16));
 				if (Encoded[Offset + 2] != '=') Bytes.push_back(static_cast<std::uint8_t>(Value >> 8));
 				if (Encoded[Offset + 3] != '=') Bytes.push_back(static_cast<std::uint8_t>(Value));
 			}
-			if (EncodeBase64(Bytes) != Encoded) throw std::invalid_argument("PreRun source Base64 is not canonical");
+			if (Bytes.size() > MaximumBytes || EncodeBase64(Bytes) != Encoded)
+				throw std::invalid_argument("Base64 data is oversized or noncanonical");
+			return Bytes;
+		}
+
+		Json EncodePreRunSource(std::string_view Source) {
+			ValidateProtocolString(Source, MaximumPreRunSourceBytes, "PreRun source");
+			return EncodeBase64Chunks(std::vector<std::uint8_t>(Source.begin(), Source.end()));
+		}
+
+		std::string DecodePreRunSource(const Json &Chunks) {
+			const auto Bytes = DecodeBase64Chunks(Chunks, MaximumPreRunSourceBytes);
 			std::string Source(Bytes.begin(), Bytes.end());
 			ValidateProtocolString(Source, MaximumPreRunSourceBytes, "PreRun source");
 			return Source;
@@ -1237,6 +1253,7 @@ namespace gargantuan {
 					"OpenProject", "CreateProject", "Schema", "Snapshot", "Journal", "SetProperty", "SetPropertyBatch", "SetTransform", "SetAttribute", "SetExtensionProperty", "SetCustomProperty",
 					"AddTag", "RemoveTag", "SaveProject", "SaveProjectAs", "AuthoritativeRevision",
 					"CreateInstance", "DestroyInstance", "DuplicateInstance", "ReparentInstance",
+					"ExportGasModel", "ImportGasModel", "ExportGasPlace", "OpenGasPlace",
 					"BeginTransaction",
 					"CommitTransaction",
 					"AuthoritativeTransactions",
@@ -2818,6 +2835,142 @@ namespace gargantuan {
 					StudioSecurity, World->GetObjectId(), RequestTransaction, TransactionOwner
 				);
 			};
+
+			if (method == "ExportGasModel" || method == "ExportGasPlace") {
+				if (!CurrentProject || !StudioSecurity.HasCapability(ScriptCapability::ReadDataModel) ||
+					!StudioSecurity.HasCapability(ScriptCapability::EditorCommands))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "GAS export requires project authoring access"));
+				const bool IsModel = method == "ExportGasModel";
+				SerializationResult<Gas::Document> Document;
+				if (IsModel) {
+					if (!HasOnlyFields(parameters, {"Roots", "AssetIds"}) || !parameters.contains("Roots") ||
+						!parameters["Roots"].is_array() || parameters["Roots"].empty() || parameters["Roots"].size() > 256)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GASM export requires up to 256 root identities"));
+					std::vector<Gas::Dependency> RequestedDependencies;
+					if (parameters.contains("AssetIds")) {
+						const auto &Ids = parameters["AssetIds"];
+						if (!Ids.is_array() || Ids.size() > Gas::MaximumDependencies)
+							return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GASM asset identity list is invalid"));
+						for (const auto &EncodedId : Ids) {
+							const auto Id = EncodedId.is_string() ? AssetId::Parse(EncodedId.get_ref<const std::string &>()) : std::nullopt;
+							if (!Id)
+								return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GASM asset identity is invalid"));
+							RequestedDependencies.push_back({*Id, {}});
+						}
+					}
+					std::vector<std::shared_ptr<Instance>> Roots;
+					for (const auto &EncodedRoot : parameters["Roots"]) {
+						const auto Id = JsonCodec::DecodeObjectId(EncodedRoot);
+						const auto Root = Id ? ObjectRegistry::Get().Lookup(Id->ToObjectId()) : nullptr;
+						if (!Root || Root->GetDataModel() != World)
+							return SerializeBoundedResponse(ErrorResponse(requestId, "StaleObject", "GASM root is outside the current project"));
+						Roots.push_back(Root);
+					}
+					Document = InstanceSerialization::CaptureGasDocument(Roots, Gas::DocumentKind::Model);
+					if (Document) {
+						Document->Dependencies = std::move(RequestedDependencies);
+						for (const auto &Node : Document->Nodes) {
+							const auto *Class = InstanceClassRegistry::GetDefinitionBySchemaId(Node.Class);
+							if (!Class || !Class->EditorVisible || World->IsProtectedServiceClass(Node.Class) ||
+								Node.Class == SchemaId::FromNativeName("Engine", "FileLink"))
+								return SerializeBoundedResponse(ErrorResponse(requestId, "GasExportFailed",
+									"GASM selection includes a class that cannot be inserted"));
+						}
+						const auto Assets = std::dynamic_pointer_cast<AssetService>(
+							World->FindFirstChildOfClass("AssetService", false));
+						auto Pins = Gas::ResolveDependencies(*Document, Assets.get(), false);
+						if (!Pins)
+							return SerializeBoundedResponse(ErrorResponse(requestId, "GasExportFailed", Pins.error().Message));
+						Document->Dependencies = std::move(*Pins);
+					}
+				} else {
+					if (!parameters.empty())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GASP export takes no parameters"));
+					Document = CurrentProject->CaptureGasPlace(World);
+					if (Document && (Document->Place->PreRunSource != ActivePreRunSource ||
+						GetRuntimeSchemaLifecycle().GetActiveGeneration() != ActivePreRunSchemaGeneration))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "GasExportFailed",
+							"Reopen the project to apply PreRun changes before exporting"));
+				}
+				if (!Document)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "GasExportFailed", Document.error().Message));
+				const auto Encoded = Gas::Encode(*Document);
+				if (!Encoded)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "GasExportFailed", Encoded.error().Message));
+				if (Encoded->size() > MaximumGasTransferBytes)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "ResourceLimit", "GAS exceeds the EditorHost transfer limit"));
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"DataBase64", EncodeBase64Chunks(*Encoded)},
+					{"DocumentKind", IsModel ? "Model" : "Place"}, {"FormatVersion", Gas::FormatVersion},
+				}));
+			}
+
+			if (method == "ImportGasModel" || method == "OpenGasPlace") {
+				const bool IsModel = method == "ImportGasModel";
+				if (!CurrentProject || !StudioSecurity.HasCapability(ScriptCapability::MutateDataModel) ||
+					!StudioSecurity.HasCapability(ScriptCapability::EditorCommands))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "GAS import requires project authoring access"));
+				if (!Cursor)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
+				if (!HasOnlyFields(parameters, IsModel
+					? std::initializer_list<std::string_view>{"DataBase64", "ExpectedRevision", "Parent"}
+					: std::initializer_list<std::string_view>{"DataBase64", "ExpectedRevision"}) ||
+					!parameters.contains("DataBase64") || !ExpectedRevision || (IsModel && !parameters.contains("Parent")))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GAS import fields are invalid"));
+				if (HasRevisionConflict() || World->Transactions.GetOpenCount() != 0)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Conflict", "GAS import requires a current revision and closed transaction"));
+				Gas::Binary Data;
+				try {
+					Data = DecodeBase64Chunks(parameters["DataBase64"], MaximumGasTransferBytes);
+				} catch (const std::invalid_argument &) {
+					return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidGasDocument", "GAS transfer data is invalid"));
+				}
+				auto Document = Gas::Decode(Data);
+				if (!Document || Document->Kind != (IsModel ? Gas::DocumentKind::Model : Gas::DocumentKind::Place))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidGasDocument", "GAS document is invalid or has the wrong kind"));
+				if (IsModel) {
+					const auto Parent = JsonCodec::DecodeObjectId(parameters["Parent"]);
+					if (!Parent)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GASM import requires a parent identity"));
+					const auto Result = Mutations.Apply(ImportGasModelCommand{
+						std::make_shared<const Gas::Document>(std::move(*Document)), Parent->ToObjectId(), *ExpectedRevision,
+					}, StudioMutationAuthority());
+					if (!Result.Succeeded() || !Result.Object)
+						return SerializeBoundedResponse(ErrorResponse(requestId, MutationStatusName(Result.Status), Result.Message));
+					return SerializeBoundedResponse(SuccessResponse(requestId, {
+						{"Root", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(*Result.Object))},
+						{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
+					}));
+				}
+				if (Document->Place->PreRunSource != ActivePreRunSource ||
+					GetRuntimeSchemaLifecycle().GetActiveGeneration() != ActivePreRunSchemaGeneration)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "GasImportFailed",
+						"GASP PreRun requires the schema already active in the current project"));
+				std::shared_ptr<DataModel> Candidate;
+				std::string Response;
+				try {
+					ScopedChangeJournalSuppression Suppression;
+					Candidate = CurrentProject->LoadGasPlace(*Document);
+					if (!std::dynamic_pointer_cast<Workspace>(Candidate->GetService("Workspace")))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidProject", "GASP place has no valid Workspace"));
+					Candidate->InitializeLoadedProjectRevision();
+					Response = SerializeBoundedResponse(SuccessResponse(requestId, {
+						{"Root", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Candidate->GetObjectId()))},
+						{"ProjectState", EncodeProjectState(Candidate, 0, CurrentProject)},
+					}));
+				} catch (const std::exception &) {
+					return SerializeBoundedResponse(ErrorResponse(requestId, "GasImportFailed", "GASP place could not be opened with the current project inputs"));
+				}
+				ResetViewportSpatial();
+				World->Destroy();
+				World = std::move(Candidate);
+				ActiveAnimationPreview.reset();
+				PersistedRevision = 0;
+				Cursor.reset();
+				ViewportCamera = RenderCameraInput{};
+				AdvanceViewportGeneration();
+				return Response;
+			}
 
 			auto workspace = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
 			if (!workspace || !ViewportCamera)
