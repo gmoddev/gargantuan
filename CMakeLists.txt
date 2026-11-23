@@ -703,6 +703,10 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+	add_executable(gargantuan_gas_document_tests "tests/GasDocumentTests.cpp")
+	target_link_libraries(gargantuan_gas_document_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_gas_document COMMAND gargantuan_gas_document_tests)
+	set_tests_properties(gargantuan_gas_document PROPERTIES LABELS "persistence;serialization;sanitizer-safety")
 	add_test(NAME gargantuan_runtime_host_roles
 		COMMAND ${CMAKE_COMMAND}
 			-DGARGANTUAN_PLAYER=$<TARGET_FILE:gargantuan_player>
