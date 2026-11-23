@@ -40,8 +40,9 @@ GASM import verifies the destination catalog's asset IDs, artifact digests
 and transitive dependencies. Standard reflected asset fields are resolved
 automatically. Supply `AssetIds` for assets a script selects at runtime.
 GASM carries pins, so the Studio client must arrange availability through
-the existing asset workflow before inserting into a separate project. A
-missing artifact or an asset ID with a different digest aborts insertion.
+an identity-preserving project catalog and CAS before inserting into a
+separate project. Ordinary asset import allocates a new asset ID. A missing
+artifact or an asset ID with a different digest aborts insertion.
 Model imports cannot insert protected service classes or a FileLink source
 mount. One imported root is placed directly under `Parent`. Multiple roots
 are grouped under a new `Imported Model` Folder in source order to adopt the

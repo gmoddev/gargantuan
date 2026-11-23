@@ -22,6 +22,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -712,6 +713,98 @@ end)
 		Game->Destroy();
 	}
 
+	void TestCharacterCommitObservers() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto PlayersValue = std::dynamic_pointer_cast<Players>(Game->GetService("Players"));
+		auto Owner = PlayersValue->CreateSessionPlayer({"test", "owner"});
+		auto Other = PlayersValue->CreateSessionPlayer({"test", "other"});
+		const auto CreateCharacter = [&] {
+			auto Actor = std::make_shared<KinematicCharacter>();
+			Actor->SetParent(WorkspaceValue);
+			return Actor;
+		};
+
+		auto Previous = CreateCharacter();
+		auto Intermediate = CreateCharacter();
+		auto Final = CreateCharacter();
+		Owner->SetCharacter(Previous);
+		std::vector<std::shared_ptr<Character>> AddedCharacters;
+		auto Added = Owner->CharacterAdded->Connect([&](const auto &Value) { AddedCharacters.push_back(Value); });
+		auto Changed = Owner->GetPropertyChangedSignal("Character");
+		int RetiringRejections = 0;
+		auto ReplaceOnCommit = Changed->Once([&](std::monostate) {
+			Check(Owner->GetCharacter() == Intermediate, "property observer sees the committed Character");
+			try { Owner->SetCharacter(Previous); } catch (const std::invalid_argument &) { ++RetiringRejections; }
+			try { Other->SetCharacter(Previous); } catch (const std::invalid_argument &) { ++RetiringRejections; }
+			try { Other->SetPossession(Previous); } catch (const std::invalid_argument &) { ++RetiringRejections; }
+			Owner->SetCharacter(Final);
+		});
+		Owner->SetCharacter(Intermediate);
+		Check(RetiringRejections == 3 && !Other->GetCharacter() && !Other->GetPossessedEntity(),
+			"the previous Character stays reserved for retirement during property callbacks");
+		Check(Owner->GetCharacter() == Final && Previous->GetDestroyed() && Intermediate->GetDestroyed() &&
+				AddedCharacters.size() == 1 && AddedCharacters.front() == Final,
+			"reentrant replacement publishes only the live addition and retires previous Characters");
+		Final->Destroy();
+		Check(!Owner->GetCharacter(), "reentrant replacement keeps the final Character destruction connection");
+
+		auto DestroyedOnCommit = CreateCharacter();
+		auto DestroyOnCommit = Changed->Once([&](std::monostate) { DestroyedOnCommit->Destroy(); });
+		Owner->SetCharacter(DestroyedOnCommit);
+		Check(!Owner->GetCharacter() && DestroyedOnCommit->GetDestroyed() && AddedCharacters.size() == 1,
+			"destroying the committed Character in a property callback clears ownership and suppresses the stale addition");
+
+		auto DestroyingPrevious = CreateCharacter();
+		auto Displaced = CreateCharacter();
+		auto ReplacesDisplaced = CreateCharacter();
+		Owner->SetCharacter(DestroyingPrevious);
+		auto ReplaceOnRetirement = DestroyingPrevious->Destroying->Once([&](std::monostate) {
+			Owner->SetCharacter(ReplacesDisplaced);
+		});
+		Owner->SetCharacter(Displaced);
+		Check(Owner->GetCharacter() == ReplacesDisplaced && Displaced->GetDestroyed() &&
+				AddedCharacters.size() == 3 && AddedCharacters.back() == ReplacesDisplaced,
+			"old Character destruction can supersede the replacement without publishing a stale addition");
+
+		auto AfterFailure = CreateCharacter();
+		auto ThrowOnCommit = Changed->Once([](std::monostate) { throw std::runtime_error("native observer failure"); });
+		bool ReportedFailure = false;
+		try {
+			Owner->SetCharacter(AfterFailure);
+		} catch (const std::runtime_error &Error) {
+			ReportedFailure = std::string_view(Error.what()) == "native observer failure";
+		}
+		Check(ReportedFailure && ReplacesDisplaced->GetDestroyed() && Owner->GetCharacter() == AfterFailure,
+			"a failed native property observer leaves the committed replacement tracked and retires the previous Character");
+		AfterFailure->Destroy();
+		Check(!Owner->GetCharacter(), "the committed Character retains its destruction connection after a callback fails");
+
+		auto ExternalRetirement = CreateCharacter();
+		auto RetiredChild = std::make_shared<Folder>();
+		RetiredChild->SetParent(ExternalRetirement);
+		Owner->SetCharacter(ExternalRetirement);
+		auto ThrowOnExternalRemoval = Owner->CharacterRemoving->Once([](const auto &) {
+			throw std::runtime_error("native removal observer failure");
+		});
+		ExternalRetirement->Destroy();
+		Check(!Owner->GetCharacter() && ExternalRetirement->GetDestroyed() && !ExternalRetirement->GetParent() &&
+				RetiredChild->GetDestroyed() && !RetiredChild->GetParent(),
+			"external Character destruction retires its full hierarchy after a native removal observer fails");
+
+		auto PlayerRetirement = CreateCharacter();
+		Owner->SetCharacter(PlayerRetirement);
+		auto ThrowOnPlayerRemoval = Owner->CharacterRemoving->Once([](const auto &) {
+			throw std::runtime_error("native Player teardown observer failure");
+		});
+		Owner->Destroy();
+		Check(!Owner->GetCharacter() && !Owner->GetParent() && PlayerRetirement->GetDestroyed() &&
+				!PlayerRetirement->GetParent(),
+			"Player destruction retires its Character and detaches both after a native observer fails");
+		Game->Destroy();
+	}
+
 	void TestGenericPossession() {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
@@ -880,6 +973,7 @@ int main() {
 	TestCustomControllerPath();
 	TestMovementPolicyResults();
 	TestCharacterRemovalReservations();
+	TestCharacterCommitObservers();
 	TestGenericPossession();
 	if (Failures == 0) std::cout << "All player runtime tests passed\n";
 	return Failures == 0 ? 0 : 1;

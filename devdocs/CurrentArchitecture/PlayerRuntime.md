@@ -138,12 +138,22 @@ specializations do not require changing the Player schema. The lifecycle is:
    teardown, or Engine Stop fires `CharacterRemoving` and clears the relation.
 5. Player-owned removal/replacement destroys the old character exactly once.
 
-During the synchronous pre-removal callback, the original character remains
-available to observers and the pending replacement is reserved for its new
-owner. Nested removal or replacement on that Player is rejected, as are
-assignments of the pending target to another Player. The reservation ends
-when the callback returns or fails. After the new relationship commits,
-`CharacterAdded` handlers can still install a project-specific template.
+On the synchronous mutation path, the pre-removal callback exposes the original
+Character and reserves the pending replacement for its new owner. Nested
+removal or replacement on that Player is rejected, as are assignments of the
+pending target to another Player. The reservation ends when the callback
+returns or fails. A throwing native observer at this stage aborts the pending
+assignment. Once the new relationship commits, its
+destruction connection is already active for `GetPropertyChangedSignal("Character")`
+observers. Those observers can destroy the current Character or assign a
+different one. The previous Character stays reserved for retirement and cannot
+be reassigned as a Character or possessed. The Player invokes that retirement
+before propagating a native property observer error. If a reentrant observer
+supersedes the replacement or destroys it, only the current live binding can
+emit `CharacterAdded`. `CharacterAdded` handlers can still install a
+project-specific template. Once external Character or Player destruction has
+started, the Player logs native Character observer errors and continues its
+teardown. Replica application still uses its existing signal deferral.
 
 `Player:SetPossession(EntityOrNil)` is an independent, non-owning relationship
 for server gameplay policy. Entity eligibility is a live descendant of the

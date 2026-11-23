@@ -13,9 +13,15 @@ namespace gargantuan {
 		I_Player;
 
 		friend class Players;
+		struct CharacterRetirement {
+			ObjectId Target;
+			const CharacterRetirement *Previous;
+		};
+
 		int PlayerIdValue = 0;
 		std::shared_ptr<Character> CharacterValue;
 		ObjectId PendingCharacter;
+		const CharacterRetirement *RetiringCharacters = nullptr;
 		std::optional<PlayerIdentity> AuthenticationIdentity;
 		ObjectId PossessedEntityId;
 		std::weak_ptr<Instance> PossessedEntityValue;
@@ -32,6 +38,7 @@ namespace gargantuan {
 		void CommitPossession(const std::shared_ptr<Instance> &Entity);
 		void ClosePossession();
 		void DisconnectPossessionSignals();
+		bool IsRetiringCharacter(ObjectId Target) const;
 		void NotifyCharacterRemoving(const std::shared_ptr<Character> &Previous, ObjectId Replacement = {});
 		void ShutdownCharacter();
 
