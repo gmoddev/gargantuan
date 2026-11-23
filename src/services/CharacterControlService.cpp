@@ -191,9 +191,16 @@ namespace gargantuan {
 			lua_settop(L, StackBase);
 			throw std::runtime_error("[Character:Control] movement policy failed");
 		}
-		const auto Translation = CheckStackValue<glm::vec3>(L, -3);
-		const auto Velocity = CheckStackValue<glm::vec3>(L, -2);
-		const auto Yaw = CheckStackValue<float>(L, -1);
+		// The policy call is over. Report result errors through native control
+		// flow so they cannot raise a second Luau error on the main VM stack.
+		if (!StackValue<glm::vec3>::Is(L, -3) || !StackValue<glm::vec3>::Is(L, -2) ||
+			!StackValue<float>::Is(L, -1)) {
+			lua_settop(L, StackBase);
+			throw std::runtime_error("[Character:Control] movement policy must return translation, velocity, and yaw");
+		}
+		const auto Translation = StackValue<glm::vec3>::From(L, -3);
+		const auto Velocity = StackValue<glm::vec3>::From(L, -2);
+		const auto Yaw = StackValue<float>::From(L, -1);
 		lua_settop(L, StackBase);
 		if (!Finite(Translation) || !Finite(Velocity) || !std::isfinite(Yaw))
 			throw std::runtime_error("[Character:Control] movement policy returned non-finite motion");

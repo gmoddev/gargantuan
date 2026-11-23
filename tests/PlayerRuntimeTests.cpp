@@ -11,6 +11,7 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/services/ActionMap.hpp"
+#include "gargantuan/services/CharacterControlService.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/UserInputService.hpp"
 #include "gargantuan/services/Workspace.hpp"
@@ -607,6 +608,55 @@ Character:Move(Vector3.new(1, 0, 0))
 		);
 	}
 
+	void TestMovementPolicyResults() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto PlayersValue = std::dynamic_pointer_cast<Players>(Game->GetService("Players"));
+		PlayersValue->SetDefaultControllerEnabled(false);
+		auto CharacterValue = std::make_shared<KinematicCharacter>();
+		CharacterValue->SetParent(WorkspaceValue);
+		HeadlessRenderer Renderer(Vector2(320.0f, 240.0f));
+		Engine Runtime(Game, &Renderer, nullptr,
+			{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer});
+		auto Policy = std::make_shared<Script>();
+		Policy->SetRunContext(Enums::RunContext::Server);
+		Policy->SetSource(R"(
+local Calls = 0
+game:GetService("CharacterControlService"):SetMovementPolicy(function()
+	Calls += 1
+	if Calls == 1 then
+		return nil, Vector3.zero, 0
+	elseif Calls == 2 then
+		return Vector3.zero, {}, 0
+	elseif Calls == 3 then
+		return Vector3.zero, Vector3.zero
+	end
+	return Vector3.xAxis, Vector3.zero, 0.25
+end)
+)");
+		Policy->SetParent(Game);
+		Runtime.Script->Step();
+		auto *Main = Runtime.Script->L;
+		const auto StackBase = lua_gettop(Main);
+		const network::CharacterInputCommand Command{};
+		int Rejected = 0;
+		for (int Call = 0; Call < 3; ++Call) {
+			try {
+				(void)Runtime.CharacterControl->EvaluateMovement(Command, *CharacterValue);
+			} catch (const std::runtime_error &) {
+				++Rejected;
+			}
+			Check(lua_gettop(Main) == StackBase, "malformed movement policy results leave the main VM stack intact");
+		}
+		Check(Rejected == 3, "malformed movement policy results produce a native policy error");
+		const auto Motion = Runtime.CharacterControl->EvaluateMovement(Command, *CharacterValue);
+		Check(Motion.Translation == glm::vec3(1.0f, 0.0f, 0.0f) && Motion.Velocity == glm::vec3(0.0f) &&
+				Motion.YawRadians == 0.25f && lua_gettop(Main) == StackBase,
+			"a valid movement policy result is admitted after malformed results");
+		Runtime.Destroy();
+	}
+
 	void TestGenericPossession() {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
@@ -767,6 +817,7 @@ int main() {
 	TestDefaultPlayerRuntime();
 	TestEngineReattachAfterShutdown();
 	TestCustomControllerPath();
+	TestMovementPolicyResults();
 	TestGenericPossession();
 	if (Failures == 0) std::cout << "All player runtime tests passed\n";
 	return Failures == 0 ? 0 : 1;
