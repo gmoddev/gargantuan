@@ -45,6 +45,15 @@ The minimal fixture's expected digest comes from an independent Python
 | Relay Rescue place round trip, packages, two-player mission and animated model | `ba3fd78b9cc273f9044c702fd8edf45f8725b86d` | [Ubuntu Clang 19 ASan/UBSan](https://github.com/gmoddev/gargantuan/actions/runs/45250180300/job/137957435891) passed the Relay test, asset-backed GASM test, package input test and graph benchmark. The full job reported 121/122 due to an authoring lifecycle leak. |
 | Native suite after world cleanup and Windows test syntax correction | `70b2953f76e47952323b65914a921ec945e6783b` | [Native CI](https://github.com/gmoddev/gargantuan/actions/runs/45258517284) |
 | Windows Release GAS, persistence, package and Relay tests | `cca3d151c09b613ce019574416607e2ca8ab346c` | Worker CTest passed 18/18 cases using GNS, including both missions, both package roles, and animated model import |
+| Linux GAS codec, EditorHost and model tests after teardown fixes | `cca3d151c09b613ce019574416607e2ca8ab346c` | Worker CTest passed 3/3 cases under ASan, UBSan and LeakSanitizer |
+
+The focused Linux worker used Ubuntu 24.04 in toolchain image
+`sha256:4eeae307153445eff9e085c872580bc65ee05b43d80c9561ddd3e9a20d269f2d`,
+Clang 19.1.1 with GCC 14's standard library, CMake 3.31.10, Ninja, and
+RelWithDebInfo. The headless build used GNS off and flags
+`-fsanitize=address,undefined -fno-omit-frame-pointer`. Both sanitizers
+halted on errors and `ASAN_OPTIONS` enabled leak detection. The worker
+preserves the test XML at `C:\Sandbox\Codex\Builds\GAS-1\linux-asan\ctest-linux-asan.xml`.
 
 Only rows with stated outcomes above are established qualification evidence.
 The Relay Rescue check copies the pinned fixture, exports and restores it,
@@ -94,6 +103,19 @@ In these sanitizer runs, the binary files were about 46% smaller and decode
 took longer in all three workloads. The hydration path includes reflected
 validation and a private JSON-shaped projection. A direct binary runtime
 loader needs independent measurements and admission qualification.
+
+The six separately launched allocation profiles also passed under Clang 19
+ASan/UBSan at `b229864c3f1f96afb9be0853d3ecb115f2c96143`. Counts cover
+successful main-thread C++ allocation requests over five measured iterations.
+Peak resident memory is the whole-process high-water mark before semantic
+recapture and includes the sanitizer runtime.
+[Linux allocation profiles](https://github.com/gmoddev/gargantuan/actions/runs/45251021630/job/137960368114)
+
+| Instances | JSON encode / decode allocations | GASP encode / decode allocations | JSON peak bytes | GASP peak bytes |
+| ---: | ---: | ---: | ---: | ---: |
+| 100 | 334,875 / 232,904 | 10,115 / 370,539 | 162,443,264 | 137,723,904 |
+| 1,000 | 3,973,850 / 2,333,919 | 98,905 / 3,705,859 | 530,690,048 | 492,883,968 |
+| 5,000 | 21,508,020 / 11,700,329 | 493,460 / 18,562,284 | 775,815,168 | 662,519,808 |
 
 ### Windows Release replay
 
