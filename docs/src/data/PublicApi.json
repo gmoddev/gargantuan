@@ -6444,7 +6444,8 @@
       "Types": [
         "Impl",
         "JobGroup",
-        "JobSystem"
+        "JobSystem",
+        "StartPolicy"
       ]
     },
     {
