@@ -85,6 +85,7 @@ set(GARGANTUAN_RUNTIME_LUAU_MODULES
 	"DefaultInteractionRuntime.luau"
 	"DefaultCharacterRuntime.luau"
 	"DefaultCharacterAssembly.luau"
+	"DefaultCharacterAnimation.luau"
 	"DefaultLocomotion.luau"
 	"DefaultNetworkLocomotion.luau"
 	"DefaultNetworkCharacterRuntime.luau"

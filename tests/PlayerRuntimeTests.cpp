@@ -65,6 +65,7 @@ namespace {
 			.Physical = Logical == LogicalKey::W	   ? PhysicalKey::W
 						: Logical == LogicalKey::D	   ? PhysicalKey::D
 						: Logical == LogicalKey::Space ? PhysicalKey::Space
+						: Logical == LogicalKey::LeftShift ? PhysicalKey::LeftShift
 													   : PhysicalKey::Unknown,
 			.Logical = Logical,
 			.State = State,
@@ -272,7 +273,7 @@ Witness.Parent = game
 			"engine Character bootstrap runs exactly once before ordinary project scripts"
 		);
 		Check(
-			Runtime.ActionMap->GetBindingCount() == 9,
+			Runtime.ActionMap->GetBindingCount() == 10,
 			"engine-shipped Character modules initialize once without duplicating semantic bindings"
 		);
 		Check(LocalPlayer->GetCharacter().has_value(), "default Luau assembly responds to the Player spawn contract");
@@ -305,6 +306,24 @@ Witness.Parent = game
 			Character->GetGrounded() && Near(Character->GetPosition().y, 2.0f, 0.1f),
 			"default controller lands on actual floor geometry"
 		);
+
+		const auto BeforeSpeedCheck = Character->GetCFrame();
+		(void)Character->ApplyAttributeMutation("WalkSpeed", WireValue(8.0));
+		(void)Character->ApplyAttributeMutation("RunSpeed", WireValue(30.0));
+		(void)Runtime.ProcessEvent(Key(LogicalKey::D, ButtonState::Pressed));
+		Runtime.RunService->PreSimulation->Fire(1.0f / 60.0f);
+		const auto Walk = Character->GetVelocity();
+		(void)Runtime.ProcessEvent(Key(LogicalKey::LeftShift, ButtonState::Pressed));
+		Runtime.RunService->PreSimulation->Fire(1.0f / 60.0f);
+		const auto Run = Character->GetVelocity();
+		(void)Runtime.ProcessEvent(Key(LogicalKey::LeftShift, ButtonState::Released));
+		(void)Runtime.ProcessEvent(Key(LogicalKey::D, ButtonState::Released));
+		Check(Near(glm::length(glm::vec2(Walk.x, Walk.z)), 8.0f) &&
+				Near(glm::length(glm::vec2(Run.x, Run.z)), 30.0f),
+			"stock movement selects configured walk and run speeds through the semantic action map");
+		(void)Character->ApplyAttributeMutation("WalkSpeed", std::nullopt);
+		(void)Character->ApplyAttributeMutation("RunSpeed", std::nullopt);
+		Character->SetCFrame(BeforeSpeedCheck);
 
 		(void)Runtime.ProcessEvent(Key(LogicalKey::D, ButtonState::Pressed));
 		float MaximumStepHeight = Character->GetPosition().y;
@@ -370,12 +389,14 @@ Witness.Parent = game
 		Check(Character->GetPosition().z > -7.0f, "default horizontal movement is bounded by obstacle geometry");
 
 		const auto JumpDown = Key(LogicalKey::Space, ButtonState::Pressed);
+		(void)Character->ApplyAttributeMutation("JumpSpeed", WireValue(35.0));
 		(void)Runtime.ProcessEvent(JumpDown);
 		Runtime.RunService->PreSimulation->Fire(1.0f / 60.0f);
 		Check(
-			!Character->GetGrounded() && Character->GetVelocity().y > 0.0f,
-			"grounded Jump action launches the default character"
+			!Character->GetGrounded() && Near(Character->GetVelocity().y, 35.0f, 0.5f),
+			"grounded Jump action launches the default character at the configured speed"
 		);
+		(void)Character->ApplyAttributeMutation("JumpSpeed", std::nullopt);
 		(void)Runtime.ProcessEvent(Key(LogicalKey::Space, ButtonState::Released));
 		for (int Frame = 0; Frame < 5; ++Frame)
 			Runtime.RunService->PreSimulation->Fire(1.0f / 60.0f);

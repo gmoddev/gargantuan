@@ -2,7 +2,9 @@ local Players = game:GetService("Players")
 local CharacterControl = game:GetService("CharacterControlService")
 local Workspace = game:GetService("Workspace")
 
-require("@game/Players/PlayerRuntimeModules/DefaultNetworkLocomotion")(CharacterControl, Workspace)
+require("@game/Players/PlayerRuntimeModules/DefaultNetworkLocomotion")(
+	CharacterControl, Workspace, Players:GetAttribute("DefaultMovementTuning") == true
+)
 
 local CharacterCleanups = {}
 local function AddPlayer(Player)

@@ -1,4 +1,4 @@
-return function(ActionMap, ConsumeNativeCamera)
+return function(ActionMap, ConsumeNativeCamera, EnableRun)
 	local Input = game:GetService("InputService")
 	local BindingIds = {}
 	local Existing = {}
@@ -19,6 +19,9 @@ return function(ActionMap, ConsumeNativeCamera)
 	Key("MoveLeft", Enum.KeyCode.A)
 	Key("MoveRight", Enum.KeyCode.D)
 	Key("Jump", Enum.KeyCode.Space)
+	if EnableRun then
+		Key("Run", Enum.KeyCode.LeftShift)
+	end
 	if not Existing.CameraOrbit then
 		table.insert(BindingIds, ActionMap:BindMouseButton("CameraOrbit", Enum.UserInputType.MouseButton2, 1, 0, ConsumeNativeCamera))
 	end

@@ -123,7 +123,9 @@ namespace gargantuan {
 
 	std::shared_ptr<Script> Players::StartDefaultRuntime(RuntimeMode Mode) {
 		if (RuntimeStarted) return nullptr;
-		if (!GetDefaultControllerEnabled() && !GetDefaultCameraEnabled()) return nullptr;
+		const bool AnimateCharacters = Mode != RuntimeMode::NetworkServer &&
+			GetAttributeValue("DefaultCharacterAnimations") == std::optional<WireValue>(true);
+		if (!GetDefaultControllerEnabled() && !GetDefaultCameraEnabled() && !AnimateCharacters) return nullptr;
 		std::vector<std::string> Names;
 		std::string BootstrapName;
 		Enums::RunContext RunContext = Enums::RunContext::Client;
@@ -133,12 +135,14 @@ namespace gargantuan {
 			BootstrapName = "DefaultNetworkServerRuntime";
 			RunContext = Enums::RunContext::Server;
 		} else if (Mode == RuntimeMode::NetworkClient) {
-			Names = {"DefaultActionMap", "DefaultNetworkLocomotion", "DefaultNetworkCharacterRuntime", "DefaultCamera"};
+			Names = {"DefaultActionMap", "DefaultNetworkLocomotion", "DefaultNetworkCharacterRuntime",
+				"DefaultCamera"};
 			BootstrapName = "DefaultNetworkClientRuntime";
 		} else {
 			Names = {"DefaultActionMap", "DefaultCharacterRuntime", "DefaultLocomotion", "DefaultCamera"};
 			BootstrapName = "DefaultPlayerRuntime";
 		}
+		if (AnimateCharacters) Names.push_back("DefaultCharacterAnimation");
 		std::vector<std::string> Sources;
 		Sources.reserve(Names.size());
 		for (const auto &Name : Names)

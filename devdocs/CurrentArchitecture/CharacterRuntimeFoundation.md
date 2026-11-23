@@ -103,6 +103,24 @@ false` before Engine startup and install an ordinary project Script. The player
 runtime test does exactly that, assembles a Character, calls `Character:Move`,
 and proves no native default movement continues underneath it.
 
+The shipped offline controller uses the `Run` semantic action, bound to Left
+Shift when the project has no binding of its own. It reads optional Character
+attributes `WalkSpeed`, `RunSpeed`, and `JumpSpeed`, with defaults 16, 24,
+and 50. The values must be numbers between 0 and 100. Network play keeps the
+usual walk and jump without extra per-command attribute reads. Projects set
+the saved Players attribute `DefaultMovementTuning` before startup to
+enable tuning on that path. The server's Character `Sprinting` attribute
+selects the run speed.
+
+To play project-authored locomotion clips, set the saved Players attribute
+`DefaultCharacterAnimations` to true. A stock or custom Character with a
+skinned MeshPart RootPart and a direct Animator can use its Animator
+attributes `IdleAnimation`, `MoveAnimation`, `JumpAnimation`, and
+`FallAnimation` as clip references. Client Luau selects a track from grounded
+status and velocity. This presentation makes no root-motion request or
+authoritative action. Missing clips fall back to the available idle track
+or leave the rig at rest. Games can install their own animation controller.
+
 ## Bootstrap order and replacement
 
 Gargantuan's literal `.gargantuan/prerun.luau` phase is schema-only. It runs
