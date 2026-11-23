@@ -332,21 +332,38 @@ namespace gargantuan {
 						if (!Pins || *Pins != Document->Dependencies)
 							return {MutationStatus::ValidationFailed, {}, "GASM asset pins do not match the destination catalog"};
 
-						std::shared_ptr<Instance> Root;
+						struct StagedModel {
+							std::shared_ptr<Instance> Root;
+							std::vector<std::shared_ptr<Instance>> Roots;
+							bool Committed = false;
+
+							~StagedModel() {
+								if (Committed) return;
+								auto DestroyDetached = [](const std::shared_ptr<Instance> &Object) {
+									if (!Object || Object->GetDestroyed() || Object->GetDataModel()) return;
+									try { Object->Destroy(); }
+									catch (...) {}
+								};
+								DestroyDetached(Root);
+								for (const auto &Object : Roots) DestroyDetached(Object);
+							}
+						} Candidate;
+						auto &Root = Candidate.Root;
 						SubtreeTransactionChange Change;
 						{
 							ScopedChangeJournalSuppression Suppression;
 							auto Staged = InstanceSerialization::MaterializeGasDocument(*Document, false);
 							if (!Staged.Succeeded())
 								return {MutationStatus::ValidationFailed, {}, "GASM state is incompatible with the active schema"};
-							if (Staged.Roots.size() == 1) {
-								Root = std::move(Staged.Roots.front());
+							Candidate.Roots = std::move(Staged.Roots);
+							if (Candidate.Roots.size() == 1) {
+								Root = Candidate.Roots.front();
 							} else {
 								// Adopt a forest as one subtree so cross-root references become
 								// DataModel-owned together using the existing adoption contract.
 								Root = std::make_shared<Folder>();
 								Root->SetName("Imported Model");
-								for (const auto &Child : Staged.Roots) Child->SetParent(Root);
+								for (const auto &Child : Candidate.Roots) Child->SetParent(Root);
 							}
 							Root->MarkPersistenceSubtreeArchivable();
 							if (AncestryDepth(Parent) + SubtreeDepth(Root) > MaximumProtocolJsonDepth)
@@ -402,6 +419,7 @@ namespace gargantuan {
 								Journal.Install();
 								++World->AuthoritativeRevision;
 								Journal.Release();
+								Candidate.Committed = true;
 							} catch (...) {
 								ScopedChangeJournalSuppression Suppression;
 								if (Root->GetParent()) Root->SetParentInternal(std::nullopt, &DeferredNotifications);

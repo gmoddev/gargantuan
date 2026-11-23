@@ -1000,10 +1000,18 @@ namespace gargantuan {
 			ActivePlaySession->Stop();
 			ActivePlaySession.reset();
 		}
+		if (!World) return;
 		try {
-			if (World) (void)World->Transactions.TerminateOwner(*World, TransactionOwner);
+			(void)World->Transactions.TerminateOwner(*World, TransactionOwner);
 		} catch (...) {
-			if (World) World->Transactions.Reset();
+			World->Transactions.Reset();
+		}
+		try {
+			// Retire authored subtrees explicitly so Instance reference cycles break.
+			ScopedChangeJournalSuppression Suppression;
+			World->Destroy();
+		} catch (...) {
+			// Host teardown must remain nonthrowing.
 		}
 	}
 
@@ -2946,7 +2954,17 @@ namespace gargantuan {
 					GetRuntimeSchemaLifecycle().GetActiveGeneration() != ActivePreRunSchemaGeneration)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "GasImportFailed",
 						"GASP PreRun requires the schema already active in the current project"));
-				std::shared_ptr<DataModel> Candidate;
+				struct StagedPlace {
+					std::shared_ptr<DataModel> World;
+					~StagedPlace() {
+						if (!World) return;
+						try {
+							ScopedChangeJournalSuppression Suppression;
+							World->Destroy();
+						} catch (...) {}
+					}
+				} Staged;
+				auto &Candidate = Staged.World;
 				std::string Response;
 				try {
 					ScopedChangeJournalSuppression Suppression;

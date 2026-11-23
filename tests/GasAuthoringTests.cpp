@@ -142,6 +142,30 @@ namespace {
 			Parent.Children.size()};
 	}
 
+	class ScopedFixtureGraph {
+	  public:
+		explicit ScopedFixtureGraph(std::shared_ptr<Instance> Root) : Roots{std::move(Root)} {}
+		explicit ScopedFixtureGraph(std::span<const std::shared_ptr<Instance>> Forest) : Roots(Forest.begin(), Forest.end()) {}
+		~ScopedFixtureGraph() { Destroy(); }
+		ScopedFixtureGraph(const ScopedFixtureGraph &) = delete;
+		ScopedFixtureGraph &operator=(const ScopedFixtureGraph &) = delete;
+
+		void Destroy() {
+			// Constraints can retain their ancestor Parts. Run the same teardown as an owning host.
+			for (const auto &Root : Roots)
+				if (Root) Root->Destroy();
+			Roots.clear();
+		}
+
+	  private:
+		std::vector<std::shared_ptr<Instance>> Roots;
+	};
+
+	struct ScopedFixtureConnection {
+		SignalConnection::Pointer Connection;
+		~ScopedFixtureConnection() { Connection->Disconnect(); }
+	};
+
 	class ScopedJournalCapacity {
 	  public:
 		explicit ScopedJournalCapacity(std::size_t Capacity) { ChangeJournal::Get().SetCapacity(Capacity); }
@@ -155,6 +179,7 @@ namespace {
 
 	void TestModel() {
 		auto SourceWorld = std::make_shared<DataModel>();
+		const ScopedFixtureGraph SourceLifetime(SourceWorld);
 		const auto Source = CreateScene(SourceWorld, SourceWorld->GetService("Workspace"));
 		const auto Roots = Source.Roots();
 		Require(!InstanceSerialization::CaptureGasDocument(std::span(Roots).first(1), Gas::DocumentKind::Model),
@@ -167,6 +192,7 @@ namespace {
 		Require(Parsed.has_value() && *Parsed == *Captured, "Decode the captured forest canonically");
 
 		const auto Staged = InstanceSerialization::MaterializeGasDocument(*Parsed, true);
+		const ScopedFixtureGraph StagedLifetime(Staged.Roots);
 		Require(Staged.Succeeded() && Staged.Roots.size() == 5, "Materialize detached roots before publication");
 		const Scene Detached{std::dynamic_pointer_cast<Part>(Staged.Roots[0]),
 			std::dynamic_pointer_cast<Part>(Staged.Roots[1]), std::dynamic_pointer_cast<Frame>(Staged.Roots[2]),
@@ -177,6 +203,7 @@ namespace {
 		VerifyScene(Detached, {});
 
 		auto Destination = std::make_shared<DataModel>();
+		const ScopedFixtureGraph DestinationLifetime(Destination);
 		Destination->InitializeLoadedProjectRevision();
 		const auto Parent = Destination->GetService("Workspace");
 		const auto Studio = ScriptSecurityContext::StudioCoreUi();
@@ -216,15 +243,15 @@ namespace {
 		std::size_t AddedSignals = 0;
 		std::size_t RemovedSignals = 0;
 		bool ListenerSawCommit = false;
-		const auto Added = Parent->ChildAdded->Connect([&](const std::shared_ptr<Instance> &) {
+		const ScopedFixtureConnection Added{Parent->ChildAdded->Connect([&](const std::shared_ptr<Instance> &) {
 			++AddedSignals;
 			const auto Observed = Published(*Destination, *Parent);
 			ListenerSawCommit = Observed.Revision == Before.Revision + 1 &&
 				Observed.History == Before.History + 1 && Observed.NextJournalSequence > Before.NextJournalSequence;
-		});
-		const auto Removed = Parent->ChildRemoved->Connect([&](const std::shared_ptr<Instance> &) {
+		})};
+		const ScopedFixtureConnection Removed{Parent->ChildRemoved->Connect([&](const std::shared_ptr<Instance> &) {
 			++RemovedSignals;
-		});
+		})};
 		{
 			const ScopedJournalCapacity Capacity(1);
 			Require(!Gateway.Apply(Command, Authority).Succeeded() && Published(*Destination, *Parent) == Before &&
@@ -234,8 +261,8 @@ namespace {
 		}
 
 		const auto Imported = Gateway.Apply(Command, Authority);
-		Added->Disconnect();
-		Removed->Disconnect();
+		Added.Connection->Disconnect();
+		Removed.Connection->Disconnect();
 		Require(Imported.Succeeded() && Imported.Object.has_value(), "Commit an authorized model forest");
 		Require(AddedSignals == 1 && RemovedSignals == 0 && ListenerSawCommit,
 			"Native hierarchy listeners observe the committed history and journal");
@@ -267,6 +294,7 @@ namespace {
 		VerifyScene(Restored, Destination);
 
 		auto Full = std::make_shared<DataModel>();
+		const ScopedFixtureGraph FullLifetime(Full);
 		const auto FullParent = Full->GetService("Workspace");
 		const auto Core = ScriptSecurityContext::CoreTrusted();
 		for (std::size_t Index = 0; Index < MaximumDistinctTagsPerDataModel; ++Index) {
@@ -346,6 +374,7 @@ namespace {
 		auto Origin = Project::FromGasOrigin(&Filesystem);
 		Require(Origin.Identity == ProjectValue.Identity, "Read durable project identity from the selected origin");
 		const auto World = Origin.DeserializeGame();
+		ScopedFixtureGraph SourceLifetime(World);
 		World->InitializeLoadedProjectRevision();
 		const auto Workspace = World->GetService("Workspace");
 		const auto Source = CreateScene(World, Workspace);
@@ -357,6 +386,7 @@ namespace {
 		const auto Place = Gas::Decode(*Bytes);
 		Require(Place.has_value(), "Parse binary place");
 		const auto Restored = Origin.LoadGasPlace(*Place);
+		ScopedFixtureGraph RestoredLifetime(Restored);
 		Restored->InitializeLoadedProjectRevision();
 		const auto RestoredWorkspace = Restored->GetService("Workspace");
 		const auto RestoredScene = SceneUnder(*RestoredWorkspace);
@@ -374,12 +404,13 @@ namespace {
 			"Explicit restore preserves an existing Instance file");
 		Origin.RestoreGasPlace(Restored, TrustedPreRun);
 		const auto JsonWorld = Origin.DeserializeGame();
+		ScopedFixtureGraph JsonLifetime(JsonWorld);
 		const auto JsonScene = SceneUnder(*JsonWorld->GetService("Workspace"));
 		Require(JsonScene.Logic->GetSourceId() == Source.Logic->GetSourceId(), "Keep durable identity through the JSON bridge");
 		VerifyScene(JsonScene, JsonWorld);
-		World->Destroy();
-		Restored->Destroy();
-		JsonWorld->Destroy();
+		SourceLifetime.Destroy();
+		RestoredLifetime.Destroy();
+		JsonLifetime.Destroy();
 		TestEditorTransfer(Directory.Root);
 	}
 
@@ -388,6 +419,7 @@ namespace {
 		DiskFilesystem Filesystem(Origin);
 		auto ProjectValue = Project::fromExisting(&Filesystem);
 		const auto SourceWorld = ProjectValue.DeserializeGame();
+		const ScopedFixtureGraph SourceLifetime(SourceWorld);
 		const auto Source = Find<MeshPart>(*SourceWorld, Name);
 		const auto SourceAssets = std::dynamic_pointer_cast<AssetService>(SourceWorld->GetService("AssetService"));
 		Require(SourceAssets != nullptr, "Load fixture asset catalog");
@@ -417,6 +449,7 @@ namespace {
 		Require(Parsed.has_value(), "Decode an asset-bound fixture model");
 
 		const auto Destination = std::make_shared<DataModel>();
+		const ScopedFixtureGraph DestinationLifetime(Destination);
 		Destination->InitializeLoadedProjectRevision();
 		const auto Assets = std::dynamic_pointer_cast<AssetService>(Destination->GetService("AssetService"));
 		Require(Assets != nullptr, "Find the new world's existing asset service");
