@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <chrono>
 #include <map>
+#include <optional>
 #include <set>
 #include <type_traits>
 #include <vector>
@@ -206,9 +207,7 @@ namespace gargantuan::network {
 					throw std::invalid_argument("Replica rejected published Tag");
 		}
 
-		void RemoveReplicaObject(
-			SnapshotLoadResult &Receiver, ObjectId Object, std::map<const Instance *, WireObjectId> &ReplicaIds
-		) {
+		void RemoveReplicaObject(SnapshotLoadResult &Receiver, ObjectId Object) {
 			runtime_detail::WorkScope Retirement(runtime_detail::WorkPhase::ReplicaRetirement);
 			const auto WireId = WireObjectId::FromObjectId(Object);
 			auto Found = Receiver.Objects.find(WireId);
@@ -225,7 +224,6 @@ namespace gargantuan::network {
 					++Iterator;
 					continue;
 				}
-				ReplicaIds.erase(Iterator->second.get());
 				Iterator = Receiver.Objects.erase(Iterator);
 			}
 		}
@@ -434,13 +432,19 @@ namespace gargantuan::network {
 				LiveCommitStarted = true;
 				ScopedChangeJournalSuppression SuppressReplicaJournal(Receiver.Root->GetObjectId());
 				ScopedSignalDeferral DeferNotifications;
-				std::map<const Instance *, WireObjectId> ReplicaIds;
-				runtime_detail::CountWork(runtime_detail::WorkCounter::ClientReceiverVisits, Receiver.Objects.size());
-				for (const auto &[Id, Value] : Receiver.Objects)
-					ReplicaIds.emplace(Value.get(), Id);
 				runtime_detail::MeasureWork(runtime_detail::WorkPhase::ReplicaLiveCreate, [&] {
+					std::optional<std::set<const Instance *>> LiveAddresses;
 					for (const auto &Operation : Frame.Operations)
 						if (const auto *Publish = std::get_if<PublishReplication>(&Operation.Intent)) {
+							// Only publication checks for aliasing. Keep the complete
+							// receiver address check without visiting the map on leaves.
+							if (!LiveAddresses) {
+								LiveAddresses.emplace();
+								runtime_detail::CountWork(
+									runtime_detail::WorkCounter::ClientReceiverVisits, Receiver.Objects.size());
+								for (const auto &[Id, Value] : Receiver.Objects)
+									LiveAddresses->insert(Value.get());
+							}
 							auto *Definition = InstanceClassRegistry::GetDefinitionBySchemaId(Publish->ClassSchemaId);
 							const auto ExpectedName = Definition && Definition->ConstructionKind ==
 																		SchemaClassConstructionKind::CustomData
@@ -453,7 +457,7 @@ namespace gargantuan::network {
 							auto InstanceValue = InstanceClassRegistry::Construct(*Definition);
 							const auto WireId = WireObjectId::FromObjectId(Publish->Object);
 							if (!InstanceValue || !Receiver.Objects.emplace(WireId, InstanceValue).second ||
-								!ReplicaIds.emplace(InstanceValue.get(), WireId).second)
+								!LiveAddresses->insert(InstanceValue.get()).second)
 								throw std::invalid_argument("Replica publish construction failed");
 						}
 				});
@@ -484,7 +488,7 @@ namespace gargantuan::network {
 									);
 								} else if constexpr (std::is_same_v<Type, UnpublishReplication> ||
 													 std::is_same_v<Type, DestroyReplication>) {
-									RemoveReplicaObject(Receiver, Value.Object, ReplicaIds);
+									RemoveReplicaObject(Receiver, Value.Object);
 								} else {
 									auto InstanceValue = Receiver.Resolve(WireObjectId::FromObjectId(Value.Object));
 									if (!InstanceValue)
