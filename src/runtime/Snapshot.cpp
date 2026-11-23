@@ -78,10 +78,16 @@ namespace gargantuan {
 				SnapshotValue.Objects.size() > MaximumSnapshotObjects)
 				throw std::invalid_argument("Snapshot envelope is invalid or oversized");
 
-			std::unordered_map<WireObjectId, const SnapshotObject *> Objects;
+			enum class VisitState : std::uint8_t { Unvisited, Visiting, Finished };
+			struct ValidationNode {
+				const SnapshotObject *Object;
+				VisitState State = VisitState::Unvisited;
+			};
+			std::unordered_map<WireObjectId, ValidationNode> Objects;
+			Objects.reserve(SnapshotValue.Objects.size());
 			std::size_t RootCount = 0;
 			for (const auto &Object : SnapshotValue.Objects) {
-				if (!Object.Id.IsValid() || !Objects.emplace(Object.Id, &Object).second)
+				if (!Object.Id.IsValid() || !Objects.emplace(Object.Id, ValidationNode{&Object}).second)
 					throw std::invalid_argument("Snapshot contains an invalid or duplicate ObjectId");
 				if (!Object.Parent) ++RootCount;
 			}
@@ -200,24 +206,23 @@ namespace gargantuan {
 				}
 			}
 
-			std::unordered_map<WireObjectId, std::uint8_t> VisitState;
-			VisitState.reserve(Objects.size());
-			for (const auto &[Start, Object] : Objects) {
-				(void)Object;
-				if (VisitState[Start] == 2) continue;
-				std::vector<WireObjectId> Path;
-				auto Current = Start;
+			// Parent existence is established above. Reuse the existing identity
+			// index and path scratch for the complete, non-recursive cycle check.
+			std::vector<ValidationNode *> Path;
+			for (auto &[Id, Start] : Objects) {
+				if (Start.State == VisitState::Finished) continue;
+				Path.clear();
+				auto *Current = &Start;
 				while (true) {
-					auto &State = VisitState[Current];
-					if (State == 1) throw std::invalid_argument("Snapshot hierarchy contains a cycle");
-					if (State == 2) break;
-					State = 1;
+					if (Current->State == VisitState::Visiting)
+						throw std::invalid_argument("Snapshot hierarchy contains a cycle");
+					if (Current->State == VisitState::Finished) break;
+					Current->State = VisitState::Visiting;
 					Path.push_back(Current);
-					auto Position = Objects.find(Current);
-					if (Position == Objects.end() || !Position->second->Parent) break;
-					Current = *Position->second->Parent;
+					if (!Current->Object->Parent) break;
+					Current = &Objects.at(*Current->Object->Parent);
 				}
-				for (const auto Id : Path) VisitState[Id] = 2;
+				for (auto *Visited : Path) Visited->State = VisitState::Finished;
 			}
 		}
 	}
