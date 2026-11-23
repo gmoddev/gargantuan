@@ -14,10 +14,14 @@
 #include "gargantuan/platform/HostEvent.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/Renderer.hpp"
+#include "gargantuan/render/SDLRenderer.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
+#include <SDL3/SDL.h>
+
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -29,7 +33,6 @@
 #include <string>
 #include <string_view>
 #include <thread>
-#include <vector>
 #include <utility>
 #include <vector>
 
@@ -58,10 +61,94 @@ namespace {
 			throw std::runtime_error(Session.GetFailure());
 	}
 
+	class RelayGpuRenderer final : public BaseRenderer {
+	  public:
+		explicit RelayGpuRenderer(const Vector2 &Size)
+			: Backend(Size, {.Offscreen = true, .WaitForGpuCompletion = true, .DebugDevice = false}) {}
+
+		void Draw(RenderPublicationPtr Publication) override {
+			const auto Began = Clock::now();
+			Backend.Draw(Publication);
+			const auto Metrics = Backend.GetMetrics();
+			Require(Metrics.FramesSubmitted == Frames + 1 && Frames < Submission.size(),
+				"relay offscreen GPU frame did not complete within the capture bounds");
+			if (Frames != 0)
+				Intervals[Frames - 1] = static_cast<std::uint64_t>(
+					std::chrono::duration_cast<std::chrono::nanoseconds>(Began - PreviousStart).count());
+			PreviousStart = Began;
+			Submission[Frames] = Metrics.LastSubmissionNanoseconds;
+			CompletionWait[Frames] = Metrics.LastGpuCompletionWaitNanoseconds;
+			++Frames;
+			Camera = Publication->Frame.Camera.Position;
+			if (!WatchedDrone) return;
+			for (const auto &Update : Publication->Updates) {
+				if (Update.Object == *WatchedDrone && HasRenderUpdateDomain(Update.Domains, RenderUpdateDomain::Transform))
+					++DroneTransforms;
+			}
+			DroneRetired = DroneRetired || std::ranges::any_of(Publication->Removes,
+				[&](const auto &Remove) { return Remove.Object == *WatchedDrone; });
+		}
+
+		void Resize(int Width, int Height) override { Backend.Resize(Width, Height); }
+		void Destroy() override { Backend.Destroy(); }
+		[[nodiscard]] RendererCapabilities GetCapabilities() const override { return Backend.GetCapabilities(); }
+		[[nodiscard]] RenderAnimationVisibilityFeedback GetAnimationVisibilityFeedback() const override {
+			return Backend.GetAnimationVisibilityFeedback();
+		}
+		[[nodiscard]] std::pair<std::uint32_t, std::uint32_t> GetViewportSize() const override {
+			return Backend.GetViewportSize();
+		}
+
+		void WatchDrone(ObjectId Drone) { WatchedDrone = Drone; }
+		[[nodiscard]] bool HasDroneMotion() const { return DroneTransforms > 1; }
+		[[nodiscard]] bool HasDroneRetired() const { return DroneRetired; }
+		[[nodiscard]] glm::vec3 GetCameraPosition() const { return Camera; }
+
+		void Report(std::string_view Role) {
+			const auto Metrics = Backend.GetMetrics();
+			Require(Frames > 1 && Metrics.DrawCalls > 0 && Metrics.UiBatches > 0 && Metrics.PaletteUploads > 1 &&
+				Metrics.CpuSkinnedVertexUploads == 0 && Metrics.MainShadowPoseMismatches == 0,
+				"relay offscreen GPU journey requires rendered world, HUD and animated assets");
+			std::cout << "[Gameplay:RelayGpu] target=offscreen peer=" << Role << " driver=" << Backend.GetDriverName()
+				<< " frames=" << Frames << " draw_calls=" << Metrics.DrawCalls
+				<< " hud_batches=" << Metrics.UiBatches << " palette_uploads=" << Metrics.PaletteUploads
+				<< " drone_transforms=" << DroneTransforms << " drone_retired=" << DroneRetired;
+			ReportTiming("interval", Intervals, Frames - 1);
+			ReportTiming("submit", Submission, Frames);
+			ReportTiming("fence_wait", CompletionWait, Frames);
+			std::cout << '\n';
+		}
+
+	  private:
+		static constexpr std::size_t MaximumFrames = 2'048;
+		using FrameTimes = std::array<std::uint64_t, MaximumFrames>;
+
+		static void ReportTiming(std::string_view Phase, FrameTimes &Values, std::size_t Count) {
+			std::sort(Values.begin(), Values.begin() + Count);
+			for (const std::size_t Percentile : {50, 95, 99, 100}) {
+				const auto Rank = (Percentile * Count + 99) / 100;
+				std::cout << ' ' << Phase << "_p" << Percentile << "_ns=" << Values[Rank - 1];
+			}
+		}
+
+		SDLRenderer Backend;
+		FrameTimes Intervals{};
+		FrameTimes Submission{};
+		FrameTimes CompletionWait{};
+		Clock::time_point PreviousStart;
+		std::size_t Frames = 0;
+		std::optional<ObjectId> WatchedDrone;
+		std::size_t DroneTransforms = 0;
+		bool DroneRetired = false;
+		glm::vec3 Camera{0.0f};
+	};
+
 	struct Client {
-		std::unique_ptr<HeadlessRenderer> Renderer;
+		std::unique_ptr<BaseRenderer> Renderer;
 		std::unique_ptr<Engine> Runtime;
 		std::unique_ptr<GameSession> Session;
+
+		[[nodiscard]] RelayGpuRenderer &GetGpu() const { return dynamic_cast<RelayGpuRenderer &>(*Renderer); }
 
 		void Stop() {
 			if (Session) Session->Stop();
@@ -71,7 +158,7 @@ namespace {
 		}
 	};
 
-	void RunRelayRescue(bool UseGns) {
+	void RunRelayRescue(bool UseGns, bool RenderGpu) {
 		auto Network = UseGns ? nullptr : SimulatedNetwork::Create({.BaseLatency = 6ms});
 		const auto CreateTransport = [&]() -> std::shared_ptr<IGameTransport> {
 			if (Network) return Network->CreateTransport();
@@ -142,7 +229,8 @@ namespace {
 						ClientAssets->LoadRuntimeAssetSnapshot(AssetSnapshot);
 						Require(PackageBuilder::HydrateClientCode(TrustedWorld, World) == 1,
 							"replica hydrates the saved RelayClient script");
-						Peer.Renderer = std::make_unique<HeadlessRenderer>(Vector2(320, 240));
+						if (RenderGpu) Peer.Renderer = std::make_unique<RelayGpuRenderer>(Vector2(320, 240));
+						else Peer.Renderer = std::make_unique<HeadlessRenderer>(Vector2(320, 240));
 						Peer.Runtime = std::make_unique<Engine>(World, Peer.Renderer.get(), ReportError,
 							EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient});
 						Peer.Runtime->ProcessService->Alive = true;
@@ -195,6 +283,16 @@ namespace {
 		const auto OldPilotCharacter = *Pilot->GetCharacter();
 		const auto Course = ServerRuntime.Workspace->FindFirstChild("RelayCourse", std::nullopt);
 		Require(Course != nullptr, "saved RelayCourse is present");
+		if (RenderGpu) {
+			const glm::vec2 Start(OldPilotCharacter->GetPosition().x, OldPilotCharacter->GetPosition().z);
+			SetKey(PilotClient, PhysicalKey::D, LogicalKey::D, ButtonState::Pressed);
+			Until(90, "host input moves the authoritative stock Character during the GPU journey", [&] {
+				const auto Position = OldPilotCharacter->GetPosition();
+				return glm::distance(Start, glm::vec2(Position.x, Position.z)) > 0.5f;
+			});
+			SetKey(PilotClient, PhysicalKey::D, LogicalKey::D, ButtonState::Released);
+			WaitForRelease();
+		}
 		const auto PartAt = [&](std::string Name) {
 			auto Value = std::dynamic_pointer_cast<Part>(Course->FindFirstChild(std::move(Name), std::nullopt));
 			Require(Value != nullptr, "saved station is a Part");
@@ -233,6 +331,18 @@ namespace {
 		Require(FlightReady(), "pilot enters the sample drone and receives its replica");
 		const auto Drone = std::dynamic_pointer_cast<Part>(*Pilot->GetPossessedEntity());
 		Require(Drone && Drone->GetAnchored(), "sample uses an independently possessed anchored drone");
+		glm::vec3 LaunchCamera{0.0f};
+		if (RenderGpu) {
+			const auto LocalPilot = *PilotClient.Runtime->Players->GetLocalPlayer();
+			PilotClient.GetGpu().WatchDrone((*LocalPilot->GetPossessedEntity())->GetObjectId());
+			Until(60, "observer receives the drone before measuring its render updates", [&] {
+				const auto Replica = Clients.back().Runtime->Workspace->FindFirstChild(Drone->GetName(), true);
+				if (!Replica) return false;
+				Clients.back().GetGpu().WatchDrone(Replica->GetObjectId());
+				return true;
+			});
+			LaunchCamera = PilotClient.GetGpu().GetCameraPosition();
+		}
 		const auto Drive = [&](PhysicalKey Physical, LogicalKey Logical, int Frames, const auto &Predicate) {
 			SetKey(PilotClient, Physical, Logical, ButtonState::Pressed);
 			Until(Frames, "pilot intent failed to reach its terrain or relay target", Predicate);
@@ -263,12 +373,23 @@ namespace {
 			const auto Replica = World->FindFirstChild("RelayCourse", std::nullopt);
 			return Replica && NumberEquals(*Replica, "RelayCharges", 3);
 		});
+		if (RenderGpu) {
+			Require(PilotClient.GetGpu().HasDroneMotion() && Clients.back().GetGpu().HasDroneMotion(),
+				"both GPU clients consumed moving drone transforms");
+			Require(glm::distance(LaunchCamera, PilotClient.GetGpu().GetCameraPosition()) > 2.0f,
+				"the published camera followed the flown drone");
+		}
 
 		SetKey(PilotClient, PhysicalKey::Space, LogicalKey::Space, ButtonState::Pressed);
 		Until(90, "landing intent returns the pilot to the stock controller", [&] {
 			return Drone->GetDestroyed() && !Pilot->GetPossessedEntity() && Pilot->GetCharacter();
 		});
 		SetKey(PilotClient, PhysicalKey::Space, LogicalKey::Space, ButtonState::Released);
+		if (RenderGpu) {
+			Until(60, "landing retires the old drone from both GPU views", [&] {
+				return PilotClient.GetGpu().HasDroneRetired() && Clients.back().GetGpu().HasDroneRetired();
+			});
+		}
 		const auto BeforeDeath = *Pilot->GetCharacter();
 		PlaceAt(Pilot, "Hazard");
 		Until(120, "server damage retires the stock Character", [&] {
@@ -287,6 +408,7 @@ namespace {
 		PlaceAt(Pilot, "LaunchPad");
 		Until(75, "respawned pilot can launch a new drone", [&] { return Pilot->GetPossessedEntity().has_value(); });
 		const auto DisconnectDrone = *Pilot->GetPossessedEntity();
+		if (RenderGpu) PilotClient.GetGpu().Report("pilot");
 		PilotClient.Stop();
 		Until(150, "disconnect retires pilot, drone, and its possession while another player stays", [&] {
 			return Pilot->GetDestroyed() && DisconnectDrone->GetDestroyed() && !Pilot->GetPossessedEntity() &&
@@ -294,6 +416,7 @@ namespace {
 		});
 		Require(Inventory->GetDestroyed(), "disconnect also retires player-owned inventory");
 
+		if (RenderGpu) Clients.back().GetGpu().Report("observer");
 		Clients.back().Stop();
 		Server->Stop();
 		ServerRuntime.Destroy();
@@ -302,8 +425,18 @@ namespace {
 
 int main(int ArgumentCount, char **Arguments) {
 	try {
+		const auto Mode = ArgumentCount > 1 ? std::string_view(Arguments[1]) : std::string_view{};
+		const bool RenderGpu = Mode == "--gns-gpu";
+		if (ArgumentCount > 2 || (!Mode.empty() && Mode != "--gns" && !RenderGpu))
+			throw std::invalid_argument("expected --gns, --gns-gpu, or no arguments");
+		struct SdlLifetime {
+			bool Active;
+			~SdlLifetime() { if (Active) SDL_Quit(); }
+		} Sdl{RenderGpu && SDL_Init(SDL_INIT_VIDEO)};
+		if (RenderGpu && !Sdl.Active)
+			throw std::runtime_error(std::string("relay GPU video startup failed: ") + SDL_GetError());
 		gargantuan::BootstrapNativeRuntimeSchema();
-		RunRelayRescue(ArgumentCount > 1 && std::string_view(Arguments[1]) == "--gns");
+		RunRelayRescue(Mode == "--gns" || RenderGpu, RenderGpu);
 		std::cout << "[Gameplay:Relay] Saved two-player mission passed\n";
 		return 0;
 	} catch (const std::exception &Error) {
