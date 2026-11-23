@@ -1241,6 +1241,12 @@ if(BUILD_TESTING)
 		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
 	)
 	add_test(NAME GameSessionTests COMMAND gargantuan_game_session_tests)
+	# Use an isolated Release executable so allocation instrumentation is absent from the gates.
+	add_executable(gargantuan_gameplay_allocation_workload EXCLUDE_FROM_ALL "tests/GameSessionTests.cpp")
+	target_link_libraries(gargantuan_gameplay_allocation_workload PRIVATE gargantuan_core)
+	target_compile_definitions(gargantuan_gameplay_allocation_workload PRIVATE
+		GARGANTUAN_GAMEPLAY_WORKLOAD_ALLOCATIONS=1
+		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame")
 	add_test(NAME gargantuan_gameplay_possession_session COMMAND gargantuan_game_session_tests --generic-possession)
 	set_tests_properties(gargantuan_gameplay_possession_session PROPERTIES LABELS "networking;runtime;security" TIMEOUT 45)
 	if(GARGANTUAN_WITH_GNS)
@@ -1555,6 +1561,7 @@ if(BUILD_TESTING)
 			gargantuan_runtime6_luau_mutation_benchmark
 			gargantuan_character_networking_tests
 			gargantuan_game_session_tests
+			gargantuan_gameplay_allocation_workload
 			gargantuan_gameplay_input_tests
 			gargantuan_gameplay_pose_tests
 			gargantuan_character_networking_benchmark

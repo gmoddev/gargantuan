@@ -39,6 +39,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -46,8 +47,26 @@
 #include <iterator>
 #include <memory>
 #include <limits>
+#include <new>
 #include <thread>
 #include <vector>
+
+#if defined(GARGANTUAN_GAMEPLAY_WORKLOAD_ALLOCATIONS)
+namespace {
+	thread_local std::uint64_t GameplayWorkloadAllocatedBytes = 0;
+}
+
+void *operator new(std::size_t Size) {
+	if (auto *Value = std::malloc(std::max(Size, std::size_t{1}))) {
+		gargantuan::runtime_detail::AddWorkCounter(GameplayWorkloadAllocatedBytes, Size);
+		return Value;
+	}
+	throw std::bad_alloc();
+}
+
+void operator delete(void *Value) noexcept { std::free(Value); }
+void operator delete(void *Value, std::size_t) noexcept { std::free(Value); }
+#endif
 
 namespace {
 	using namespace gargantuan;
@@ -55,6 +74,14 @@ namespace {
 	using namespace std::chrono_literals;
 
 	int Failures = 0;
+
+	std::uint64_t GameplayWorkloadAllocationBytes() {
+#if defined(GARGANTUAN_GAMEPLAY_WORKLOAD_ALLOCATIONS)
+		return GameplayWorkloadAllocatedBytes;
+#else
+		return 0;
+#endif
+	}
 
 	void Check(bool Condition, const char *Message) {
 		if (Condition) return;
@@ -2557,15 +2584,19 @@ end)
 		for (std::size_t Index = 0; Index < Clients.size(); ++Index) StartClient(Index, Index);
 		std::uint64_t Tick = 0;
 		runtime_detail::WorkSample *FrameWork = nullptr;
+		std::uint64_t ServerAllocationBytes = 0;
+		const auto SampleServer = [&](auto &&Operation) {
+			const auto Before = GameplayWorkloadAllocationBytes();
+			runtime_detail::WorkCapture Capture(FrameWork);
+			Operation();
+			if (FrameWork) ServerAllocationBytes += GameplayWorkloadAllocationBytes() - Before;
+		};
 		const auto Frame = [&] {
 			if (Network) {
 				(void)Network->Advance(17ms);
 				Network->Pump();
 			} else std::this_thread::sleep_for(16ms);
-			{
-				runtime_detail::WorkCapture Capture(FrameWork);
-				(void)Server.Poll();
-			}
+			SampleServer([&] { (void)Server.Poll(); });
 			for (auto &Client : Clients) {
 				(void)Client.Session->Poll();
 				if (!Client.Runtime && Client.Session->GetClientDataModel()) {
@@ -2590,16 +2621,10 @@ end)
 )");
 				}
 			}
-			{
-				runtime_detail::WorkCapture Capture(FrameWork);
-				Runtime.Step();
-			}
+			SampleServer([&] { Runtime.Step(); });
 			for (auto &Client : Clients)
 				if (Client.Runtime) Client.Runtime->Step();
-			{
-				runtime_detail::WorkCapture Capture(FrameWork);
-				Server.Step(++Tick);
-			}
+			SampleServer([&] { Server.Step(++Tick); });
 			for (auto &Client : Clients) Client.Session->Step(Tick);
 		};
 		while (Tick < 100 && Server.GetMetrics().ReadyPeers != PeerCount) Frame();
@@ -2647,7 +2672,6 @@ end)
 				std::array<std::uint64_t, 120> SimulationCosts{};
 				std::array<std::uint64_t, 120> SessionCosts{};
 				std::uint64_t PhysicsTime = 0;
-				std::uint64_t TrackedAllocationBytes = 0;
 				for (std::size_t Index = 0; Index < SimulationCosts.size(); ++Index) {
 					runtime_detail::WorkSample Work{};
 					FrameWork = &Work;
@@ -2658,7 +2682,6 @@ end)
 					SimulationCosts[Index] = EngineWork.Nanoseconds;
 					SessionCosts[Index] = SessionWork.Nanoseconds;
 					PhysicsTime += Work[static_cast<std::size_t>(runtime_detail::WorkPhase::Physics)].Nanoseconds;
-					for (const auto &Phase : Work) TrackedAllocationBytes += Phase.AllocatedBytes;
 				}
 				std::ranges::sort(SimulationCosts);
 				std::ranges::sort(SessionCosts);
@@ -2666,13 +2689,17 @@ end)
 				std::cout << "[Gameplay:Qualification] peers=" << PeerCount << " ticks=" << SimulationCosts.size()
 					<< " engine_p50_ns=" << SimulationCosts[59] << " engine_p95_ns=" << SimulationCosts[113]
 					<< " engine_p99_ns=" << SimulationCosts[118] << " session_p99_ns=" << SessionCosts[118]
-					<< " physics_total_ns=" << PhysicsTime << " tracked_allocation_bytes=" << TrackedAllocationBytes
+					<< " physics_total_ns=" << PhysicsTime
 					<< " input_ns=" << After.PossessionInput.AdmissionNanoseconds - Before.PossessionInput.AdmissionNanoseconds
 					<< " controller_ns=" << After.PossessionMotionNanoseconds - Before.PossessionMotionNanoseconds
 					<< " pose_bytes=" << After.PossessionPoseBytesAccepted - Before.PossessionPoseBytesAccepted
 					<< " poses=" << After.PossessionPoseSnapshotsAccepted - Before.PossessionPoseSnapshotsAccepted
 					<< " maximum_input_age_ticks=" << After.PossessionInput.MaximumConsumedInputAgeTicks
-					<< " possession_bind_ticks=" << (AllBoundAt == 0 ? 0 : AllBoundAt - AssignedAt) << '\n';
+					<< " possession_bind_ticks=" << (AllBoundAt == 0 ? 0 : AllBoundAt - AssignedAt);
+#if defined(GARGANTUAN_GAMEPLAY_WORKLOAD_ALLOCATIONS)
+				std::cout << " server_scalar_new_bytes=" << ServerAllocationBytes;
+#endif
+				std::cout << '\n';
 			}
 			LivePlayers[0]->SetPossession(std::nullopt);
 			LivePlayers[1]->SetPossession(Drone);
