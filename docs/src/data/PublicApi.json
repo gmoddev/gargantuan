@@ -6619,6 +6619,18 @@
       ]
     },
     {
+      "Path": "include/gargantuan/serialization/GasDocument.hpp",
+      "Types": [
+        "Dependency",
+        "Document",
+        "DocumentKind",
+        "LocalReference",
+        "Node",
+        "PlaceMetadata",
+        "PropertyGroup"
+      ]
+    },
+    {
       "Path": "include/gargantuan/serialization/SerializationError.hpp",
       "Types": [
         "SerializationError",
