@@ -150,6 +150,7 @@ namespace gargantuan::network {
 			struct PoseBinding {
 				std::uint64_t Epoch = 0;
 				std::uint64_t LastSentTick = 0;
+				std::uint64_t FirstDueTick = 0;
 			};
 			PeerPhase Phase = PeerPhase::TransportConnected;
 			std::uint64_t ConnectedTick = 0;
@@ -1504,11 +1505,20 @@ namespace gargantuan::network {
 								DisconnectReason::ResourceExhaustion, "[Gameplay:Pose] Control publication failed"});
 							break;
 						}
-						Found = PeerValue.PossessionPoses.emplace(Object, Peer::PoseBinding{NextGameplayPoseEpoch++}).first;
+						// Publish control immediately. Align only the initial snapshot
+						// so a peer has a stable phase without extra snapshots.
+						const auto Phase = Connection.Slot % PossessionPoseIntervalTicks;
+						const auto Delay = (Phase + PossessionPoseIntervalTicks - Tick % PossessionPoseIntervalTicks) %
+							PossessionPoseIntervalTicks;
+						const auto FirstDueTick = Tick + std::min(Delay, std::numeric_limits<std::uint64_t>::max() - Tick);
+						Found = PeerValue.PossessionPoses.emplace(Object,
+							Peer::PoseBinding{.Epoch = NextGameplayPoseEpoch++, .FirstDueTick = FirstDueTick}).first;
 					}
 					auto &Binding = Found->second;
-					if (Binding.LastSentTick != 0 &&
-						(Tick <= Binding.LastSentTick || Tick - Binding.LastSentTick < PossessionPoseIntervalTicks)) continue;
+					if (Binding.LastSentTick == 0) {
+						if (Tick < Binding.FirstDueTick) continue;
+					} else if (Tick <= Binding.LastSentTick || Tick - Binding.LastSentTick < PossessionPoseIntervalTicks)
+						continue;
 					const auto Part = std::dynamic_pointer_cast<BasePart>(ObjectRegistry::Get().Lookup(Object));
 					if (Part && QueuePossessionPose(Connection, PeerValue, GameplayPoseSnapshot{
 						.Part = Object, .MaterializationEpoch = Binding.Epoch, .ServerTick = Tick,
