@@ -213,15 +213,32 @@ namespace {
 		Require(Gateway.Apply(Failure, Authority).Status == MutationStatus::ValidationFailed,
 			"Reject wrong-class reference during detached materialization");
 		Require(Published(*Destination, *Parent) == Before, "Invalid imports leave graph, history and journal untouched");
+		std::size_t AddedSignals = 0;
+		std::size_t RemovedSignals = 0;
+		bool ListenerSawCommit = false;
+		const auto Added = Parent->ChildAdded->Connect([&](const std::shared_ptr<Instance> &) {
+			++AddedSignals;
+			const auto Observed = Published(*Destination, *Parent);
+			ListenerSawCommit = Observed.Revision == Before.Revision + 1 &&
+				Observed.History == Before.History + 1 && Observed.NextJournalSequence > Before.NextJournalSequence;
+		});
+		const auto Removed = Parent->ChildRemoved->Connect([&](const std::shared_ptr<Instance> &) {
+			++RemovedSignals;
+		});
 		{
 			const ScopedJournalCapacity Capacity(1);
 			Require(!Gateway.Apply(Command, Authority).Succeeded() && Published(*Destination, *Parent) == Before &&
-				Destination->Tags.GetTagged(Destination->GetObjectId(), "Portable", Studio).empty(),
-				"Rollback an otherwise valid import when its journal batch cannot be reserved");
+				Destination->Tags.GetTagged(Destination->GetObjectId(), "Portable", Studio).empty() &&
+				AddedSignals == 0 && RemovedSignals == 0,
+				"Rollback a failed journal reservation before publishing hierarchy signals");
 		}
 
 		const auto Imported = Gateway.Apply(Command, Authority);
+		Added->Disconnect();
+		Removed->Disconnect();
 		Require(Imported.Succeeded() && Imported.Object.has_value(), "Commit an authorized model forest");
+		Require(AddedSignals == 1 && RemovedSignals == 0 && ListenerSawCommit,
+			"Native hierarchy listeners observe the committed history and journal");
 		const auto ImportedRoot = std::dynamic_pointer_cast<Folder>(ObjectRegistry::Get().Lookup(*Imported.Object));
 		Require(ImportedRoot && ImportedRoot->GetDataModel() == Destination && ImportedRoot->Children.size() == 5 &&
 			ImportedRoot->Children.front()->GetName() == "PartA" && ImportedRoot->Children.back()->GetName() == "Rig",

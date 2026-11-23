@@ -9,6 +9,10 @@ place exported from legacy JSON retains the state the legacy reader
 materializes. Older files can lack references or durable Script SourceIds.
 Opening and saving them in the existing project format establishes the
 migrated state before repeated GASP exports.
+Hydration uses the existing reflected setters and their semantics. For
+example, Character transform updates inside its existing equality tolerance
+can restore to the default transform. The standalone codec preserves the
+encoded finite nonzero components.
 
 ## EditorHost
 
@@ -46,7 +50,8 @@ Folder in the multi-root case.
 
 The gateway validates and reconstructs the candidate graph in isolation,
 remaps Instance and Script SourceIds, and commits one authoring history
-entry and journal batch. Undo and Redo use the existing persistent subtree
+entry and journal batch. Native hierarchy notifications run after that
+commit. Undo and Redo use the existing persistent subtree
 history. Script source stays inert during parsing and editing. Normal Play
 and runtime activation remain governed by the engine's execution policy.
 
