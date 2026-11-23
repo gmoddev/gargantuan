@@ -4552,6 +4552,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "devdocs/Validation/GASFoundation1.md",
+      "Purpose": "GAS Foundation 1 qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "devdocs/Validation/PhysicsExpansionBenchmarkProtocol.md",
       "Purpose": "Physics expansion after-only benchmark protocol",
       "LastMeaningfulUpdate": null,
