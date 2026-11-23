@@ -94,3 +94,19 @@ directory. Opaque binary values are representable in the codec. Hydration
 requires a reflected destination property adapter and rejects unsupported
 values. The proposed [protected export envelope](../adr/GAS-Protected-Exports.md)
 has a separate qualification plan.
+
+## Measuring the interchange path
+
+`gargantuan_serialization_benchmark --gas` compares JSON and GAS with the
+same reflected place graphs of 100, 1,000 and 5,000 Instances. The fixture
+has eight-way branches, Parts, Weld references, scripts, tags, and
+attributes. Each timing averages five runs after one warmup. Encode
+includes capture. Decode includes materialization. The benchmark checks
+stable bytes and persistent semantic equivalence on every iteration.
+
+`gargantuan_gas_benchmark_profile --gas-profile JSON 1000` isolates one
+backend and graph size in a fresh process. The result includes process
+peak resident memory and measured-thread C++ allocation requests in
+encode and decode. Run each backend and size separately to keep process
+high-water memory comparable. Use ordinary `--gas` timings for comparisons
+without allocation interposition.

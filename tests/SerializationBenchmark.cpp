@@ -13,6 +13,11 @@
 #ifdef GARGANTUAN_WITH_GLAZE_SERIALIZATION_PROTOTYPE
 #include "serialization/GlazePrototype.hpp"
 #endif
+#ifdef GARGANTUAN_GAS_BENCHMARK_PROFILE
+#include "BenchmarkAllocationProbe.hpp"
+#include "GasBenchmarkAllocations.hpp"
+#include <charconv>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -230,7 +235,17 @@ namespace {
 		return Root;
 	}
 
-	void BenchmarkGasProject(std::size_t ObjectCount, std::size_t RunCount) {
+#ifdef GARGANTUAN_GAS_BENCHMARK_PROFILE
+	template <typename Operation>
+	auto CountGasBenchmarkAllocations(bool Measured, BenchmarkAllocationProbe::Counts &Counts, Operation &&Execute) {
+		if (!Measured) return Execute();
+		BenchmarkAllocationProbe::Scope AllocationScope(Counts);
+		return Execute();
+	}
+#endif
+
+	void BenchmarkGasProject(std::size_t ObjectCount, std::size_t RunCount,
+		[[maybe_unused]] std::string_view ProfileBackend = {}) {
 		using namespace gargantuan;
 		const auto ConstructBegin = Clock::now();
 		auto Root = MakeGasBenchmarkProject(ObjectCount);
@@ -242,25 +257,55 @@ namespace {
 			if (!Document) throw std::runtime_error(Document.error().Format());
 			return std::move(*Document);
 		};
+#ifndef GARGANTUAN_GAS_BENCHMARK_PROFILE
 		const auto Expected = Capture(Root);
 		if (Expected.Nodes.size() != ObjectCount) throw std::runtime_error("Unexpected GAS benchmark graph size");
+#endif
 
 		auto Run = [&](std::string_view Backend, auto Encode, auto Decode) {
+#ifdef GARGANTUAN_GAS_BENCHMARK_PROFILE
+			if (Backend != ProfileBackend) return;
+			const auto FixturePeak = GasBenchmarkAllocations::ReadPeakResidentBytes();
+			std::uint64_t MeasuredPeak = 0;
+			BenchmarkAllocationProbe::Counts EncodeAllocations;
+			BenchmarkAllocationProbe::Counts DecodeAllocations;
+#endif
 			std::optional<decltype(Encode())> FirstBytes;
 			double EncodeMs = 0;
 			double DecodeMs = 0;
 			for (std::size_t RunIndex = 0; RunIndex <= RunCount; ++RunIndex) {
 				const auto EncodeBegin = Clock::now();
+#ifdef GARGANTUAN_GAS_BENCHMARK_PROFILE
+				auto Bytes = CountGasBenchmarkAllocations(RunIndex > 0, EncodeAllocations, Encode);
+#else
 				auto Bytes = Encode();
+#endif
 				const auto EncodeEnd = Clock::now();
 				if (RunIndex == 0) FirstBytes = Bytes;
 				else if (Bytes != *FirstBytes) throw std::runtime_error("Benchmark export bytes changed");
 				const auto DecodeBegin = Clock::now();
+#ifdef GARGANTUAN_GAS_BENCHMARK_PROFILE
+				auto Restored = CountGasBenchmarkAllocations(RunIndex > 0, DecodeAllocations,
+					[&] { return Decode(std::move(Bytes)); });
+#else
 				auto Restored = Decode(std::move(Bytes));
+#endif
 				const auto DecodeEnd = Clock::now();
+#ifdef GARGANTUAN_GAS_BENCHMARK_PROFILE
+				if (RunIndex == RunCount) {
+					// Use a single backend per process and sample before semantic recapture.
+					MeasuredPeak = GasBenchmarkAllocations::ReadPeakResidentBytes();
+					const auto Expected = Capture(Root);
+					if (Expected.Nodes.size() != ObjectCount || Capture(Restored) != Expected)
+						throw std::runtime_error("Benchmark round-trip changed persistent state");
+				}
+#else
 				auto Actual = Capture(Restored);
+#endif
 				Restored->Destroy();
+#ifndef GARGANTUAN_GAS_BENCHMARK_PROFILE
 				if (Actual != Expected) throw std::runtime_error("Benchmark round-trip changed persistent state");
+#endif
 				if (RunIndex > 0) {
 					EncodeMs += Milliseconds(EncodeBegin, EncodeEnd);
 					DecodeMs += Milliseconds(DecodeBegin, DecodeEnd);
@@ -270,7 +315,13 @@ namespace {
 			DecodeMs /= RunCount;
 			std::cout << Backend << ",PlaceGraph," << ObjectCount << ',' << FirstBytes->size() << ','
 					  << Milliseconds(ConstructBegin, ConstructEnd) << ',' << EncodeMs << ',' << DecodeMs << ','
-					  << EncodeMs + DecodeMs << ",Ok\n";
+					  << EncodeMs + DecodeMs;
+#ifdef GARGANTUAN_GAS_BENCHMARK_PROFILE
+			std::cout << ',' << RunCount << ',' << EncodeAllocations.Calls << ',' << EncodeAllocations.Bytes << ','
+					  << DecodeAllocations.Calls << ',' << DecodeAllocations.Bytes << ',' << FixturePeak << ','
+					  << MeasuredPeak;
+#endif
+			std::cout << ",Ok\n";
 		};
 
 		Run("JSON", [&] { return InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Root); },
@@ -301,6 +352,29 @@ namespace {
 int main(int ArgumentCount, char **Arguments) {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
+#ifdef GARGANTUAN_GAS_BENCHMARK_PROFILE
+		constexpr std::string_view Usage = "Usage: gargantuan_gas_benchmark_profile --gas-profile JSON|GAS 100|1000|5000\n";
+		if (ArgumentCount != 4 || std::string_view(Arguments[1]) != "--gas-profile") {
+			std::cerr << Usage;
+			return 2;
+		}
+		const std::string_view Backend(Arguments[2]);
+		const std::string_view CountArgument(Arguments[3]);
+		std::size_t ObjectCount = 0;
+		const auto [CountEnd, Error] =
+			std::from_chars(CountArgument.data(), CountArgument.data() + CountArgument.size(), ObjectCount);
+		if ((Backend != "JSON" && Backend != "GAS") || Error != std::errc{} ||
+			CountEnd != CountArgument.data() + CountArgument.size() ||
+			(ObjectCount != 100 && ObjectCount != 1000 && ObjectCount != 5000)) {
+			std::cerr << Usage;
+			return 2;
+		}
+		std::cout << "Backend,Workload,Items,Bytes,ConstructMs,EncodeMs,DecodeMs,CodecTotalMs,Runs,"
+					 "EncodeCppNewCallsTotal,EncodeCppNewBytesTotal,DecodeCppNewCallsTotal,DecodeCppNewBytesTotal,"
+					 "FixturePeakResidentBytes,MeasuredPeakResidentBytes,Status\n";
+		BenchmarkGasProject(ObjectCount, 5, Backend);
+		return 0;
+#else
 		const bool Gas = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--gas";
 		const bool Full = ArgumentCount > 1 && std::string_view(Arguments[1]) == "--full";
 		const std::size_t RunCount = Full ? 5 : 1;
@@ -317,6 +391,7 @@ int main(int ArgumentCount, char **Arguments) {
 		Ok = BenchmarkEditorHost(Full ? 10000 : 100) && Ok;
 		Ok = BenchmarkProject(Full ? 1000 : 100) && Ok;
 		return Ok ? 0 : 1;
+#endif
 	} catch (const std::exception &Error) {
 		std::cerr << "Serialization benchmark failed: " << Error.what() << '\n';
 		return 1;
