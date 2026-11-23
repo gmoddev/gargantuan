@@ -15,6 +15,7 @@
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "serialization/JsonCodec.hpp"
 #include "runtime/SnapshotValidation.hpp"
+#include "RuntimeWorkDiagnostics.hpp"
 
 #include <algorithm>
 #include <any>
@@ -667,11 +668,13 @@ namespace gargantuan {
 		AssertAuthoritativeMutation("LoadSnapshot");
 		using ProfileClock = std::chrono::steady_clock;
 		auto PhaseStarted = Profile ? ProfileClock::now() : ProfileClock::time_point{};
-		auto FinishPhase = [&](std::uint64_t SnapshotLoadProfile::*Field) {
+		auto FinishPhase = [&](std::uint64_t SnapshotLoadProfile::*Field, runtime_detail::WorkPhase Phase) {
 			if (!Profile) return;
 			const auto Now = ProfileClock::now();
-			Profile->*Field += static_cast<std::uint64_t>(
+			const auto Elapsed = static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(Now - PhaseStarted).count());
+			Profile->*Field += Elapsed;
+			runtime_detail::RecordReportedWork(Phase, Elapsed);
 			PhaseStarted = Now;
 		};
 		SnapshotLoadResult result;
@@ -681,7 +684,7 @@ namespace gargantuan {
 			result.Errors.push_back(Error.what());
 			return result;
 		}
-		FinishPhase(&SnapshotLoadProfile::ValidationNanoseconds);
+		FinishPhase(&SnapshotLoadProfile::ValidationNanoseconds, runtime_detail::WorkPhase::SnapshotValidation);
 		const auto rootObject = std::find_if(
 			snapshot.Objects.begin(),
 			snapshot.Objects.end(),
@@ -717,7 +720,7 @@ namespace gargantuan {
 			result.Objects.emplace(object.Id, std::move(instance));
 		}
 
-		FinishPhase(&SnapshotLoadProfile::ConstructionNanoseconds);
+		FinishPhase(&SnapshotLoadProfile::ConstructionNanoseconds, runtime_detail::WorkPhase::SnapshotConstruction);
 		std::size_t rootCount = 0;
 		try {
 			for (const auto &object : snapshot.Objects) {
@@ -734,7 +737,7 @@ namespace gargantuan {
 			if (rootCount != 1) throw std::runtime_error("Snapshot must contain exactly one root");
 			auto dataModel = std::dynamic_pointer_cast<DataModel>(result.Root);
 			if (!dataModel) throw std::runtime_error("Snapshot root is not a DataModel");
-			FinishPhase(&SnapshotLoadProfile::ParentingNanoseconds);
+			FinishPhase(&SnapshotLoadProfile::ParentingNanoseconds, runtime_detail::WorkPhase::SnapshotParenting);
 
 			for (const auto &object : snapshot.Objects) {
 				auto instance = result.Resolve(object.Id);
@@ -799,7 +802,7 @@ namespace gargantuan {
 				for (const auto &tag : object.Tags)
 					(void)dataModel->Tags.Add(dataModel->GetObjectId(), instance->GetObjectId(), tag, ScriptSecurityContext::CoreTrusted());
 			}
-			FinishPhase(&SnapshotLoadProfile::PropertiesNanoseconds);
+			FinishPhase(&SnapshotLoadProfile::PropertiesNanoseconds, runtime_detail::WorkPhase::SnapshotProperties);
 		} catch (const std::exception &error) {
 			result.Errors.push_back(error.what());
 			result.Root.reset();

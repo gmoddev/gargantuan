@@ -37,6 +37,9 @@ enum class WorkPhase : std::size_t {
 	PreSimulation, GameplayInputProduce, GameplayInputAdmission, GameplayMotion, GameplayPoseCommit,
 	GameplayPosePublish, GameplayPoseRelevance, GameplayPoseEncode, GameplayPoseEnqueue,
 	GameplayPoseReceive, GameplayPoseDecode, GameplayPosePresentation, TransportPoll,
+	ReplicaCandidateCopy, ReplicaCandidatePlan, ReplicaNativePreflight, ReplicaLiveApply,
+	ReplicaLiveCreate, ReplicaLiveParent, ReplicaLiveOperations, ReplicaRetirement, ReplicaNotifications, ReplicaPreflightRelease,
+	SnapshotValidation, SnapshotConstruction, SnapshotParenting, SnapshotProperties,
 	Count
 };
 
@@ -61,7 +64,10 @@ inline constexpr std::array<std::string_view, static_cast<std::size_t>(WorkPhase
 	"StructuralIntent", "StructuralSubmit", "StructuralAcceptance", "KnownCommit", "AcceptedMetadataCommit",
 	"PreSimulation", "GameplayInputProduce", "GameplayInputAdmission", "GameplayMotion", "GameplayPoseCommit",
 	"GameplayPosePublish", "GameplayPoseRelevance", "GameplayPoseEncode", "GameplayPoseEnqueue",
-	"GameplayPoseReceive", "GameplayPoseDecode", "GameplayPosePresentation", "TransportPoll"
+	"GameplayPoseReceive", "GameplayPoseDecode", "GameplayPosePresentation", "TransportPoll",
+	"ReplicaCandidateCopy", "ReplicaCandidatePlan", "ReplicaNativePreflight", "ReplicaLiveApply",
+	"ReplicaLiveCreate", "ReplicaLiveParent", "ReplicaLiveOperations", "ReplicaRetirement", "ReplicaNotifications", "ReplicaPreflightRelease",
+	"SnapshotValidation", "SnapshotConstruction", "SnapshotParenting", "SnapshotProperties"
 };
 
 struct WorkDuration {
