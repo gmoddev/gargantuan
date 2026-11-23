@@ -5623,6 +5623,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "samples/GameplayFoundation7/README.md",
+      "Purpose": "Relay Rescue",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "assets/NOTICE.md"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Maintain setup, authority and sample-specific execution limits",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "src/assets/third_party/README.md",
       "Purpose": "stb_image",
       "LastMeaningfulUpdate": null,
