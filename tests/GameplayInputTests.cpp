@@ -122,15 +122,14 @@ namespace {
 		Check(!World.Server.HandleReceived(Rejected, 51), "An unknown intent flag was admitted");
 		Check(World.Server.HandleReceived(Valid, 51) && !World.Server.HandleReceived(Valid, 51),
 			"Malformed bound-peer attempts failed to consume the per-tick budget");
-		const auto Future = World.Submit(61 + GameplayInputMaximumClientTickLead);
-		Check(!World.Server.HandleReceived(Future, 60), "A far-future client tick was admitted");
-		Check(World.Server.HandleReceived(Future, 61), "A client tick inside the lead bound was rejected");
-		const auto Next = World.Submit(62 + GameplayInputMaximumClientTickLead);
-		Check(World.Server.HandleReceived(Next, 62) && !World.Server.HandleReceived(Future, 62),
+		const auto Ahead = World.Submit(1000);
+		Check(World.Server.HandleReceived(Ahead, 60), "Independent client frame count blocked a current input");
+		const auto Next = World.Submit(1001);
+		Check(World.Server.HandleReceived(Next, 61) && !World.Server.HandleReceived(Ahead, 61),
 			"Newer input did not supersede the old sequence");
 		const auto &Metrics = World.Server.GetMetrics();
 		Check(Metrics.MalformedInputs == 3 && Metrics.UnauthorizedInputs == 1 && Metrics.RateLimitedInputs == 1 &&
-			Metrics.StaleInputs == 2, "Input rejection counters lost classification");
+			Metrics.StaleInputs == 1, "Input rejection counters lost classification");
 	}
 
 	void TestRevocationAndReuse() {

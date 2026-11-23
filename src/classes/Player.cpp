@@ -85,7 +85,8 @@ namespace gargantuan {
 			if (!IsEligiblePossession(*this, Entity))
 				throw std::invalid_argument("[Player:Possession] Target must be live in this Workspace");
 			for (const auto &Other : Owner->GetPlayers()) {
-				if (Other.get() != this && Other->GetPossessedEntity().value_or(nullptr) == Entity)
+				if (Other.get() != this && (Other->GetPossessedEntity().value_or(nullptr) == Entity ||
+						Other->GetCharacter().value_or(nullptr) == Entity))
 					throw std::invalid_argument("[Player:Possession] Target is already possessed");
 			}
 		}
@@ -179,6 +180,14 @@ namespace gargantuan {
 				throw std::invalid_argument("Player character must be live");
 			if (!GetDataModel() || Replacement->GetDataModel() != GetDataModel())
 				throw std::invalid_argument("Player character must belong to the same DataModel");
+			if (const auto PlayersValue = std::dynamic_pointer_cast<Players>(GetParent().value_or(nullptr))) {
+				for (const auto &Child : PlayersValue->Children) {
+					auto Other = std::dynamic_pointer_cast<Player>(Child);
+					if (Other && Other.get() != this && !Other->GetDestroyed() &&
+						Other->GetPossessedEntity().value_or(nullptr) == Replacement)
+						throw std::invalid_argument("[Player:Possession] Character is already possessed");
+				}
+			}
 		}
 
 		auto Previous = CharacterValue;

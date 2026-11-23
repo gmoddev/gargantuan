@@ -27,9 +27,10 @@ GPIN admits up to four attempts per leased connection per server tick.
 The movement vector must be finite with magnitude at most 1.001 and
 the finite yaw must be within plus or minus pi. Client intent carries
 only the input fields above. Input sequence and client tick advance
-monotonically. A client tick more than eight ticks ahead of the receiving
-server tick is rejected. The most recent sample expires six ticks after
-server admission. Releasing and reassigning the same entity creates a
+monotonically within the lease. Client tick orders that sender's inputs.
+The server uses its own receipt clock for admission rate and freshness,
+including after independent host scheduling stalls. The most recent sample
+expires six ticks after server admission. A release followed by reassignment creates a
 new lease epoch. The trusted live relation and its revision are checked
 again at consumption.
 

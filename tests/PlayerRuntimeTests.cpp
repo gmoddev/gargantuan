@@ -668,6 +668,31 @@ Vehicle:SetAttribute("DeniedClientPossession", true)
 				Local->GetPossessedEntity() == Vehicle,
 			"duplicate and foreign targets are rejected without changing current possession");
 
+		auto StockCharacter = std::make_shared<KinematicCharacter>();
+		StockCharacter->SetParent(WorkspaceValue);
+		Second->SetCharacter(StockCharacter);
+		bool StockTargetRejected = false;
+		try {
+			Local->SetPossession(StockCharacter);
+		} catch (const std::invalid_argument &) {
+			StockTargetRejected = true;
+		}
+		Second->RemoveCharacter();
+		auto CustomCharacter = std::make_shared<KinematicCharacter>();
+		CustomCharacter->SetParent(WorkspaceValue);
+		Second->SetPossession(CustomCharacter);
+		bool ExplicitTargetRejected = false;
+		try {
+			Local->SetCharacter(CustomCharacter);
+		} catch (const std::invalid_argument &) {
+			ExplicitTargetRejected = true;
+		}
+		Check(StockTargetRejected && ExplicitTargetRejected && !Local->GetCharacter() &&
+				Local->GetPossessedEntity() == Vehicle && Second->GetPossessedEntity() == CustomCharacter,
+			"stock and explicit possession reject a target currently owned by another Player");
+		Second->SetPossession(std::nullopt);
+		CustomCharacter->Destroy();
+
 		bool ReentrantRejected = false;
 		auto Changed = Local->GetPropertyChangedSignal("PossessedEntity")->Connect([&](auto) {
 			try {

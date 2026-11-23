@@ -2625,7 +2625,8 @@ end)
 			for (auto &Client : Clients)
 				if (Client.Runtime) Client.Runtime->Step();
 			SampleServer([&] { Server.Step(++Tick); });
-			for (auto &Client : Clients) Client.Session->Step(Tick);
+			for (auto &Client : Clients)
+				Client.Session->Step(Client.Runtime ? Client.Runtime->GetSimulationTick() : Tick);
 		};
 		while (Tick < 100 && Server.GetMetrics().ReadyPeers != PeerCount) Frame();
 		auto LivePlayers = PlayersValue->GetPlayers();
@@ -2666,6 +2667,24 @@ end)
 					Check(RemotePart && glm::length(RemotePart->GetPosition()) > 0.5f,
 						"an interested peer receives the other possessed body's authoritative pose");
 				}
+			}
+			if (!Measure && Network) {
+				for (int Index = 0; Index < 24; ++Index) {
+					(void)Network->Advance(17ms);
+					Network->Pump();
+					for (auto &Client : Clients) {
+						(void)Client.Session->Poll();
+						Client.Runtime->Step();
+						Client.Session->Step(Client.Runtime->GetSimulationTick());
+					}
+				}
+				for (int Index = 0; Index < 12; ++Index) Frame();
+				const auto DroneAfterStall = Drone->GetPosition();
+				const auto RoverAfterStall = Rover->GetPosition();
+				for (int Index = 0; Index < 8; ++Index) Frame();
+				Check(Drone->GetPosition().x > DroneAfterStall.x + 0.5f &&
+						Rover->GetPosition().z > RoverAfterStall.z + 0.5f,
+					"both controllers recover after the server loop stalls while client ticks advance");
 			}
 			if (Measure) {
 				const auto Before = Server.GetMetrics();

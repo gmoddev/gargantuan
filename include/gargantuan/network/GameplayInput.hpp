@@ -19,7 +19,6 @@ namespace gargantuan::network {
 
 	inline constexpr std::size_t MaximumGameplayInputLeases = 1024;
 	inline constexpr std::uint32_t MaximumGameplayInputsPerTick = 4;
-	inline constexpr std::uint64_t GameplayInputMaximumClientTickLead = 8;
 	inline constexpr std::uint64_t GameplayInputFreshnessTicks = 6;
 
 	struct GameplayInputLeaseEpochDomain;

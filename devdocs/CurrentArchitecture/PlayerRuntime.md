@@ -140,7 +140,8 @@ specializations do not require changing the Player schema. The lifecycle is:
 for server gameplay policy. Entity eligibility is a live descendant of the
 same DataModel's Workspace, regardless of its Instance class. The Player must
 be a live runtime identity under Players. One Player can possess a target at a
-time. Reassignment or release preserves the target. Destruction, losing
+time across explicit possession and stock Character control. Reassignment or
+release of explicit possession preserves the target. Destruction, losing
 Workspace ancestry, or Player removal revokes possession, and PlayerRemoving
 observers see the relationship cleared. The server records a fresh local
 possession revision on each change for downstream input routing.

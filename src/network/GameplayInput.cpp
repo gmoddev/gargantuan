@@ -174,8 +174,9 @@ namespace gargantuan::network {
 			SaturatingAdd(Metrics.UnauthorizedInputs);
 			return false;
 		}
-		if (Sequence <= Lease.LastInput.Value() || ClientTick <= Lease.LastClientTick ||
-			(ClientTick > ServerTick && ClientTick - ServerTick > GameplayInputMaximumClientTickLead)) {
+		// Host frame counters advance independently. ClientTick orders that
+		// sender's reports; only receipt ticks govern server rate and freshness.
+		if (Sequence <= Lease.LastInput.Value() || ClientTick <= Lease.LastClientTick) {
 			SaturatingAdd(Metrics.StaleInputs);
 			return false;
 		}
