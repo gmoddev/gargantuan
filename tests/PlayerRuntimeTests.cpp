@@ -657,6 +657,61 @@ end)
 		Runtime.Destroy();
 	}
 
+	void TestCharacterRemovalReservations() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto PlayersValue = std::dynamic_pointer_cast<Players>(Game->GetService("Players"));
+		auto Owner = PlayersValue->CreateSessionPlayer({"test", "owner"});
+		auto Other = PlayersValue->CreateSessionPlayer({"test", "other"});
+		const auto CreateCharacter = [&] {
+			auto Actor = std::make_shared<KinematicCharacter>();
+			Actor->SetParent(WorkspaceValue);
+			return Actor;
+		};
+		auto Previous = CreateCharacter();
+		auto Replacement = CreateCharacter();
+		Owner->SetCharacter(Previous);
+		auto Aborting = Owner->CharacterRemoving->Once([](const auto &) {
+			throw std::runtime_error("abort removal callback");
+		});
+		bool Aborted = false;
+		try {
+			Owner->SetCharacter(Replacement);
+		} catch (const std::runtime_error &) {
+			Aborted = true;
+		}
+		Check(Aborted && Owner->GetCharacter() == Previous && !Previous->GetDestroyed(),
+			"an interrupted removal leaves the previous Character owned and live");
+		Other->SetPossession(Replacement);
+		Check(Other->GetPossessedEntity() == Replacement,
+			"an interrupted removal releases the pending Character reservation");
+		Other->SetPossession(std::nullopt);
+
+		bool ObservedPrevious = false;
+		int Rejected = 0;
+		auto Removing = Owner->CharacterRemoving->Once([&](const auto &Value) {
+			ObservedPrevious = Value == Previous && Owner->GetCharacter() == Previous && !Previous->GetDestroyed();
+			try { Other->SetCharacter(Replacement); } catch (const std::invalid_argument &) { ++Rejected; }
+			try { Other->SetPossession(Replacement); } catch (const std::invalid_argument &) { ++Rejected; }
+			try { Owner->ResetCharacter(); } catch (const std::runtime_error &) { ++Rejected; }
+		});
+		auto Final = CreateCharacter();
+		bool AddedReplacement = false;
+		auto Added = Owner->CharacterAdded->Once([&](const auto &Value) {
+			AddedReplacement = Value == Replacement && Owner->GetCharacter() == Replacement;
+			Owner->SetCharacter(Final);
+		});
+		Owner->SetCharacter(Replacement);
+		Check(ObservedPrevious && Rejected == 3 && !Other->GetCharacter() && !Other->GetPossessedEntity(),
+			"pre-removal observers see the previous Character and cannot reassign the reserved replacement");
+		Check(AddedReplacement && Owner->GetCharacter() == Final && Previous->GetDestroyed() && Replacement->GetDestroyed(),
+			"post-commit CharacterAdded can still install a custom template");
+		Owner->RemoveCharacter();
+		Check(Final->GetDestroyed() && !Owner->GetCharacter(), "final teardown retires the single owned Character");
+		Game->Destroy();
+	}
+
 	void TestGenericPossession() {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
@@ -818,6 +873,7 @@ int main() {
 	TestEngineReattachAfterShutdown();
 	TestCustomControllerPath();
 	TestMovementPolicyResults();
+	TestCharacterRemovalReservations();
 	TestGenericPossession();
 	if (Failures == 0) std::cout << "All player runtime tests passed\n";
 	return Failures == 0 ? 0 : 1;

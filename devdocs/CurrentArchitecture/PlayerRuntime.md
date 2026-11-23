@@ -138,6 +138,13 @@ specializations do not require changing the Player schema. The lifecycle is:
    teardown, or Engine Stop fires `CharacterRemoving` and clears the relation.
 5. Player-owned removal/replacement destroys the old character exactly once.
 
+During the synchronous pre-removal callback, the original character remains
+available to observers and the pending replacement is reserved for its new
+owner. Nested removal or replacement on that Player is rejected, as are
+assignments of the pending target to another Player. The reservation ends
+when the callback returns or fails. After the new relationship commits,
+`CharacterAdded` handlers can still install a project-specific template.
+
 `Player:SetPossession(EntityOrNil)` is an independent, non-owning relationship
 for server gameplay policy. Entity eligibility is a live descendant of the
 same DataModel's Workspace, regardless of its Instance class. The Player must
