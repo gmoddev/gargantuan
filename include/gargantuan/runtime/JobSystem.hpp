@@ -26,7 +26,8 @@ namespace gargantuan {
 
 	class JobSystem {
 	  public:
-		explicit JobSystem(std::size_t workerCount = 0);
+		enum class StartPolicy { Immediate, OnFirstSubmission };
+		explicit JobSystem(std::size_t WorkerCount = 0, StartPolicy Policy = StartPolicy::Immediate);
 		~JobSystem();
 
 		void Submit(std::function<void()> job, const std::shared_ptr<JobGroup> &group = nullptr);
@@ -40,5 +41,6 @@ namespace gargantuan {
 	  private:
 		struct Impl;
 		std::unique_ptr<Impl> State;
+		void StartWorkers();
 	};
 }

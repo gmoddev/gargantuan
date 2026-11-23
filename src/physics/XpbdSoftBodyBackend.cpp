@@ -885,7 +885,8 @@ namespace gargantuan {
 				SoftBodyWorldLimits LimitsValue,
 				std::unique_ptr<const detail::SoftBodyStepTestHooks> HooksValue = {}
 			)
-				: Limits(LimitsValue), Jobs(DefaultWorkerCount(LimitsValue)), TestHooks(std::move(HooksValue)) {
+				: Limits(LimitsValue), Jobs(DefaultWorkerCount(LimitsValue), JobSystem::StartPolicy::OnFirstSubmission),
+				  TestHooks(std::move(HooksValue)) {
 				if (Limits.MaximumBodies == 0 || Limits.MaximumVerticesPerBody == 0 ||
 					Limits.MaximumWorldVertices == 0 || Limits.MaximumConstraints == 0 ||
 					Limits.MaximumAttachments == 0 || Limits.MaximumColliders == 0 || Limits.MaximumWorkers == 0 ||
@@ -1127,8 +1128,6 @@ namespace gargantuan {
 					}
 					StepActive = true;
 				}
-				Result.Profile.WorkerCount = Jobs.GetWorkerCount();
-
 				auto FinishStep = [this] {
 					std::scoped_lock Lock(Mutex);
 					StepActive = false;
@@ -1235,6 +1234,7 @@ namespace gargantuan {
 							);
 						}
 						Result.Profile.JobsDispatched = Batch->Items.size();
+						Result.Profile.WorkerCount = Jobs.GetWorkerCount();
 						Result.Profile.DispatchNanoseconds = Nanoseconds(ProfileClock::now() - DispatchStart);
 						const auto WaitStart = ProfileClock::now();
 						Group->Wait();

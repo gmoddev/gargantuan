@@ -165,7 +165,8 @@ namespace gargantuan {
 			LuaResult Result;
 		};
 
-		State() : Provider(std::make_shared<NoneEntitlementProvider>()), Workers(2) {}
+		State() : Provider(std::make_shared<NoneEntitlementProvider>()),
+			Workers(2, JobSystem::StartPolicy::OnFirstSubmission) {}
 
 		std::mutex ReplacementMutex;
 		mutable std::mutex ProviderMutex;

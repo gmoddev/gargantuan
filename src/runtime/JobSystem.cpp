@@ -44,15 +44,30 @@ namespace gargantuan {
 		std::size_t QueueHead = 0;
 		std::size_t QueueSize = 0;
 		std::vector<std::thread> Workers;
+		std::size_t WorkerCapacity = 0;
 		std::size_t Active = 0;
 		bool Accepting = true;
 		bool Stopping = false;
 	};
 
-	JobSystem::JobSystem(std::size_t workerCount) : State(std::make_unique<Impl>()) {
+	JobSystem::JobSystem(std::size_t WorkerCount, StartPolicy Policy) : State(std::make_unique<Impl>()) {
 		State->Queue.resize(64);
-		if (workerCount == 0) workerCount = std::max(1u, std::thread::hardware_concurrency());
-		for (std::size_t i = 0; i < workerCount; ++i) {
+		State->WorkerCapacity = WorkerCount == 0 ? std::max(1u, std::thread::hardware_concurrency()) : WorkerCount;
+		if (Policy == StartPolicy::Immediate) {
+			try {
+				StartWorkers();
+			} catch (...) {
+				Shutdown(false);
+				throw;
+			}
+		}
+	}
+
+	void JobSystem::StartWorkers() {
+		// Construction is private to the owner. After construction, Submit
+		// serializes startup with other submissions and shutdown.
+		State->Workers.reserve(State->WorkerCapacity);
+		while (State->Workers.size() < State->WorkerCapacity) {
 			State->Workers.emplace_back([this] {
 				ExecutionDomainScope domain(ExecutionDomain::Worker);
 				while (true) {
@@ -91,7 +106,9 @@ namespace gargantuan {
 		if (!job) throw std::invalid_argument("Cannot submit an empty job");
 		std::scoped_lock lock(State->Mutex);
 		if (!State->Accepting) throw std::runtime_error("JobSystem is shutting down");
-		if (group) group->Add();
+		// A partially started pool stays owned and idle if creation throws.
+		// No job or group reservation is published until startup succeeds.
+		if (State->Workers.size() < State->WorkerCapacity) StartWorkers();
 		if (State->QueueSize == State->Queue.size()) {
 			std::vector<Impl::Job> Expanded(State->Queue.size() * 2);
 			for (std::size_t Index = 0; Index < State->QueueSize; ++Index)
@@ -100,6 +117,7 @@ namespace gargantuan {
 			State->QueueHead = 0;
 		}
 		const auto Position = (State->QueueHead + State->QueueSize) % State->Queue.size();
+		if (group) group->Add();
 		State->Queue[Position] = {std::move(job), group};
 		++State->QueueSize;
 		State->Available.notify_one();
@@ -112,6 +130,7 @@ namespace gargantuan {
 
 	void JobSystem::Shutdown(bool drain) {
 		if (!State) return;
+		std::vector<std::thread> Workers;
 		{
 			std::scoped_lock lock(State->Mutex);
 			if (!State->Accepting && State->Stopping) return;
@@ -126,15 +145,17 @@ namespace gargantuan {
 				State->QueueSize = 0;
 			}
 			State->Stopping = true;
+			Workers = std::move(State->Workers);
 		}
 		State->Available.notify_all();
-		for (auto &worker : State->Workers) {
+		State->Drained.notify_all();
+		for (auto &worker : Workers) {
 			if (worker.joinable()) worker.join();
 		}
-		State->Workers.clear();
 	}
 
 	std::size_t JobSystem::GetWorkerCount() const {
+		std::scoped_lock Lock(State->Mutex);
 		return State->Workers.size();
 	}
 }
