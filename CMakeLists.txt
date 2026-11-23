@@ -1278,6 +1278,19 @@ if(BUILD_TESTING)
 		GARGANTUAN_GAMEPLAY_SAMPLE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/GameplayFoundation7")
 	add_test(NAME gargantuan_gameplay_relay_sample COMMAND gargantuan_gameplay_sample_tests)
 	set_tests_properties(gargantuan_gameplay_relay_sample PROPERTIES LABELS "networking;runtime;sample" TIMEOUT 45)
+	add_test(NAME gargantuan_gas_relay_rescue
+		COMMAND ${CMAKE_COMMAND}
+			-DPACKAGER=$<TARGET_FILE:gargantuan_packager>
+			-DMODEL_TEST=$<TARGET_FILE:gargantuan_gas_authoring_tests>
+			-DMISSION=$<TARGET_FILE:gargantuan_gameplay_sample_tests>
+			-DPLAYER_DISTRIBUTION=$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
+			-DSERVER_DISTRIBUTION=$<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution
+			-DSOURCE_PROJECT=${CMAKE_CURRENT_SOURCE_DIR}/samples/GameplayFoundation7
+			-DWORKSPACE_ROOT=${CMAKE_CURRENT_BINARY_DIR}
+			-DGNS=$<BOOL:${GARGANTUAN_WITH_GNS}>
+			-P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GasRelayRescueQualification.cmake)
+	set_tests_properties(gargantuan_gas_relay_rescue PROPERTIES
+		LABELS "persistence;packaging;networking;sample" RUN_SERIAL TRUE TIMEOUT 360)
 	if(GARGANTUAN_WITH_GNS)
 		target_link_libraries(gargantuan_game_session_tests PRIVATE gargantuan_gns_transport)
 		target_link_libraries(gargantuan_gameplay_allocation_workload PRIVATE gargantuan_gns_transport)

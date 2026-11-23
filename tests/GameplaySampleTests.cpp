@@ -26,6 +26,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -158,7 +159,7 @@ namespace {
 		}
 	};
 
-	void RunRelayRescue(bool UseGns, bool RenderGpu) {
+	void RunRelayRescue(bool UseGns, bool RenderGpu, const std::filesystem::path &ProjectRoot) {
 		auto Network = UseGns ? nullptr : SimulatedNetwork::Create({.BaseLatency = 6ms});
 		const auto CreateTransport = [&]() -> std::shared_ptr<IGameTransport> {
 			if (Network) return Network->CreateTransport();
@@ -169,7 +170,7 @@ namespace {
 #endif
 		};
 
-		DiskFilesystem Filesystem(GARGANTUAN_GAMEPLAY_SAMPLE_ROOT);
+		DiskFilesystem Filesystem(ProjectRoot);
 		auto Sample = Project::fromExisting(&Filesystem);
 		auto TrustedWorld = Sample.DeserializeGame();
 		auto ServerWorld = Sample.DeserializeGame();
@@ -425,10 +426,18 @@ namespace {
 
 int main(int ArgumentCount, char **Arguments) {
 	try {
-		const auto Mode = ArgumentCount > 1 ? std::string_view(Arguments[1]) : std::string_view{};
-		const bool RenderGpu = Mode == "--gns-gpu";
-		if (ArgumentCount > 2 || (!Mode.empty() && Mode != "--gns" && !RenderGpu))
-			throw std::invalid_argument("expected --gns, --gns-gpu, or no arguments");
+		bool UseGns = false;
+		bool RenderGpu = false;
+		std::filesystem::path ProjectRoot = GARGANTUAN_GAMEPLAY_SAMPLE_ROOT;
+		for (int Index = 1; Index < ArgumentCount; ++Index) {
+			const std::string_view Argument(Arguments[Index]);
+			if (Argument == "--gns" || Argument == "--gns-gpu") {
+				UseGns = true;
+				RenderGpu = RenderGpu || Argument == "--gns-gpu";
+			} else if (Argument == "--project" && Index + 1 < ArgumentCount)
+				ProjectRoot = std::filesystem::absolute(Arguments[++Index]);
+			else throw std::invalid_argument("Use --gns, --gns-gpu, or --project <root>");
+		}
 		struct SdlLifetime {
 			bool Active;
 			~SdlLifetime() { if (Active) SDL_Quit(); }
@@ -436,7 +445,7 @@ int main(int ArgumentCount, char **Arguments) {
 		if (RenderGpu && !Sdl.Active)
 			throw std::runtime_error(std::string("relay GPU video startup failed: ") + SDL_GetError());
 		gargantuan::BootstrapNativeRuntimeSchema();
-		RunRelayRescue(Mode == "--gns" || RenderGpu, RenderGpu);
+		RunRelayRescue(UseGns, RenderGpu, ProjectRoot);
 		std::cout << "[Gameplay:Relay] Saved two-player mission passed\n";
 		return 0;
 	} catch (const std::exception &Error) {
