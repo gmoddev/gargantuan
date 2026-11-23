@@ -781,7 +781,13 @@ Vehicle:SetAttribute("DeniedClientPossession", true)
 		StockDuplicateScript->SetSource(R"(
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
-local AssignedCharacter = Players:GetPlayers()[2].Character
+local AssignedCharacter
+for _, Player in Players:GetPlayers() do
+	if Player ~= LocalPlayer and Player.Character then
+		AssignedCharacter = Player.Character
+		break
+	end
+end
 assert(AssignedCharacter and AssignedCharacter ~= LocalPlayer.Character)
 local Assigned = pcall(function() LocalPlayer.Character = AssignedCharacter end)
 LocalPlayer:RemoveCharacter()
