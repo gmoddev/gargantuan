@@ -17,6 +17,13 @@
 #include "BenchmarkAllocationProbe.hpp"
 #include "GasBenchmarkAllocations.hpp"
 #include <charconv>
+#else
+#include "gargantuan/filesystem/DiskFilesystem.hpp"
+#include "gargantuan/filesystem/Project.hpp"
+#include "gargantuan/filesystem/SourceMount.hpp"
+#include "gargantuan/reflection/PreRunRegistration.hpp"
+
+#include <SDL3/SDL.h>
 #endif
 
 #include <algorithm>
@@ -347,10 +354,97 @@ namespace {
 		});
 		Root->Destroy();
 	}
+
+#ifndef GARGANTUAN_GAS_BENCHMARK_PROFILE
+	void BenchmarkProjectLoad(const std::filesystem::path &ProjectPath, const std::filesystem::path &PlacePath) {
+		using namespace gargantuan;
+		constexpr std::size_t RunCount = 5;
+		if (!SDL_Init(0)) throw std::runtime_error("Could not initialize platform file support");
+		struct SdlLifetime {
+			~SdlLifetime() { SDL_Quit(); }
+		} Sdl;
+
+		DiskFilesystem Filesystem(std::filesystem::absolute(ProjectPath).lexically_normal());
+		const auto Origin = Project::FromGasOrigin(&Filesystem);
+		const auto JsonProject = Project::fromExisting(&Filesystem);
+		const auto AbsolutePlace = std::filesystem::absolute(PlacePath).lexically_normal();
+		const auto FileSize = [](const std::filesystem::path &Path, std::size_t Maximum) {
+			if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(Path)))
+				throw std::runtime_error("Benchmark input must be a regular file");
+			const auto Size = std::filesystem::file_size(Path);
+			if (Size > Maximum) throw std::length_error("Benchmark input exceeds its document limit");
+			return Size;
+		};
+		if (JsonProject.InstanceFileFormat != InstanceSerialization::InstanceFormat::Json)
+			throw std::runtime_error("The project load comparison requires the existing JSON project format");
+		const auto JsonBytes = FileSize(JsonProject.InstanceFilePath, MaximumProtocolDocumentBytes);
+		const auto GasBytes = FileSize(AbsolutePlace, Gas::MaximumDocumentBytes);
+		DiskFilesystem PlaceFilesystem(AbsolutePlace.parent_path());
+		const SourceMount PlaceMount(PlaceFilesystem);
+		const auto ReadPlace = [&] {
+			SourceMountBudget Budget;
+			const auto Bytes = PlaceMount.ReadFile(AbsolutePlace.filename(), Gas::MaximumDocumentBytes, Budget);
+			if (!Bytes) throw std::runtime_error(Bytes.error().Format());
+			auto Place = Gas::Decode(std::span(reinterpret_cast<const std::uint8_t *>(Bytes->data()), Bytes->size()));
+			if (!Place) throw std::runtime_error(Place.error().Format());
+			return std::move(*Place);
+		};
+		const auto Document = ReadPlace();
+		const auto TrustedPreRun = ReadProjectPreRunSource(Filesystem.Root);
+		if (Document.Kind != Gas::DocumentKind::Place || !Document.Place ||
+			Document.Place->Identity != Origin.Identity || Document.Place->PreRunSource != TrustedPreRun)
+			throw std::runtime_error("Benchmark GASP does not match the trusted project identity and PreRun source");
+		BootstrapPackagedRuntimeSchema(TrustedPreRun);
+		auto Baseline = Origin.LoadGasPlace(Document);
+		Baseline->InitializeLoadedProjectRevision();
+		const auto Expected = Origin.CaptureGasPlace(Baseline);
+		Baseline->Destroy();
+		Baseline.reset();
+		if (!Expected) throw std::runtime_error(Expected.error().Format());
+
+		std::cout << "Backend,Workload,Items,DocumentBytes,MeanLoadMs,Runs,Status\n";
+		const auto Run = [&](std::string_view Backend, std::uintmax_t Bytes, auto Load) {
+			double LoadMs = 0;
+			for (std::size_t Index = 0; Index <= RunCount; ++Index) {
+				const auto Begin = Clock::now();
+				auto World = Load();
+				World->InitializeLoadedProjectRevision();
+				const auto End = Clock::now();
+				const auto Restored = Origin.CaptureGasPlace(World);
+				World->Destroy();
+				if (!Restored) throw std::runtime_error(Restored.error().Format());
+				if (*Restored != *Expected)
+					throw std::runtime_error("Benchmark inputs must describe the same persistent project");
+				if (Index > 0) LoadMs += Milliseconds(Begin, End);
+			}
+			std::cout << Backend << ",DiskProjectLoad," << Expected->Nodes.size() << ',' << Bytes << ','
+					  << LoadMs / RunCount << ',' << RunCount << ",Ok\n";
+		};
+		Run("JSON", JsonBytes, [&] {
+			auto ProjectValue = Project::fromExisting(&Filesystem);
+			return ProjectValue.DeserializeGame();
+		});
+		Run("GAS", GasBytes, [&] {
+			auto Place = ReadPlace();
+			const auto ProjectValue = Project::FromGasOrigin(&Filesystem);
+			return ProjectValue.LoadGasPlace(Place);
+		});
+	}
+#endif
 }
 
 int main(int ArgumentCount, char **Arguments) {
 	try {
+#ifndef GARGANTUAN_GAS_BENCHMARK_PROFILE
+		if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--gas-project-load") {
+			if (ArgumentCount != 4) {
+				std::cerr << "Usage: gargantuan_serialization_benchmark --gas-project-load <origin> <gasp-file>\n";
+				return 2;
+			}
+			BenchmarkProjectLoad(Arguments[2], Arguments[3]);
+			return 0;
+		}
+#endif
 		gargantuan::BootstrapNativeRuntimeSchema();
 #ifdef GARGANTUAN_GAS_BENCHMARK_PROFILE
 		constexpr std::string_view Usage = "Usage: gargantuan_gas_benchmark_profile --gas-profile JSON|GAS 100|1000|5000\n";
