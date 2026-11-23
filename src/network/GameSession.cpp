@@ -201,6 +201,8 @@ namespace gargantuan::network {
 			std::uint64_t RequiredStructuralSequence;
 			std::weak_ptr<BasePart> ReplicaPart;
 			std::uint64_t AppliedTick = 0;
+			std::uint64_t ResolvedAtSequence = 0;
+			ReplicationEpoch ResolvedAtEpoch;
 		};
 		std::map<ObjectId, ActivePose> ActivePossessionPoses;
 		std::map<ObjectId, ClientPoseBinding> ClientPossessionPoses;
@@ -1553,8 +1555,12 @@ namespace gargantuan::network {
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::GameplayPosePresentation);
 			runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::GameplayPosePresentation, ClientPossessionPoses.size());
 			for (auto &[Object, Binding] : ClientPossessionPoses) {
-				if (Replica.GetNextSequence().Value() <= Binding.RequiredStructuralSequence) continue;
-				const auto Part = std::dynamic_pointer_cast<BasePart>(Replica.Resolve(Object));
+				const auto StructuralSequence = Replica.GetNextSequence().Value();
+				if (StructuralSequence <= Binding.RequiredStructuralSequence) continue;
+				const auto StructuralEpoch = Replica.GetEpoch();
+				auto Part = Binding.ResolvedAtSequence == StructuralSequence && Binding.ResolvedAtEpoch == StructuralEpoch
+					? Binding.ReplicaPart.lock() : nullptr;
+				if (!Part) Part = std::dynamic_pointer_cast<BasePart>(Replica.Resolve(Object));
 				if (!IsIndependentPosePart(Part)) {
 					if (const auto Previous = Binding.ReplicaPart.lock(); Previous && !Previous->GetDestroyed())
 						Previous->SetCharacterPresentationOffset(std::nullopt);
@@ -1562,6 +1568,8 @@ namespace gargantuan::network {
 					continue;
 				}
 				Binding.ReplicaPart = Part;
+				Binding.ResolvedAtSequence = StructuralSequence;
+				Binding.ResolvedAtEpoch = StructuralEpoch;
 				if (const auto Latest = ClientPosePresentation.GetLatest(Object); Latest && Latest->ServerTick > Binding.AppliedTick) {
 					Part->SetSimulationCFrame(Latest->Transform);
 					Binding.AppliedTick = Latest->ServerTick;

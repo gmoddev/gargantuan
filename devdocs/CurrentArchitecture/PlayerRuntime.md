@@ -191,6 +191,10 @@ measured from the last successful admission. A failed admission can be retried
 on the next eligible tick. A peer receives
 at most 16 active pose streams, with its own target selected first. The client
 applies the latest valid authoritative sample to the local anchored body.
+The client can reuse the weak replica binding while its accepted structural
+sequence stays current. It rechecks anchoring, hierarchy and destruction before
+applying any sample. A structural advance or materialization change invalidates
+the cached resolution.
 Render extraction uses a bounded, interpolated presentation offset without
 extrapolation. A part nested under a Character leaves this pose mode so it
 cannot compete with the Character transform owner.

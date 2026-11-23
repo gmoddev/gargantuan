@@ -2922,6 +2922,11 @@ end)
 			for (int Index = 0; Index < 8; ++Index) Frame();
 			Check(!LivePlayers[1]->GetPossessedEntity() && Server.GetMetrics().PossessionInput.Revocations == 3,
 				"entity destruction retires its input lease");
+			if (!Measure) {
+				for (const auto &Client : Clients)
+					Check(Client.Runtime && !Client.Runtime->Workspace->FindFirstChild("PossessionDrone", std::nullopt),
+						"structural removal retires every presented replica of the old identity");
+			}
 			if (!Measure && Clients.front().Runtime) {
 				auto &Departing = Clients.front();
 				const auto LocalBefore = Departing.Runtime->Players->GetLocalPlayer().value_or(nullptr);
