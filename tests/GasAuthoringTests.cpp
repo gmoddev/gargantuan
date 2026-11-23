@@ -13,6 +13,7 @@
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Script.hpp"
+#include "gargantuan/classes/Sound.hpp"
 #include "gargantuan/classes/TextLabel.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/editor/EditorHost.hpp"
@@ -32,6 +33,7 @@
 #include <nlohmann/json.hpp>
 #include <memory>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -78,6 +80,12 @@ namespace {
 			Create<Frame>("Panel", Parent), Create<Script>("Logic", Parent), Create<Character>("Rig", Parent)};
 		const auto AttachmentA = Create<Attachment>("MountA", Result.PartA);
 		const auto AttachmentB = Create<Attachment>("MountB", Result.PartB);
+		const auto NearbySound = Create<Sound>("NearbySound", AttachmentA);
+		NearbySound->SetRollOffMinDistance(1.0f);
+		NearbySound->SetRollOffMaxDistance(5.0f);
+		const auto DistantSound = Create<Sound>("DistantSound", AttachmentB);
+		DistantSound->SetRollOffMaxDistance(200.0f);
+		DistantSound->SetRollOffMinDistance(125.0f);
 		const auto Weld = Create<WeldConstraint>("BridgeWeld", Result.PartA);
 		Weld->SetPart0(Result.PartA);
 		Weld->SetPart1(Result.PartB);
@@ -105,6 +113,11 @@ namespace {
 			"Restore weld links across roots");
 		Require(Joint->GetAttachment0() == AttachmentA && Joint->GetAttachment1() == AttachmentB &&
 			Joint->GetJointType() == "Hinge", "Restore joint settings and attachment links across roots");
+		const auto NearbySound = Find<Sound>(*AttachmentA, "NearbySound");
+		const auto DistantSound = Find<Sound>(*AttachmentB, "DistantSound");
+		Require(NearbySound->GetRollOffMinDistance() == 1.0f && NearbySound->GetRollOffMaxDistance() == 5.0f &&
+			DistantSound->GetRollOffMinDistance() == 125.0f && DistantSound->GetRollOffMaxDistance() == 200.0f,
+			"Restore Sound rolloff ranges below and above the construction defaults");
 		Require(Find<TextLabel>(*Restored.Panel, "Message")->GetText() == LabelText, "Restore nested UI and text");
 		Require(Restored.Rig->GetRootPart() == Find<Part>(*Restored.Rig, "RigBody"), "Restore Character root body reference");
 		const auto Security = ScriptSecurityContext::CoreTrusted();
@@ -177,6 +190,31 @@ namespace {
 		const std::size_t PreviousCapacity = ChangeJournal::Get().GetCapacity();
 	};
 
+	void TestLegacySoundRollOff() {
+		using Json = nlohmann::ordered_json;
+		const auto Read = [](Json Properties) {
+			std::istringstream Input(Json{
+				{"Version", 0}, {"Name", "Cue"}, {"ClassName", "Sound"},
+				{"Properties", std::move(Properties)}, {"Children", Json::array()},
+			}.dump());
+			return InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Input);
+		};
+		const auto Verify = [&](Json Properties, float Minimum, float Maximum) {
+			const auto State = Read(std::move(Properties));
+			const ScopedFixtureGraph Lifetime(State.Instance);
+			const auto Value = std::dynamic_pointer_cast<Sound>(State.Instance);
+			Require(State.Ok && Value && Value->GetRollOffMinDistance() == Minimum &&
+				Value->GetRollOffMaxDistance() == Maximum, "Restore legacy JSON Sound rolloff distances");
+		};
+		Verify({{"RollOffMinDistance", {{"Float", 1.0}}}, {"RollOffMaxDistance", {{"Float", 5.0}}}}, 1.0f, 5.0f);
+		Verify({{"RollOffMinDistance", {{"Float", 125.0}}}, {"RollOffMaxDistance", {{"Float", 200.0}}}}, 125.0f, 200.0f);
+		Verify({{"RollOffMinDistance", {{"Float", 20.0}}}}, 20.0f, 100.0f);
+		Verify({{"RollOffMaxDistance", {{"Float", 20.0}}}}, 10.0f, 20.0f);
+		Require(!Read({{"RollOffMinDistance", {{"Float", 20.0}}}, {"RollOffMaxDistance", {{"Float", 20.0}}}}).Ok &&
+			!Read({{"RollOffMaxDistance", {{"Float", 5.0}}}}).Ok,
+			"Reject equal Sound rolloff distances and a legacy maximum below the default minimum");
+	}
+
 	void TestModel() {
 		auto SourceWorld = std::make_shared<DataModel>();
 		const ScopedFixtureGraph SourceLifetime(SourceWorld);
@@ -239,6 +277,12 @@ namespace {
 		WeldNode->SavedProperties.at("Part1") = Gas::LocalReference{ScriptIndex};
 		Require(Gateway.Apply(Failure, Authority).Status == MutationStatus::ValidationFailed,
 			"Reject wrong-class reference during detached materialization");
+		*Bad = *Parsed;
+		const auto SoundNode = std::ranges::find(Bad->Nodes, std::string("NearbySound"), &Gas::Node::Name);
+		Require(SoundNode != Bad->Nodes.end(), "Find persisted Sound in the model fixture");
+		SoundNode->SavedProperties.at("RollOffMinDistance") = WireValue{6.0f};
+		Require(Gateway.Apply(Failure, Authority).Status == MutationStatus::ValidationFailed,
+			"Reject an invalid Sound rolloff pair during detached model import");
 		Require(Published(*Destination, *Parent) == Before, "Invalid imports leave graph, history and journal untouched");
 		std::size_t AddedSignals = 0;
 		std::size_t RemovedSignals = 0;
@@ -385,6 +429,12 @@ namespace {
 		Require(Bytes.has_value(), "Encode selected place");
 		const auto Place = Gas::Decode(*Bytes);
 		Require(Place.has_value(), "Parse binary place");
+		auto InvalidPlace = *Place;
+		const auto SoundNode = std::ranges::find(InvalidPlace.Nodes, std::string("DistantSound"), &Gas::Node::Name);
+		Require(SoundNode != InvalidPlace.Nodes.end(), "Find persisted Sound in the place fixture");
+		SoundNode->SavedProperties.at("RollOffMaxDistance") = WireValue{100.0f};
+		const auto Rejected = InstanceSerialization::MaterializeGasDocument(InvalidPlace, true);
+		Require(!Rejected.Succeeded() && Rejected.Roots.empty(), "Reject an invalid Sound rolloff pair during place load");
 		const auto Restored = Origin.LoadGasPlace(*Place);
 		ScopedFixtureGraph RestoredLifetime(Restored);
 		Restored->InitializeLoadedProjectRevision();
@@ -489,6 +539,7 @@ int main(int ArgumentCount, char **Arguments) {
 			return 0;
 		}
 		BootstrapNativeRuntimeSchema();
+		TestLegacySoundRollOff();
 		TestModel();
 		TestPlace();
 		std::cout << "[GAS:Authoring] Model and place integration tests passed\n";

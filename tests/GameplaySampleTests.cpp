@@ -12,9 +12,11 @@
 #endif
 #include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/platform/HostEvent.hpp"
+#include "gargantuan/reflection/PreRunRegistration.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/render/SDLRenderer.hpp"
+#include "gargantuan/serialization/GasDocument.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/Workspace.hpp"
@@ -27,6 +29,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -159,7 +162,22 @@ namespace {
 		}
 	};
 
-	void RunRelayRescue(bool UseGns, bool RenderGpu, const std::filesystem::path &ProjectRoot) {
+	Gas::Document ReadRelayGasPlace(const std::filesystem::path &Path) {
+		std::ifstream Input(Path, std::ios::binary | std::ios::ate);
+		const std::streamoff Size = Input.tellg();
+		Require(Size > 0 && Size <= static_cast<std::streamoff>(Gas::MaximumDocumentBytes),
+			"Relay GASP fixture has a valid size");
+		Gas::Binary Bytes(static_cast<std::size_t>(Size));
+		Input.seekg(0);
+		Require(static_cast<bool>(Input.read(reinterpret_cast<char *>(Bytes.data()), Size)),
+			"Relay GASP fixture reads in full");
+		auto Document = Gas::Decode(Bytes);
+		if (!Document) throw std::runtime_error(Document.error().Format());
+		return std::move(*Document);
+	}
+
+	void RunRelayRescue(bool UseGns, bool RenderGpu, const std::filesystem::path &ProjectRoot,
+		const std::optional<std::filesystem::path> &GasPlacePath) {
 		auto Network = UseGns ? nullptr : SimulatedNetwork::Create({.BaseLatency = 6ms});
 		const auto CreateTransport = [&]() -> std::shared_ptr<IGameTransport> {
 			if (Network) return Network->CreateTransport();
@@ -171,9 +189,14 @@ namespace {
 		};
 
 		DiskFilesystem Filesystem(ProjectRoot);
-		auto Sample = Project::fromExisting(&Filesystem);
-		auto TrustedWorld = Sample.DeserializeGame();
-		auto ServerWorld = Sample.DeserializeGame();
+		auto Sample = GasPlacePath ? Project::FromGasOrigin(&Filesystem) : Project::fromExisting(&Filesystem);
+		std::optional<Gas::Document> GasPlace;
+		if (GasPlacePath) GasPlace = ReadRelayGasPlace(*GasPlacePath);
+		const auto LoadWorld = [&] {
+			return GasPlace ? Sample.LoadGasPlace(*GasPlace) : Sample.DeserializeGame();
+		};
+		auto TrustedWorld = LoadWorld();
+		auto ServerWorld = LoadWorld();
 		ServerWorld->InitializeLoadedProjectRevision();
 		auto Assets = std::dynamic_pointer_cast<AssetService>(TrustedWorld->GetService("AssetService"));
 		Require(Assets != nullptr, "sample asset catalog loads");
@@ -421,6 +444,7 @@ namespace {
 		Clients.back().Stop();
 		Server->Stop();
 		ServerRuntime.Destroy();
+		TrustedWorld->Destroy();
 	}
 }
 
@@ -429,6 +453,7 @@ int main(int ArgumentCount, char **Arguments) {
 		bool UseGns = false;
 		bool RenderGpu = false;
 		std::filesystem::path ProjectRoot = GARGANTUAN_GAMEPLAY_SAMPLE_ROOT;
+		std::optional<std::filesystem::path> GasPlacePath;
 		for (int Index = 1; Index < ArgumentCount; ++Index) {
 			const std::string_view Argument(Arguments[Index]);
 			if (Argument == "--gns" || Argument == "--gns-gpu") {
@@ -436,7 +461,9 @@ int main(int ArgumentCount, char **Arguments) {
 				RenderGpu = RenderGpu || Argument == "--gns-gpu";
 			} else if (Argument == "--project" && Index + 1 < ArgumentCount)
 				ProjectRoot = std::filesystem::absolute(Arguments[++Index]);
-			else throw std::invalid_argument("Use --gns, --gns-gpu, or --project <root>");
+			else if (Argument == "--gasp" && Index + 1 < ArgumentCount)
+				GasPlacePath = std::filesystem::absolute(Arguments[++Index]);
+			else throw std::invalid_argument("Use --gns, --gns-gpu, --project <root>, or --gasp <file>");
 		}
 		struct SdlLifetime {
 			bool Active;
@@ -444,8 +471,11 @@ int main(int ArgumentCount, char **Arguments) {
 		} Sdl{RenderGpu && SDL_Init(SDL_INIT_VIDEO)};
 		if (RenderGpu && !Sdl.Active)
 			throw std::runtime_error(std::string("relay GPU video startup failed: ") + SDL_GetError());
-		gargantuan::BootstrapNativeRuntimeSchema();
-		RunRelayRescue(UseGns, RenderGpu, ProjectRoot);
+		if (GasPlacePath)
+			gargantuan::BootstrapPackagedRuntimeSchema(gargantuan::ReadProjectPreRunSource(ProjectRoot));
+		else
+			gargantuan::BootstrapNativeRuntimeSchema();
+		RunRelayRescue(UseGns, RenderGpu, ProjectRoot, GasPlacePath);
 		std::cout << "[Gameplay:Relay] Saved two-player mission passed\n";
 		return 0;
 	} catch (const std::exception &Error) {

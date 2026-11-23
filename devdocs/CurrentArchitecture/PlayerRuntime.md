@@ -138,18 +138,28 @@ specializations do not require changing the Player schema. The lifecycle is:
    teardown, or Engine Stop fires `CharacterRemoving` and clears the relation.
 5. Player-owned removal/replacement destroys the old character exactly once.
 
-During the synchronous pre-removal callback, the original character remains
-available to observers and the pending replacement is reserved for its new
-owner. Nested removal or replacement on that Player is rejected, as are
-assignments of the pending target to another Player. The reservation ends
-when the callback returns or fails. After the new relationship commits,
-`CharacterAdded` handlers can still install a project-specific template.
+On the synchronous mutation path, the pre-removal callback exposes the original
+Character and reserves the pending replacement for its new owner. Nested
+removal or replacement on that Player is rejected, as are assignments of the
+pending target to another Player. The reservation ends when the callback
+returns or fails. A throwing native observer at this stage aborts the pending
+assignment. Once the new relationship commits, its
+destruction connection is already active for `GetPropertyChangedSignal("Character")`
+observers. Those observers can destroy the current Character or assign a
+different one. The previous Character stays reserved for retirement and cannot
+be reassigned as a Character or possessed. The Player invokes that retirement
+before propagating a native property observer error. If a reentrant observer
+supersedes the replacement or destroys it, only the current live binding can
+emit `CharacterAdded`. `CharacterAdded` handlers can still install a
+project-specific template. Once external Character or Player destruction has
+started, the Player logs native Character observer errors and continues its
+teardown. Replica application still uses its existing signal deferral.
 
 `Player:SetPossession(EntityOrNil)` is an independent, non-owning relationship
 for server gameplay policy. Entity eligibility is a live descendant of the
 same DataModel's Workspace, regardless of its Instance class. The Player must
-be a live runtime identity under Players. One Player can possess a target at a
-time across explicit possession and stock Character control. Reassignment or
+be a live runtime identity under Players. The server admits at most one Player
+per target across explicit possession and stock Character control. Reassignment or
 release of explicit possession preserves the target. Destruction, losing
 Workspace ancestry, or Player removal revokes possession, and PlayerRemoving
 observers see the relationship cleared. The server records a fresh local
@@ -157,7 +167,11 @@ possession revision on each change for downstream input routing.
 
 `Player.PossessedEntity` is a soft replicated reference. Clients can inspect
 it when the target is materialized in their view. Its setter is restricted to
-the native projection boundary. Server Luau calls `SetPossession`; rejected
+the native projection boundary. The structural receiver can receive a new
+Player's hard Character relationship before the previous Player's soft
+possession release. Both replica preflight and live application allow this
+temporary overlap with a soft reference and reject duplicate hard Character
+relationships. Server Luau calls `SetPossession`; rejected
 assignments preserve the existing relationship. Observers can use
 `GetPropertyChangedSignal("PossessedEntity")`. Synchronous reassignment from
 this notification is rejected. `Player.Character` retains its existing

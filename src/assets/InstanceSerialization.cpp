@@ -4,6 +4,7 @@
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/LuaSourceContainer.hpp"
+#include "gargantuan/classes/Sound.hpp"
 #include "gargantuan/datatypes/CFrame.hpp"
 #include "gargantuan/datatypes/Color3.hpp"
 #include "gargantuan/datatypes/Enum.hpp"
@@ -840,8 +841,39 @@ namespace gargantuan::InstanceSerialization {
 			instance->Destroy();
 			return state.ReturnError("Failed to apply Name for {}", state.FormatCurrentPath());
 		}
+		constexpr auto MinimumRollOff = "RollOffMinDistance";
+		constexpr auto MaximumRollOff = "RollOffMaxDistance";
+		static constexpr auto SoundClassId = SchemaId::FromNativeName("Engine", "Sound");
+		const bool HasSoundRollOffPair = definition->Id == SoundClassId &&
+			properties.contains(MinimumRollOff) && properties.contains(MaximumRollOff);
+		if (HasSoundRollOffPair) {
+			const auto Minimum = TryDeserializeProperty(properties.at(MinimumRollOff), state);
+			const auto Maximum = TryDeserializeProperty(properties.at(MaximumRollOff), state);
+			const auto *MinimumValue = Minimum ? std::any_cast<float>(&*Minimum) : nullptr;
+			const auto *MaximumValue = Maximum ? std::any_cast<float>(&*Maximum) : nullptr;
+			if (!MinimumValue || !MaximumValue || *MinimumValue >= *MaximumValue) {
+				instance->Destroy();
+				return state.ReturnError("Invalid Sound rolloff distance pair in {}", state.FormatCurrentPath());
+			}
+			// The ordinary setters require min < max throughout the update. Choose
+			// the first write from the new range and the freshly constructed Sound.
+			const auto &SoundValue = static_cast<const Sound &>(*instance);
+			const bool MaximumFirst = *MinimumValue >= SoundValue.GetRollOffMaxDistance();
+			const auto Apply = [&](std::string_view Key, const std::any &Value) {
+				return instance->ApplyPropertyMutation(Key, Value, Enums::Permission::Engine) == MutationStatus::Success;
+			};
+			try {
+				const bool Applied = MaximumFirst ? Apply(MaximumRollOff, *Maximum) && Apply(MinimumRollOff, *Minimum)
+					: Apply(MinimumRollOff, *Minimum) && Apply(MaximumRollOff, *Maximum);
+				if (!Applied) throw std::invalid_argument("Sound rolloff property mutation rejected");
+			} catch (const std::exception &Error) {
+				instance->Destroy();
+				return state.ReturnError("Failed to set Sound rolloff distances in {}: {}", state.FormatCurrentPath(), Error.what());
+			}
+		}
 		for (auto &[key, property] : definition->AllProperties) {
 			if (property->CustomSchemaPropertyType) continue;
+			if (HasSoundRollOffPair && (key == MinimumRollOff || key == MaximumRollOff)) continue;
 			if (state.FormatVersion >= 5 && key != "Parent" &&
 				property->PersistencePolicy == InstanceProperty::Persistence::Saved &&
 				property->SemanticType == InstanceProperty::DataType::ObjectReference &&

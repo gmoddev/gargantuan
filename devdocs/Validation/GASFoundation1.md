@@ -40,6 +40,16 @@ The minimal fixture's expected digest comes from an independent Python
 | Typed GASM file | `6fed3d1de66ab6e71cf4019119c13795af3e8872997ed4b322676949c3cd3bb3` |
 | Typed GASP file | `64708aa16eb4b83d5c14b9f44256b5fe984f264f4ae2b28de3765230edad80ec` |
 
+The separate [coverage-guided replay](https://github.com/gmoddev/gargantuan/actions/runs/45270249936/job/138027864019)
+used the identical codec source at qualification commit
+`6bb8a12abb58a1c1e4987c645110c3d4dcd3f13e` with Clang 19.1.1, GCC 14's
+standard library, and ASan/UBSan/LSan on Ubuntu 24.04. It seeded libFuzzer
+with one typed model and place and checked canonical re-encoding for every
+accepted input. A second pass recomputed the integrity trailer to reach
+section parsing. The 75-second run with seed 4177, an 8,192-byte input
+ceiling and a 1,024 MiB memory ceiling reported 1,225,185 executions,
+1,159 covered edges, 189 retained inputs, and 512 MiB peak RSS.
+
 ## Integrated qualification
 
 | Scope | Source | Evidence |

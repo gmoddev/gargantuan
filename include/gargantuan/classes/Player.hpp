@@ -8,14 +8,23 @@
 namespace gargantuan {
 	class Players;
 	class Character;
+	namespace runtime_detail { class ReplicaCharacterProjection; }
 
 	class Player : public Instance {
 		I_Player;
 
 		friend class Players;
+		friend class runtime_detail::ReplicaCharacterProjection;
+		enum class CharacterWriteSource { Gameplay, Replica };
+		struct CharacterRetirement {
+			ObjectId Target;
+			const CharacterRetirement *Previous;
+		};
+
 		int PlayerIdValue = 0;
 		std::shared_ptr<Character> CharacterValue;
 		ObjectId PendingCharacter;
+		const CharacterRetirement *RetiringCharacters = nullptr;
 		std::optional<PlayerIdentity> AuthenticationIdentity;
 		ObjectId PossessedEntityId;
 		std::weak_ptr<Instance> PossessedEntityValue;
@@ -32,6 +41,8 @@ namespace gargantuan {
 		void CommitPossession(const std::shared_ptr<Instance> &Entity);
 		void ClosePossession();
 		void DisconnectPossessionSignals();
+		bool IsRetiringCharacter(ObjectId Target) const;
+		void SetCharacterRelationship(std::optional<std::shared_ptr<Character>> Value, CharacterWriteSource Source);
 		void NotifyCharacterRemoving(const std::shared_ptr<Character> &Previous, ObjectId Replacement = {});
 		void ShutdownCharacter();
 

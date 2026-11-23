@@ -49,6 +49,9 @@ function(RunPackager ExpectedExit)
 		ERROR_VARIABLE Error
 		TIMEOUT 90
 	)
+	if(Error MATCHES "LeakSanitizer: detected memory leaks")
+		Fail("Packager leaked its project graph: ${Output}${Error}")
+	endif()
 	if(NOT "${Result}" STREQUAL "${ExpectedExit}")
 		Fail("Unexpected packager exit ${Result} (expected ${ExpectedExit}): ${Output}${Error}")
 	endif()
@@ -170,6 +173,36 @@ endif()
 if(EXISTS "${Rejected}")
 	Fail("Rejected GASP input published package output")
 endif()
+
+# A child constraint retains its ancestor Part. Rejected publication must still
+# retire that ownership cycle before the packager exits under LeakSanitizer.
+set(CyclicOrigin "${Workspace}/Cycle")
+set(CyclicJson "${CyclicOrigin}/.gargantuan/project.instance.json")
+set(CyclicGas "${Workspace}/Cycle.gasp")
+file(MAKE_DIRECTORY "${CyclicOrigin}/.gargantuan")
+file(WRITE "${CyclicOrigin}/.gargantuan/project.json" "${Metadata}")
+file(WRITE "${CyclicJson}" [=[
+{"Version":5,"NodeId":1,"Name":"Cycle","ClassName":"DataModel",
+ "ClassSchemaId":"5ed5470f622082d244a9379d906bbd16","ClassDefinitionVersion":1,
+ "Properties":{},"Attributes":{},"Extensions":[],"CustomProperties":[],"Tags":[],"Children":[
+  {"NodeId":2,"Name":"Workspace","ClassName":"Workspace",
+   "ClassSchemaId":"9ae26e41e446cbfed61d91dfcab22b12","ClassDefinitionVersion":1,
+   "Properties":{},"Attributes":{},"Extensions":[],"CustomProperties":[],"Tags":[],"Children":[
+    {"NodeId":3,"Name":"Anchor","ClassName":"Part",
+     "ClassSchemaId":"5eab0d5368149cacdcc9dcd4130cd3c8","ClassDefinitionVersion":1,
+     "Properties":{"Anchored":{"Bool":true}},"Attributes":{},"Extensions":[],"CustomProperties":[],"Tags":[],"Children":[
+      {"NodeId":4,"Name":"Weld","ClassName":"WeldConstraint",
+       "ClassSchemaId":"7fcac3697da4d9867c5dda29b209bf02","ClassDefinitionVersion":1,
+       "Properties":{"Enabled":{"Bool":false},"Part0":{"InstanceReference":3},"Part1":{"InstanceReference":null},
+                     "Attachment0":{"InstanceReference":null},"Attachment1":{"InstanceReference":null}},
+       "Attributes":{},"Extensions":[],"CustomProperties":[],"Tags":[],"Children":[]}
+    ]}
+  ]}
+]}
+]=])
+RunPackager(0 export-gasp --project "${CyclicOrigin}" --output "${CyclicGas}")
+RunPackager(3 export-gasp --project "${CyclicOrigin}" --output "${Workspace}/Unrelated.gasp")
+RunPackager(3 restore-gasp --project "${CyclicOrigin}" --gasp "${CyclicGas}")
 
 RemoveWorkspace()
 message(STATUS "GASP client/server packaging, startup, reproducibility and admission passed")

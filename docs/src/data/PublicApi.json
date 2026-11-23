@@ -5120,6 +5120,8 @@
       "Path": "include/gargantuan/classes/Player.hpp",
       "Types": [
         "Character",
+        "CharacterRetirement",
+        "CharacterWriteSource",
         "Player",
         "Players"
       ]

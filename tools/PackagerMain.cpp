@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -66,6 +67,20 @@ namespace {
 		std::optional<std::string> PreRunSource;
 	};
 
+	struct ScopedProjectWorld {
+		std::shared_ptr<DataModel> World;
+
+		~ScopedProjectWorld() noexcept {
+			if (!World) return;
+			try {
+				// Explicitly destroy the private graph to break authored reference cycles.
+				World->Destroy();
+			} catch (...) {
+				// Preserve the command result if teardown fails.
+			}
+		}
+	};
+
 	SerializationResult<LoadedGasPlace> LoadGasPlace(const Project &ProjectValue, const Gas::Document &Document) {
 		if (Document.Place->Identity != ProjectValue.Identity)
 			return SerializationFailure(SerializationErrorCode::InvalidValue,
@@ -118,7 +133,8 @@ namespace {
 			}
 			DiskFilesystem Filesystem(ProjectPath);
 			auto ProjectValue = GasPlace ? Project::FromGasOrigin(&Filesystem) : Project::fromExisting(&Filesystem);
-			std::shared_ptr<DataModel> World;
+			ScopedProjectWorld ProjectWorld;
+			auto &World = ProjectWorld.World;
 			std::optional<std::string> TrustedPreRun;
 			if (GasPlace) {
 				auto Loaded = LoadGasPlace(ProjectValue, *GasPlace);
@@ -133,10 +149,8 @@ namespace {
 			auto Payload = PackageBuilder::Capture(
 				ProjectValue, World, World->GetAuthoritativeRevision(), World->GetAuthoritativeRevision()
 			);
-			if (GasInput && Payload.PreRunSource != TrustedPreRun) {
-				World->Destroy();
+			if (GasInput && Payload.PreRunSource != TrustedPreRun)
 				return GasFailure("Project PreRun source changed during package capture.");
-			}
 			auto Result = PackageBuilder::Build({
 				.Payload = std::move(Payload),
 				.RuntimeDistributionRoot = DistributionPath,
@@ -147,7 +161,6 @@ namespace {
 				},
 			});
 			PrintDiagnostics(Result.Diagnostics);
-			World->Destroy();
 			if (!Result.Ok) return 3;
 			std::cout << "[Package:Result] revision=" << Result.PackagedRevision
 					  << " projectId=" << Result.Identity.ToString() << " totalBytes=" << Result.Size.TotalBytes
@@ -176,9 +189,8 @@ namespace {
 			const auto TrustedPreRun = BootstrapProjectRuntimeSchema(ProjectPath);
 			DiskFilesystem Filesystem(ProjectPath);
 			auto ProjectValue = Project::fromExisting(&Filesystem);
-			auto World = ProjectValue.DeserializeGame();
-			ProjectValue.ExportGasPlace(World, OutputPath, TrustedPreRun);
-			World->Destroy();
+			const ScopedProjectWorld ProjectWorld{ProjectValue.DeserializeGame()};
+			ProjectValue.ExportGasPlace(ProjectWorld.World, OutputPath, TrustedPreRun);
 			std::cout << "[Package:GAS] Exported a GAS place.\n";
 			return 0;
 		} catch (const std::exception &) {
@@ -202,8 +214,8 @@ namespace {
 			auto ProjectValue = Project::FromGasOrigin(&Filesystem);
 			auto Loaded = LoadGasPlace(ProjectValue, *Parsed);
 			if (!Loaded) return GasFailure(Loaded.error().Message);
-			ProjectValue.RestoreGasPlace(Loaded->World, Loaded->PreRunSource);
-			Loaded->World->Destroy();
+			const ScopedProjectWorld ProjectWorld{std::move(Loaded->World)};
+			ProjectValue.RestoreGasPlace(ProjectWorld.World, Loaded->PreRunSource);
 			std::cout << "[Package:GAS] Restored project.instance.json.\n";
 			return 0;
 		} catch (const std::exception &) {

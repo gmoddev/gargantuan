@@ -174,6 +174,7 @@ The following documents describe recently implemented, source-verified slices:
 - [GAS authoring and package input](../protocols/GAS-Authoring-v1.md)
 - [GAS Foundation 1 inventory](GASFoundationInventory.md)
 - [GAS Foundation 1 qualification](../../devdocs/Validation/GASFoundation1.md)
+- [GAS and Gameplay 7 integration and Studio handoff](../../devdocs/Validation/GasGameplayIntegration.md)
 - [Protected GAS export proposal](../adr/GAS-Protected-Exports.md)
 - [Script security](../../devdocs/CurrentArchitecture/ScriptSecurity.md)
 - [SourceMount and FileLink compatibility](../../devdocs/CurrentArchitecture/SourceMount.md)
