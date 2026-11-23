@@ -183,6 +183,8 @@ namespace gargantuan::network {
 			return false;
 		}
 		if (Header.Flags == JumpFlag) Lease.JumpArrivalTick = ServerTick;
+		if (Lease.ArrivalTick && Lease.LastInput != Lease.AcknowledgedInput)
+			SaturatingAdd(Metrics.InputsCoalesced);
 		Lease.LastInput = GameplayInputSequence(Sequence);
 		Lease.LastClientTick = ClientTick;
 		Lease.ArrivalTick = ServerTick;
@@ -270,6 +272,7 @@ namespace gargantuan::network {
 		if (!Message || !Scheduler.Submit(std::move(*Message)).Accepted()) return false;
 		NextInput = NextInput.TryNext().value_or(GameplayInputSequence{});
 		LastSubmittedTick = ClientTick;
+		SaturatingAdd(InputsProduced);
 		return true;
 	}
 
@@ -280,5 +283,6 @@ namespace gargantuan::network {
 		NextInput = GameplayInputSequence(1);
 		LastControlTick = 0;
 		LastSubmittedTick = 0;
+		InputsProduced = 0;
 	}
 }

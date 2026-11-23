@@ -100,6 +100,7 @@ two-peer and eight-peer cohorts.
 ```sh
 gargantuan_gameplay_allocation_workload --generic-possession-scale sim 40 3000 off
 gargantuan_gameplay_allocation_workload --generic-possession-scale gns 40 3000 on
+gargantuan_gameplay_allocation_workload --generic-possession-scale gns 40 3000 on deadline
 ```
 
 The supported cohort sizes are 2, 8, 16, 24, 32 and 40. Each measured run
@@ -128,6 +129,17 @@ interval includes transport and polling, while the input acceptance-to-consume
 interval ends at the authoritative controller. Client pose presentation is
 timed independently. These measurements give no physical multi-host or
 rendered input-to-display result.
+
+Use the explicit `deadline` mode for scheduled GNS tests. It applies cumulative
+16.667 ms deadlines to the measured frames. The default `relative` mode
+preserves the original sleep-first cadence for historical comparisons. The
+fixture records actual lateness and separately marks deadlines already missed
+before the wait. It also records intended and executed frames, GPIN submissions
+accepted by the client scheduler, server admission, distinct sequence consumption,
+pending inputs replaced before consumption, and possession snapshots offered by
+the server and applied by the client. A held input can still drive motion.
+Application samples join the GPOS handoff to the client simulation transform
+update on the fixture's monotonic clock. They do not time visual presentation.
 
 ## Full Relay Rescue mission
 

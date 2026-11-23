@@ -94,7 +94,8 @@ namespace {
 		Check(Expired && !Expired->Fresh && Expired->Movement == glm::vec2(0.0f) && !Expired->JumpRequested &&
 			Expired->AcknowledgedInput.Value() == 2, "Expired input did not become neutral");
 		const auto &Metrics = World.Server.GetMetrics();
-		Check(Metrics.InputsAccepted == 2 && Metrics.InputsConsumed == 1 && Metrics.StaleInputs == 2 &&
+		Check(Metrics.InputsAccepted == 2 && Metrics.InputsConsumed == 1 && Metrics.InputsCoalesced == 1 &&
+			World.Client.GetInputsProduced() == 2 && Metrics.StaleInputs == 2 &&
 			Metrics.InputsExpired == 1 && Metrics.MaximumConsumedInputAgeTicks == 1,
 			"Input diagnostics diverged from accepted and consumed state");
 	}

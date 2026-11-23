@@ -19,6 +19,7 @@ namespace gargantuan::test_detail {
 	struct GameplayScalingOptions {
 		std::size_t Ticks;
 		bool Profile;
+		bool DeadlinePacing = false;
 	};
 
 	class GameplayScalingCapture final {
@@ -34,6 +35,10 @@ namespace gargantuan::test_detail {
 			std::uint64_t ServerPoll = 0, ServerEngine = 0, ServerSession = 0;
 			std::uint64_t ClientPoll = 0, ClientEngine = 0, ClientSession = 0;
 			std::uint64_t ServerAllocations = 0, ServerBytes = 0;
+			std::uint64_t DeadlineLateness = 0;
+			bool MissedDeadlineBeforeWait = false;
+			std::uint64_t Poses = 0, PoseBytes = 0, Produced = 0, Admitted = 0, Consumed = 0, Coalesced = 0;
+			std::uint64_t Applied = 0, StructuralApply = 0, MaximumClientStructuralApply = 0;
 		};
 		struct Phases {
 			WorkSample Server{}, Client{};
@@ -86,10 +91,12 @@ namespace gargantuan::test_detail {
 		}
 
 		static void RecordEvent(void *Context, runtime_detail::PublicationLatencyRecord Event) noexcept {
-			if (std::strcmp(Event.Stage, "PossessionConsumed") != 0 || Event.Sequence % PacketStride != 0) return;
+			if (Event.Sequence % PacketStride != 0) return;
+			const bool Input = std::strcmp(Event.Stage, "PossessionConsumed") == 0;
+			if (!Input && std::strcmp(Event.Stage, "PoseApplied") != 0) return;
 			auto &Capture = *static_cast<GameplayScalingCapture *>(Context);
-			Capture.Append({Event.Stage, Event.Connection, Event.Object, Event.Tick, Event.Sequence, 0,
-				Event.Nanoseconds, Capture.Endpoint, 1});
+			Capture.Append({Event.Stage, Event.Connection, Event.Object, Event.Tick, Event.Sequence, Event.Epoch,
+				Event.Nanoseconds, Capture.Endpoint, static_cast<std::uint8_t>(Input ? 1 : 2)});
 		}
 
 		static std::uint64_t Elapsed(Clock::time_point Begin, Clock::time_point End) {
@@ -136,6 +143,27 @@ namespace gargantuan::test_detail {
 
 		void SetEndpoint(std::uint32_t Value) { Endpoint = Value; }
 
+		void RecordDeadline(Clock::time_point Deadline, Clock::time_point BeforeWait) {
+			auto &Row = Frames[Index];
+			Row.MissedDeadlineBeforeWait = BeforeWait > Deadline;
+			Row.DeadlineLateness = Elapsed(Deadline, std::max(Deadline, Clock::now()));
+		}
+
+		void RecordWorkload(std::uint64_t Poses, std::uint64_t PoseBytes, std::uint64_t Produced,
+			std::uint64_t Admitted, std::uint64_t Consumed, std::uint64_t Coalesced, std::uint64_t Applied,
+			std::uint64_t StructuralApply, std::uint64_t MaximumClientStructuralApply) {
+			auto &Row = Frames[Index];
+			Row.Poses = Poses;
+			Row.PoseBytes = PoseBytes;
+			Row.Produced = Produced;
+			Row.Admitted = Admitted;
+			Row.Consumed = Consumed;
+			Row.Coalesced = Coalesced;
+			Row.Applied = Applied;
+			Row.StructuralApply = StructuralApply;
+			Row.MaximumClientStructuralApply = MaximumClientStructuralApply;
+		}
+
 		template <typename Operation>
 		void Measure(Phase Work, Operation &&Run, runtime_detail::WorkAllocationReader Allocations,
 			runtime_detail::WorkAllocationReader Bytes) {
@@ -177,6 +205,10 @@ namespace gargantuan::test_detail {
 					<< Row.ServerPoll << ',' << Row.ServerEngine << ',' << Row.ServerSession << ','
 					<< Row.ClientPoll << ',' << Row.ClientEngine << ',' << Row.ClientSession << ','
 					<< Row.ServerAllocations << ',' << Row.ServerBytes << '\n';
+				Output << "[Gameplay:FrameWork] " << Row.Tick << ',' << Row.DeadlineLateness << ','
+					<< Row.MissedDeadlineBeforeWait << ',' << Row.Poses << ',' << Row.PoseBytes << ',' << Row.Produced
+					<< ',' << Row.Admitted << ',' << Row.Consumed << ',' << Row.Coalesced << ',' << Row.Applied << ','
+					<< Row.StructuralApply << ',' << Row.MaximumClientStructuralApply << '\n';
 				if (Samples.empty() || Step % PhaseStride != 0) continue;
 				const auto PrintPhases = [&](const WorkSample &Work, const char *Side) {
 					for (std::size_t PhaseIndex = 0; PhaseIndex < Work.size(); ++PhaseIndex) {

@@ -2602,6 +2602,8 @@ end)
 		for (std::size_t Index = 0; Index < Clients.size(); ++Index) StartClient(Index, Index);
 		std::uint64_t Tick = 0;
 		runtime_detail::WorkSample *FrameWork = nullptr;
+		bool PaceMeasuredFrames = false;
+		std::chrono::steady_clock::time_point Deadline{};
 		std::uint64_t ServerAllocationBytes = 0;
 		const auto SampleServer = [&](auto &&Operation) {
 			if (!FrameWork) {
@@ -2623,6 +2625,11 @@ end)
 					(void)Network->Advance(17ms);
 					Network->Pump();
 				});
+			} else if (PaceMeasuredFrames) {
+				Deadline += 16'667us;
+				const auto BeforeWait = std::chrono::steady_clock::now();
+				Sample(Phase::Wait, [&] { std::this_thread::sleep_until(Deadline); });
+				Scaling->RecordDeadline(Deadline, BeforeWait);
 			} else Sample(Phase::Wait, [] { std::this_thread::sleep_for(16ms); });
 			Sample(Phase::ServerPoll, [&] { SampleServer([&] { (void)Server.Poll(); }); });
 			Sample(Phase::ClientPoll, [&] {
@@ -2764,12 +2771,44 @@ end)
 				PreviousPositions.reserve(PeerCount);
 				for (const auto &Target : Targets) PreviousPositions.push_back(Target->GetPosition());
 
+				using ClientCounters = detail::GameSessionTestAccess::GameplayClientCounters;
+				std::vector<ClientCounters> PriorClients;
+				PriorClients.reserve(Clients.size());
+				for (const auto &Client : Clients)
+					PriorClients.push_back(detail::GameSessionTestAccess::GetGameplayClientCounters(*Client.Session));
+				std::uint64_t Produced = 0, Applied = 0;
+				const auto TickBegin = Tick;
+				auto PriorServer = Before;
 				Scaling->Start();
+				PaceMeasuredFrames = Scale->DeadlinePacing;
+				Deadline = std::chrono::steady_clock::now();
 				for (std::size_t Index = 0; Index < Scale->Ticks; ++Index) {
 					Scaling->BeginFrame(Index, Tick + 1);
 					Frame();
+					std::uint64_t FrameProduced = 0, FrameApplied = 0, StructuralApply = 0, MaximumStructuralApply = 0;
+					for (std::size_t Client = 0; Client < Clients.size(); ++Client) {
+						const auto Current = detail::GameSessionTestAccess::GetGameplayClientCounters(*Clients[Client].Session);
+						auto &Prior = PriorClients[Client];
+						FrameProduced += Current.Produced - Prior.Produced;
+						FrameApplied += Current.Applied - Prior.Applied;
+						const auto ApplyCost = Current.StructuralApplyNanoseconds - Prior.StructuralApplyNanoseconds;
+						StructuralApply += ApplyCost;
+						MaximumStructuralApply = std::max(MaximumStructuralApply, ApplyCost);
+						Prior = Current;
+					}
+					Produced += FrameProduced;
+					Applied += FrameApplied;
+					const auto Current = Server.GetMetrics();
+					Scaling->RecordWorkload(Current.PossessionPoseSnapshotsAccepted - PriorServer.PossessionPoseSnapshotsAccepted,
+						Current.PossessionPoseBytesAccepted - PriorServer.PossessionPoseBytesAccepted, FrameProduced,
+						Current.PossessionInput.InputsAccepted - PriorServer.PossessionInput.InputsAccepted,
+						Current.PossessionInput.InputsConsumed - PriorServer.PossessionInput.InputsConsumed,
+						Current.PossessionInput.InputsCoalesced - PriorServer.PossessionInput.InputsCoalesced,
+						FrameApplied, StructuralApply, MaximumStructuralApply);
+					PriorServer = Current;
 				}
 				Scaling->Stop();
+				PaceMeasuredFrames = false;
 				const auto After = Server.GetMetrics();
 				Check(PlayersValue->GetPlayers().size() == PeerCount && After.PlayersRemoved == Before.PlayersRemoved,
 					"every workload peer remains connected");
@@ -2816,12 +2855,16 @@ end)
 						<< ',' << Scheduler->TransportBackpressureEvents - Peer.Scheduler.TransportBackpressureEvents << '\n';
 				}
 				std::cout << "[Gameplay:Scale] peers=" << PeerCount << " ticks=" << Scale->Ticks
+					<< " intended_ticks=" << Scale->Ticks << " executed_ticks=" << Tick - TickBegin
 					<< " warmup_ticks=" << 25 + ExtraWarmupTicks << " profile=" << Scale->Profile
 					<< " transport=" << (NativeTransport ? "gns-loopback" : "simulated")
+					<< " pacing=" << (Scale->DeadlinePacing ? "deadline" : "relative")
+					<< " inputs_produced=" << Produced << " client_poses_applied=" << Applied
 					<< " poses=" << After.PossessionPoseSnapshotsAccepted - Before.PossessionPoseSnapshotsAccepted
 					<< " pose_bytes=" << After.PossessionPoseBytesAccepted - Before.PossessionPoseBytesAccepted
 					<< " inputs=" << After.PossessionInput.InputsAccepted - Before.PossessionInput.InputsAccepted
 					<< " inputs_consumed=" << After.PossessionInput.InputsConsumed - Before.PossessionInput.InputsConsumed
+					<< " inputs_coalesced=" << After.PossessionInput.InputsCoalesced - Before.PossessionInput.InputsCoalesced
 					<< " input_bytes=" << After.PossessionInput.InputBytesReceived - Before.PossessionInput.InputBytesReceived
 					<< " stale_inputs=" << After.PossessionInput.StaleInputs - Before.PossessionInput.StaleInputs
 					<< " expired_inputs=" << After.PossessionInput.InputsExpired - Before.PossessionInput.InputsExpired
@@ -2940,8 +2983,8 @@ int main(int ArgumentCount, char **Arguments) {
 			return Failures == 0 ? 0 : 1;
 		}
 		if (ArgumentCount >= 2 && std::string_view(Arguments[1]) == "--generic-possession-scale") {
-			if (ArgumentCount != 6)
-				throw std::invalid_argument("expected --generic-possession-scale <sim|gns> <2|8|16|24|32|40> <1..6000> <off|on>");
+			if (ArgumentCount != 6 && ArgumentCount != 7)
+				throw std::invalid_argument("expected --generic-possession-scale <sim|gns> <2|8|16|24|32|40> <1..6000> <off|on> [relative|deadline]");
 			const auto Parse = [](std::string_view Text) {
 				std::size_t Value = 0;
 				const auto [End, Error] = std::from_chars(Text.data(), Text.data() + Text.size(), Value);
@@ -2953,11 +2996,13 @@ int main(int ArgumentCount, char **Arguments) {
 			const auto Peers = Parse(Arguments[3]);
 			const auto Ticks = Parse(Arguments[4]);
 			const std::string_view Profile = Arguments[5];
+			const std::string_view Pacing = ArgumentCount == 7 ? Arguments[6] : "relative";
 			constexpr std::array Cohorts{2u, 8u, 16u, 24u, 32u, 40u};
 			if ((Transport != "sim" && Transport != "gns") || std::ranges::find(Cohorts, Peers) == Cohorts.end() ||
-				Ticks == 0 || Ticks > 6000 || (Profile != "off" && Profile != "on"))
+				Ticks == 0 || Ticks > 6000 || (Profile != "off" && Profile != "on") ||
+				(Pacing != "relative" && (Pacing != "deadline" || Transport != "gns")))
 				throw std::invalid_argument("unsupported workload configuration");
-			const gargantuan::test_detail::GameplayScalingOptions Options{Ticks, Profile == "on"};
+			const gargantuan::test_detail::GameplayScalingOptions Options{Ticks, Profile == "on", Pacing == "deadline"};
 			TestGenericPossessionRuntime(Transport == "gns", Peers, true, &Options);
 			return Failures == 0 ? 0 : 1;
 		}

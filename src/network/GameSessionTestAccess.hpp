@@ -123,6 +123,10 @@ namespace gargantuan::network::detail {
 
 	class GameSessionTestAccess final {
 	  public:
+		struct GameplayClientCounters {
+			std::uint64_t Produced, Applied, StructuralApplyNanoseconds;
+		};
+		[[nodiscard]] static GameplayClientCounters GetGameplayClientCounters(const GameSession &Session);
 		// Main-owned qualification observation only. Source and local identity
 		// domains stay distinct; no lookup by Name/path or persistent reverse map.
 		[[nodiscard]] static std::optional<std::vector<ClientReplicaIdentity>> ReadClientReplicaIdentities(

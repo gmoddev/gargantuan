@@ -1555,6 +1555,12 @@ namespace gargantuan::network {
 				if (const auto Latest = ClientPosePresentation.GetLatest(Object); Latest && Latest->ServerTick > Binding.AppliedTick) {
 					Part->SetSimulationCFrame(Latest->Transform);
 					Binding.AppliedTick = Latest->ServerTick;
+					SaturatingAdd(Metrics.ClientPossessionPoseSnapshotsApplied, 1);
+					if (PrimaryConnection && runtime_detail::ActivePublicationLatency &&
+						runtime_detail::ActivePublicationLatency->CapturePossession)
+						runtime_detail::RecordPublicationLatency({.Stage = "PoseApplied", .Connection = *PrimaryConnection,
+							.Object = Object, .Tick = Latest->ServerTick, .Sequence = Latest->ServerTick,
+							.Epoch = Latest->MaterializationEpoch});
 				}
 				if (const auto RenderPose = ClientPosePresentation.Sample(Object, Tick))
 					Part->SetCharacterPresentationOffset(Part->GetCFrame().ToObjectSpace(*RenderPose));
@@ -3113,6 +3119,12 @@ namespace gargantuan::network {
 	std::optional<SchedulerStatistics> detail::GameSessionTestAccess::GetSchedulerStatistics(
 		const GameSession &Session, ConnectionId Connection) {
 		return Session.State->Scheduler.GetStatistics(Connection);
+	}
+	detail::GameSessionTestAccess::GameplayClientCounters detail::GameSessionTestAccess::GetGameplayClientCounters(
+		const GameSession &Session) {
+		const auto &State = *Session.State;
+		return {State.ClientPossessionInput.GetInputsProduced(), State.Metrics.ClientPossessionPoseSnapshotsApplied,
+			State.Metrics.ClientStructuralApplyNanoseconds};
 	}
 	std::optional<std::vector<detail::StructuralCausalSnapshot>>
 	detail::GameSessionTestAccess::CaptureStructuralCausalSnapshot(const GameSession &Session, std::string &Error,
