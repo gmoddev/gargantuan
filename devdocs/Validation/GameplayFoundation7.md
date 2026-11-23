@@ -119,9 +119,18 @@ multi-host coverage, and realtime poses for dynamic bodies remain separate.
 ## Hosted qualification
 
 The final runtime source is `56364bb3954e3f6cb2480f866eb0c99b8577af85`.
-[Native Windows and Linux gates](https://github.com/gmoddev/gargantuan/actions/runs/45187948310),
-[GNS sanitizer gate](https://github.com/gmoddev/gargantuan/actions/runs/45187948759),
-[documentation gate](https://github.com/gmoddev/gargantuan/actions/runs/45187949548).
+All three workflows passed.
+
+- The Windows Release headless suite and all five Release workload steps
+  passed. The suite exercised Relay Rescue over simulated transport and GNS.
+  Linux Clang 19 ASan/UBSan passed all 116 headless tests.
+  [Native Windows and Linux gates](https://github.com/gmoddev/gargantuan/actions/runs/45187948310).
+- Linux Clang 19 ASan/UBSan/LSan passed the 13-test GNS contract, including
+  generic possession and the saved Relay Rescue mission, plus the profiled
+  and byte-admission runs.
+  [GNS sanitizer gate](https://github.com/gmoddev/gargantuan/actions/runs/45187948759).
+- The documentation workflow passed.
+  [Documentation gate](https://github.com/gmoddev/gargantuan/actions/runs/45187949548).
 
 The intermediate candidates retain their original runs:
 
