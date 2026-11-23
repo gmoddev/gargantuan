@@ -271,7 +271,7 @@
       "Path": "devdocs/CurrentArchitecture/AnimationAuthoringPreview.md",
       "Purpose": "Animation import inspection and disposable preview",
       "LastMeaningfulUpdate": {
-        "Date": "2026-10-29",
+        "Date": "2026-11-16",
         "Basis": "Document-declared verification/review date; scope remains revision-specific"
       },
       "LastPathCommit": {
@@ -4552,6 +4552,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "devdocs/Validation/GASFoundation1.md",
+      "Purpose": "GAS Foundation 1 qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/SerializationBenchmark.cpp"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "devdocs/Validation/GameplayFoundation7.md",
       "Purpose": "Gameplay Foundation 7",
       "LastMeaningfulUpdate": null,
@@ -4918,6 +4931,48 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "docs/adr/GAS-Protected-Exports.md",
+      "Purpose": "Protected GAS exports",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "cmake/GameNetworkingSockets.cmake",
+        "src/packaging/PackageBuilder.cpp"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Preserve accepted decision authority and explicit amendments; acceptance is not implementation proof",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/architecture/GASFoundationInventory.md",
+      "Purpose": "GAS Foundation 1 inventory",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "assets/classes/LuaSourceContainer.luau",
+        "include/gargantuan/reflection/RuntimeSchema.hpp",
+        "src/assets/InstanceSerialization.cpp",
+        "src/classes/DataModel.cpp",
+        "src/content/docs/developing/runtime-schema.mdx",
+        "src/editor/EditorHost.cpp",
+        "src/filesystem/Project.cpp",
+        "src/packaging/PackageBuilder.cpp",
+        "src/reflection/RuntimeSchemaLifecycle.cpp",
+        "src/runtime/AttributeValidation.cpp",
+        "src/runtime/MutationGateway.cpp",
+        "src/runtime/Snapshot.cpp",
+        "src/runtime/TagIndex.cpp",
+        "src/services/AssetService.cpp",
+        "tests/PackagingBenchmark.cpp",
+        "tests/SerializationBenchmark.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Inspect owning source before promoting to current authority",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "docs/architecture/README.md",
       "Purpose": "Gargantuan architecture documentation",
       "LastMeaningfulUpdate": {
@@ -4982,6 +5037,34 @@
       "Status": "Current",
       "StatusLabel": "Current and authoritative",
       "ProposedAction": "Maintain source-linked developer entry point and validate links/examples",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/protocols/GAS-Authoring-v1.md",
+      "Purpose": "GAS authoring and package input",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Inspect owning source before promoting to current authority",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/protocols/GAS-v1.md",
+      "Purpose": "Gargantuan Asset Serialization v1",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "include/gargantuan/reflection/SchemaId.hpp",
+        "include/gargantuan/serialization/GasDocument.hpp",
+        "src/serialization/GasDocument.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Inspect owning source before promoting to current authority",
       "ObsoleteTermMentions": []
     },
     {

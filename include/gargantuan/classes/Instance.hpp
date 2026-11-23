@@ -34,6 +34,12 @@ namespace gargantuan {
 		std::unordered_map<std::string, std::shared_ptr<Signal<std::monostate>>> PropertyChangedSignals;
 
 	  private:
+		friend class MutationGateway;
+		void SetParentInternal(std::optional<std::shared_ptr<Instance>> Value,
+			std::vector<std::shared_ptr<Instance>> *DeferredNotifications);
+		void NotifyParentChanged(const std::shared_ptr<Instance> &SelfValue,
+			const std::shared_ptr<Instance> &OldParent, const std::shared_ptr<Instance> &NewParent,
+			const std::vector<std::shared_ptr<Instance>> &Subtree);
 		std::map<std::string, WireValue> Attributes;
 		std::map<SchemaId, std::map<std::string, WireValue>> ExtensionValues;
 		std::map<SchemaId, std::map<std::string, WireValue>> CustomPropertyValues;
