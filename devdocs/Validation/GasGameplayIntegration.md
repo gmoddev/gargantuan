@@ -26,6 +26,10 @@ standalone GAS branch `966bc9cb11c1e58d6cf8b6f5f061b26c406612f5`.
   restored JSON package manifests for both roles. Packaged Player and Server
   startup is a separate check within the test. It exercises simulated
   transport and uses real GNS loopback when built with GNS.
+- Integration regressions cover reentrant Character observers, valid
+  ownership transfers while a replica still sees older soft possession,
+  cyclic graph retirement after failed packager operations, and paired
+  audio distance settings through legacy JSON and GAS materialization.
 - The promotion PR carries the tested source and its tree-equivalence proof,
   native Windows Release and Linux sanitizer results, GNS sanitizer and
   documentation results, and Windows Release workload outcomes.
@@ -50,11 +54,16 @@ independently paced graphical clients require their own evidence.
 
 The [opt-in Release work trace](../Compiling.md#local-performance-traces)
 keeps the normal Release configuration available and measures construction,
-snapshot preflight, live replica apply, and host frame pacing. GAS place load
-also pays reflected materialization costs. Evaluate direct typed materialization
-and structural preflight allocation reductions with matched correctness and
-performance fixtures. GAS import and live replication have distinct authority,
-transaction, and observer contracts.
+snapshot preflight, live replica apply, and host frame pacing. At `4eddc265a`,
+the instrumented Release recorder test passed. Packaged Player and Server
+each emitted 12-frame startup traces, with 211 and 204 records respectively
+and no records dropped. The receipt `TraceRelease.json` identifies configuration,
+binary and package hashes, and both raw traces.
+
+GAS place load also pays reflected materialization costs. Evaluate direct
+typed materialization and structural preflight allocation reductions with
+matched correctness and performance fixtures. GAS import and live replication
+have distinct authority, transaction, and observer contracts.
 
 ## Studio handoff
 
@@ -79,7 +88,7 @@ clients while Studio's multi-client TestSession remains deferred.
    selection and scope-bound consumers. Fetch a new initial snapshot without
    polling the old cursor. The place stays dirty until the existing JSON save.
 4. Exercise selection order, stale revision, Play refusal, transfer limit,
-   missing pins, correct and incorrect package identity, scope replacement,
+   missing pins, correct and incorrect project identity, scope replacement,
    and explicit save/reopen through native Studio.
 
 Studio's [native allowlist](https://github.com/GantriaEngine/gargantuan-studio/blob/9e0589144720cce2a6951a32e585fd4a53c6582c/experiments/LuiStudio/Host/StudioBinding.cs#L337)

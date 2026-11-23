@@ -1,7 +1,9 @@
 #include "gargantuan/runtime/Snapshot.hpp"
 
 #include "gargantuan/classes/Instance.hpp"
+#include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Player.hpp"
 #include "gargantuan/datatypes/CFrame.hpp"
 #include "gargantuan/datatypes/Color3.hpp"
 #include "gargantuan/datatypes/Enum.hpp"
@@ -669,7 +671,25 @@ namespace gargantuan {
 		return result;
 	}
 
-	SnapshotLoadResult LoadSnapshot(const Snapshot &snapshot, SnapshotLoadProfile *Profile) {
+	bool runtime_detail::ReplicaCharacterProjection::TryWrite(
+		Instance &Target, std::string_view Property, const std::shared_ptr<Instance> &Value
+	) {
+		if (Property != "Character") return false;
+		auto *Owner = dynamic_cast<Player *>(&Target);
+		if (!Owner) return false;
+		if (GetCurrentScriptSecurityContext().Domain != ScriptExecutionDomain::Core)
+			throw std::runtime_error("Replica Character assignment requires native authority");
+		auto Actor = std::dynamic_pointer_cast<Character>(Value);
+		if (Value && !Actor) throw std::invalid_argument("Replica Character reference has the wrong class");
+		// A relevance publication and the preceding owner's soft-reference
+		// release can use separate GRPL frames. Hard ownership remains unique.
+		Owner->SetCharacterRelationship(std::move(Actor), Player::CharacterWriteSource::Replica);
+		return true;
+	}
+
+	static SnapshotLoadResult LoadSnapshotWithPolicy(
+		const Snapshot &snapshot, SnapshotLoadProfile *Profile, bool ReplicaProjection
+	) {
 		AssertAuthoritativeMutation("LoadSnapshot");
 		using ProfileClock = std::chrono::steady_clock;
 		auto PhaseStarted = Profile ? ProfileClock::now() : ProfileClock::time_point{};
@@ -759,7 +779,9 @@ namespace gargantuan {
 							referenced = result.Resolve(reference->Object);
 							if (!referenced) throw std::runtime_error("Snapshot reference is stale or missing");
 						}
-						property->WriteObjectReference(instance.get(), referenced);
+						if (!ReplicaProjection ||
+							!runtime_detail::ReplicaCharacterProjection::TryWrite(*instance, name, referenced))
+							property->WriteObjectReference(instance.get(), referenced);
 					} else if (auto *wireEnum = std::get_if<WireEnumItem>(&value)) {
 						if (!property->WriteEnumValue || property->ReflectedTypedef != "Enum." + wireEnum->EnumType)
 							throw std::runtime_error("Wire enum does not match the reflected property type");
@@ -814,5 +836,13 @@ namespace gargantuan {
 			result.Objects.clear();
 		}
 		return result;
+	}
+
+	SnapshotLoadResult LoadSnapshot(const Snapshot &Value, SnapshotLoadProfile *Profile) {
+		return LoadSnapshotWithPolicy(Value, Profile, false);
+	}
+
+	SnapshotLoadResult runtime_detail::LoadReplicaSnapshot(const Snapshot &Value, SnapshotLoadProfile *Profile) {
+		return LoadSnapshotWithPolicy(Value, Profile, true);
 	}
 }

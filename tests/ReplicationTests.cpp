@@ -1,6 +1,7 @@
 #include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
@@ -17,6 +18,8 @@
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
+#include "gargantuan/services/Players.hpp"
+#include "gargantuan/services/Workspace.hpp"
 #include "ProtocolUtf8ParityFixture.hpp"
 #include "BoundedReplicationEncodingFixture.hpp"
 #include "FarmRecoveryObservationFixture.hpp"
@@ -439,6 +442,92 @@ namespace {
 		Replica.Reset();
 		Check(Replica.ApplyFrame(Repeated).Status == ReplicaApplyStatus::StaleEpoch && !Replica.GetReplicaRoot(),
 			"validation reuse cannot survive replica reset");
+		World->Destroy();
+	}
+
+	void TestReplicaCharacterTransferWithPendingPossessionRelease() {
+		auto World = std::make_shared<DataModel>();
+		auto PlayersValue = std::dynamic_pointer_cast<Players>(World->GetService("Players"));
+		auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
+		auto Actor = std::make_shared<KinematicCharacter>();
+		Actor->SetParent(WorkspaceValue);
+		auto PreviousOwner = PlayersValue->CreateSessionPlayer({"test", "previous"});
+		PreviousOwner->SetPossession(Actor);
+
+		const auto ActorId = Actor->GetObjectId();
+		const auto PreviousId = PreviousOwner->GetObjectId();
+		PeerRelevanceSelection Selection;
+		Selection.DesiredObjects = {World->GetObjectId(), PlayersValue->GetObjectId(), WorkspaceValue->GetObjectId(),
+			ActorId, PreviousId};
+		Selection.RequiredObjects = Selection.DesiredObjects;
+		const ConnectionId Peer{704, 1};
+		const ReplicationEpoch Epoch(4);
+		ReplicationCoordinator Coordinator(World);
+		ReplicaApplier SplitReplica, CombinedReplica;
+		const auto Baseline = Coordinator.AddPeer(Peer, Epoch, Selection);
+		const bool Initialized = Baseline.Succeeded() && SplitReplica.ApplyFrame(*Baseline.Frame).Succeeded() &&
+			CombinedReplica.ApplyFrame(*Baseline.Frame).Succeeded();
+		Check(Initialized, "Character transfer replicas start from the real coordinator baseline");
+		if (!Initialized) return;
+		auto SplitPrevious = std::dynamic_pointer_cast<Player>(SplitReplica.Resolve(PreviousId));
+		auto SplitActor = SplitReplica.Resolve(ActorId);
+		const bool HasPossession = SplitPrevious && SplitActor && SplitPrevious->GetPossessedEntity() == SplitActor;
+		Check(HasPossession, "baseline contains the previous owner's materialized soft possession");
+		if (!HasPossession) return;
+
+		auto NewOwner = PlayersValue->CreateSessionPlayer({"test", "new"});
+		const auto NewId = NewOwner->GetObjectId();
+		bool DuplicateServerOwnerRejected = false;
+		try {
+			NewOwner->SetCharacter(Actor);
+		} catch (const std::invalid_argument &) {
+			DuplicateServerOwnerRejected = true;
+		}
+		Check(DuplicateServerOwnerRejected && !NewOwner->GetCharacter() && PreviousOwner->GetPossessedEntity() == Actor,
+			"the authoritative model rejects Character assignment while another Player possesses its target");
+		PreviousOwner->SetPossession(std::nullopt);
+		NewOwner->SetCharacter(Actor);
+		Selection.DesiredObjects.push_back(NewId);
+		const auto Enter = Coordinator.UpdateRelevance(Peer, Selection);
+		Check(Enter.Succeeded() && Enter.Frame->Operations.size() == 1 &&
+				std::holds_alternative<PublishReplication>(Enter.Frame->Operations.front().Intent),
+			"relevance can publish the new Player's hard Character reference before the old journal update");
+		if (!Enter.Succeeded()) return;
+		const auto Release = Coordinator.ProduceIncremental(Peer);
+		Check(Release.Succeeded(), "the journal separately delivers the previous owner's soft possession release");
+		if (!Release.Succeeded()) return;
+
+		const bool Entered = SplitReplica.ApplyFrame(*Enter.Frame).Succeeded();
+		auto SplitNew = std::dynamic_pointer_cast<Player>(SplitReplica.Resolve(NewId));
+		Check(Entered && SplitNew && SplitNew->GetCharacter().value_or(nullptr) == SplitActor &&
+				SplitPrevious->GetPossessedEntity() == SplitActor,
+			"new hard ownership materializes before the older soft possession clears across frames");
+		if (!Entered) return;
+		Check(SplitReplica.ApplyFrame(*Release.Frame).Succeeded() && !SplitPrevious->GetPossessedEntity() &&
+				SplitNew && SplitNew->GetCharacter().value_or(nullptr) == SplitActor,
+			"the later soft release preserves the new Character relationship and live replica identity");
+
+		auto Combined = *Enter.Frame;
+		Combined.Operations.insert(Combined.Operations.end(), Release.Frame->Operations.begin(), Release.Frame->Operations.end());
+		const bool AppliedTogether = CombinedReplica.ApplyFrame(Combined).Succeeded();
+		auto CombinedPrevious = std::dynamic_pointer_cast<Player>(CombinedReplica.Resolve(PreviousId));
+		auto CombinedNew = std::dynamic_pointer_cast<Player>(CombinedReplica.Resolve(NewId));
+		Check(AppliedTogether && CombinedPrevious && !CombinedPrevious->GetPossessedEntity() && CombinedNew &&
+				CombinedNew->GetCharacter().value_or(nullptr) == CombinedReplica.Resolve(ActorId),
+			"the same-frame hard publication and soft clear commit in wire order");
+
+		const auto Root = SplitReplica.GetReplicaRoot();
+		const auto NextSequence = SplitReplica.GetNextSequence();
+		const ReplicationFrame Duplicate{
+			ReplicationProtocolVersion, ReplicationMessageKind::Incremental, Epoch, NextSequence, {},
+			{{Epoch, PropertyReplicationUpdate{PreviousId, "Character",
+				WireObjectReference{WireObjectId::FromObjectId(ActorId)}}}}};
+		Check(SplitReplica.ApplyFrame(Duplicate).Status == ReplicaApplyStatus::SemanticRejection &&
+				SplitReplica.GetNextSequence() == NextSequence && SplitReplica.GetReplicaRoot() == Root &&
+				!SplitPrevious->GetCharacter() && SplitNew && SplitNew->GetCharacter().value_or(nullptr) == SplitActor,
+			"duplicate hard Character ownership still fails preflight before changing the live replica");
+		SplitReplica.Reset();
+		CombinedReplica.Reset();
 		World->Destroy();
 	}
 
@@ -936,6 +1025,7 @@ int main() {
 	Check(test::RunFarmRecoveryObservationTests(), "farm recovery stage comes from the replicated DataModel");
 	TestReplicaRenderDirtiness();
 	TestRepeatedReplicaPropertyPreflight();
+	TestReplicaCharacterTransferWithPendingPossessionRelease();
 	TestClientReplicaIdentityObservations();
 	TestSourceOwnedAdmissionEmptiness();
 	TestRevisionedStructuralMaterialization();

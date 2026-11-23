@@ -1,5 +1,6 @@
 #include "gargantuan/network/ReplicaApplier.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
+#include "../runtime/SnapshotValidation.hpp"
 
 #include "gargantuan/InstanceProperty.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -138,7 +139,8 @@ namespace gargantuan::network {
 					Referenced = Receiver.Resolve(Reference->Object);
 					if (!Referenced) throw std::invalid_argument("Replica reference is not materialized");
 				}
-				Property->WriteObjectReference(InstanceValue.get(), Referenced);
+				if (!runtime_detail::ReplicaCharacterProjection::TryWrite(*InstanceValue, Update.PropertyName, Referenced))
+					Property->WriteObjectReference(InstanceValue.get(), Referenced);
 				return;
 			}
 			if (const auto *EnumValue = std::get_if<WireEnumItem>(&Update.Value)) {
@@ -420,7 +422,7 @@ namespace gargantuan::network {
 				runtime_detail::WorkScope Preflight(runtime_detail::WorkPhase::ReplicaNativePreflight);
 				runtime_detail::CountWork(runtime_detail::WorkCounter::ClientPreflightIdentities, Candidate.Objects.size());
 				ScopedChangeJournalSuppression SuppressReplicaJournal;
-				Loaded = LoadSnapshot(Candidate, &Metrics.ValidationLoad);
+				Loaded = runtime_detail::LoadReplicaSnapshot(Candidate, &Metrics.ValidationLoad);
 			}
 			FinishPhase(Metrics.ValidationLoadNanoseconds);
 			if (RequiresNativePreflight && !Loaded.Succeeded())
@@ -563,7 +565,7 @@ namespace gargantuan::network {
 		} catch (const std::exception &Error) {
 			if (LiveCommitStarted) {
 				ScopedChangeJournalSuppression SuppressReplicaJournal;
-				auto Restored = LoadSnapshot(SemanticState);
+				auto Restored = runtime_detail::LoadReplicaSnapshot(SemanticState);
 				if (Restored.Succeeded()) Receiver = std::move(Restored);
 			}
 			const std::string Message = Error.what();

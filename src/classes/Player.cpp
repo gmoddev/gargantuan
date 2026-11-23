@@ -195,6 +195,10 @@ namespace gargantuan {
 	}
 
 	void Player::SetCharacter(std::optional<std::shared_ptr<Character>> Value) {
+		SetCharacterRelationship(std::move(Value), CharacterWriteSource::Gameplay);
+	}
+
+	void Player::SetCharacterRelationship(std::optional<std::shared_ptr<Character>> Value, CharacterWriteSource Source) {
 		RequireCharacterMutationCapability();
 		AssertCanMutate();
 		ValidatePropertyMutation("Character", Value);
@@ -216,7 +220,8 @@ namespace gargantuan {
 					auto Other = std::dynamic_pointer_cast<Player>(Child);
 					if (Other && Other.get() != this && !Other->GetDestroyed() &&
 						(Other->GetCharacter().value_or(nullptr) == Replacement ||
-						 Other->GetPossessedEntity().value_or(nullptr) == Replacement ||
+						 (Source == CharacterWriteSource::Gameplay &&
+						  Other->GetPossessedEntity().value_or(nullptr) == Replacement) ||
 						 Other->PendingCharacter == ReplacementId || Other->IsRetiringCharacter(ReplacementId)))
 						throw std::invalid_argument("[Player:Possession] Character is already assigned to another Player");
 				}

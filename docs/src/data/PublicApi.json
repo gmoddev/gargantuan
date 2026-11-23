@@ -5121,6 +5121,7 @@
       "Types": [
         "Character",
         "CharacterRetirement",
+        "CharacterWriteSource",
         "Player",
         "Players"
       ]

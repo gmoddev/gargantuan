@@ -158,8 +158,8 @@ teardown. Replica application still uses its existing signal deferral.
 `Player:SetPossession(EntityOrNil)` is an independent, non-owning relationship
 for server gameplay policy. Entity eligibility is a live descendant of the
 same DataModel's Workspace, regardless of its Instance class. The Player must
-be a live runtime identity under Players. One Player can possess a target at a
-time across explicit possession and stock Character control. Reassignment or
+be a live runtime identity under Players. The server admits at most one Player
+per target across explicit possession and stock Character control. Reassignment or
 release of explicit possession preserves the target. Destruction, losing
 Workspace ancestry, or Player removal revokes possession, and PlayerRemoving
 observers see the relationship cleared. The server records a fresh local
@@ -167,7 +167,11 @@ possession revision on each change for downstream input routing.
 
 `Player.PossessedEntity` is a soft replicated reference. Clients can inspect
 it when the target is materialized in their view. Its setter is restricted to
-the native projection boundary. Server Luau calls `SetPossession`; rejected
+the native projection boundary. The structural receiver can receive a new
+Player's hard Character relationship before the previous Player's soft
+possession release. Both replica preflight and live application allow this
+temporary overlap with a soft reference and reject duplicate hard Character
+relationships. Server Luau calls `SetPossession`; rejected
 assignments preserve the existing relationship. Observers can use
 `GetPropertyChangedSignal("PossessedEntity")`. Synchronous reassignment from
 this notification is rejected. `Player.Character` retains its existing
