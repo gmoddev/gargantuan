@@ -2626,19 +2626,19 @@ end)
 			} else Sample(Phase::Wait, [] { std::this_thread::sleep_for(16ms); });
 			Sample(Phase::ServerPoll, [&] { SampleServer([&] { (void)Server.Poll(); }); });
 			Sample(Phase::ClientPoll, [&] {
-			for (std::size_t Index = 0; Index < Clients.size(); ++Index) {
-				auto &Client = Clients[Index];
-				if (Scaling) Scaling->SetEndpoint(static_cast<std::uint32_t>(Index + 1));
-				(void)Client.Session->Poll();
-				if (!Client.Runtime && Client.Session->GetClientDataModel()) {
-					Client.Renderer = std::make_unique<HeadlessRenderer>(Vector2(320, 240));
-					Client.Runtime = std::make_unique<Engine>(Client.Session->GetClientDataModel(),
-						Client.Renderer.get(), nullptr,
-						EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient});
-					Client.Runtime->ProcessService->Alive = true;
-					Check(Client.Session->AttachClientRuntime(*Client.Runtime),
-						"generic possession client attaches through the normal bootstrap");
-					(void)AddScript(Client.Runtime->DataModel, Enums::RunContext::Client, R"(
+				for (std::size_t Index = 0; Index < Clients.size(); ++Index) {
+					auto &Client = Clients[Index];
+					if (Scaling) Scaling->SetEndpoint(static_cast<std::uint32_t>(Index + 1));
+					(void)Client.Session->Poll();
+					if (!Client.Runtime && Client.Session->GetClientDataModel()) {
+						Client.Renderer = std::make_unique<HeadlessRenderer>(Vector2(320, 240));
+						Client.Runtime = std::make_unique<Engine>(Client.Session->GetClientDataModel(),
+							Client.Renderer.get(), nullptr,
+							EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient});
+						Client.Runtime->ProcessService->Alive = true;
+						Check(Client.Session->AttachClientRuntime(*Client.Runtime),
+							"generic possession client attaches through the normal bootstrap");
+						(void)AddScript(Client.Runtime->DataModel, Enums::RunContext::Client, R"(
 local Players = game:GetService("Players")
 local Control = game:GetService("CharacterControlService")
 game:GetService("RunService").PreSimulation:Connect(function()
@@ -2650,8 +2650,8 @@ game:GetService("RunService").PreSimulation:Connect(function()
 	end
 end)
 )");
+					}
 				}
-			}
 			});
 			Sample(Phase::ServerEngine, [&] { SampleServer([&] { Runtime.Step(); }); });
 			Sample(Phase::ClientEngine, [&] {
@@ -2681,7 +2681,7 @@ end)
 				bool Rejected = false;
 				try {
 					LivePlayers[1]->SetPossession(Drone);
-				} catch (const std::runtime_error &) {
+				} catch (const std::invalid_argument &) {
 					Rejected = true;
 				}
 				Check(Rejected && LivePlayers[0]->GetPossessedEntity() == Drone && LivePlayers[1]->GetPossessedEntity() == Rover,
