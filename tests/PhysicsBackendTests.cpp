@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -1228,6 +1229,67 @@ namespace {
 			"physics publication does not create a transform feedback update");
 	}
 
+	void TestNativePhysicsStepAdmission() {
+		auto Game = std::make_shared<DataModel>();
+		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
+		if (!Workspace) return;
+		auto *Schema = InstanceClassRegistry::GetDefinitionByName("Workspace");
+		Check(Schema && !Schema->AllMethods.contains("StepPhysics"),
+			"engine-owned physics stepping has no inherited script method");
+
+		ScriptEngine ScriptRuntime(Game);
+		const auto Bytecode = Luau::compile(R"(
+			local Workspace = game:GetService("Workspace")
+			assert(not pcall(function() Workspace:StepPhysics(0) end))
+		)");
+		for (const auto Context : {ScriptSecurityContext::ServerRuntime(), ScriptSecurityContext::ClientRuntime()}) {
+			const int Loaded = luau_load(ScriptRuntime.L, "physics-step-authority", Bytecode.data(), Bytecode.size(), 0);
+			ScriptSecurityScope Security(Context);
+			const int Status = Loaded == LUA_OK ? lua_pcall(ScriptRuntime.L, 0, 0, 0) : Loaded;
+			Check(Status == LUA_OK, "gameplay Luau cannot advance world physics");
+			lua_settop(ScriptRuntime.L, 0);
+		}
+
+		auto Moving = std::make_shared<Part>();
+		Moving->SetKinematic(true);
+		Moving->SetParent(Workspace);
+		Moving->SetLinearVelocity({60.0f, 0.0f, 0.0f});
+		for (const auto DeltaTime : {-1.0, std::numeric_limits<double>::quiet_NaN(),
+			std::numeric_limits<double>::infinity()}) {
+			bool Rejected = false;
+			try {
+				Workspace->StepPhysics(DeltaTime, std::nullopt);
+			} catch (const std::invalid_argument &) {
+				Rejected = true;
+			}
+			Check(Rejected && Near(Moving->GetCFrame().Position.x, 0.0f),
+				"invalid native delta leaves simulation unchanged");
+		}
+
+		bool ReentryAttempted = false;
+		bool ReentryRejected = false;
+		auto Connection = Moving->GetPropertyChangedSignal("CFrame")->Connect([&](std::monostate) {
+			if (ReentryAttempted) return;
+			ReentryAttempted = true;
+			try {
+				Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+			} catch (const std::logic_error &) {
+				ReentryRejected = true;
+			}
+		});
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Connection->Disconnect();
+		Check(ReentryAttempted && ReentryRejected && Near(Moving->GetCFrame().Position.x, 1.0f),
+			"native callbacks cannot advance an active world step");
+
+		Workspace->StepPhysics(std::numeric_limits<double>::max(), std::nullopt);
+		Check(Near(Moving->GetCFrame().Position.x, 5.0f), "native catch-up advances at most four fixed steps");
+		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(Near(Moving->GetCFrame().Position.x, 5.0f), "native zero-delta flush retains no excess catch-up");
+		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
+		Check(Near(Moving->GetCFrame().Position.x, 6.0f), "ordinary advancement resumes after restricted steps");
+	}
+
 	void TestPhysicsPublicationNestedMutation(bool UseIndexedReadback) {
 		auto Game = std::make_shared<DataModel>();
 		auto Workspace = std::dynamic_pointer_cast<gargantuan::Workspace>(Game->GetService("Workspace"));
@@ -1353,7 +1415,10 @@ namespace {
 		Check(MotionSequence != 0, "physics observer throw retains the committed CFrame record");
 		Check(SizeSequence > MotionSequence,
 			"physics observer throw orders nested Size after committed CFrame");
+		const auto AfterObserverError = Moving->GetCFrame();
 		Workspace->StepPhysics(0.0, std::nullopt);
+		Check(Moving->GetCFrame().FuzzyEq(AfterObserverError),
+			"zero-delta recovery does not repeat a rigid step completed before an observer threw");
 		const auto OtherState = WorldRootTestAccess::State(*Workspace, WorldRootTestAccess::Body(*Workspace, *Other));
 		Check(OtherState.has_value(), "physics observer throw retains the other Part backend body");
 		Check(OtherState && Near(OtherState->Description.Shape.Size.x, 4.0f),
@@ -2692,6 +2757,7 @@ int main() {
 	TestGameplayLuauJointAssembly(false);
 	TestGameplayLuauJointAssembly(true);
 	TestSimulationPublicationAndImpulse();
+	TestNativePhysicsStepAdmission();
 	TestPhysicsPublicationNestedMutation(false);
 	TestPhysicsPublicationNestedMutation(true);
 	TestPhysicsPublicationThrowKeepsAuthoredHistory();

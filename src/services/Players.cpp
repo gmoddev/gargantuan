@@ -87,6 +87,7 @@ namespace gargantuan {
 		if (!Value || Value->GetDestroyed() || Value->IsDestroying() ||
 			Value->GetParent().value_or(nullptr).get() != this)
 			return false;
+		Value->ClosePossession();
 		if (LocalPlayerValue == Value) ClearTrustedLocalPlayer();
 		PlayerRemoving->Fire(Value);
 		Value->ShutdownCharacter();

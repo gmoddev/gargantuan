@@ -2,6 +2,7 @@
 #include "gargantuan/classes/Camera.hpp"
 #include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/InputBinding.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/Part.hpp"
@@ -584,6 +585,107 @@ Character:Move(Vector3.new(1, 0, 0))
 			"Character persists and future-replicates authority state without introducing a Humanoid aggregate"
 		);
 	}
+
+	void TestGenericPossession() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto PlayersValue = std::dynamic_pointer_cast<Players>(Game->GetService("Players"));
+		PlayersValue->SetDefaultControllerEnabled(false);
+		PlayersValue->SetDefaultCameraEnabled(false);
+		auto Vehicle = MakePart(WorkspaceValue, "Vehicle", {0.0f, 3.0f, 0.0f}, {2.0f, 2.0f, 2.0f});
+		auto Group = std::make_shared<Folder>();
+		Group->SetParent(WorkspaceValue);
+		HeadlessRenderer Renderer(Vector2(320.0f, 240.0f));
+		Engine Runtime(Game, &Renderer);
+		auto Local = PlayersValue->GetLocalPlayer().value();
+		auto Second = PlayersValue->CreateSessionPlayer({"test", "second"});
+		auto ScriptValue = std::make_shared<Script>();
+		ScriptValue->SetRunContext(Enums::RunContext::Server);
+		ScriptValue->SetSource(R"(
+local Player = game:GetService("Players").LocalPlayer
+local Vehicle = game:GetService("Workspace"):FindFirstChild("Vehicle")
+Player:SetPossession(Vehicle)
+assert(Player.PossessedEntity == Vehicle and Player.Character == nil)
+)");
+		ScriptValue->SetParent(Game);
+		Runtime.Script->Step();
+		Check(Local->GetPossessedEntity() == Vehicle, "ordinary server Luau possesses a BasePart");
+		auto Client = std::make_shared<Script>();
+		Client->SetRunContext(Enums::RunContext::Client);
+		Client->SetSource(R"(
+local Player = game:GetService("Players").LocalPlayer
+local Vehicle = game:GetService("Workspace"):FindFirstChild("Vehicle")
+assert(Player.PossessedEntity == Vehicle)
+local MethodAllowed = pcall(function() Player:SetPossession(nil) end)
+local PropertyAllowed = pcall(function() Player.PossessedEntity = nil end)
+assert(not MethodAllowed and not PropertyAllowed)
+Vehicle:SetAttribute("DeniedClientPossession", true)
+)");
+		Client->SetParent(Game);
+		Runtime.Script->Step();
+		Check(Vehicle->GetAttributeValue("DeniedClientPossession") == std::optional<WireValue>(true) &&
+				Local->GetPossessedEntity() == Vehicle,
+			"Luau clients can inspect possession and cannot release it or directly assign its property");
+
+		bool DuplicateRejected = false;
+		try {
+			Second->SetPossession(Vehicle);
+		} catch (const std::invalid_argument &) {
+			DuplicateRejected = true;
+		}
+		auto ForeignGame = std::make_shared<DataModel>();
+		auto ForeignWorld = std::dynamic_pointer_cast<Workspace>(ForeignGame->GetService("Workspace"));
+		auto Foreign = MakePart(ForeignWorld, "Foreign", {0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f});
+		bool ForeignRejected = false;
+		try {
+			Local->SetPossession(Foreign);
+		} catch (const std::invalid_argument &) {
+			ForeignRejected = true;
+		}
+		Check(DuplicateRejected && ForeignRejected && !Second->GetPossessedEntity() &&
+				Local->GetPossessedEntity() == Vehicle,
+			"duplicate and foreign targets are rejected without changing current possession");
+
+		bool ReentrantRejected = false;
+		auto Changed = Local->GetPropertyChangedSignal("PossessedEntity")->Connect([&](auto) {
+			try {
+				Local->SetPossession(Vehicle);
+			} catch (const std::runtime_error &) {
+				ReentrantRejected = true;
+			}
+		});
+		const auto InitialRevision = Local->GetPossessionRevision();
+		Local->SetPossession(std::nullopt);
+		Check(ReentrantRejected && !Local->GetPossessedEntity() && !Vehicle->GetDestroyed(),
+			"release preserves the entity and rejects synchronous reassignment from its notification");
+		Changed->Disconnect();
+		Local->SetPossession(Vehicle);
+		Check(Local->GetPossessionRevision() == InitialRevision + 2,
+			"same-entity reacquisition has a fresh possession revision");
+		Vehicle->SetParent(Group);
+		Group->SetParent(std::nullopt);
+		Check(!Local->GetPossessedEntity(), "moving an ancestor out of Workspace revokes possession");
+		Group->SetParent(WorkspaceValue);
+		Second->SetPossession(Vehicle);
+		const auto RetiredId = Vehicle->GetObjectId();
+		Vehicle->Destroy();
+		auto Replacement = MakePart(WorkspaceValue, "Replacement", {0.0f, 3.0f, 0.0f}, {2.0f, 2.0f, 2.0f});
+		Check(!Second->GetPossessedEntity() && !ObjectRegistry::Get().Lookup(RetiredId) &&
+				Replacement->GetObjectId() != RetiredId,
+			"destroyed entity identity cannot resolve or possess a replacement");
+
+		Second->SetPossession(Replacement);
+		bool RemovingObservedRelease = false;
+		auto Removing = PlayersValue->PlayerRemoving->Connect([&](const auto &PlayerValue) {
+			if (PlayerValue == Second) RemovingObservedRelease = !Second->GetPossessedEntity();
+		});
+		Check(PlayersValue->RemoveSessionPlayer(Second) && RemovingObservedRelease &&
+				!Replacement->GetDestroyed(),
+			"disconnect revokes possession before PlayerRemoving and preserves the controlled entity");
+		Removing->Disconnect();
+		Runtime.Destroy();
+	}
 }
 
 int main() {
@@ -598,6 +700,7 @@ int main() {
 	TestDefaultPlayerRuntime();
 	TestEngineReattachAfterShutdown();
 	TestCustomControllerPath();
+	TestGenericPossession();
 	if (Failures == 0) std::cout << "All player runtime tests passed\n";
 	return Failures == 0 ? 0 : 1;
 }

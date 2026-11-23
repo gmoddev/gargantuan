@@ -133,6 +133,23 @@ specializations do not require changing the Player schema. The lifecycle is:
    teardown, or Engine Stop fires `CharacterRemoving` and clears the relation.
 5. Player-owned removal/replacement destroys the old character exactly once.
 
+`Player:SetPossession(EntityOrNil)` is an independent, non-owning relationship
+for server gameplay policy. Entity eligibility is a live descendant of the
+same DataModel's Workspace, regardless of its Instance class. The Player must
+be a live runtime identity under Players. One Player can possess a target at a
+time. Reassignment or release preserves the target. Destruction, losing
+Workspace ancestry, or Player removal revokes possession, and PlayerRemoving
+observers see the relationship cleared. The server records a fresh local
+possession revision on each change for downstream input routing.
+
+`Player.PossessedEntity` is a soft replicated reference. Clients can inspect
+it when the target is materialized in their view. Its setter is restricted to
+the native projection boundary. Server Luau calls `SetPossession`; rejected
+assignments preserve the existing relationship. Observers can use
+`GetPropertyChangedSignal("PossessedEntity")`. Synchronous reassignment from
+this notification is rejected. `Player.Character` retains its existing
+assembly and teardown contract.
+
 `Character` is a Folder-based semantic root with authoritative `CFrame`, its
 `Position` alias, an optional descendant `RootPart`, and the bounded
 `Character:Move` admission method. `KinematicCharacter : Character` adds only

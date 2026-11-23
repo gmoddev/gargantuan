@@ -55,6 +55,7 @@ namespace gargantuan {
 		PhysicsWorld Physics;
 		SoftBodyWorld Deformables;
 		float StepAccumulator = 0.0f;
+		bool SteppingPhysics = false;
 		std::vector<std::shared_ptr<BasePart>> Parts;
 		std::unordered_set<ObjectId> PartMembership;
 		struct DynamicReadbackRecord {
@@ -120,6 +121,7 @@ namespace gargantuan {
 		std::map<ObjectId, std::weak_ptr<LocalLight>> LocalLights;
 		std::map<ObjectId, std::weak_ptr<ReflectionProbe>> ReflectionProbes;
 
+		void StepPhysics(double DeltaTime, std::optional<std::vector<std::shared_ptr<Instance>>> Instances);
 		[[nodiscard]] PhysicsKinematicMotionResult ResolveKinematicMotion(const PhysicsKinematicMotionRequest &Request);
 		[[nodiscard]] WorldRaycastResult
 		ResolveRaycast(glm::vec3 Origin, glm::vec3 Direction, const RaycastParams &Params = {});
