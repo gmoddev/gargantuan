@@ -124,7 +124,9 @@ method, or signal can return a fresh userdata wrapper for the same Player.
 Those wrappers compare equal, while Luau table keys use raw userdata identity.
 
 `Player.Character` is nullable and accepts any live canonical `Character` in
-the same DataModel. The default assembly chooses `KinematicCharacter`, but an
+the same DataModel that is not already assigned as another Player's Character
+or explicit possession. A failed assignment leaves both Player relationships
+intact. The default assembly chooses `KinematicCharacter`, but an
 NPC can use Character semantics without a Player and future movement
 specializations do not require changing the Player schema. The lifecycle is:
 
@@ -135,6 +137,13 @@ specializations do not require changing the Player schema. The lifecycle is:
 4. `RemoveCharacter`, replacement, external character destruction, Player
    teardown, or Engine Stop fires `CharacterRemoving` and clears the relation.
 5. Player-owned removal/replacement destroys the old character exactly once.
+
+During the synchronous pre-removal callback, the original character remains
+available to observers and the pending replacement is reserved for its new
+owner. Nested removal or replacement on that Player is rejected, as are
+assignments of the pending target to another Player. The reservation ends
+when the callback returns or fails. After the new relationship commits,
+`CharacterAdded` handlers can still install a project-specific template.
 
 `Player:SetPossession(EntityOrNil)` is an independent, non-owning relationship
 for server gameplay policy. Entity eligibility is a live descendant of the

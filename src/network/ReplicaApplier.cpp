@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <chrono>
 #include <map>
+#include <optional>
 #include <set>
 #include <type_traits>
 #include <vector>
@@ -206,9 +207,8 @@ namespace gargantuan::network {
 					throw std::invalid_argument("Replica rejected published Tag");
 		}
 
-		void RemoveReplicaObject(
-			SnapshotLoadResult &Receiver, ObjectId Object, std::map<const Instance *, WireObjectId> &ReplicaIds
-		) {
+		void RemoveReplicaObject(SnapshotLoadResult &Receiver, ObjectId Object) {
+			runtime_detail::WorkScope Retirement(runtime_detail::WorkPhase::ReplicaRetirement);
 			const auto WireId = WireObjectId::FromObjectId(Object);
 			auto Found = Receiver.Objects.find(WireId);
 			// An earlier authoritative relationship update may have synchronously destroyed
@@ -224,7 +224,6 @@ namespace gargantuan::network {
 					++Iterator;
 					continue;
 				}
-				ReplicaIds.erase(Iterator->second.get());
 				Iterator = Receiver.Objects.erase(Iterator);
 			}
 		}
@@ -274,9 +273,11 @@ namespace gargantuan::network {
 		auto PhaseStarted = std::chrono::steady_clock::now();
 		auto FinishPhase = [&](std::uint64_t &Nanoseconds) {
 			const auto Now = std::chrono::steady_clock::now();
-			Nanoseconds += static_cast<std::uint64_t>(
+			const auto Elapsed = static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(Now - PhaseStarted).count());
+			Nanoseconds += Elapsed;
 			PhaseStarted = Now;
+			return Elapsed;
 		};
 		Snapshot Candidate;
 		if (Frame.Kind == ReplicationMessageKind::Baseline) {
@@ -296,7 +297,8 @@ namespace gargantuan::network {
 			runtime_detail::CountWork(runtime_detail::WorkCounter::ClientCopiedIdentities, SemanticState.Objects.size());
 			Candidate = SemanticState;
 		}
-		FinishPhase(Metrics.CandidateCopyNanoseconds);
+		runtime_detail::RecordReportedWork(runtime_detail::WorkPhase::ReplicaCandidateCopy,
+			FinishPhase(Metrics.CandidateCopyNanoseconds));
 
 		std::map<WireObjectId, std::size_t> CandidateIndex;
 		std::map<WireObjectId, std::set<WireObjectId>> CandidateChildren;
@@ -411,9 +413,11 @@ namespace gargantuan::network {
 			// LoadSnapshot begins with the same complete semantic validation before
 			// constructing anything. Do not traverse the whole candidate twice.
 			// Its native materialization preflight remains mandatory below.
-			FinishPhase(Metrics.SemanticValidationNanoseconds);
+			runtime_detail::RecordReportedWork(runtime_detail::WorkPhase::ReplicaCandidatePlan,
+				FinishPhase(Metrics.SemanticValidationNanoseconds));
 			SnapshotLoadResult Loaded;
 			if (RequiresNativePreflight) {
+				runtime_detail::WorkScope Preflight(runtime_detail::WorkPhase::ReplicaNativePreflight);
 				runtime_detail::CountWork(runtime_detail::WorkCounter::ClientPreflightIdentities, Candidate.Objects.size());
 				ScopedChangeJournalSuppression SuppressReplicaJournal;
 				Loaded = LoadSnapshot(Candidate, &Metrics.ValidationLoad);
@@ -424,111 +428,125 @@ namespace gargantuan::network {
 					Loaded.Errors.empty() ? "Replica materialization failed" : Loaded.Errors.front()
 				);
 			if (Frame.Kind == ReplicationMessageKind::Incremental) {
+				runtime_detail::WorkScope Live(runtime_detail::WorkPhase::ReplicaLiveApply);
 				LiveCommitStarted = true;
 				ScopedChangeJournalSuppression SuppressReplicaJournal(Receiver.Root->GetObjectId());
 				ScopedSignalDeferral DeferNotifications;
-				std::map<const Instance *, WireObjectId> ReplicaIds;
-				runtime_detail::CountWork(runtime_detail::WorkCounter::ClientReceiverVisits, Receiver.Objects.size());
-				for (const auto &[Id, Value] : Receiver.Objects)
-					ReplicaIds.emplace(Value.get(), Id);
-				for (const auto &Operation : Frame.Operations)
-					if (const auto *Publish = std::get_if<PublishReplication>(&Operation.Intent)) {
-						auto *Definition = InstanceClassRegistry::GetDefinitionBySchemaId(Publish->ClassSchemaId);
-						const auto ExpectedName = Definition && Definition->ConstructionKind ==
-																	SchemaClassConstructionKind::CustomData
-													  ? Definition->CanonicalName
-												  : Definition ? Definition->ClassName
-															   : std::string{};
-						if (!Definition || Definition->DefinitionVersion != Publish->DefinitionVersion ||
-							ExpectedName != Publish->ClassName || !InstanceClassRegistry::IsConstructible(*Definition))
-							throw std::invalid_argument("Replica publish class identity is incompatible");
-						auto InstanceValue = InstanceClassRegistry::Construct(*Definition);
-						const auto WireId = WireObjectId::FromObjectId(Publish->Object);
-						if (!InstanceValue || !Receiver.Objects.emplace(WireId, InstanceValue).second ||
-							!ReplicaIds.emplace(InstanceValue.get(), WireId).second)
-							throw std::invalid_argument("Replica publish construction failed");
-					}
+				runtime_detail::MeasureWork(runtime_detail::WorkPhase::ReplicaLiveCreate, [&] {
+					std::optional<std::set<const Instance *>> LiveAddresses;
+					for (const auto &Operation : Frame.Operations)
+						if (const auto *Publish = std::get_if<PublishReplication>(&Operation.Intent)) {
+							// Only publication checks for aliasing. Keep the complete
+							// receiver address check without visiting the map on leaves.
+							if (!LiveAddresses) {
+								LiveAddresses.emplace();
+								runtime_detail::CountWork(
+									runtime_detail::WorkCounter::ClientReceiverVisits, Receiver.Objects.size());
+								for (const auto &[Id, Value] : Receiver.Objects)
+									LiveAddresses->insert(Value.get());
+							}
+							auto *Definition = InstanceClassRegistry::GetDefinitionBySchemaId(Publish->ClassSchemaId);
+							const auto ExpectedName = Definition && Definition->ConstructionKind ==
+																		SchemaClassConstructionKind::CustomData
+														  ? Definition->CanonicalName
+													  : Definition ? Definition->ClassName
+																   : std::string{};
+							if (!Definition || Definition->DefinitionVersion != Publish->DefinitionVersion ||
+								ExpectedName != Publish->ClassName || !InstanceClassRegistry::IsConstructible(*Definition))
+								throw std::invalid_argument("Replica publish class identity is incompatible");
+							auto InstanceValue = InstanceClassRegistry::Construct(*Definition);
+							const auto WireId = WireObjectId::FromObjectId(Publish->Object);
+							if (!InstanceValue || !Receiver.Objects.emplace(WireId, InstanceValue).second ||
+								!LiveAddresses->insert(InstanceValue.get()).second)
+								throw std::invalid_argument("Replica publish construction failed");
+						}
+				});
 				// Establish the entire published ancestry before applying properties. A
 				// relationship such as Character.RootPart may validate ancestry while
 				// referring to another object published later in the same frame.
-				for (const auto &Operation : Frame.Operations)
-					if (const auto *Publish = std::get_if<PublishReplication>(&Operation.Intent)) {
-						auto InstanceValue = Receiver.Resolve(WireObjectId::FromObjectId(Publish->Object));
-						if (!InstanceValue) throw std::invalid_argument("Replica publish target is unavailable");
-						InstanceValue->SetName(Publish->Name);
-						if (Publish->Parent) {
-							auto Parent = Receiver.Resolve(WireObjectId::FromObjectId(*Publish->Parent));
-							if (!Parent) throw std::invalid_argument("Replica publish parent is not materialized");
-							InstanceValue->SetParent(Parent);
-						}
-					}
-				for (const auto &Operation : Frame.Operations)
-					std::visit(
-						[&](const auto &Value) {
-							using Type = std::decay_t<decltype(Value)>;
-							if constexpr (std::is_same_v<Type, PublishReplication>) {
-								ApplyPublishToReplica(
-									Value, Receiver.Resolve(WireObjectId::FromObjectId(Value.Object)), Receiver
-								);
-							} else if constexpr (std::is_same_v<Type, UnpublishReplication> ||
-												 std::is_same_v<Type, DestroyReplication>) {
-								RemoveReplicaObject(Receiver, Value.Object, ReplicaIds);
-							} else {
-								auto InstanceValue = Receiver.Resolve(WireObjectId::FromObjectId(Value.Object));
-								if (!InstanceValue)
-									throw std::invalid_argument(
-										"Replica operation target is not materialized: " +
-										std::to_string(Value.Object.Slot) + ":" +
-										std::to_string(Value.Object.Generation)
-									);
-								if constexpr (std::is_same_v<Type, PropertyReplicationUpdate>)
-									ApplyPropertyToReplica(Value, InstanceValue, Receiver);
-								else if constexpr (std::is_same_v<Type, ExtensionPropertyReplicationUpdate>) {
-									if (InstanceValue->ApplyExtensionPropertyMutation(
-											Value.ExtensionSchemaId,
-											Value.DefinitionVersion,
-											Value.PropertyName,
-											Value.Value,
-											ScriptSecurityContext::CoreTrusted()
-										) != MutationStatus::Success)
-										throw std::invalid_argument("Replica rejected extension update");
-								} else if constexpr (std::is_same_v<Type, ReparentReplication>) {
-									std::shared_ptr<Instance> Parent;
-									if (Value.Parent) {
-										Parent = Receiver.Resolve(WireObjectId::FromObjectId(*Value.Parent));
-										if (!Parent)
-											throw std::invalid_argument("Replica reparent parent is not materialized");
-									}
-									InstanceValue->SetParent(Parent ? std::optional(Parent) : std::nullopt);
-								} else if constexpr (std::is_same_v<Type, AttributeReplicationUpdate>) {
-									if (InstanceValue->ApplyAttributeMutation(
-											Value.AttributeName, Value.Value, ScriptSecurityContext::CoreTrusted()
-										) != MutationStatus::Success)
-										throw std::invalid_argument("Replica rejected Attribute update");
-								} else if constexpr (std::is_same_v<Type, TagAddedReplication> ||
-													 std::is_same_v<Type, TagRemovedReplication>) {
-									auto DataModelValue = std::dynamic_pointer_cast<DataModel>(Receiver.Root);
-									if (!DataModelValue) throw std::invalid_argument("Replica root is not a DataModel");
-									const bool Changed = std::is_same_v<Type, TagAddedReplication>
-															 ? DataModelValue->Tags.Add(
-																   DataModelValue->GetObjectId(),
-																   InstanceValue->GetObjectId(),
-																   Value.TagName,
-																   ScriptSecurityContext::CoreTrusted()
-															   )
-															 : DataModelValue->Tags.Remove(
-																   DataModelValue->GetObjectId(),
-																   InstanceValue->GetObjectId(),
-																   Value.TagName,
-																   ScriptSecurityContext::CoreTrusted()
-															   );
-									if (!Changed) throw std::invalid_argument("Replica rejected Tag update");
-								}
+				runtime_detail::MeasureWork(runtime_detail::WorkPhase::ReplicaLiveParent, [&] {
+					for (const auto &Operation : Frame.Operations)
+						if (const auto *Publish = std::get_if<PublishReplication>(&Operation.Intent)) {
+							auto InstanceValue = Receiver.Resolve(WireObjectId::FromObjectId(Publish->Object));
+							if (!InstanceValue) throw std::invalid_argument("Replica publish target is unavailable");
+							InstanceValue->SetName(Publish->Name);
+							if (Publish->Parent) {
+								auto Parent = Receiver.Resolve(WireObjectId::FromObjectId(*Publish->Parent));
+								if (!Parent) throw std::invalid_argument("Replica publish parent is not materialized");
+								InstanceValue->SetParent(Parent);
 							}
-						},
-						Operation.Intent
-					);
-				DeferNotifications.Commit();
+						}
+				});
+				runtime_detail::MeasureWork(runtime_detail::WorkPhase::ReplicaLiveOperations, [&] {
+					for (const auto &Operation : Frame.Operations)
+						std::visit(
+							[&](const auto &Value) {
+								using Type = std::decay_t<decltype(Value)>;
+								if constexpr (std::is_same_v<Type, PublishReplication>) {
+									ApplyPublishToReplica(
+										Value, Receiver.Resolve(WireObjectId::FromObjectId(Value.Object)), Receiver
+									);
+								} else if constexpr (std::is_same_v<Type, UnpublishReplication> ||
+													 std::is_same_v<Type, DestroyReplication>) {
+									RemoveReplicaObject(Receiver, Value.Object);
+								} else {
+									auto InstanceValue = Receiver.Resolve(WireObjectId::FromObjectId(Value.Object));
+									if (!InstanceValue)
+										throw std::invalid_argument(
+											"Replica operation target is not materialized: " +
+											std::to_string(Value.Object.Slot) + ":" +
+											std::to_string(Value.Object.Generation)
+										);
+									if constexpr (std::is_same_v<Type, PropertyReplicationUpdate>)
+										ApplyPropertyToReplica(Value, InstanceValue, Receiver);
+									else if constexpr (std::is_same_v<Type, ExtensionPropertyReplicationUpdate>) {
+										if (InstanceValue->ApplyExtensionPropertyMutation(
+												Value.ExtensionSchemaId,
+												Value.DefinitionVersion,
+												Value.PropertyName,
+												Value.Value,
+												ScriptSecurityContext::CoreTrusted()
+											) != MutationStatus::Success)
+											throw std::invalid_argument("Replica rejected extension update");
+									} else if constexpr (std::is_same_v<Type, ReparentReplication>) {
+										std::shared_ptr<Instance> Parent;
+										if (Value.Parent) {
+											Parent = Receiver.Resolve(WireObjectId::FromObjectId(*Value.Parent));
+											if (!Parent)
+												throw std::invalid_argument("Replica reparent parent is not materialized");
+										}
+										InstanceValue->SetParent(Parent ? std::optional(Parent) : std::nullopt);
+									} else if constexpr (std::is_same_v<Type, AttributeReplicationUpdate>) {
+										if (InstanceValue->ApplyAttributeMutation(
+												Value.AttributeName, Value.Value, ScriptSecurityContext::CoreTrusted()
+											) != MutationStatus::Success)
+											throw std::invalid_argument("Replica rejected Attribute update");
+									} else if constexpr (std::is_same_v<Type, TagAddedReplication> ||
+														 std::is_same_v<Type, TagRemovedReplication>) {
+										auto DataModelValue = std::dynamic_pointer_cast<DataModel>(Receiver.Root);
+										if (!DataModelValue) throw std::invalid_argument("Replica root is not a DataModel");
+										const bool Changed = std::is_same_v<Type, TagAddedReplication>
+																 ? DataModelValue->Tags.Add(
+																	   DataModelValue->GetObjectId(),
+																	   InstanceValue->GetObjectId(),
+																	   Value.TagName,
+																	   ScriptSecurityContext::CoreTrusted()
+																   )
+																 : DataModelValue->Tags.Remove(
+																	   DataModelValue->GetObjectId(),
+																	   InstanceValue->GetObjectId(),
+																	   Value.TagName,
+																	   ScriptSecurityContext::CoreTrusted()
+																   );
+										if (!Changed) throw std::invalid_argument("Replica rejected Tag update");
+									}
+								}
+							},
+							Operation.Intent
+						);
+				});
+				runtime_detail::MeasureWork(runtime_detail::WorkPhase::ReplicaNotifications,
+					[&] { DeferNotifications.Commit(); });
 			} else
 				Receiver = std::move(Loaded);
 			FinishPhase(Metrics.LiveApplyNanoseconds);
@@ -537,6 +555,10 @@ namespace gargantuan::network {
 			NextSequence = *FollowingSequence;
 			++Metrics.FramesApplied;
 			Metrics.OperationsApplied += Frame.Operations.size();
+			if (RequiresNativePreflight && Frame.Kind == ReplicationMessageKind::Incremental) {
+				runtime_detail::WorkScope Release(runtime_detail::WorkPhase::ReplicaPreflightRelease);
+				[[maybe_unused]] SnapshotLoadResult Retired = std::move(Loaded);
+			}
 			return {ReplicaApplyStatus::Applied, Frame.Operations.size(), {}};
 		} catch (const std::exception &Error) {
 			if (LiveCommitStarted) {

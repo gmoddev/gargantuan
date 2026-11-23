@@ -86,7 +86,8 @@ namespace gargantuan {
 				throw std::invalid_argument("[Player:Possession] Target must be live in this Workspace");
 			for (const auto &Other : Owner->GetPlayers()) {
 				if (Other.get() != this && (Other->GetPossessedEntity().value_or(nullptr) == Entity ||
-						Other->GetCharacter().value_or(nullptr) == Entity))
+						Other->GetCharacter().value_or(nullptr) == Entity ||
+						Other->PendingCharacter == Entity->GetObjectId()))
 					throw std::invalid_argument("[Player:Possession] Target is already possessed");
 			}
 		}
@@ -175,6 +176,8 @@ namespace gargantuan {
 		ValidatePropertyMutation("Character", Value);
 		auto Replacement = Value ? *Value : nullptr;
 		if (Replacement == CharacterValue) return;
+		if (NotifyingCharacterRemoval || ShuttingDownCharacter)
+			throw std::runtime_error("[Player:Character] Cannot change Character during removal");
 		if (Replacement) {
 			if (Replacement->GetDestroyed() || Replacement->IsDestroying())
 				throw std::invalid_argument("Player character must be live");
@@ -184,16 +187,26 @@ namespace gargantuan {
 				for (const auto &Child : PlayersValue->Children) {
 					auto Other = std::dynamic_pointer_cast<Player>(Child);
 					if (Other && Other.get() != this && !Other->GetDestroyed() &&
-						Other->GetPossessedEntity().value_or(nullptr) == Replacement)
-						throw std::invalid_argument("[Player:Possession] Character is already possessed");
+						(Other->GetCharacter().value_or(nullptr) == Replacement ||
+						 Other->GetPossessedEntity().value_or(nullptr) == Replacement ||
+						 Other->PendingCharacter == Replacement->GetObjectId()))
+						throw std::invalid_argument("[Player:Possession] Character is already assigned to another Player");
 				}
 			}
 		}
 
 		auto Previous = CharacterValue;
+		if (Previous) {
+			NotifyCharacterRemoving(Previous, Replacement ? Replacement->GetObjectId() : ObjectId{});
+			AssertCanMutate();
+			if (ShuttingDownCharacter)
+				throw std::runtime_error("[Player:Character] Player retired during Character removal");
+			if (Replacement && (Replacement->GetDestroyed() || Replacement->IsDestroying() ||
+				Replacement->GetDataModel() != GetDataModel()))
+				throw std::invalid_argument("[Player:Character] Replacement left the live DataModel during removal");
+		}
 		if (CharacterDestroyingConnection) CharacterDestroyingConnection->Disconnect();
 		CharacterDestroyingConnection.reset();
-		if (Previous) CharacterRemoving->Fire(Previous);
 		CharacterValue = Replacement;
 		NotifyPropertyCommitted("Character");
 
@@ -206,7 +219,7 @@ namespace gargantuan {
 				auto Self = WeakSelf.lock();
 				auto Character = WeakCharacter.lock();
 				if (!Self || !Character || Self->CharacterValue != Character || Self->ShuttingDownCharacter) return;
-				Self->CharacterRemoving->Fire(Character);
+				if (!Self->NotifyingCharacterRemoval) Self->NotifyCharacterRemoving(Character);
 				Self->CharacterValue.reset();
 				Self->CharacterDestroyingConnection.reset();
 				Self->NotifyPropertyCommitted("Character");
@@ -232,6 +245,19 @@ namespace gargantuan {
 		SetCharacter(std::nullopt);
 	}
 
+	void Player::NotifyCharacterRemoving(const std::shared_ptr<Character> &Previous, ObjectId Replacement) {
+		struct Reservation {
+			Player &Owner;
+			~Reservation() {
+				Owner.PendingCharacter = {};
+				Owner.NotifyingCharacterRemoval = false;
+			}
+		} Guard{*this};
+		PendingCharacter = Replacement;
+		NotifyingCharacterRemoval = true;
+		CharacterRemoving->Fire(Previous);
+	}
+
 	void Player::ShutdownCharacter() {
 		if (ShuttingDownCharacter) return;
 		ShuttingDownCharacter = true;
@@ -239,7 +265,7 @@ namespace gargantuan {
 		CharacterDestroyingConnection.reset();
 		auto Previous = std::move(CharacterValue);
 		if (Previous) {
-			CharacterRemoving->Fire(Previous);
+			if (!NotifyingCharacterRemoval) NotifyCharacterRemoving(Previous);
 			if (!Previous->GetDestroyed() && !Previous->IsDestroying()) Previous->Destroy();
 		}
 	}

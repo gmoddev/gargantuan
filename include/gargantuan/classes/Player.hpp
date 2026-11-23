@@ -15,6 +15,7 @@ namespace gargantuan {
 		friend class Players;
 		int PlayerIdValue = 0;
 		std::shared_ptr<Character> CharacterValue;
+		ObjectId PendingCharacter;
 		std::optional<PlayerIdentity> AuthenticationIdentity;
 		ObjectId PossessedEntityId;
 		std::weak_ptr<Instance> PossessedEntityValue;
@@ -24,12 +25,14 @@ namespace gargantuan {
 		SignalConnection::Pointer CharacterDestroyingConnection;
 		bool PossessionClosed = false;
 		bool PublishingPossessionChange = false;
+		bool NotifyingCharacterRemoval = false;
 		bool ShuttingDownCharacter = false;
 
 		void InitializeIdentity(int Value);
 		void CommitPossession(const std::shared_ptr<Instance> &Entity);
 		void ClosePossession();
 		void DisconnectPossessionSignals();
+		void NotifyCharacterRemoving(const std::shared_ptr<Character> &Previous, ObjectId Replacement = {});
 		void ShutdownCharacter();
 
 	  public:

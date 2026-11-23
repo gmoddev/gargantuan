@@ -12,6 +12,7 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/DataModelRoot.hpp"
 #include "platform/sdl/SDLHost.hpp"
+#include "runtime/RuntimeWorkTrace.hpp"
 #include "telemetry/OptionalTelemetry.hpp"
 
 #include <SDL3/SDL.h>
@@ -259,6 +260,18 @@ int main(int argc, char *argv[]) {
 	engine->ProcessService->Alive = true;
 	SDLHost Host;
 	auto PreviousFrame = std::chrono::steady_clock::now();
+#if defined(GARGANTUAN_WORK_TRACE)
+	std::unique_ptr<runtime_detail::WorkTrace> Trace;
+	try {
+		Trace = runtime_detail::WorkTrace::FromEnvironment();
+	} catch (const std::exception &Error) {
+		std::cerr << "[Runtime:WorkTrace] " << Error.what() << '\n';
+		engine->Destroy();
+		delete engine;
+		delete renderer;
+		return 1;
+	}
+#endif
 	try {
 		while (engine->ProcessService->Alive) {
 			HostEvent Event;
@@ -270,6 +283,26 @@ int main(int argc, char *argv[]) {
 			if (!engine->ProcessService->Alive) break;
 			const auto CurrentFrame = std::chrono::steady_clock::now();
 			Telemetry.ObserveFrame(CurrentFrame - PreviousFrame);
+#if defined(GARGANTUAN_WORK_TRACE)
+			if (Trace) {
+				const auto PriorTick = engine->GetSimulationTick();
+				const auto Tick = PriorTick == std::numeric_limits<std::uint64_t>::max() ? PriorTick : PriorTick + 1;
+				if (Trace->SelectFrame(PriorTick, Tick)) {
+					runtime_detail::WorkSample Sample{};
+					{
+						runtime_detail::WorkTrace::Region Region(Trace.get(), Tick, 0);
+						runtime_detail::WorkCapture Capture(&Sample);
+						engine->Step();
+					}
+					const auto Started = std::chrono::duration_cast<std::chrono::nanoseconds>(CurrentFrame.time_since_epoch()).count();
+					const auto Interval = std::chrono::duration_cast<std::chrono::nanoseconds>(CurrentFrame - PreviousFrame).count();
+					Trace->RecordFrame(Tick, 0, static_cast<std::uint64_t>(Started), static_cast<std::uint64_t>(Interval));
+					Trace->RecordSample(Tick, 0, runtime_detail::WorkTimestamp(), Sample);
+					PreviousFrame = CurrentFrame;
+					continue;
+				}
+			}
+#endif
 			PreviousFrame = CurrentFrame;
 			engine->Step();
 		}
@@ -283,6 +316,14 @@ int main(int argc, char *argv[]) {
 	}
 
 	auto exitCode = engine->ProcessService->ExitCode;
+#if defined(GARGANTUAN_WORK_TRACE)
+	try {
+		if (Trace) Trace->Write();
+	} catch (const std::exception &Error) {
+		std::cerr << "[Runtime:WorkTrace] " << Error.what() << '\n';
+		if (exitCode == 0) exitCode = 1;
+	}
+#endif
 	engine->Destroy();
 	delete engine;
 	delete renderer;

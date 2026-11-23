@@ -5,6 +5,16 @@ Relay Rescue source are pinned in the [capability matrix](../../docs/architectur
 The [protocol](../../docs/protocols/GAS-v1.md) and [authoring contract](../../docs/protocols/GAS-Authoring-v1.md)
 describe the behavior exercised here.
 
+The final read-only branch check on 2026-11-23 found Engine `main` at
+`e7bec187def55e79c6ca956b17feb82926e5d1fe`, hosting PR #27 at
+`d51c074cfaaf973310a4d8effd192cffd85c384d`, and `foundation/gameplay-7`
+at `06d1a2015b26f8610a74a6b6eea39b179a4417a8`. Node's hosting integration
+review and production hosting lifecycle refs were
+`09c793b6bf8c21a35898a641987f16fb27277fea` and
+`9910df1f95312d3564ee6bab6e799dc350279944`. The GAS implementation
+builds from the pinned Engine baseline. The Relay replay uses only the
+separate integration worktree.
+
 ## Focused codec
 
 The Windows x64 run used MSVC 19.50.35728 with `/std:c++latest /EHsc /W4 /O2`
@@ -43,7 +53,8 @@ The minimal fixture's expected digest comes from an independent Python
 | Instrumented encode/decode, peak memory and C++ allocations | `b229864c3f1f96afb9be0853d3ecb115f2c96143` | [Native CI](https://github.com/gmoddev/gargantuan/actions/runs/45251021630) |
 | Native checks with hierarchy notification deferral | `1750c03ba98c3e60a152e01627a7f85bf07e07cc` | [Native CI](https://github.com/gmoddev/gargantuan/actions/runs/45252274625) |
 | Relay Rescue place round trip, packages, two-player mission and animated model | `ba3fd78b9cc273f9044c702fd8edf45f8725b86d` | [Ubuntu Clang 19 ASan/UBSan](https://github.com/gmoddev/gargantuan/actions/runs/45250180300/job/137957435891) passed the Relay test, asset-backed GASM test, package input test and graph benchmark. The full job reported 121/122 due to an authoring lifecycle leak. |
-| Native suite after world cleanup and Windows test syntax correction | `70b2953f76e47952323b65914a921ec945e6783b` | [Native CI](https://github.com/gmoddev/gargantuan/actions/runs/45258517284) |
+| Native suite after world cleanup and Windows test syntax correction | `70b2953f76e47952323b65914a921ec945e6783b` | [Ubuntu 24.04, Clang 19 ASan/UBSan/LSan](https://github.com/gmoddev/gargantuan/actions/runs/45258517284/job/137986638371) passed 123/123 CTest cases. [Windows native CI](https://github.com/gmoddev/gargantuan/actions/runs/45258517284/job/137986638926) stopped on a name collision in the rendering extraction probe. |
+| Native suite with the rendering probe name collision fixed | `13dbc8fbb760da6a36f2ff76c357036e0fae6f9a` | MSVC 19.50.35728 passed the corrected probe translation unit with `/Zs /std:c++23preview`. [Native CI replay](https://github.com/gmoddev/gargantuan/actions/runs/45267168825). |
 | Windows Release GAS, persistence, package and Relay tests | `cca3d151c09b613ce019574416607e2ca8ab346c` | Worker CTest passed 18/18 cases using GNS, including both missions, both package roles, and animated model import |
 | Linux GAS codec, EditorHost and model tests after teardown fixes | `cca3d151c09b613ce019574416607e2ca8ab346c` | Worker CTest passed 3/3 cases under ASan, UBSan and LeakSanitizer |
 
@@ -54,6 +65,7 @@ RelWithDebInfo. The headless build used GNS off and flags
 `-fsanitize=address,undefined -fno-omit-frame-pointer`. Both sanitizers
 halted on errors and `ASAN_OPTIONS` enabled leak detection. The worker
 preserves the test XML at `C:\Sandbox\Codex\Builds\GAS-1\linux-asan\ctest-linux-asan.xml`.
+Its SHA-256 is `5d049d86116ada1bc48042e6ffc64f743f17e0e5df45bf82191dd48654450ee3`.
 
 Only rows with stated outcomes above are established qualification evidence.
 The Relay Rescue check copies the pinned fixture, exports and restores it,
@@ -124,7 +136,8 @@ and pinned GNS `2cb93a06350bb065db53abdb0d87cf297e0bfd34`. It had a Ryzen 9
 5900X with 24 logical processors and 34,282,344,448 bytes of physical memory.
 The build used eight jobs and ran the measured CTest cases sequentially.
 Evidence is in `C:\Sandbox\Codex\Logs\GAS-1\ctest-msvc-final.xml` on the
-worker. The package regression failed with the first, longer worker temp
+worker, with SHA-256 `4c5bb23f48e2d3438a4a9d4f697f150fe6741f8c870c20edd21c5eb4749eeb24`.
+The package regression failed with the first, longer worker temp
 directory. The unchanged binary passed with `C:\Sandbox\Codex\Temp\GAS`.
 
 Both Windows Relay Rescue missions passed, including real GNS loopback.

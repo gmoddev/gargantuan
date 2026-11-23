@@ -37,6 +37,10 @@ enum class WorkPhase : std::size_t {
 	PreSimulation, GameplayInputProduce, GameplayInputAdmission, GameplayMotion, GameplayPoseCommit,
 	GameplayPosePublish, GameplayPoseRelevance, GameplayPoseEncode, GameplayPoseEnqueue,
 	GameplayPoseReceive, GameplayPoseDecode, GameplayPosePresentation, TransportPoll,
+	ReplicaCandidateCopy, ReplicaCandidatePlan, ReplicaNativePreflight, ReplicaLiveApply,
+	ReplicaLiveCreate, ReplicaLiveParent, ReplicaLiveOperations, ReplicaRetirement, ReplicaNotifications, ReplicaPreflightRelease,
+	SnapshotValidation, SnapshotConstruction, SnapshotParenting, SnapshotProperties,
+	RenderDraw, HostFramePacing,
 	Count
 };
 
@@ -61,7 +65,11 @@ inline constexpr std::array<std::string_view, static_cast<std::size_t>(WorkPhase
 	"StructuralIntent", "StructuralSubmit", "StructuralAcceptance", "KnownCommit", "AcceptedMetadataCommit",
 	"PreSimulation", "GameplayInputProduce", "GameplayInputAdmission", "GameplayMotion", "GameplayPoseCommit",
 	"GameplayPosePublish", "GameplayPoseRelevance", "GameplayPoseEncode", "GameplayPoseEnqueue",
-	"GameplayPoseReceive", "GameplayPoseDecode", "GameplayPosePresentation", "TransportPoll"
+	"GameplayPoseReceive", "GameplayPoseDecode", "GameplayPosePresentation", "TransportPoll",
+	"ReplicaCandidateCopy", "ReplicaCandidatePlan", "ReplicaNativePreflight", "ReplicaLiveApply",
+	"ReplicaLiveCreate", "ReplicaLiveParent", "ReplicaLiveOperations", "ReplicaRetirement", "ReplicaNotifications", "ReplicaPreflightRelease",
+	"SnapshotValidation", "SnapshotConstruction", "SnapshotParenting", "SnapshotProperties",
+	"RenderDraw", "HostFramePacing"
 };
 
 struct WorkDuration {
@@ -183,6 +191,14 @@ inline thread_local WorkAllocationReader ActiveWorkAllocationBytesReader = nullp
 class WorkScope;
 inline thread_local WorkScope *ActiveWorkScope = nullptr;
 
+#if defined(GARGANTUAN_WORK_TRACE)
+struct WorkSpanSink {
+	void *Context;
+	void (*Record)(void *, WorkPhase, std::uint64_t, std::uint64_t, std::uint64_t) noexcept;
+};
+inline thread_local WorkSpanSink *ActiveWorkSpanSink = nullptr;
+#endif
+
 inline void AddWorkCounter(std::uint64_t &Value, std::uint64_t Count) noexcept {
 	Value += std::min(Count, std::numeric_limits<std::uint64_t>::max() - Value);
 }
@@ -248,6 +264,9 @@ class WorkScope final {
 	explicit WorkScope(WorkPhase Phase) noexcept
 		: Target(ActiveWorkSample ? &(*ActiveWorkSample)[static_cast<std::size_t>(Phase)] : nullptr) {
 		if (Target) {
+#if defined(GARGANTUAN_WORK_TRACE)
+			TracePhase = Phase;
+#endif
 			Parent = ActiveWorkScope;
 			ActiveWorkScope = this;
 			Started = std::chrono::steady_clock::now();
@@ -267,6 +286,11 @@ class WorkScope final {
 		AddWorkCounter(Target->ExclusiveNanoseconds, Elapsed - std::min(Elapsed, ChildNanoseconds));
 		const auto StartedNanoseconds = static_cast<std::uint64_t>(
 			std::chrono::duration_cast<std::chrono::nanoseconds>(Started.time_since_epoch()).count());
+#if defined(GARGANTUAN_WORK_TRACE)
+		if (ActiveWorkSpanSink)
+			ActiveWorkSpanSink->Record(ActiveWorkSpanSink->Context, TracePhase, StartedNanoseconds,
+				Elapsed, Elapsed - std::min(Elapsed, ChildNanoseconds));
+#endif
 		if (Target->Calls == 0 || StartedNanoseconds < Target->FirstStartedNanoseconds)
 			Target->FirstStartedNanoseconds = StartedNanoseconds;
 		Target->LastEndedNanoseconds = static_cast<std::uint64_t>(
@@ -287,6 +311,9 @@ class WorkScope final {
 	WorkScope &operator=(const WorkScope &) = delete;
   private:
 	WorkDuration *Target;
+#if defined(GARGANTUAN_WORK_TRACE)
+	WorkPhase TracePhase;
+#endif
 	std::chrono::steady_clock::time_point Started{};
 	WorkAllocationReader AllocationReader = nullptr;
 	std::uint64_t StartedAllocations = 0;

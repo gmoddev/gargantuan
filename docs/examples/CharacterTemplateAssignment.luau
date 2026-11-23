@@ -19,11 +19,12 @@ function Assignment.New(Players, Workspace, Template)
 	local Self = setmetatable({Players = Players, Workspace = Workspace, Template = Template,
 		Connections = {}, Owned = {}, Closed = false}, Assignment)
 	local function AddPlayer(Player)
-		if Self.Closed or Self.Connections[Player] then return end
+		local PlayerId = Player.PlayerId
+		if Self.Closed or Self.Connections[PlayerId] then return end
 		local function Replace(Current)
-			if Self.Closed or Current == nil or Current == Self.Owned[Player] then return end
+			if Self.Closed or Current == nil or Current == Self.Owned[PlayerId] then return end
 			local Replacement = nil
-			local PreviousOwned = Self.Owned[Player]
+			local PreviousOwned = Self.Owned[PlayerId]
 			local Ok, Failure = pcall(function()
 				Replacement = Self.Template:Clone()
 				local RootPart = Replacement.RootPart
@@ -32,11 +33,11 @@ function Assignment.New(Players, Workspace, Template)
 					RootPart:FindFirstChildOfClass("Animator"),
 					"[Character:Template] Clone lost its internal rig or RootPart reference")
 				Replacement.Parent = Self.Workspace
-				Self.Owned[Player] = Replacement
+				Self.Owned[PlayerId] = Replacement
 				Player.Character = Replacement
 			end)
 			if not Ok then
-				Self.Owned[Player] = PreviousOwned
+				Self.Owned[PlayerId] = PreviousOwned
 				if Replacement and Player.Character ~= Replacement then
 					pcall(function() Replacement:Destroy() end)
 				end
@@ -44,14 +45,15 @@ function Assignment.New(Players, Workspace, Template)
 				else print("[Character:Template] Could not replace Player.Character:", Failure) end
 			end
 		end
-		Self.Connections[Player] = Player.CharacterAdded:Connect(Replace)
+		Self.Connections[PlayerId] = Player.CharacterAdded:Connect(Replace)
 		if Player.Character then Replace(Player.Character) end
 	end
 	local function RemovePlayer(Player)
-		local Connection = Self.Connections[Player]
+		local PlayerId = Player.PlayerId
+		local Connection = Self.Connections[PlayerId]
 		if Connection then Connection:Disconnect() end
-		Self.Connections[Player] = nil
-		Self.Owned[Player] = nil
+		Self.Connections[PlayerId] = nil
+		Self.Owned[PlayerId] = nil
 	end
 	Self.AddedConnection = Players.PlayerAdded:Connect(AddPlayer)
 	Self.RemovingConnection = Players.PlayerRemoving:Connect(RemovePlayer)

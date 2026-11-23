@@ -15,6 +15,7 @@
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "serialization/JsonCodec.hpp"
 #include "runtime/SnapshotValidation.hpp"
+#include "RuntimeWorkDiagnostics.hpp"
 
 #include <algorithm>
 #include <any>
@@ -77,10 +78,16 @@ namespace gargantuan {
 				SnapshotValue.Objects.size() > MaximumSnapshotObjects)
 				throw std::invalid_argument("Snapshot envelope is invalid or oversized");
 
-			std::unordered_map<WireObjectId, const SnapshotObject *> Objects;
+			enum class VisitState : std::uint8_t { Unvisited, Visiting, Finished };
+			struct ValidationNode {
+				const SnapshotObject *Object;
+				VisitState State = VisitState::Unvisited;
+			};
+			std::unordered_map<WireObjectId, ValidationNode> Objects;
+			Objects.reserve(SnapshotValue.Objects.size());
 			std::size_t RootCount = 0;
 			for (const auto &Object : SnapshotValue.Objects) {
-				if (!Object.Id.IsValid() || !Objects.emplace(Object.Id, &Object).second)
+				if (!Object.Id.IsValid() || !Objects.emplace(Object.Id, ValidationNode{&Object}).second)
 					throw std::invalid_argument("Snapshot contains an invalid or duplicate ObjectId");
 				if (!Object.Parent) ++RootCount;
 			}
@@ -199,24 +206,23 @@ namespace gargantuan {
 				}
 			}
 
-			std::unordered_map<WireObjectId, std::uint8_t> VisitState;
-			VisitState.reserve(Objects.size());
-			for (const auto &[Start, Object] : Objects) {
-				(void)Object;
-				if (VisitState[Start] == 2) continue;
-				std::vector<WireObjectId> Path;
-				auto Current = Start;
+			// Parent existence is established above. Reuse the existing identity
+			// index and path scratch for the complete, non-recursive cycle check.
+			std::vector<ValidationNode *> Path;
+			for (auto &[Id, Start] : Objects) {
+				if (Start.State == VisitState::Finished) continue;
+				Path.clear();
+				auto *Current = &Start;
 				while (true) {
-					auto &State = VisitState[Current];
-					if (State == 1) throw std::invalid_argument("Snapshot hierarchy contains a cycle");
-					if (State == 2) break;
-					State = 1;
+					if (Current->State == VisitState::Visiting)
+						throw std::invalid_argument("Snapshot hierarchy contains a cycle");
+					if (Current->State == VisitState::Finished) break;
+					Current->State = VisitState::Visiting;
 					Path.push_back(Current);
-					auto Position = Objects.find(Current);
-					if (Position == Objects.end() || !Position->second->Parent) break;
-					Current = *Position->second->Parent;
+					if (!Current->Object->Parent) break;
+					Current = &Objects.at(*Current->Object->Parent);
 				}
-				for (const auto Id : Path) VisitState[Id] = 2;
+				for (auto *Visited : Path) Visited->State = VisitState::Finished;
 			}
 		}
 	}
@@ -667,11 +673,13 @@ namespace gargantuan {
 		AssertAuthoritativeMutation("LoadSnapshot");
 		using ProfileClock = std::chrono::steady_clock;
 		auto PhaseStarted = Profile ? ProfileClock::now() : ProfileClock::time_point{};
-		auto FinishPhase = [&](std::uint64_t SnapshotLoadProfile::*Field) {
+		auto FinishPhase = [&](std::uint64_t SnapshotLoadProfile::*Field, runtime_detail::WorkPhase Phase) {
 			if (!Profile) return;
 			const auto Now = ProfileClock::now();
-			Profile->*Field += static_cast<std::uint64_t>(
+			const auto Elapsed = static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(Now - PhaseStarted).count());
+			Profile->*Field += Elapsed;
+			runtime_detail::RecordReportedWork(Phase, Elapsed);
 			PhaseStarted = Now;
 		};
 		SnapshotLoadResult result;
@@ -681,7 +689,7 @@ namespace gargantuan {
 			result.Errors.push_back(Error.what());
 			return result;
 		}
-		FinishPhase(&SnapshotLoadProfile::ValidationNanoseconds);
+		FinishPhase(&SnapshotLoadProfile::ValidationNanoseconds, runtime_detail::WorkPhase::SnapshotValidation);
 		const auto rootObject = std::find_if(
 			snapshot.Objects.begin(),
 			snapshot.Objects.end(),
@@ -717,7 +725,7 @@ namespace gargantuan {
 			result.Objects.emplace(object.Id, std::move(instance));
 		}
 
-		FinishPhase(&SnapshotLoadProfile::ConstructionNanoseconds);
+		FinishPhase(&SnapshotLoadProfile::ConstructionNanoseconds, runtime_detail::WorkPhase::SnapshotConstruction);
 		std::size_t rootCount = 0;
 		try {
 			for (const auto &object : snapshot.Objects) {
@@ -734,7 +742,7 @@ namespace gargantuan {
 			if (rootCount != 1) throw std::runtime_error("Snapshot must contain exactly one root");
 			auto dataModel = std::dynamic_pointer_cast<DataModel>(result.Root);
 			if (!dataModel) throw std::runtime_error("Snapshot root is not a DataModel");
-			FinishPhase(&SnapshotLoadProfile::ParentingNanoseconds);
+			FinishPhase(&SnapshotLoadProfile::ParentingNanoseconds, runtime_detail::WorkPhase::SnapshotParenting);
 
 			for (const auto &object : snapshot.Objects) {
 				auto instance = result.Resolve(object.Id);
@@ -799,7 +807,7 @@ namespace gargantuan {
 				for (const auto &tag : object.Tags)
 					(void)dataModel->Tags.Add(dataModel->GetObjectId(), instance->GetObjectId(), tag, ScriptSecurityContext::CoreTrusted());
 			}
-			FinishPhase(&SnapshotLoadProfile::PropertiesNanoseconds);
+			FinishPhase(&SnapshotLoadProfile::PropertiesNanoseconds, runtime_detail::WorkPhase::SnapshotProperties);
 		} catch (const std::exception &error) {
 			result.Errors.push_back(error.what());
 			result.Root.reset();
