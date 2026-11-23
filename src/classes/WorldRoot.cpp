@@ -1416,10 +1416,8 @@ namespace gargantuan {
 			}
 
 			}
-			// The ordered rigid collider list is consumed only by registered deformables.
-			auto Colliders = IdDeformables.empty() ? std::vector<SoftBodyCollider>{}
-				: runtime_detail::MeasureWork(runtime_detail::WorkPhase::PhysicsSoftColliders,
-					[&] { return BuildSoftBodyColliders(); });
+			auto Colliders = runtime_detail::MeasureWork(runtime_detail::WorkPhase::PhysicsSoftColliders,
+				[&] { return BuildSoftBodyColliders(); });
 			auto SoftResult = runtime_detail::MeasureWork(runtime_detail::WorkPhase::PhysicsSoftStep, [&] { return Deformables.Step({
 				.DeltaTime = STEP_INTERVAL,
 				.Gravity = {0.0f, -GetGravity(), 0.0f},
