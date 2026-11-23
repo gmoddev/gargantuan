@@ -34,6 +34,9 @@ enum class WorkPhase : std::size_t {
 	PlanningValidation, PlanningResume, PlanningCleanup, PlanningInstall,
 	StructuralFrameBuild, StructuralValidationEncode, StructuralSubmissionEncode,
 	StructuralIntent, StructuralSubmit, StructuralAcceptance, KnownCommit, AcceptedMetadataCommit,
+	PreSimulation, GameplayInputProduce, GameplayInputAdmission, GameplayMotion, GameplayPoseCommit,
+	GameplayPosePublish, GameplayPoseRelevance, GameplayPoseEncode, GameplayPoseEnqueue,
+	GameplayPoseReceive, GameplayPoseDecode, GameplayPosePresentation, TransportPoll,
 	Count
 };
 
@@ -55,7 +58,10 @@ inline constexpr std::array<std::string_view, static_cast<std::size_t>(WorkPhase
 	"StructuralPlanning", "RelevancePeer", "RelevanceHysteresis", "RelevanceCommit",
 	"PlanningValidation", "PlanningResume", "PlanningCleanup", "PlanningInstall",
 	"StructuralFrameBuild", "StructuralValidationEncode", "StructuralSubmissionEncode",
-	"StructuralIntent", "StructuralSubmit", "StructuralAcceptance", "KnownCommit", "AcceptedMetadataCommit"
+	"StructuralIntent", "StructuralSubmit", "StructuralAcceptance", "KnownCommit", "AcceptedMetadataCommit",
+	"PreSimulation", "GameplayInputProduce", "GameplayInputAdmission", "GameplayMotion", "GameplayPoseCommit",
+	"GameplayPosePublish", "GameplayPoseRelevance", "GameplayPoseEncode", "GameplayPoseEnqueue",
+	"GameplayPoseReceive", "GameplayPoseDecode", "GameplayPosePresentation", "TransportPoll"
 };
 
 struct WorkDuration {

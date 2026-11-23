@@ -1,5 +1,6 @@
 #include "gargantuan/network/SimulatedTransport.hpp"
 #include "../runtime/PublicationLatencyDiagnostics.hpp"
+#include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -715,6 +716,7 @@ namespace gargantuan::network {
 	}
 
 	TransportOperationResult SimulatedTransport::Send(const NetworkMessageIntent &Message) {
+		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::TransportSend);
 		auto Iterator = State->Connections.find(Message.Destination());
 		if (Iterator == State->Connections.end()) return Operation(TransportOperationStatus::InvalidConnection);
 		auto &Connection = Iterator->second;

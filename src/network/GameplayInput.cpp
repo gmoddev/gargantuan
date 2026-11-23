@@ -3,6 +3,7 @@
 #include "gargantuan/network/BinaryCodec.hpp"
 #include "gargantuan/network/Scheduler.hpp"
 #include "gargantuan/network/Transport.hpp"
+#include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -130,6 +131,7 @@ namespace gargantuan::network {
 	}
 
 	bool GameplayInputServer::HandleReceived(const ReceivedMessageEvent &Event, std::uint64_t ServerTick) {
+		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::GameplayInputAdmission);
 		AdmissionTimer Timing{Metrics.AdmissionNanoseconds};
 		SaturatingAdd(Metrics.InputBytesReceived, Event.Payload.size());
 		auto Current = Leases.find(Event.Connection);
@@ -251,6 +253,7 @@ namespace gargantuan::network {
 
 	bool GameplayInputClient::Submit(ConnectionId Connection, ObjectId CurrentEntity, std::uint64_t ClientTick,
 		glm::vec2 Movement, float FacingYawRadians, bool JumpRequested, const NetworkLimits &Limits) {
+		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::GameplayInputProduce);
 		if (Connection != ServerConnection || CurrentEntity != Entity || !Entity.IsValid() || !NextInput.IsValid() ||
 			ClientTick <= LastSubmittedTick || !ValidMovement(Movement, FacingYawRadians)) return false;
 		GameBinaryWriter Output(InputFrameBytes);
