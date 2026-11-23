@@ -15,7 +15,7 @@ local function Load(Animator)
 			local Ok, Track = pcall(function()
 				return Animator:LoadAnimation(Reference)
 			end)
-			if Ok then
+			if Ok and Track then
 				Track.Looped = Name ~= "Jump"
 				Tracks[Name] = Track
 			else
@@ -38,17 +38,28 @@ local function Evaluate(Character, Tracks)
 end
 
 return function(Players, RunService)
-	local PlayersByPlayback = {}
+	local PlaybackByPlayerId = {}
 	local function Add(Player)
-		if Player:IsA("Player") and not PlayersByPlayback[Player] then
-			PlayersByPlayback[Player] = {}
+		if Player.Destroyed or not Player:IsA("Player") then
+			return
 		end
+		local PlayerId = Player.PlayerId
+		local Previous = PlaybackByPlayerId[PlayerId]
+		if Previous and Previous.Player == Player then
+			return
+		end
+		if Previous then
+			Stop(Previous)
+		end
+		PlaybackByPlayerId[PlayerId] = { Player = Player }
 	end
 	local function Remove(Player)
-		local Playback = PlayersByPlayback[Player]
-		if Playback then
-			Stop(Playback)
-			PlayersByPlayback[Player] = nil
+		for PlayerId, Playback in PlaybackByPlayerId do
+			if Playback.Player == Player then
+				Stop(Playback)
+				PlaybackByPlayerId[PlayerId] = nil
+				return
+			end
 		end
 	end
 	for _, Player in Players:GetPlayers() do
@@ -57,8 +68,13 @@ return function(Players, RunService)
 	local AddedConnection = Players.ChildAdded:Connect(Add)
 	local RemovedConnection = Players.ChildRemoved:Connect(Remove)
 	local RenderConnection = RunService.PreRender:Connect(function()
-		for Player, Playback in PlayersByPlayback do
-			local Character = Player.Character
+		for PlayerId, Playback in PlaybackByPlayerId do
+			if Playback.Player.Destroyed then
+				Stop(Playback)
+				PlaybackByPlayerId[PlayerId] = nil
+				continue
+			end
+			local Character = Playback.Player.Character
 			local Root = Character and Character:IsA("KinematicCharacter") and Character.RootPart
 			local Animator = Root and Root:IsA("MeshPart") and Root:FindFirstChildOfClass("Animator") or nil
 			if Animator ~= Playback.Animator then
@@ -83,8 +99,9 @@ return function(Players, RunService)
 		RenderConnection:Disconnect()
 		RemovedConnection:Disconnect()
 		AddedConnection:Disconnect()
-		for Player in PlayersByPlayback do
-			Remove(Player)
+		for _, Playback in PlaybackByPlayerId do
+			Stop(Playback)
 		end
+		table.clear(PlaybackByPlayerId)
 	end
 end

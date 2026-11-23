@@ -51,7 +51,8 @@ local function SetHealth(Player, State, Health)
 end
 
 local function AddPlayer(Player)
-	if States[Player] then
+	local PlayerId = Player.PlayerId
+	if States[PlayerId] then
 		return
 	end
 	local Inventory = Instance.new("Folder")
@@ -65,7 +66,7 @@ local function AddPlayer(Player)
 		NextDroneStep = 0,
 		HasCharged = false,
 	}
-	States[Player] = State
+	States[PlayerId] = State
 	Player:SetAttribute("Team", "RelayCrew")
 	Player:SetAttribute("RelayCharges", 0)
 	SetHealth(Player, State, HealthMaximum)
@@ -89,10 +90,10 @@ local function RetireDrone(State)
 	end
 end
 
-local function RemovePlayer(Player)
-	local State = States[Player]
+local function RemovePlayer(PlayerId)
+	local State = States[PlayerId]
 	if State then
-		States[Player] = nil
+		States[PlayerId] = nil
 		State.CharacterConnection:Disconnect()
 		RetireDrone(State)
 	end
@@ -159,13 +160,15 @@ for _, Player in Players:GetPlayers() do
 	AddPlayer(Player)
 end
 local AddedConnection = Players.PlayerAdded:Connect(AddPlayer)
-local RemovingConnection = Players.PlayerRemoving:Connect(RemovePlayer)
+local RemovingConnection = Players.PlayerRemoving:Connect(function(Player)
+	RemovePlayer(Player.PlayerId)
+end)
 local StepConnection = RunService.PreSimulation:Connect(function(DeltaTime)
 	Elapsed += math.clamp(DeltaTime, 0, 0.1)
 	local CurrentPlayers = Players:GetPlayers()
 	local SwitchHeld = false
 	for _, Player in CurrentPlayers do
-		local State = States[Player]
+		local State = States[Player.PlayerId]
 		local Character = Player.Character
 		if State and State.Health > 0 and Character and not State.Drone
 			and IsStandingOn(Character.Position, GroundSwitch) then
@@ -179,7 +182,7 @@ local StepConnection = RunService.PreSimulation:Connect(function(DeltaTime)
 	end
 
 	for _, Player in CurrentPlayers do
-		local State = States[Player]
+		local State = States[Player.PlayerId]
 		if not State then
 			continue
 		end
@@ -243,7 +246,7 @@ script.Destroying:Connect(function()
 	StepConnection:Disconnect()
 	RemovingConnection:Disconnect()
 	AddedConnection:Disconnect()
-	for Player in States do
-		RemovePlayer(Player)
+	for PlayerId in States do
+		RemovePlayer(PlayerId)
 	end
 end)

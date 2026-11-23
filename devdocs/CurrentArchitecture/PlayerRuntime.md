@@ -119,6 +119,9 @@ replication ownership. A separate native-only, immutable `PlayerIdentity`
 (`Provider`, `Subject`) seam now supplies EntitlementService checks. Local Play
 initializes `(local, player-1)`; a future authenticated server bootstrap may
 initialize the same engine-owned type. Luau cannot submit or mutate it.
+Use `PlayerId` to key per-player Luau state within one runtime. A property,
+method, or signal can return a fresh userdata wrapper for the same Player.
+Those wrappers compare equal, while Luau table keys use raw userdata identity.
 
 `Player.Character` is nullable and accepts any live canonical `Character` in
 the same DataModel. The default assembly chooses `KinematicCharacter`, but an

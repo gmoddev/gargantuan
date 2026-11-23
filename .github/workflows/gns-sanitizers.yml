@@ -182,6 +182,7 @@ jobs:
               gargantuan_character_real_transport_tests \
               gargantuan_game_session_real_transport_tests \
               gargantuan_game_session_tests \
+              gargantuan_gameplay_sample_tests \
               gargantuan_replication_tests \
               gargantuan_gns_capacity_benchmark
 
@@ -201,7 +202,7 @@ jobs:
             --output-on-failure \
             --no-tests=error \
             --output-junit "$GITHUB_WORKSPACE/build-gns-sanitizers/ctest-gns-results.xml" \
-            -R '^(gargantuan_replication|gargantuan_real_transport|gargantuan_gns_failed_send_retry_safety|gargantuan_hybrid_packet_tail|gargantuan_f1_four_grant_sanitizer_safety|gargantuan_hybrid_mixed_traffic|gargantuan_gns_service_fairness|gargantuan_remote_real_transport|gargantuan_character_real_transport|gargantuan_game_session_real_transport|gargantuan_pooled_feedback_refresh|gargantuan_gameplay_possession_gns)$'
+            -R '^(gargantuan_replication|gargantuan_real_transport|gargantuan_gns_failed_send_retry_safety|gargantuan_hybrid_packet_tail|gargantuan_f1_four_grant_sanitizer_safety|gargantuan_hybrid_mixed_traffic|gargantuan_gns_service_fairness|gargantuan_remote_real_transport|gargantuan_character_real_transport|gargantuan_game_session_real_transport|gargantuan_pooled_feedback_refresh|gargantuan_gameplay_possession_gns|gargantuan_gameplay_relay_sample_gns)$'
           test -s "$GITHUB_WORKSPACE/build-gns-sanitizers/ctest-gns-results.xml"
 
       - name: Run profiled GameSession over GNS under sanitizers

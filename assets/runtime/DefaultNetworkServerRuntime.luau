@@ -8,10 +8,11 @@ require("@game/Players/PlayerRuntimeModules/DefaultNetworkLocomotion")(
 
 local CharacterCleanups = {}
 local function AddPlayer(Player)
-	if CharacterCleanups[Player] ~= nil then
+	local PlayerId = Player.PlayerId
+	if CharacterCleanups[PlayerId] ~= nil then
 		return
 	end
-	CharacterCleanups[Player] = require("@game/Players/PlayerRuntimeModules/DefaultCharacterAssembly")(
+	CharacterCleanups[PlayerId] = require("@game/Players/PlayerRuntimeModules/DefaultCharacterAssembly")(
 		Player,
 		Workspace
 	)
@@ -21,9 +22,10 @@ local function AddPlayer(Player)
 end
 
 local function RemovePlayer(Player)
-	local Cleanup = CharacterCleanups[Player]
+	local PlayerId = Player.PlayerId
+	local Cleanup = CharacterCleanups[PlayerId]
 	if Cleanup ~= nil then
-		CharacterCleanups[Player] = nil
+		CharacterCleanups[PlayerId] = nil
 		Cleanup()
 	end
 end
@@ -37,8 +39,8 @@ local RemovingConnection = Players.PlayerRemoving:Connect(RemovePlayer)
 script.Destroying:Connect(function()
 	RemovingConnection:Disconnect()
 	AddedConnection:Disconnect()
-	for Player, Cleanup in CharacterCleanups do
-		CharacterCleanups[Player] = nil
+	for PlayerId, Cleanup in CharacterCleanups do
+		CharacterCleanups[PlayerId] = nil
 		Cleanup()
 	end
 end)
