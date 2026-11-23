@@ -1,0 +1,38 @@
+name: GAS codec fuzz qualification
+
+on:
+  push:
+    branches: [qualification/gas-1-codec]
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Build and fuzz both canonical GAS profiles
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          set -euo pipefail
+          git submodule update --init --depth 1 vendor/glm vendor/json
+          git rev-parse HEAD
+          git submodule status vendor/glm vendor/json
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends clang-19 g++-14 libclang-rt-19-dev llvm-19
+          clang++-19 --version
+          clang++-19 --gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 \
+            -std=c++23 -O1 -g -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer \
+            -Iinclude -Isrc -isystem vendor/glm -isystem vendor/json/include \
+            src/serialization/GasDocument.cpp src/filesystem/ProjectIdentity.cpp \
+            src/assets/AssetTypes.cpp src/runtime/ProtocolInput.cpp tests/GasDocumentFuzz.cpp \
+            -o "$RUNNER_TEMP/gas-codec-fuzz"
+          export GAS_FUZZ_CORPUS="$RUNNER_TEMP/gas-corpus"
+          mkdir -p "$GAS_FUZZ_CORPUS"
+          "$RUNNER_TEMP/gas-codec-fuzz" "$GAS_FUZZ_CORPUS" -max_total_time=75 \
+            -max_len=8192 -rss_limit_mb=1024 -timeout=5 -seed=4177 -print_final_stats=1
