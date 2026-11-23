@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -71,7 +72,7 @@ namespace {
 		}
 	};
 
-	void RunRelayRescue(bool UseGns) {
+	void RunRelayRescue(bool UseGns, const std::filesystem::path &ProjectRoot) {
 		auto Network = UseGns ? nullptr : SimulatedNetwork::Create({.BaseLatency = 6ms});
 		const auto CreateTransport = [&]() -> std::shared_ptr<IGameTransport> {
 			if (Network) return Network->CreateTransport();
@@ -82,7 +83,7 @@ namespace {
 #endif
 		};
 
-		DiskFilesystem Filesystem(GARGANTUAN_GAMEPLAY_SAMPLE_ROOT);
+		DiskFilesystem Filesystem(ProjectRoot);
 		auto Sample = Project::fromExisting(&Filesystem);
 		auto TrustedWorld = Sample.DeserializeGame();
 		auto ServerWorld = Sample.DeserializeGame();
@@ -302,8 +303,17 @@ namespace {
 
 int main(int ArgumentCount, char **Arguments) {
 	try {
+		bool UseGns = false;
+		std::filesystem::path ProjectRoot = GARGANTUAN_GAMEPLAY_SAMPLE_ROOT;
+		for (int Index = 1; Index < ArgumentCount; ++Index) {
+			const std::string_view Argument(Arguments[Index]);
+			if (Argument == "--gns") UseGns = true;
+			else if (Argument == "--project" && Index + 1 < ArgumentCount)
+				ProjectRoot = std::filesystem::absolute(Arguments[++Index]);
+			else throw std::invalid_argument("Use --gns or --project <root>");
+		}
 		gargantuan::BootstrapNativeRuntimeSchema();
-		RunRelayRescue(ArgumentCount > 1 && std::string_view(Arguments[1]) == "--gns");
+		RunRelayRescue(UseGns, ProjectRoot);
 		std::cout << "[Gameplay:Relay] Saved two-player mission passed\n";
 		return 0;
 	} catch (const std::exception &Error) {
