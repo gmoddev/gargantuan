@@ -90,7 +90,7 @@ namespace gargantuan {
 		if (!RootPartValue || RootPartValue->GetDestroyed() || RootPartValue->IsDestroying()) return;
 		if (!RootPartValue->GetCFrame().FuzzyEq(Transform)) {
 			if (Simulation)
-				RootPartValue->SetCharacterSimulationCFrame(Transform);
+				RootPartValue->SetSimulationCFrame(Transform);
 			else
 				RootPartValue->SetCFrame(Transform);
 		}

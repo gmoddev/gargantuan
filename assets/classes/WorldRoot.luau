@@ -1,4 +1,4 @@
-const c, t, p = require("@tools/classes").unpack()
+const c, t = require("@tools/classes").unpack()
 
 return c({
 	name = "WorldRoot",
@@ -63,10 +63,6 @@ return c({
 			description = "Moves a bounded capsule through real world geometry and returns neutral collision resolution data.",
 			asLuau = true,
 			luauSignature = "(self: WorldRoot, Position: Vector3, Radius: number, Height: number, Translation: Vector3, Velocity: Vector3) -> { Position: Vector3, AppliedTranslation: Vector3, Velocity: Vector3, ContactNormal: Vector3, FloorNormal: Vector3, Collided: boolean, HasFloor: boolean, PlanesTruncated: boolean }",
-		},
-		StepPhysics = {
-			description = "Advances the physics simulation by the specified delta time. Defaults to simulating all descendant BaseParts.",
-			params = { p("deltaTime", t.Double), p("instances", t.Optional(t.Array(t.Instance()))) },
 		},
 	},
 })

@@ -24,6 +24,17 @@ return c({
 			replicated = true,
 			materializationDependency = "Hard",
 		},
+		PossessedEntity = {
+			description = "The current server-assigned gameplay entity, or nil if no target is available in this view.",
+			type = t.Optional(t.Instance("Instance")),
+			unmodified = "std::nullopt",
+			overrideRead = "GetPossessedEntity",
+			overrideWrite = "SetReplicatedPossessedEntity",
+			writeLevel = "Engine",
+			editable = false,
+			replicated = true,
+			materializationDependency = "Soft",
+		},
 	},
 
 	signals = {
@@ -41,6 +52,11 @@ return c({
 	},
 
 	methods = {
+		SetPossession = {
+			description = "Assigns an unoccupied live Workspace entity, or releases the current target with nil. Server only.",
+			requiredCapability = "MutateDataModel",
+			params = { { name = "Entity", type = t.Optional(t.Instance("Instance")) } },
+		},
 		LoadCharacter = {
 			description = "Removes the current character and requests a fresh character assembly.",
 		},

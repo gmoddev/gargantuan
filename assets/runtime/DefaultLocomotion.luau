@@ -1,7 +1,13 @@
+local function ReadSpeed(Character, Name, Default)
+	local Speed = Character:GetAttribute(Name)
+	if type(Speed) == "number" and Speed >= 0 and Speed <= 100 then
+		return Speed
+	end
+	return Default
+end
+
 return function(LocalPlayer, ActionMap, Workspace, RunService)
 	local JumpRequested = false
-	local WalkSpeed = 16
-	local JumpSpeed = 50
 	local WalkableFloorY = 0.55
 	local StepHeight = 1.25
 	local StepForwardInset = 1
@@ -15,7 +21,9 @@ return function(LocalPlayer, ActionMap, Workspace, RunService)
 
 	local SimulationConnection = RunService.PreSimulation:Connect(function(DeltaTime)
 		local Character = LocalPlayer.Character
-		if Character == nil or not Character:IsA("KinematicCharacter") or DeltaTime <= 0 then
+		local Possession = LocalPlayer.PossessedEntity
+		if Character == nil or not Character:IsA("KinematicCharacter") or DeltaTime <= 0
+			or (Possession and Possession ~= Character) then
 			JumpRequested = false
 			return
 		end
@@ -48,9 +56,11 @@ return function(LocalPlayer, ActionMap, Workspace, RunService)
 
 		local WasGrounded = Character.Grounded
 		local Velocity = Character.Velocity
-		Velocity = Vector3.new(Direction.X * WalkSpeed, Velocity.Y - Workspace.Gravity * DeltaTime, Direction.Z * WalkSpeed)
+		local Speed = if ActionMap:IsDown("Run") then ReadSpeed(Character, "RunSpeed", 24)
+			else ReadSpeed(Character, "WalkSpeed", 16)
+		Velocity = Vector3.new(Direction.X * Speed, Velocity.Y - Workspace.Gravity * DeltaTime, Direction.Z * Speed)
 		if JumpRequested and Character.Grounded then
-			Velocity = Vector3.new(Velocity.X, JumpSpeed, Velocity.Z)
+			Velocity = Vector3.new(Velocity.X, ReadSpeed(Character, "JumpSpeed", 50), Velocity.Z)
 			Character.Grounded = false
 		end
 		JumpRequested = false

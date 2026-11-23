@@ -1353,15 +1353,31 @@ namespace gargantuan {
 		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::MutateDataModel))
 			throw std::runtime_error("[Physics:Authority] Stepping requires MutateDataModel");
 		AssertCanMutate();
+		if (!std::isfinite(DeltaTime) || DeltaTime < 0.0)
+			throw std::invalid_argument("[Physics:Step] DeltaTime must be finite and nonnegative");
+		if (SteppingPhysics)
+			throw std::logic_error("[Physics:Step] Cannot advance a world already stepping");
 		(void)Instances;
+
+		struct StepGuard {
+			bool &Active;
+			~StepGuard() { Active = false; }
+		};
+		SteppingPhysics = true;
+		const StepGuard Guard{SteppingPhysics};
 		runtime_detail::MeasureWork(runtime_detail::WorkPhase::PhysicsUpdate, [&] { ApplyPendingPhysicsChanges(); });
-		StepAccumulator += static_cast<float>(DeltaTime);
+		constexpr auto MaximumAccumulatedTime = static_cast<double>(MAX_STEPS_PER_FRAME) * STEP_INTERVAL;
+		StepAccumulator = static_cast<float>(std::min(
+			static_cast<double>(StepAccumulator) + DeltaTime, MaximumAccumulatedTime));
 		int Steps = 0;
 		while (StepAccumulator >= STEP_INTERVAL && Steps < MAX_STEPS_PER_FRAME) {
 			ApplyPendingImpulses();
 			ApplyPendingDeformableForces();
 			auto Result = runtime_detail::MeasureWork(runtime_detail::WorkPhase::PhysicsRigidStep,
 				[&] { return Physics.Step({.DeltaTime = STEP_INTERVAL, .SubStepCount = SUB_STEP_COUNT}); });
+			StepAccumulator -= STEP_INTERVAL;
+			++Steps;
+			if (Steps == MAX_STEPS_PER_FRAME) StepAccumulator = 0.0f;
 			ReadbackDynamicBodies();
 			{
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::PhysicsEvents);
@@ -1422,9 +1438,6 @@ namespace gargantuan {
 					State.Positions ? State.Positions->size() * sizeof(glm::vec3) * 4 : 0
 				);
 			}
-			StepAccumulator -= STEP_INTERVAL;
-			++Steps;
 		}
-		if (Steps == MAX_STEPS_PER_FRAME) StepAccumulator = 0.0f;
 	}
 }

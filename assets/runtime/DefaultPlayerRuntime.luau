@@ -8,7 +8,9 @@ local Cleanups = {}
 if Players.DefaultControllerEnabled or Players.DefaultCameraEnabled then
 	table.insert(
 		Cleanups,
-		require("@game/Players/PlayerRuntimeModules/DefaultActionMap")(ActionMap, Players.DefaultCameraEnabled)
+		require("@game/Players/PlayerRuntimeModules/DefaultActionMap")(
+			ActionMap, Players.DefaultCameraEnabled, Players.DefaultControllerEnabled
+		)
 	)
 end
 if Players.DefaultControllerEnabled then
@@ -16,6 +18,9 @@ if Players.DefaultControllerEnabled then
 end
 if Players.DefaultCameraEnabled then
 	table.insert(Cleanups, require("@game/Players/PlayerRuntimeModules/DefaultCamera")(Players, ActionMap, UserInputService, Workspace, RunService))
+end
+if Players:GetAttribute("DefaultCharacterAnimations") == true then
+	table.insert(Cleanups, require("@game/Players/PlayerRuntimeModules/DefaultCharacterAnimation")(Players, RunService))
 end
 
 script.Destroying:Connect(function()

@@ -707,7 +707,7 @@
       "Name": "CharacterControlService",
       "Kind": "Service",
       "Source": "assets/services/CharacterControlService.luau",
-      "SourceSha256": "4d412883fae3289e3a8b4f511eaac8114c7a7dffaf28b69c7782cf447aaed1ff",
+      "SourceSha256": "80e9fd6597f9d83dca389e7802e04339c283b3d2311b1ea885e9a4651cf937a4",
       "Description": "A narrow runtime bridge between replaceable Character policy and native network authority.",
       "Extends": "Instance",
       "Abstract": false,
@@ -715,6 +715,18 @@
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
       "Methods": [
+        {
+          "Name": "GetPossessionInput",
+          "Description": "Consumes the authoritative possession input for a Player once per simulation tick. Server only.",
+          "AsLuau": true,
+          "LuauSignature": "(self: CharacterControlService, Player: Player) -> { Movement: Vector2, FacingYawRadians: number, JumpRequested: boolean, Tick: number, AcknowledgedInput: number, AgeTicks: number, Fresh: boolean }?"
+        },
+        {
+          "Name": "MovePossessedPart",
+          "Description": "Commits one bounded server-chosen pose per simulation tick for a possessed anchored BasePart.",
+          "AsLuau": true,
+          "LuauSignature": "(self: CharacterControlService, Player: Player, Transform: CFrame) -> boolean"
+        },
         {
           "Name": "RegisterAction",
           "Description": "Registers bounded runtime action policy and pinned animation identity.",
@@ -748,6 +760,12 @@
         {
           "Name": "SubmitMoveIntent",
           "Description": "Submits bounded semantic movement intent for the trusted local Character.",
+          "AsLuau": true,
+          "LuauSignature": "(self: CharacterControlService, MoveIntent: Vector2, FacingYawRadians: number, JumpRequested: boolean) -> boolean"
+        },
+        {
+          "Name": "SubmitPossessionIntent",
+          "Description": "Submits one bounded movement intent for the local Player's current possessed entity.",
           "AsLuau": true,
           "LuauSignature": "(self: CharacterControlService, MoveIntent: Vector2, FacingYawRadians: number, JumpRequested: boolean) -> boolean"
         }
@@ -2824,7 +2842,7 @@
       "Name": "Player",
       "Kind": "Class",
       "Source": "assets/classes/Player.luau",
-      "SourceSha256": "eee34e11e6b3dcc3dcec0f6238af6eb2e13fdeaaf2310b9dec5042ad472fd8a5",
+      "SourceSha256": "1e6fd048472f9f3d747494bf66ea4beeb42f106da930acf2ad5b41d37d58eb72",
       "Description": "A gameplay player identity whose lifetime is independent from transport connections.",
       "Extends": "Instance",
       "Abstract": false,
@@ -2850,6 +2868,18 @@
           "OverrideRead": "GetPlayerId",
           "OverrideWrite": "SetReplicatedPlayerId",
           "Replicated": true
+        },
+        {
+          "Name": "PossessedEntity",
+          "Description": "The current server-assigned gameplay entity, or nil if no target is available in this view.",
+          "Type": "t.Optional(t.Instance(\"Instance\"))",
+          "Unmodified": "std::nullopt",
+          "OverrideRead": "GetPossessedEntity",
+          "OverrideWrite": "SetReplicatedPossessedEntity",
+          "WriteLevel": "Engine",
+          "Editable": false,
+          "Replicated": true,
+          "MaterializationDependency": "Soft"
         }
       ],
       "Methods": [
@@ -2864,6 +2894,12 @@
         {
           "Name": "ResetCharacter",
           "Description": "Resets the current character through the same spawn contract."
+        },
+        {
+          "Name": "SetPossession",
+          "Description": "Assigns an unoccupied live Workspace entity, or releases the current target with nil. Server only.",
+          "RequiredCapability": "MutateDataModel",
+          "Params": "{ { name = \"Entity\", type = t.Optional(t.Instance(\"Instance\")) } }"
         }
       ],
       "Signals": [
@@ -4623,7 +4659,7 @@
       "Name": "WorldRoot",
       "Kind": "Class",
       "Source": "assets/classes/WorldRoot.luau",
-      "SourceSha256": "e0a6656323c0b80f440ec1f77753b8a45ec346eac3fdce7ff4064b13857af9e2",
+      "SourceSha256": "197cba029075ed325a1b142e29f442bcb26b26e4edb3e8eb193aae20e5f9be5c",
       "Description": "Abstract class for a physical 3D world.",
       "Extends": "Instance",
       "Abstract": true,
@@ -4703,11 +4739,6 @@
           "Description": "Sweeps a sphere; Direction magnitude is distance. Initial overlaps are ignored.",
           "AsLuau": true,
           "LuauSignature": "(self: WorldRoot, Origin: Vector3, Radius: number, Direction: Vector3, Params: RaycastParams?) -> { Instance: BasePart, Position: Vector3, Normal: Vector3, Distance: number }?"
-        },
-        {
-          "Name": "StepPhysics",
-          "Description": "Advances the physics simulation by the specified delta time. Defaults to simulating all descendant BaseParts.",
-          "Params": "{ p(\"deltaTime\", t.Double), p(\"instances\", t.Optional(t.Array(t.Instance()))) }"
         }
       ],
       "Signals": []
@@ -5735,6 +5766,31 @@
         "GameSessionMessageKind",
         "GameSessionServerAccepted",
         "SessionIdentityKind"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/network/GameplayInput.hpp",
+      "Types": [
+        "GameplayInputClient",
+        "GameplayInputLeaseEpochDomain",
+        "GameplayInputMetrics",
+        "GameplayInputSample",
+        "GameplayInputSequenceDomain",
+        "GameplayInputServer",
+        "INetworkScheduler",
+        "Lease",
+        "NetworkLimits",
+        "ReceivedMessageEvent"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/network/GameplayPose.hpp",
+      "Types": [
+        "GameplayPoseControl",
+        "GameplayPosePresentation",
+        "GameplayPoseSnapshot",
+        "ReceivedMessageEvent",
+        "Replica"
       ]
     },
     {

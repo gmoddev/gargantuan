@@ -10,6 +10,7 @@
 
 namespace gargantuan {
 	class Character;
+	namespace network { class GameSession; }
 
 	class BasePart : public Instance {
 		I_BasePart;
@@ -28,7 +29,8 @@ namespace gargantuan {
 		[[nodiscard]] virtual PhysicsShapeDesc GetPhysicsShape() const = 0;
 		friend class Character;
 		friend class WorldRoot;
-		void SetCharacterSimulationCFrame(const gargantuan::CFrame &Value);
+		friend class network::GameSession;
+		void SetSimulationCFrame(const gargantuan::CFrame &Value);
 		void SetCharacterPresentationOffset(std::optional<gargantuan::CFrame> Value);
 
 	  public:

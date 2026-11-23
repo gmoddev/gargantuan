@@ -18,7 +18,9 @@ if Players.DefaultControllerEnabled or Players.DefaultCameraEnabled then
 	)
 end
 if Players.DefaultControllerEnabled then
-	require("@game/Players/PlayerRuntimeModules/DefaultNetworkLocomotion")(CharacterControl, Workspace)
+	require("@game/Players/PlayerRuntimeModules/DefaultNetworkLocomotion")(
+		CharacterControl, Workspace, Players:GetAttribute("DefaultMovementTuning") == true
+	)
 	table.insert(
 		Cleanups,
 		require("@game/Players/PlayerRuntimeModules/DefaultNetworkCharacterRuntime")(
@@ -41,6 +43,9 @@ if Players.DefaultCameraEnabled then
 			RunService
 		)
 	)
+end
+if Players:GetAttribute("DefaultCharacterAnimations") == true then
+	table.insert(Cleanups, require("@game/Players/PlayerRuntimeModules/DefaultCharacterAnimation")(Players, RunService))
 end
 
 script.Destroying:Connect(function()

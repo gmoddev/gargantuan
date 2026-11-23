@@ -4552,6 +4552,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "devdocs/Validation/GameplayFoundation7.md",
+      "Purpose": "Gameplay Foundation 7",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "devdocs/Validation/PhysicsExpansionBenchmarkProtocol.md",
       "Purpose": "Physics expansion after-only benchmark protocol",
       "LastMeaningfulUpdate": null,
@@ -4969,6 +4982,19 @@
       "Status": "Current",
       "StatusLabel": "Current and authoritative",
       "ProposedAction": "Maintain source-linked developer entry point and validate links/examples",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/protocols/gameplay-possession.md",
+      "Purpose": "Gameplay possession wire formats",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Inspect owning source before promoting to current authority",
       "ObsoleteTermMentions": []
     },
     {
@@ -5590,6 +5616,19 @@
       },
       "RelevantSourceSubsystem": [
         "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Maintain setup, authority and sample-specific execution limits",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "samples/GameplayFoundation7/README.md",
+      "Purpose": "Relay Rescue",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "assets/NOTICE.md"
       ],
       "Status": "Current",
       "StatusLabel": "Current and authoritative",

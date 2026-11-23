@@ -853,6 +853,13 @@ namespace gargantuan::network {
 		return true;
 	}
 
+	ObjectId ReplicationRelevance::GetSpatialRoot(ObjectId Object) const {
+		const auto Location = State->ObjectLocations.find(Object);
+		return Location != State->ObjectLocations.end()
+			? Location->second.SpatialRoot.value_or(ObjectId{})
+			: ObjectId{};
+	}
+
 	bool ReplicationRelevance::SetTrustedFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints) {
 		auto Peer = State->Peers.find(Connection);
 		if (Peer == State->Peers.end() || FocusPoints.size() > MaximumReplicationFocusPoints ||
