@@ -4873,6 +4873,16 @@
       ]
     },
     {
+      "Path": "include/gargantuan/assets/GasDependencies.hpp",
+      "Types": []
+    },
+    {
+      "Path": "include/gargantuan/assets/GasInstanceSerialization.hpp",
+      "Types": [
+        "GasMaterializationResult"
+      ]
+    },
+    {
       "Path": "include/gargantuan/assets/InstanceSerialization.hpp",
       "Types": [
         "DeserializationState",
@@ -6455,6 +6465,7 @@
         "CreateObjectCommand",
         "DestroyObjectCommand",
         "DuplicateObjectCommand",
+        "ImportGasModelCommand",
         "InitialPropertyMutation",
         "MutationAuthorityContext",
         "MutationCommandOrigin",
@@ -6673,6 +6684,18 @@
       "Path": "include/gargantuan/scripting/UserdataTag.hpp",
       "Types": [
         "UserdataTag"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/serialization/GasDocument.hpp",
+      "Types": [
+        "Dependency",
+        "Document",
+        "DocumentKind",
+        "LocalReference",
+        "Node",
+        "PlaceMetadata",
+        "PropertyGroup"
       ]
     },
     {

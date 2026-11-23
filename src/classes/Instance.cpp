@@ -1142,6 +1142,11 @@ namespace gargantuan {
 	}
 
 	void Instance::SetParent(std::optional<std::shared_ptr<Instance>> value) {
+		SetParentInternal(std::move(value), nullptr);
+	}
+
+	void Instance::SetParentInternal(std::optional<std::shared_ptr<Instance>> value,
+		std::vector<std::shared_ptr<Instance>> *DeferredNotifications) {
 		AssertAuthoritativeMutation("Instance::SetParent");
 		if (!DestroyingState) AssertIsAlive();
 
@@ -1284,26 +1289,28 @@ namespace gargantuan {
 			}
 		}
 
-		if (oldParent != nullptr) {
-			oldParent->ChildRemoved->Fire(self);
-			for (auto ancestor = oldParent; ancestor; ancestor = ancestor->ParentReference.lock()) {
-				for (auto &node : subtree) ancestor->DescendantRemoved->Fire(node);
-			}
-		}
-
-		if (newParent != nullptr) {
-			newParent->ChildAdded->Fire(self);
-
-			for (auto ancestor = newParent; ancestor; ancestor = ancestor->ParentReference.lock()) {
-				for (auto &node : subtree) ancestor->DescendantAdded->Fire(node);
-			}
-		}
-
-		FireAncestryChanged(self, newParent);
+		if (DeferredNotifications) *DeferredNotifications = std::move(subtree);
+		else NotifyParentChanged(self, oldParent, newParent, subtree);
 		if (!DestroyingState) {
 			if (oldDataModel) oldDataModel->AdvanceAuthoritativeRevision();
 			if (newDataModel && newDataModel != oldDataModel) newDataModel->AdvanceAuthoritativeRevision();
 		}
+	}
+
+	void Instance::NotifyParentChanged(const std::shared_ptr<Instance> &SelfValue,
+		const std::shared_ptr<Instance> &OldParent, const std::shared_ptr<Instance> &NewParent,
+		const std::vector<std::shared_ptr<Instance>> &Subtree) {
+		if (OldParent) {
+			OldParent->ChildRemoved->Fire(SelfValue);
+			for (auto Ancestor = OldParent; Ancestor; Ancestor = Ancestor->ParentReference.lock())
+				for (const auto &Node : Subtree) Ancestor->DescendantRemoved->Fire(Node);
+		}
+		if (NewParent) {
+			NewParent->ChildAdded->Fire(SelfValue);
+			for (auto Ancestor = NewParent; Ancestor; Ancestor = Ancestor->ParentReference.lock())
+				for (const auto &Node : Subtree) Ancestor->DescendantAdded->Fire(Node);
+		}
+		FireAncestryChanged(SelfValue, NewParent);
 	}
 
 	void Instance::ClearAllChildren() {

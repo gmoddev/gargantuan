@@ -703,6 +703,17 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+	add_executable(gargantuan_gas_document_tests "tests/GasDocumentTests.cpp")
+	target_link_libraries(gargantuan_gas_document_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_gas_document COMMAND gargantuan_gas_document_tests)
+	set_tests_properties(gargantuan_gas_document PROPERTIES LABELS "persistence;serialization;sanitizer-safety")
+	add_executable(gargantuan_gas_authoring_tests "tests/GasAuthoringTests.cpp")
+	target_link_libraries(gargantuan_gas_authoring_tests PRIVATE gargantuan_core nlohmann_json)
+	add_test(NAME gargantuan_gas_authoring COMMAND gargantuan_gas_authoring_tests)
+	set_tests_properties(gargantuan_gas_authoring PROPERTIES LABELS "persistence;editor;serialization")
+	add_test(NAME gargantuan_gas_animated_model COMMAND gargantuan_gas_authoring_tests --model-fixture
+		"${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame" AnimatedBeacon)
+	set_tests_properties(gargantuan_gas_animated_model PROPERTIES LABELS "persistence;editor;assets")
 	add_test(NAME gargantuan_runtime_host_roles
 		COMMAND ${CMAKE_COMMAND}
 			-DGARGANTUAN_PLAYER=$<TARGET_FILE:gargantuan_player>
@@ -1499,6 +1510,25 @@ if(BUILD_TESTING)
 			target_link_libraries(gargantuan_serialization_benchmark PRIVATE gargantuan_glaze_serialization_prototype)
 		endif()
 		add_test(NAME SerializationBenchmarkSmoke COMMAND gargantuan_serialization_benchmark)
+		add_test(NAME gargantuan_gas_serialization_benchmark COMMAND gargantuan_serialization_benchmark --gas)
+		set_tests_properties(gargantuan_gas_serialization_benchmark PROPERTIES LABELS "serialization;benchmark" TIMEOUT 180)
+		if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+			add_executable(gargantuan_gas_benchmark_profile
+				"tests/SerializationBenchmark.cpp" "tests/GasBenchmarkAllocations.cpp" "tests/BenchmarkAllocationProbe.cpp")
+			target_compile_definitions(gargantuan_gas_benchmark_profile PRIVATE GARGANTUAN_GAS_BENCHMARK_PROFILE=1)
+			target_link_libraries(gargantuan_gas_benchmark_profile PRIVATE gargantuan_core)
+			if(WIN32)
+				target_link_libraries(gargantuan_gas_benchmark_profile PRIVATE Psapi)
+			endif()
+			foreach(GasProfileBackend JSON GAS)
+				foreach(GasProfileObjects 100 1000 5000)
+					set(GasProfileTest "gargantuan_gas_profile_${GasProfileBackend}_${GasProfileObjects}")
+					add_test(NAME "${GasProfileTest}" COMMAND gargantuan_gas_benchmark_profile
+						--gas-profile "${GasProfileBackend}" "${GasProfileObjects}")
+					set_tests_properties("${GasProfileTest}" PROPERTIES LABELS "serialization;benchmark" TIMEOUT 180)
+				endforeach()
+			endforeach()
+		endif()
 	endif()
 	if(GARGANTUAN_WITH_FILAMENT)
 		add_executable(gargantuan_filament_renderer_tests "tests/FilamentRendererTests.cpp")
@@ -1518,6 +1548,8 @@ if(BUILD_TESTING)
 		set(GARGANTUAN_SDL_RUNTIME_TARGETS
 			gargantuan
 			gargantuan_foundation_tests
+			gargantuan_gas_document_tests
+			gargantuan_gas_authoring_tests
 			gargantuan_prepared_property_tests
 			gargantuan_concrete_property_default_tests
 			gargantuan_asset_foundation_tests
@@ -1600,7 +1632,7 @@ if(BUILD_TESTING)
 			gargantuan_remote_benchmark
 		)
 		if(GARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS)
-			list(APPEND GARGANTUAN_SDL_RUNTIME_TARGETS gargantuan_serialization_benchmark)
+			list(APPEND GARGANTUAN_SDL_RUNTIME_TARGETS gargantuan_serialization_benchmark gargantuan_gas_benchmark_profile)
 		endif()
 		if(GARGANTUAN_WITH_GNS)
 			list(APPEND GARGANTUAN_SDL_RUNTIME_TARGETS
@@ -1742,6 +1774,16 @@ if(BUILD_TESTING)
 			-DGARGANTUAN_PACKAGE_TEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/package-tests
 			-P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/DedicatedServerPackageTests.cmake
 	)
+	add_test(NAME gargantuan_gas_package_input
+		COMMAND ${CMAKE_COMMAND}
+			-DGARGANTUAN_PACKAGER=$<TARGET_FILE:gargantuan_packager>
+			-DGARGANTUAN_RUNTIME_DISTRIBUTION=$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
+			-DGARGANTUAN_SERVER_RUNTIME_DISTRIBUTION=$<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution
+			-DGARGANTUAN_PROJECT_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame
+			-DGARGANTUAN_PACKAGE_TEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/package-tests
+			-P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GasPackageInputTests.cmake
+	)
+	set_tests_properties(gargantuan_gas_package_input PROPERTIES LABELS "persistence;packaging" TIMEOUT 300)
 	add_test(NAME gargantuan_gui_foundation_benchmark_smoke COMMAND gargantuan_gui_foundation_benchmark --quick)
 	add_test(NAME gargantuan_prerun_bootstrap COMMAND gargantuan_prerun_bootstrap_tests)
 	add_test(NAME gargantuan_networking_contracts COMMAND gargantuan_networking_contract_tests)
