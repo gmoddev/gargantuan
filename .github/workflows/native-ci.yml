@@ -29,6 +29,27 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  gas_codec_focused:
+    name: GAS codec golden and malformed-input sanitizer check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Build and run the focused codec fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule update --init --depth 1 vendor/glm vendor/json
+          git rev-parse HEAD
+          git submodule status vendor/glm vendor/json
+          uname -srm
+          g++ --version
+          g++ -std=c++23 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iinclude -Isrc -isystem vendor/glm -isystem vendor/json/include \
+            src/serialization/GasDocument.cpp src/filesystem/ProjectIdentity.cpp \
+            src/assets/AssetTypes.cpp src/runtime/ProtocolInput.cpp tests/GasDocumentTests.cpp \
+            -o "$RUNNER_TEMP/gas-codec-test"
+          "$RUNNER_TEMP/gas-codec-test"
   windows-native:
     name: ${{ github.event_name == 'workflow_dispatch' && (inputs.scheduler_trace || inputs.scheduler_pair_diagnostic || inputs.scheduler_ack_cycle_diagnostic) && 'Windows causal diagnostic - not qualification' || 'Windows x64 / MSVC 19.50+ / Release' }}
     runs-on: windows-2025-vs2026
