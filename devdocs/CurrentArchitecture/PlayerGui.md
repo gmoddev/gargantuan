@@ -117,9 +117,9 @@ Server-created structural content without matching package provenance remains pr
 data. Existing action, input, and remote authority policies apply to gameplay
 requests made from UI.
 
-Destroying a reset Script retires pending task-scheduler entries for its
-original coroutine. Independently spawned coroutines retain their existing
-scheduler lifetime.
+Destroying or disabling a Script retires pending task-scheduler entries for
+its original coroutine, including when a disable and re-enable requests a
+fresh run. Independently spawned coroutines retain their scheduler lifetime.
 
 ## Native regression coverage
 

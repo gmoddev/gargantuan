@@ -714,11 +714,6 @@ namespace gargantuan {
 			Tracked.Published = false;
 			Tracked.Snapshot = {};
 		}
-
-		void FireEnded(const std::vector<std::shared_ptr<AnimationTrack>> &Tracks) {
-			for (const auto &Track : Tracks)
-				if (Track) Track->FirePendingEndedRuntime();
-		}
 	};
 
 	AnimationRuntime::AnimationRuntime(
@@ -1413,9 +1408,17 @@ namespace gargantuan {
 			std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - MergeStarted)
 				.count()
 		);
-		for (auto &[AnimatorObject, Tracked] : State->Animators) {
+		// A completion can synchronously shut down the runtime. Snapshot only
+		// pending tracks in animator and creation order before invoking observers.
+		std::vector<std::shared_ptr<AnimationTrack>> CompletedTracks;
+		for (const auto &[AnimatorObject, Tracked] : State->Animators) {
 			(void)AnimatorObject;
-			State->FireEnded(Tracked.TrackSnapshot);
+			for (const auto &Track : Tracked.TrackSnapshot)
+				if (Track && Track->PendingEnded) CompletedTracks.push_back(Track);
+		}
+		for (const auto &Track : CompletedTracks) {
+			Track->FirePendingEndedRuntime();
+			if (State->ShutDown) return;
 		}
 
 		std::erase_if(State->PoseRemoves, [&](const auto &Remove) {

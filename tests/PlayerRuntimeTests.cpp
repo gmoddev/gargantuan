@@ -270,9 +270,52 @@ namespace {
 			!World->GetAttributeValue("GuiMainContinued") &&
 			World->GetAttributeValue("IndependentGuiTaskContinued") == std::optional<WireValue>(true),
 			"respawn cancels the destroyed main coroutine and preserves its independently spawned task");
+		if (!NewScript) {
+			Runtime.Destroy();
+			return;
+		}
+		Check(World->ApplyAttributeMutation("IndependentGuiTaskContinued", std::nullopt) == MutationStatus::Success,
+			"the replacement script uses a fresh independent-task observation");
+		NewScript->SetEnabled(false);
+		Runtime.Script->Threads.Step();
+		Check(NewScript->Status == ScriptStatus::Disabled && !NewScript->Thread &&
+			!World->GetAttributeValue("GuiMainContinued") &&
+			World->GetAttributeValue("IndependentGuiTaskContinued") == std::optional<WireValue>(true),
+			"disabling a suspended GUI Script retires its main wait while its separate task still runs");
+		NewScript->SetEnabled(true);
+		Runtime.Script->RunBootstrapScript(NewScript);
 		Runtime.Script->Threads.Step();
 		Check(World->GetAttributeValue("GuiMainContinued") == std::optional<WireValue>(true),
-			"the replacement GUI script can finish its own scheduled wait");
+			"an explicitly restarted GUI Script can finish its new main wait");
+
+		auto SelfRestart = std::make_shared<Script>();
+		SelfRestart->SetName("SelfRestart");
+		SelfRestart->SetRunContext(Enums::RunContext::Client);
+		SelfRestart->SetSource(R"(
+			if game:GetAttribute("GuiSelfRestartStarted") then
+				game:SetAttribute("GuiSelfRestartFinished", true)
+				return
+			end
+			game:SetAttribute("GuiSelfRestartStarted", true)
+			task.spawn(function()
+				task.wait(0)
+				game:SetAttribute("GuiSelfRestartIndependent", true)
+			end)
+			script.Enabled = false
+			script.Enabled = true
+			task.wait(0)
+			game:SetAttribute("GuiSelfRestartOldMain", true)
+		)");
+		SelfRestart->SetParent(NewScript->GetParent());
+		Runtime.Script->Step();
+		Check(SelfRestart->Status == ScriptStatus::Idle && !SelfRestart->Thread,
+			"self-disable and re-enable preserve the existing Idle restart state");
+		Runtime.Script->Step();
+		Check(SelfRestart->Status == ScriptStatus::Finished &&
+			World->GetAttributeValue("GuiSelfRestartFinished") == std::optional<WireValue>(true) &&
+			World->GetAttributeValue("GuiSelfRestartIndependent") == std::optional<WireValue>(true) &&
+			!World->GetAttributeValue("GuiSelfRestartOldMain"),
+			"self-restart starts a fresh main coroutine and retires the old wait without discarding separate work");
 		Runtime.Destroy();
 	}
 

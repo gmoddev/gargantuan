@@ -2540,6 +2540,47 @@ int main() {
 				!ReadViewportPose(*Frame, View->GetObjectId()) && Runtime.Animation->GetMetrics().HeadlessVisualPoseSkips > 0,
 				"a dedicated headless runtime keeps its ordinary visual-only pose suppression");
 		}
+		{
+			auto Game = std::make_shared<DataModel>();
+			Game->Root = Root;
+			GetAssets(Game)->LoadProjectAssetSnapshot(AuthoredSnapshot.Assets);
+			HeadlessRenderer Renderer(Vector2(320, 180), HeadlessRenderer::PublicationMode::DeferredGpuPresentation);
+			Engine Runtime(Game, &Renderer);
+			Runtime.ProcessService->Alive = true;
+			auto [View, Track] = AddViewportRig(Game);
+			const auto Rig = View->FindFirstChildOfClass("MeshPart", false);
+			const auto RigId = Rig->GetObjectId();
+			const auto RigAnimator = std::dynamic_pointer_cast<Animator>(Rig->FindFirstChildOfClass("Animator", false));
+			auto Later = RigAnimator->CreateTrack(WaveRecord->Reference.Value);
+			Later->SetLooped(true);
+			Later->Play();
+			Runtime.Step();
+			const auto Initial = Renderer.TakeLastPublication();
+			Check(Initial && ReadViewportPose(*Initial, View->GetObjectId()),
+				"shutdown fixture publishes an animated viewport before either track completes");
+
+			std::size_t FirstEnded = 0;
+			std::size_t LaterEnded = 0;
+			bool LaterCompleted = false;
+			Track->Ended->Once([&](std::monostate) {
+				++FirstEnded;
+				LaterCompleted = Later->HoldsNaturalEndPose();
+				Game->Destroy();
+			});
+			const auto Remaining = Later->Ended->Once([&](std::monostate) { ++LaterEnded; });
+			for (const auto &Pending : {Track, Later}) {
+				Pending->SetLooped(false);
+				Pending->SetTimePosition(0.0f);
+			}
+			// Deterministically complete both tracks in the same evaluation.
+			Runtime.Animation->Step(Track->GetDuration());
+			Runtime.Step();
+			Check(FirstEnded == 1 && LaterCompleted && LaterEnded == 0 && Game->GetDestroyed() &&
+				!Runtime.Animation->GetPose(RigId) && Runtime.Animation->GetMetrics().TrackedAnimators == 0 &&
+				!Renderer.TakeLastPublication(),
+				"the first viewport completion can destroy the live world and cancel later completion dispatch");
+			Remaining->Disconnect();
+		}
 	}
 	if (MeshRecord && WaveRecord)
 		TestAnimationPoseJobs(

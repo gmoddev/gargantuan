@@ -482,8 +482,8 @@ namespace {
 			workspace->FindFirstChild("Nested lookup Part", true) == detachedPart0 &&
 			!workspace->FindFirstChildOfClass("WeldConstraint", false) &&
 			workspace->FindFirstChildOfClass("WeldConstraint", true) == detachedWeld &&
-			!workspace->FindFirstChildWhichIsA("JointConstraint", false) &&
-			workspace->FindFirstChildWhichIsA("JointConstraint", true) == detachedWeld,
+			!workspace->FindFirstChildWhichIsA("Constraint", false) &&
+			workspace->FindFirstChildWhichIsA("Constraint", true) == detachedWeld,
 			"explicit false limits native child lookup to direct children");
 		Check(detachedPart0->GetDataModel() == game && detachedPart1->GetDataModel() == game &&
 			detachedWeld->GetDataModel() == game,

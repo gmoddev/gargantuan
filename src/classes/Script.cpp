@@ -21,8 +21,8 @@ namespace gargantuan {
 		if (Status == ScriptStatus::Disabled && enabled) {
 			Status = ScriptStatus::Idle;
 		} else if (Status != ScriptStatus::Disabled && !enabled) {
-			Cleanup();
 			Status = ScriptStatus::Disabled;
+			Cleanup();
 		}
 		NotifyPropertyCommitted("Enabled");
 	}
@@ -36,8 +36,9 @@ namespace gargantuan {
 			auto L = lua_mainthread(Thread);
 			auto *Engine = ScriptEngine::Get(L);
 			// A queued task owns its own reference to the main coroutine.
-			// Retire that entry while this Script still keeps the thread alive.
-			if (GetDestroyed() || IsDestroying()) (void)Engine->Threads.CancelPendingTasks(L, Thread);
+			// A deferred cleanup still retires this coroutine after a restart to Idle.
+			if (CleanupAfterResume || Status == ScriptStatus::Disabled || GetDestroyed() || IsDestroying())
+				(void)Engine->Threads.CancelPendingTasks(L, Thread);
 			Engine->UntrackManagedScriptThread(Thread);
 			lua_unref(L, ThreadReference);
 		}

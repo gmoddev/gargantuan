@@ -2484,11 +2484,13 @@ end)
 		HeadlessRenderer ServerRenderer(Vector2(32, 32));
 		HeadlessRenderer FirstRenderer(Vector2(32, 32));
 		HeadlessRenderer SecondRenderer(Vector2(32, 32));
+		HeadlessRenderer RejoinedRenderer(Vector2(32, 32));
 		Engine ServerRuntime(World, &ServerRenderer, nullptr,
 			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer});
 		ServerRuntime.ProcessService->Alive = true;
 		std::unique_ptr<Engine> FirstRuntime;
 		std::unique_ptr<Engine> SecondRuntime;
+		std::unique_ptr<Engine> RejoinedRuntime;
 		GameSession Server(Network->CreateTransport(), Configuration(GameSessionRole::Server, "player-gui-private"), &ServerRuntime);
 		GameSession First(Network->CreateTransport(), FirstConfig);
 		GameSession Second(Network->CreateTransport(), SecondConfig);
@@ -2502,6 +2504,7 @@ end)
 			Check(Session.AttachClientRuntime(*Runtime), "client runtime attaches with its owned PlayerGui");
 		};
 		std::uint64_t Tick = 0;
+		std::uint64_t RejoinedTick = 0;
 		auto Pump = [&](std::uint64_t Count, GameSession *Rejoining = nullptr) {
 			for (std::uint64_t Step = 0; Step < Count; ++Step) {
 				(void)Network->Advance(2ms);
@@ -2509,17 +2512,22 @@ end)
 				(void)Server.Poll();
 				(void)First.Poll();
 				(void)Second.Poll();
-				if (Rejoining) (void)Rejoining->Poll();
+				if (Rejoining) {
+					(void)Rejoining->Poll();
+					Attach(*Rejoining, RejoinedRenderer, RejoinedRuntime);
+				}
 				Attach(First, FirstRenderer, FirstRuntime);
 				Attach(Second, SecondRenderer, SecondRuntime);
 				ServerRuntime.Step();
 				if (FirstRuntime) FirstRuntime->Step();
 				if (SecondRuntime) SecondRuntime->Step();
+				if (RejoinedRuntime) RejoinedRuntime->Step();
 				++Tick;
 				Server.Step(Tick);
 				First.Step(Tick);
 				Second.Step(Tick);
-				if (Rejoining) Rejoining->Step(Tick);
+				// A new client starts a new handshake clock even when the server is already running.
+				if (Rejoining) Rejoining->Step(++RejoinedTick);
 				(void)Network->Advance(20ms);
 			}
 		};
@@ -2665,16 +2673,21 @@ end)
 			"disconnect retires the owned GUI on both endpoints and preserves the other player's GUI");
 		GameSession Rejoined(Network->CreateTransport(), FirstConfig);
 		Check(Rejoined.Start().Succeeded(), "disconnected identity can establish a new session");
-		Pump(35, &Rejoined);
-		const auto RejoinedWorld = Rejoined.GetClientDataModel();
-		const auto RejoinedPlayers = RejoinedWorld ? std::dynamic_pointer_cast<Players>(
-			RejoinedWorld->FindFirstChildOfClass("Players", false)) : nullptr;
-		const auto RejoinedPlayer = RejoinedPlayers ? RejoinedPlayers->GetLocalPlayer().value_or(nullptr) : nullptr;
+		Pump(75, &Rejoined);
+		const auto RejoinedPlayer = RejoinedRuntime ? RejoinedRuntime->Players->GetLocalPlayer().value_or(nullptr) : nullptr;
+		const auto ServerRejoined = RejoinedPlayer && std::ranges::any_of(Server.GetPeerIdentities(), [&](const auto &Peer) {
+			return Peer.Ready && Peer.Nonce == FirstConfig.ClientNonce &&
+				Peer.PlayerId == static_cast<std::uint32_t>(RejoinedPlayer->GetPlayerId());
+		});
+		Check(Rejoined.GetStatus() == GameSessionStatus::Ready && ServerRejoined,
+			"the returning client and its corresponding server peer both reach gameplay readiness");
 		const auto RejoinedGui = RejoinedPlayer ? RejoinedPlayer->GetPlayerGui().value_or(nullptr) : nullptr;
 		const auto RejoinedHud = RejoinedGui ? std::dynamic_pointer_cast<ScreenGui>(
 			RejoinedGui->FindFirstChild("PrivateHud", false)) : nullptr;
-		Check(RejoinedPlayer && RejoinedPlayer->GetPlayerId() != Owner->GetPlayerId() && RejoinedGui != Gui &&
-			RejoinedHud && RejoinedHud->GetEnabled(),
+		const auto RejoinedBriefing = RejoinedGui ? RejoinedGui->FindFirstChild("Briefing", false) : nullptr;
+		Check(RejoinedPlayer && RejoinedPlayer->GetPlayerId() != Owner->GetPlayerId() &&
+			RejoinedGui && RejoinedGui->GetObjectId() != Gui->GetObjectId() && RejoinedHud && RejoinedHud->GetEnabled() &&
+			RejoinedBriefing && RejoinedBriefing->GetAttributeValue("LocalLogicRan") == std::optional<WireValue>(true),
 			"reconnection provisions fresh GUI identities and template state");
 		Rejoined.Stop();
 		Second.Stop();
