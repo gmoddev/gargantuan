@@ -105,6 +105,11 @@ readback, swapchain, synchronization wait or device is required. Headless
 renderers own no viewport targets. The Filament renderer does not implement
 this composition in Foundation 9.
 
+Studio Play's CPU-only publication renderer supplies visual palettes to the
+EditorHost SDL consumer. Its animation policy uses conservative evaluation
+when the deferred renderer has no camera visibility feedback. A dedicated
+headless renderer retains the semantic-only animation policy.
+
 ## Qualification
 
 - `gargantuan_viewport_frame_tests` exercises camera scope and hierarchy,

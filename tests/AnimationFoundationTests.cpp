@@ -12,6 +12,7 @@
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/ProximityPrompt.hpp"
+#include "gargantuan/classes/ScreenGui.hpp"
 #include "gargantuan/classes/Sound.hpp"
 #include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/editor/PlaySession.hpp"
@@ -2472,6 +2473,72 @@ int main() {
 			"a viewport Animator does not publish its palette into the gameplay world");
 		PreviewAnimation.Shutdown();
 		Preview->Destroy();
+	}
+	if (MeshRecord && WaveRecord) {
+		const auto AddViewportRig = [&](const std::shared_ptr<DataModel> &Model) {
+			auto Screen = std::make_shared<ScreenGui>();
+			Screen->SetParent(Model);
+			auto View = std::make_shared<ViewportFrame>();
+			View->SetSize(UDim2::fromOffset(180, 120));
+			View->SetParent(Screen);
+			auto CameraValue = std::make_shared<Camera>();
+			CameraValue->SetCFrame(CFrame(0.0f, 0.0f, 4.0f));
+			CameraValue->SetParent(View);
+			View->SetCurrentCamera(CameraValue);
+			auto ModelPart = std::make_shared<MeshPart>();
+			ModelPart->SetMesh(MeshRecord->Reference.Value);
+			ModelPart->SetParent(View);
+			auto ModelAnimator = std::make_shared<Animator>();
+			ModelAnimator->SetParent(ModelPart);
+			auto Track = ModelAnimator->CreateTrack(WaveRecord->Reference.Value);
+			Track->SetLooped(true);
+			Track->Play();
+			return std::pair(View, Track);
+		};
+		const auto ReadViewportPose = [](const RenderPublication &Publication, ObjectId Target)
+			-> std::optional<std::uint64_t> {
+			if (!Publication.Viewports) return std::nullopt;
+			for (const auto &View : *Publication.Viewports)
+				if (View->Viewport == Target && View->Objects.size() == 1 && View->Objects.front().Pose)
+					return View->Objects.front().Pose->PoseRevision;
+			return std::nullopt;
+		};
+		{
+			PlaySession ViewportPlay({42}, AuthoredSnapshot.Contents, InstanceSerialization::InstanceFormat::Json,
+				Root, 320, 180, AuthoredSnapshot.Revision, AuthoredSnapshot.Assets);
+			(void)ViewportPlay.TakeRenderPublications();
+			auto [View, Track] = AddViewportRig(ViewportPlay.GetWorld());
+			ViewportPlay.Step();
+			const auto First = ViewportPlay.TakeRenderPublications();
+			const auto FirstPose = First.empty() ? std::nullopt : ReadViewportPose(*First.back(), View->GetObjectId());
+			View->SetVisible(false);
+			ViewportPlay.Step();
+			(void)ViewportPlay.TakeRenderPublications();
+			// Re-admission makes the next sample immediate without sleeping on the cadence clock.
+			Track->SetTimePosition(0.5f);
+			View->SetVisible(true);
+			ViewportPlay.Step();
+			const auto Second = ViewportPlay.TakeRenderPublications();
+			const auto SecondPose = Second.empty() ? std::nullopt : ReadViewportPose(*Second.back(), View->GetObjectId());
+			Check(FirstPose && SecondPose && *SecondPose > *FirstPose,
+				"Studio Play supplies updated viewport GPU palettes through its actual CPU-only publication renderer");
+		}
+		{
+			auto Dedicated = std::make_shared<DataModel>();
+			Dedicated->Root = Root;
+			auto DedicatedAssets = GetAssets(Dedicated);
+			DedicatedAssets->LoadProjectAssetSnapshot(AuthoredSnapshot.Assets);
+			HeadlessRenderer Renderer(Vector2(320, 180));
+			Engine Runtime(Dedicated, &Renderer, {}, EngineProviderConfiguration{.Mode = RuntimeMode::NetworkServer});
+			Runtime.ProcessService->Alive = true;
+			auto [View, Track] = AddViewportRig(Dedicated);
+			Runtime.Step();
+			const auto Frame = Renderer.TakeLastPublication();
+			const auto Capabilities = Renderer.GetCapabilities();
+			Check(!Capabilities.Graphical && !Capabilities.GpuSkinning && Frame &&
+				!ReadViewportPose(*Frame, View->GetObjectId()) && Runtime.Animation->GetMetrics().HeadlessVisualPoseSkips > 0,
+				"a dedicated headless runtime keeps its ordinary visual-only pose suppression");
+		}
 	}
 	if (MeshRecord && WaveRecord)
 		TestAnimationPoseJobs(
