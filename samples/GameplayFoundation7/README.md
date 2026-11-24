@@ -11,9 +11,11 @@ to complete the mission, then switch roles to try both controllers.
 - **Drone** — WASD flies the drone, and Space lands and returns the player
   to the stock Character. The drone holds altitude and stops against the
   tall divider.
-- **Sound** — the crystal button toggles game audio for your client. The
-  beacon plays a positional cue for each charge. The third charge releases
-  the orange cargo marker onto the bouncy platform beside the course.
+- **Sound** — click the crystal button or focus it with Tab and press Enter
+  to toggle audio for your client. The control returns keyboard focus to
+  gameplay after activation. The beacon plays a positional cue for each
+  charge. The third charge releases the orange cargo marker onto the bouncy
+  platform beside the course.
 
 Open this directory as a project in Gargantuan Studio. Local Play previews the
 course, on-foot movement, hazard, respawn, and beacon animation. Drone flight

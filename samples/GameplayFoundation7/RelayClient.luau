@@ -50,6 +50,7 @@ local MixConnection = MixToggle.Activated:Connect(function()
 	local Muted = not Mix:GetMasterMuted()
 	Mix:SetMasterMuted(Muted)
 	ShowMixState(Muted)
+	MixToggle:ReleaseFocus()
 	if MixFeedback then
 		task.cancel(MixFeedback)
 	end

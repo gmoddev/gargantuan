@@ -626,10 +626,11 @@ namespace {
 		Button->SetScaleType(Enums::GuiImageScaleType::Fit);
 		Button->SetAccessibleName("Open map");
 		Button->SetParent(Panel);
+		Panel->MarkPersistenceSubtreeArchivable();
 		const std::array<std::shared_ptr<Instance>, 1> Roots{Panel};
 		auto Document = InstanceSerialization::CaptureGasDocument(Roots, Gas::DocumentKind::Model);
-		Check(Document.has_value(), "GASM captures authored image controls");
-		if (!Document) return;
+		Check(Document && Document->Nodes.size() == 3, "GASM captures the panel and both authored image controls");
+		if (!Document || Document->Nodes.size() != 3) return;
 		auto Pins = Gas::ResolveDependencies(*Document, Assets.get(), false);
 		Check(Pins && Pins->size() == 2 &&
 			std::ranges::find(*Pins, Gas::Dependency{LabelImage.Record->Id, LabelImage.Record->ContentId}) != Pins->end() &&
