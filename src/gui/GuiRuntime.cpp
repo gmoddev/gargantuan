@@ -263,6 +263,7 @@ namespace gargantuan {
 		std::shared_ptr<const GuiPresentationSnapshot> Presentation = std::make_shared<const GuiPresentationSnapshot>();
 		std::shared_ptr<const GuiAccessibilitySnapshot> Accessibility = std::make_shared<const GuiAccessibilitySnapshot>();
 		GuiTextureChanges PendingTextures;
+		std::unordered_set<RenderTextureIdentity, RenderTextureIdentityHash> PublishedPreviewTextures;
 		GuiRuntimeProfile Profile;
 		std::uint64_t PendingObservationNanoseconds = 0;
 		std::uint64_t PendingDirtyMarkingNanoseconds = 0;
@@ -1977,18 +1978,35 @@ namespace gargantuan {
 			!State->PendingTextures.Updates.empty() || !State->PendingTextures.Removes.empty();
 	}
 
-	void GuiRuntime::Publish(RenderPublisher &Publisher) {
+	void GuiRuntime::Publish(RenderPublisher &Publisher, std::shared_ptr<const RenderUiFrame> PlacedFrame,
+		std::uint64_t PlacementGeneration, GuiTextureChanges ViewportTextures) {
 		const auto Start = Clock::now();
 		const auto Source = State->World->GetObjectId();
-		if (!Publisher.HasUiFrame(Source, State->Presentation->Generation)) {
+		const bool IsPlacedPreview = PlacedFrame != nullptr;
+		const auto Generation = PlacedFrame ? PlacementGeneration : State->Presentation->Generation;
+		if (!Publisher.HasUiFrame(Source, Generation)) {
 			const auto CopyStart = Clock::now();
+			if (!PlacedFrame) PlacedFrame =
+				std::shared_ptr<const RenderUiFrame>(State->Presentation, &State->Presentation->Frame);
 			Publisher.SetUiFrame(
-				std::shared_ptr<const RenderUiFrame>(State->Presentation, &State->Presentation->Frame),
-				Source,
-				State->Presentation->Generation
+				std::move(PlacedFrame), Source, Generation
 			);
 			State->Profile.FrameCopyNanoseconds += Nanoseconds(Clock::now() - CopyStart);
 		}
+		std::optional<decltype(State->PublishedPreviewTextures)> PreviewTextures;
+		if (IsPlacedPreview && (!State->PendingTextures.Creates.empty() || !State->PendingTextures.Removes.empty())) {
+			PreviewTextures = State->PublishedPreviewTextures;
+			for (const auto &Create : State->PendingTextures.Creates) PreviewTextures->insert(Create.Texture);
+			for (const auto &Remove : State->PendingTextures.Removes) PreviewTextures->erase(Remove.Texture);
+		}
+		const auto Append = [](auto &Pending, auto &Additional) {
+			if (!Additional.empty())
+				Pending.insert(Pending.end(), std::make_move_iterator(Additional.begin()),
+					std::make_move_iterator(Additional.end()));
+		};
+		Append(State->PendingTextures.Creates, ViewportTextures.Creates);
+		Append(State->PendingTextures.Updates, ViewportTextures.Updates);
+		Append(State->PendingTextures.Removes, ViewportTextures.Removes);
 		if (!State->PendingTextures.Creates.empty() || !State->PendingTextures.Updates.empty() ||
 			!State->PendingTextures.Removes.empty()) {
 			Publisher.SetUiTextureChanges(
@@ -1996,8 +2014,17 @@ namespace gargantuan {
 				std::move(State->PendingTextures.Removes)
 			);
 			State->PendingTextures = {};
+			if (PreviewTextures) State->PublishedPreviewTextures = std::move(*PreviewTextures);
 		}
 		State->Profile.PublicationNanoseconds += Nanoseconds(Clock::now() - Start);
+	}
+
+	std::vector<RenderTextureRemove> GuiRuntime::GetPreviewTextureRemovals() const {
+		std::vector<RenderTextureRemove> Removals;
+		Removals.reserve(State->PublishedPreviewTextures.size());
+		for (const auto Texture : State->PublishedPreviewTextures) Removals.push_back({Texture});
+		std::ranges::sort(Removals, {}, &RenderTextureRemove::Texture);
+		return Removals;
 	}
 
 	bool GuiRuntime::ProcessEvent(const HostEvent &Event) {

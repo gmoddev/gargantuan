@@ -5098,7 +5098,8 @@ namespace {
 		});
 		for (const auto method : {
 			"OpenViewportTransport", "CloseViewportTransport", "ConfigureViewport",
-			"SetViewportCamera", "CaptureViewport", "PickViewport",
+			"SetViewportCamera", "CaptureViewport", "PickViewport", "SetGuiPreview",
+			"GetGuiPreview", "PickGuiPreview",
 		}) {
 			Json restrictedRequest{
 				{"Version", EditorHostProtocolVersion},
@@ -6680,6 +6681,11 @@ namespace {
 			"viewport camera session state does not enter the document journal"
 		);
 		auto picked = call("PickViewport", {{"X", 159.5}, {"Y", 99.5}}, "test-token");
+		const auto PreviewOff = call("GetGuiPreview", Json::object(), "test-token");
+		const auto BadPreview = call("SetGuiPreview", {{"Enabled", true}, {"Width", 100}}, "test-token");
+		Check(PreviewOff["Ok"].get<bool>() && PreviewOff["Result"]["Enabled"] == false &&
+			!BadPreview["Ok"].get<bool>() && BadPreview["Error"]["Code"] == "MalformedRequest",
+			"GUI preview starts off and requires a complete design resolution");
 		auto pickTarget = std::find_if(objects.begin(), objects.end(), [](const Json &object) {
 			return object["Name"] == "PickTarget";
 		});
@@ -6739,10 +6745,12 @@ namespace {
 			RenderProjection TestViewportProjection;
 			std::vector<RenderPublicationId> PlayApplied;
 			std::vector<RenderPublicationId> PlayCaptured;
+			RenderPublicationPtr LastCapturedPublication;
 			std::size_t PlayFullPublications = 0;
 			bool CheckPlayPublicationOrder = false;
 			host.SetViewportCaptureForTesting([&](RenderPublicationPtr Publication) {
 				if (!Publication) throw std::invalid_argument("test viewport capture requires a publication");
+				LastCapturedPublication = Publication;
 				if (CheckPlayPublicationOrder) {
 					if (TestViewportProjection.GetLastPublicationId() != Publication->Id)
 						throw std::logic_error("test capture missed one or more Play publications");
@@ -6884,6 +6892,60 @@ namespace {
 					EditAfterPlayPresentationState["Result"]["PresentationFailures"] == FailuresBeforePlay,
 				"Play to Edit retires the runtime generation without flashing a stale Play frame"
 			);
+			const auto PreviewSnapshot = call("GetSnapshot", Json::object(), "test-token");
+			const auto &PreviewObjects = PreviewSnapshot["Result"]["Snapshot"]["Objects"];
+			const auto Starter = std::ranges::find_if(PreviewObjects, [](const Json &Object) {
+				return Object["Name"] == "StarterGui";
+			});
+			Check(Starter != PreviewObjects.end(), "editor projects expose the canonical StarterGui");
+			if (Starter != PreviewObjects.end()) {
+				const auto Screen = call("CreateInstance", {
+					{"ClassSchemaId", SchemaId::FromNativeName("Engine", "ScreenGui").ToString()},
+					{"DefinitionVersion", 1}, {"Parent", (*Starter)["Id"]}, {"Name", "AuthoringPreviewScreen"},
+				}, "test-token");
+				const auto Button = call("CreateInstance", {
+					{"ClassSchemaId", SchemaId::FromNativeName("Engine", "TextButton").ToString()},
+					{"DefinitionVersion", 1}, {"Parent", Screen["Result"]["Object"]}, {"Name", "AuthoringPreviewButton"},
+					{"InitialProperties", Json::array({Json{
+						{"DeclaringClassSchemaId", SchemaId::FromNativeName("Engine", "GuiObject").ToString()},
+						{"DeclaringDefinitionVersion", 1}, {"Property", "Size"},
+						{"Value", JsonCodec::EncodeWireValue(WireUDim2{{0, 50}, {0, 40}})},
+					}})},
+				}, "test-token");
+				Check(Screen["Ok"].get<bool>() && Button["Ok"].get<bool>(), "Studio creates a GUI template with ordinary authoring commands");
+				const auto Baseline = call("GetProjectState", Json::object(), "test-token");
+				(void)call("PollChanges", Json::object(), "test-token");
+				const auto Before = call("GetViewportPresentationState", Json::object(), "test-token");
+				const auto Enabled = call("SetGuiPreview", {{"Enabled", true}, {"Width", 100}, {"Height", 200}}, "test-token");
+				Check(Enabled["Ok"].get<bool>() && Enabled["Result"]["Enabled"] == true &&
+					Enabled["Result"]["Generation"] == Before["Result"]["Generation"] &&
+					Enabled["Result"]["X"] == 110 && Enabled["Result"]["DisplayWidth"] == 100,
+					"portrait preview preserves the active transport and fits its design into a centered rectangle");
+				host.PumpViewportPresentationForTesting();
+				const auto Frame = call("GetViewportPresentationState", Json::object(), "test-token");
+				Check(LastCapturedPublication && !LastCapturedPublication->GetUi().Batches.empty() &&
+					Frame["Result"]["Mode"] == "Edit", "GUI authoring uses an ordinary edit frame with runtime UI batches");
+				host.PumpViewportPresentationForTesting();
+				const auto Pick = call("PickGuiPreview", {{"X", 120.0}, {"Y", 10.0},
+					{"FrameNumber", Frame["Result"]["LatestSequence"]}, {"Generation", Frame["Result"]["Generation"]}},
+					"test-token");
+				Check(Pick["Ok"].get<bool>() && Pick["Result"]["Object"] == Button["Result"]["Object"] &&
+					Pick["Result"]["Bounds"]["X"] == 110 && Pick["Result"]["Bounds"]["Width"] == 50,
+					"preview picking uses the previously displayed layout and authoring object identity");
+				const auto WrongGeneration = call("PickGuiPreview", {{"X", 120.0}, {"Y", 10.0},
+					{"FrameNumber", Frame["Result"]["LatestSequence"]},
+					{"Generation", Frame["Result"]["Generation"].get<std::uint64_t>() + 1}}, "test-token");
+				Check(!WrongGeneration["Ok"].get<bool>() && WrongGeneration["Error"]["Code"] == "StaleFrame",
+					"GUI preview rejects a frame from another viewport generation");
+				const auto Disabled = call("SetGuiPreview", {{"Enabled", false}}, "test-token");
+				host.PumpViewportPresentationForTesting();
+				Check(Disabled["Ok"].get<bool>() && Disabled["Result"]["Enabled"] == false &&
+					LastCapturedPublication && LastCapturedPublication->GetUi().Batches.empty() &&
+					call("GetProjectState", Json::object(), "test-token")["Result"] == Baseline["Result"] &&
+					call("PollChanges", Json::object(), "test-token")["Result"]["Records"].empty(),
+					"preview toggle and picking leave authored state, journal and history untouched");
+				(void)call("DestroyInstance", {{"Object", Screen["Result"]["Object"]}}, "test-token");
+			}
 			auto StoppedPresentation = call("StopViewportPresentation", Json::object(), "test-token");
 			auto RepeatedStop = call("StopViewportPresentation", Json::object(), "test-token");
 			Check(

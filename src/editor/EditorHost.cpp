@@ -17,6 +17,7 @@
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
+#include "gargantuan/gui/GuiRuntime.hpp"
 #include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -57,6 +58,60 @@ namespace gargantuan {
 	namespace {
 		using Json = JsonCodec::Json;
 		constexpr std::size_t MaximumGasTransferBytes = 512 * 1024;
+		constexpr std::size_t MaximumGuiPreviewFrames = 8;
+
+		struct GuiPreviewPlacement {
+			std::uint32_t Width = 0;
+			std::uint32_t Height = 0;
+			std::uint32_t SurfaceWidth = 0;
+			std::uint32_t SurfaceHeight = 0;
+			float Scale = 0.0f;
+			GuiRect Bounds;
+
+			bool operator==(const GuiPreviewPlacement &Other) const {
+				return Width == Other.Width && Height == Other.Height &&
+					SurfaceWidth == Other.SurfaceWidth && SurfaceHeight == Other.SurfaceHeight;
+			}
+		};
+
+		GuiPreviewPlacement GetGuiPreviewPlacement(std::uint32_t Width, std::uint32_t Height,
+			std::uint32_t SurfaceWidth, std::uint32_t SurfaceHeight) {
+			GuiPreviewPlacement Result{Width ? Width : SurfaceWidth, Height ? Height : SurfaceHeight,
+				SurfaceWidth, SurfaceHeight, 0.0f, {}};
+			if (SurfaceWidth == 0 || SurfaceHeight == 0) return Result;
+			Result.Scale = std::min(static_cast<float>(SurfaceWidth) / Result.Width,
+				static_cast<float>(SurfaceHeight) / Result.Height);
+			const float DisplayWidth = Result.Width * Result.Scale;
+			const float DisplayHeight = Result.Height * Result.Scale;
+			Result.Bounds = {(SurfaceWidth - DisplayWidth) * 0.5f, (SurfaceHeight - DisplayHeight) * 0.5f,
+				DisplayWidth, DisplayHeight};
+			return Result;
+		}
+
+		GuiRect PlaceGuiRect(const GuiRect &Rect, const GuiPreviewPlacement &Placement) {
+			return {Placement.Bounds.X + Rect.X * Placement.Scale, Placement.Bounds.Y + Rect.Y * Placement.Scale,
+				Rect.Width * Placement.Scale, Rect.Height * Placement.Scale};
+		}
+
+		std::shared_ptr<const RenderUiFrame> PlaceGuiPreview(const GuiPresentationSnapshot &Presentation,
+			const GuiPreviewPlacement &Placement) {
+			auto Frame = std::make_shared<RenderUiFrame>(Presentation.Frame);
+			Frame->ViewportWidth = Placement.SurfaceWidth;
+			Frame->ViewportHeight = Placement.SurfaceHeight;
+			for (auto &Batch : Frame->Batches) {
+				auto Clip = Placement.Bounds;
+				if (Batch.Clip) {
+					const auto PlacedClip = PlaceGuiRect({Batch.Clip->X, Batch.Clip->Y, Batch.Clip->Width, Batch.Clip->Height}, Placement);
+					Clip = GuiRect::Intersect(Clip, PlacedClip).value_or(GuiRect{});
+				}
+				Batch.Clip = RenderUiClipRect{Clip.X, Clip.Y, Clip.Width, Clip.Height};
+				for (auto &Vertex : Batch.Vertices) {
+					Vertex.Position.x = Placement.Bounds.X + Vertex.Position.x * Placement.Scale;
+					Vertex.Position.y = Placement.Bounds.Y + Vertex.Position.y * Placement.Scale;
+				}
+			}
+			return Frame;
+		}
 
 		enum class LineReadStatus { Complete, End, Oversized };
 
@@ -857,19 +912,18 @@ namespace gargantuan {
 			return result;
 		}
 
-		void SynchronizeEditorViewportAssets(const std::shared_ptr<DataModel> &World, RenderPublisher &Publisher) {
-			if (!World) return;
+		GuiTextureChanges CollectEditorViewportAssets(const std::shared_ptr<DataModel> &World, RenderPublisher &Publisher,
+			std::span<const RenderTextureRemove> RetiredTextures) {
 			auto Assets = std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
 			if (!Assets) throw std::runtime_error("Editor viewport has no canonical AssetService");
 
 			auto Textures = Assets->DrainTextureChanges();
-			if (!Textures.Creates.empty() || !Textures.Updates.empty() || !Textures.Removes.empty())
-				Publisher.SetUiTextureChanges(
-					std::move(Textures.Creates), std::move(Textures.Updates), std::move(Textures.Removes)
-				);
+			if (!RetiredTextures.empty())
+				Textures.Removes.insert(Textures.Removes.end(), RetiredTextures.begin(), RetiredTextures.end());
 			auto Meshes = Assets->DrainMeshChanges();
 			if (!Meshes.Creates.empty() || !Meshes.Removes.empty())
 				Publisher.SetAssetMeshChanges(std::move(Meshes.Creates), std::move(Meshes.Removes));
+			return {std::move(Textures.Creates), std::move(Textures.Updates), std::move(Textures.Removes), Textures.UploadBytes};
 		}
 
 		std::string EncodeBase64(const std::vector<std::uint8_t> &bytes) {
@@ -961,6 +1015,28 @@ namespace gargantuan {
 		Json Rig;
 	};
 
+	struct EditorHost::GuiPreviewState final {
+		struct DisplayedFrame {
+			std::uint64_t Number = 0;
+			GuiPreviewPlacement Placement;
+			std::shared_ptr<const GuiLayoutSnapshot> Layout;
+		};
+
+		GuiRuntime Runtime;
+		std::uint32_t Width = 0;
+		std::uint32_t Height = 0;
+		std::uint64_t LayoutGeneration = 0;
+		std::uint64_t PlacementGeneration = 0;
+		GuiPreviewPlacement Placement;
+		std::shared_ptr<const RenderUiFrame> PlacedFrame;
+		std::shared_ptr<const GuiLayoutSnapshot> DisplayedLayout;
+		std::deque<DisplayedFrame> DisplayedFrames;
+
+		explicit GuiPreviewState(const std::shared_ptr<DataModel> &World)
+			: Runtime(World, Paths::GetExecutableDirectory() / "runtime" / "GargantuanSans.ttf",
+				GuiRuntimeMode::AuthoringPreview) {}
+	};
+
 	struct EditorHost::PackageJob final {
 		std::uint64_t Id = 0;
 		std::uint64_t CapturedRevision = 0;
@@ -989,6 +1065,7 @@ namespace gargantuan {
 
 	EditorHost::~EditorHost() {
 		ActiveAnimationPreview.reset();
+		GuiPreview.reset();
 		ResetViewportSpatial();
 		ViewportPresentationActive = false;
 		ViewportLatestFrameMailbox.reset();
@@ -1035,7 +1112,57 @@ namespace gargantuan {
 		ViewportSpatial->Step();
 	}
 
+	void EditorHost::ResetGuiPreview() {
+		if (!GuiPreview) return;
+		auto Retired = GuiPreview->Runtime.GetPreviewTextureRemovals();
+		RetiredGuiPreviewTextures.insert(RetiredGuiPreviewTextures.end(), Retired.begin(), Retired.end());
+		GuiPreview.reset();
+	}
+
+	void EditorHost::PublishEditViewport(Workspace &WorkspaceService, const RenderCameraInput &Camera) {
+		if (GuiPreview) {
+			auto &Preview = *GuiPreview;
+			const auto Placement = GetGuiPreviewPlacement(Preview.Width, Preview.Height, ViewportWidth, ViewportHeight);
+			Preview.Runtime.SetViewport({Placement.Width, Placement.Height, 1.0f, {}});
+			(void)Preview.Runtime.Reconcile();
+			const auto Presentation = Preview.Runtime.GetCommittedPresentation();
+			if (!Preview.PlacedFrame || Preview.LayoutGeneration != Presentation->Generation || Preview.Placement != Placement) {
+				Preview.PlacedFrame = PlaceGuiPreview(*Presentation, Placement);
+				Preview.DisplayedLayout = Preview.Runtime.GetCommittedLayout();
+				Preview.LayoutGeneration = Presentation->Generation;
+				Preview.Placement = Placement;
+				Preview.PlacementGeneration = NextGuiPreviewPlacementGeneration++;
+			}
+			Preview.Runtime.Publish(ViewportPublisher, Preview.PlacedFrame, Preview.PlacementGeneration,
+				CollectEditorViewportAssets(World, ViewportPublisher, RetiredGuiPreviewTextures));
+			GuiPreviewFramePublished = true;
+		} else {
+			if (GuiPreviewFramePublished) {
+				ViewportPublisher.SetUiFrame(RenderUiFrame{});
+				ViewportPublisher.SetViewportScenes(nullptr);
+				GuiPreviewFramePublished = false;
+			}
+			auto Textures = CollectEditorViewportAssets(World, ViewportPublisher, RetiredGuiPreviewTextures);
+			if (!Textures.Creates.empty() || !Textures.Updates.empty() || !Textures.Removes.empty())
+				ViewportPublisher.SetUiTextureChanges(std::move(Textures.Creates),
+					std::move(Textures.Updates), std::move(Textures.Removes));
+		}
+		RetiredGuiPreviewTextures.clear();
+		StepViewportSpatial();
+		LastViewportPublication = ViewportPublisher.Publish(
+			WorkspaceService, Camera, ViewportWidth, ViewportHeight
+		);
+	}
+
+	void EditorHost::RecordGuiPreviewFrame(std::uint64_t FrameNumber) {
+		if (!GuiPreview || ActivePlaySession || !GuiPreview->DisplayedLayout) return;
+		auto &Frames = GuiPreview->DisplayedFrames;
+		if (Frames.size() == MaximumGuiPreviewFrames) Frames.pop_front();
+		Frames.push_back({FrameNumber, GuiPreview->Placement, GuiPreview->DisplayedLayout});
+	}
+
 	void EditorHost::AdvanceViewportGeneration() {
+		if (GuiPreview) GuiPreview->DisplayedFrames.clear();
 		ViewportGeneration = ViewportGeneration == std::numeric_limits<std::uint64_t>::max()
 			? 1 : ViewportGeneration + 1;
 		ViewportFrameNumber = 0;
@@ -1115,11 +1242,7 @@ namespace gargantuan {
 				Metadata.Mode = LatestFrameMailboxLayout::Mode::Play;
 				Metadata.PlaySessionId = ActivePlaySession->GetId().Value;
 			} else {
-				SynchronizeEditorViewportAssets(World, ViewportPublisher);
-				StepViewportSpatial();
-				LastViewportPublication = ViewportPublisher.Publish(
-					*WorkspaceService, *ViewportCamera, ViewportWidth, ViewportHeight
-				);
+				PublishEditViewport(*WorkspaceService, *ViewportCamera);
 				Metadata.Mode = LatestFrameMailboxLayout::Mode::Edit;
 			}
 			if (ViewportProjection.GetLastPublicationId() != LastViewportPublication->Id)
@@ -1139,6 +1262,7 @@ namespace gargantuan {
 			ViewportFrameNumber = ViewportLatestFrameMailbox->Publish(
 				Captured.Width, Captured.Height, Captured.BgraPixels, Metadata
 			);
+			if (Metadata.Mode == LatestFrameMailboxLayout::Mode::Edit) RecordGuiPreviewFrame(ViewportFrameNumber);
 			++ViewportProducedFrames;
 			ViewportLastRenderSubmissionUs = static_cast<std::uint64_t>(Captured.RenderSubmission.count());
 			ViewportLastGpuReadbackUs = static_cast<std::uint64_t>(Captured.GpuReadbackWait.count());
@@ -1251,7 +1375,8 @@ namespace gargantuan {
 			const bool viewportMethod = method == "OpenViewportTransport" || method == "CloseViewportTransport" ||
 				method == "ConfigureViewport" || method == "SetViewportCamera" ||
 				method == "StartViewportPresentation" || method == "StopViewportPresentation" ||
-				method == "GetViewportPresentationState" || method == "CaptureViewport" || method == "PickViewport";
+				method == "GetViewportPresentationState" || method == "CaptureViewport" || method == "PickViewport" ||
+				method == "SetGuiPreview" || method == "GetGuiPreview" || method == "PickGuiPreview";
 			if (viewportMethod && !StudioSecurity.HasCapability(ScriptCapability::ViewportControl))
 				return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Viewport access requires ViewportControl"));
 			if (method == "Handshake") {
@@ -1275,7 +1400,7 @@ namespace gargantuan {
 					"AnimationRig", "AnimationPreview", "AnimationPreviewBlend", "CharacterComposition",
 					"PackageBuild", "PackageBuildProgress", "PackageBuildCancellation",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport",
-					"ViewportLatestFrame", "ViewportPresentationDiagnostics"
+					"ViewportLatestFrame", "ViewportPresentationDiagnostics", "GuiPreview"
 				};
 				Json viewportTransports = Json::array({{
 					{"Name", "Base64"}, {"Version", 1}, {"PixelFormats", {"RGB8"}}
@@ -1976,6 +2101,7 @@ namespace gargantuan {
 				auto root = std::filesystem::weakly_canonical(std::filesystem::path(parameters["Root"].get<std::string>()));
 				if (!std::filesystem::is_directory(root))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectNotFound", "Project root is not a directory"));
+				ResetGuiPreview();
 				ResetViewportSpatial();
 				if (World) {
 					(void)World->Transactions.TerminateOwner(*World, TransactionOwner); World->Destroy();
@@ -2102,6 +2228,7 @@ namespace gargantuan {
 				}
 
 				try {
+					ResetGuiPreview();
 					ResetViewportSpatial();
 					if (World) {
 						(void)World->Transactions.TerminateOwner(*World, TransactionOwner);
@@ -2979,6 +3106,7 @@ namespace gargantuan {
 				} catch (const std::exception &) {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "GasImportFailed", "GASP place could not be opened with the current project inputs"));
 				}
+				ResetGuiPreview();
 				ResetViewportSpatial();
 				World->Destroy();
 				World = std::move(Candidate);
@@ -2994,6 +3122,95 @@ namespace gargantuan {
 			if (!workspace || !ViewportCamera)
 				return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidProject", "Project has no valid editor viewport state"));
 			auto &camera = *ViewportCamera;
+
+			if (method == "SetGuiPreview" || method == "GetGuiPreview") {
+				if (method == "SetGuiPreview") {
+					if (ActivePlaySession)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionActive", "Stop Play before changing GUI preview"));
+					if (!HasOnlyFields(parameters, {"Enabled", "Width", "Height"}) || !parameters.contains("Enabled") ||
+						!parameters["Enabled"].is_boolean() || parameters.contains("Width") != parameters.contains("Height"))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "SetGuiPreview requires Enabled and an optional dimension pair"));
+					std::uint32_t Width = 0, Height = 0;
+					if (parameters.contains("Width")) {
+						const auto ParsedWidth = JsonCodec::DecodeUnsigned32(parameters["Width"]);
+						const auto ParsedHeight = JsonCodec::DecodeUnsigned32(parameters["Height"]);
+						if (!ParsedWidth || !ParsedHeight || *ParsedWidth == 0 || *ParsedHeight == 0 ||
+							*ParsedWidth > EditorHostMaximumViewportWidth || *ParsedHeight > EditorHostMaximumViewportHeight ||
+							static_cast<std::uint64_t>(*ParsedWidth) * *ParsedHeight > EditorHostMaximumViewportPixels)
+							return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportTooLarge", "GUI preview dimensions exceed protocol limits"));
+						Width = *ParsedWidth;
+						Height = *ParsedHeight;
+					}
+					const bool Enabled = parameters["Enabled"].get<bool>();
+					if (Enabled && (!GuiPreview || GuiPreview->Width != Width || GuiPreview->Height != Height)) {
+						if (!GuiPreview) GuiPreview = std::make_unique<GuiPreviewState>(World);
+						GuiPreview->Width = Width;
+						GuiPreview->Height = Height;
+						GuiPreview->DisplayedFrames.clear();
+						NextViewportFrame = std::chrono::steady_clock::now();
+					} else if (!Enabled && GuiPreview) {
+						ResetGuiPreview();
+						NextViewportFrame = std::chrono::steady_clock::now();
+					}
+				} else if (!parameters.empty()) {
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GetGuiPreview takes no parameters"));
+				}
+				const auto Placement = GetGuiPreviewPlacement(GuiPreview ? GuiPreview->Width : 0,
+					GuiPreview ? GuiPreview->Height : 0, ViewportWidth, ViewportHeight);
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"Enabled", GuiPreview != nullptr && !ActivePlaySession}, {"Generation", ViewportGeneration},
+					{"Width", Placement.Width}, {"Height", Placement.Height},
+					{"X", Placement.Bounds.X}, {"Y", Placement.Bounds.Y},
+					{"DisplayWidth", Placement.Bounds.Width}, {"DisplayHeight", Placement.Bounds.Height},
+				}));
+			}
+
+			if (method == "PickGuiPreview") {
+				if (ActivePlaySession)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionActive", "Stop Play before picking authored GUI"));
+				if (!GuiPreview)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "GuiPreviewInactive", "Enable GUI preview before picking"));
+				if (!HasOnlyFields(parameters, {"X", "Y", "FrameNumber", "Generation"}) || !parameters.contains("X") ||
+					!parameters["X"].is_number() || !parameters.contains("Y") || !parameters["Y"].is_number() ||
+					!parameters.contains("FrameNumber") || !parameters["FrameNumber"].is_number_unsigned() ||
+					!parameters.contains("Generation") || !parameters["Generation"].is_number_unsigned())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PickGuiPreview requires pixels and the displayed frame identity"));
+				const auto FrameNumber = parameters["FrameNumber"].get<std::uint64_t>();
+				const auto Generation = parameters["Generation"].get<std::uint64_t>();
+				const auto X = parameters["X"].get<float>();
+				const auto Y = parameters["Y"].get<float>();
+				if (FrameNumber == 0 || Generation == 0 || !std::isfinite(X) || !std::isfinite(Y))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GUI preview pick values are invalid"));
+				const auto &Frames = GuiPreview->DisplayedFrames;
+				const auto Frame = std::ranges::find(Frames, FrameNumber, &GuiPreviewState::DisplayedFrame::Number);
+				if (Generation != ViewportGeneration || Frame == Frames.end())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleFrame", "The displayed GUI preview frame is no longer available"));
+				const auto &Placement = Frame->Placement;
+				if (Placement.Bounds.Contains(X, Y)) {
+					const Vector2 Point((X - Placement.Bounds.X) / Placement.Scale, (Y - Placement.Bounds.Y) / Placement.Scale);
+					const auto Starter = World->FindFirstChildOfClass("StarterGui", false);
+					for (auto Node = Frame->Layout->Nodes.rbegin(); Node != Frame->Layout->Nodes.rend(); ++Node) {
+						if (!Node->Parent.IsValid() || !Node->EffectiveVisible || Node->EffectiveOpacity <= 0.0f ||
+							(Node->EffectiveClip && !Node->EffectiveClip->Contains(Point.GetX(), Point.GetY()))) continue;
+						const auto Inverse = Node->Transform.Inverse();
+						if (!Inverse) continue;
+						const auto Local = Inverse->Apply(Point);
+						if (!Node->Bounds.Contains(Local.GetX(), Local.GetY())) continue;
+						const auto Object = ObjectRegistry::Get().Lookup(Node->Object);
+						if (!Object || !Starter || Object->GetDataModel() != World ||
+							Object->FindFirstAncestorWhichIsA("StarterGui") != Starter) continue;
+						auto Bounds = PlaceGuiRect(Node->TransformedBounds, Placement);
+						if (Node->EffectiveClip)
+							Bounds = GuiRect::Intersect(Bounds, PlaceGuiRect(*Node->EffectiveClip, Placement)).value_or(GuiRect{});
+						Bounds = GuiRect::Intersect(Bounds, Placement.Bounds).value_or(GuiRect{});
+						return SerializeBoundedResponse(SuccessResponse(requestId, {
+							{"Object", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Node->Object))},
+							{"Bounds", {{"X", Bounds.X}, {"Y", Bounds.Y}, {"Width", Bounds.Width}, {"Height", Bounds.Height}}},
+						}));
+					}
+				}
+				return SerializeBoundedResponse(SuccessResponse(requestId, {{"Object", nullptr}, {"Bounds", nullptr}}));
+			}
 
 			if (method == "ConfigureViewport") {
 				if (!HasOnlyFields(parameters, {"Width", "Height"}) ||
@@ -3089,6 +3306,8 @@ namespace gargantuan {
 			if (method == "CaptureViewport") {
 				if (!parameters.empty())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "CaptureViewport takes no parameters"));
+				if (GuiPreview && ViewportPresentationActive && ViewportLatestFrameMailbox && !ActivePlaySession)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportTransportActive", "Read the GUI preview from the active frame transport"));
 				if (ViewportWidth == 0 || ViewportHeight == 0)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportRequired", "ConfigureViewport must succeed first"));
 				try {
@@ -3110,9 +3329,7 @@ namespace gargantuan {
 						PlayIdentity = std::to_string(ActivePlaySession->GetId().Value);
 						Mode = "Play";
 					} else {
-						SynchronizeEditorViewportAssets(World, ViewportPublisher);
-						StepViewportSpatial();
-						LastViewportPublication = ViewportPublisher.Publish(*workspace, camera, ViewportWidth, ViewportHeight);
+						PublishEditViewport(*workspace, camera);
 					}
 					if (ViewportProjection.GetLastPublicationId() != LastViewportPublication->Id)
 						(void)ViewportProjection.Apply(*LastViewportPublication);
@@ -3127,15 +3344,18 @@ namespace gargantuan {
 							frame.Width, frame.Height, frame.RgbPixels, timestamp
 						);
 						ViewportFrameNumber = sequence;
+						RecordGuiPreviewFrame(sequence);
 						return SerializeBoundedResponse(SuccessResponse(requestId, {
-							{"ViewportVersion", 1}, {"FrameNumber", sequence},
+							{"ViewportVersion", 1}, {"FrameNumber", sequence}, {"Generation", ViewportGeneration},
 							{"Width", frame.Width}, {"Height", frame.Height}, {"Format", "RGB8"},
 							{"Transport", "SharedMemoryRing"}, {"TransportVersion", SharedFrameRingLayout::Version},
 							{"Mode", Mode}, {"PlaySessionId", PlayIdentity},
 						}));
 					}
+					++ViewportFrameNumber;
+					RecordGuiPreviewFrame(ViewportFrameNumber);
 					return SerializeBoundedResponse(SuccessResponse(requestId, {
-						{"ViewportVersion", 1}, {"FrameNumber", ++ViewportFrameNumber},
+						{"ViewportVersion", 1}, {"FrameNumber", ViewportFrameNumber}, {"Generation", ViewportGeneration},
 						{"Width", frame.Width}, {"Height", frame.Height}, {"Format", "RGB8"},
 						{"Transport", "Base64"}, {"Encoding", "Base64"}, {"Pixels", EncodeBase64(frame.RgbPixels)},
 						{"Mode", Mode}, {"PlaySessionId", PlayIdentity},
@@ -3157,15 +3377,15 @@ namespace gargantuan {
 			if (method == "PickViewport") {
 				if (ActivePlaySession)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionActive", "Runtime object selection is not available during Play"));
+				if (GuiPreview)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "GuiPreviewActive", "Use PickGuiPreview while editing the GUI preview"));
 				if (!HasOnlyFields(parameters, {"X", "Y"}) || !parameters.contains("X") ||
 					!parameters["X"].is_number() || !parameters.contains("Y") || !parameters["Y"].is_number())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PickViewport requires numeric X and Y"));
 				if (ViewportWidth == 0 || ViewportHeight == 0)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportRequired", "ConfigureViewport must succeed first"));
 				if (!LastViewportPublication) {
-					SynchronizeEditorViewportAssets(World, ViewportPublisher);
-					StepViewportSpatial();
-					LastViewportPublication = ViewportPublisher.Publish(*workspace, camera, ViewportWidth, ViewportHeight);
+					PublishEditViewport(*workspace, camera);
 				}
 				if (ViewportProjection.GetLastPublicationId() != LastViewportPublication->Id)
 					(void)ViewportProjection.Apply(*LastViewportPublication);

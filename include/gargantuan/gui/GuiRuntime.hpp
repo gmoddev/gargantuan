@@ -39,7 +39,9 @@ namespace gargantuan {
 
 		void SetViewport(GuiViewportConfiguration Configuration);
 		[[nodiscard]] bool Reconcile();
-		void Publish(RenderPublisher &Publisher);
+		void Publish(RenderPublisher &Publisher, std::shared_ptr<const RenderUiFrame> PlacedFrame = {},
+			std::uint64_t PlacementGeneration = 0, GuiTextureChanges ViewportTextures = {});
+		[[nodiscard]] std::vector<RenderTextureRemove> GetPreviewTextureRemovals() const;
 		[[nodiscard]] bool ProcessEvent(const HostEvent &Event);
 		[[nodiscard]] bool ProcessPointer(const GuiPointerInput &Input);
 		[[nodiscard]] std::optional<HostCommand> SynchronizeTextInput();
