@@ -32,6 +32,20 @@ namespace gargantuan {
 		}
 	}
 
+	Enums::SoundMixCategory Sound::GetMixCategory() const {
+		return MixCategory;
+	}
+
+	void Sound::SetMixCategory(Enums::SoundMixCategory Value) {
+		AssertCanMutate();
+		if (!magic_enum::enum_contains(Value))
+			throw std::invalid_argument("[Audio:Mix] Sound mix category is invalid");
+		ValidatePropertyMutation("MixCategory", Value);
+		if (MixCategory == Value) return;
+		MixCategory = Value;
+		NotifyPropertyCommitted("MixCategory");
+	}
+
 	float Sound::GetTimePosition() const {
 		return TimePosition;
 	}

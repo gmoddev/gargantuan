@@ -1,9 +1,13 @@
 #include "gargantuan/audio/AudioRuntime.hpp"
 
 #include "gargantuan/assets/AssetTypes.hpp"
+#include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Sound.hpp"
+#include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/SemanticSpatialResolver.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/AudioMixService.hpp"
+#include "runtime/RuntimeWorkDiagnostics.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,6 +16,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -37,10 +42,17 @@ namespace gargantuan {
 	}
 
 	struct AudioRuntime::Impl {
+		static constexpr AudioMixService::EffectiveGains UnityGains = [] {
+			AudioMixService::EffectiveGains Gains;
+			Gains.fill(1.0f);
+			return Gains;
+		}();
+
 		struct Voice {
 			AssetAudioResource Resource;
 			double FramePosition = 0.0;
 			std::string Reference;
+			bool HasMixed = false;
 		};
 
 		struct TrackedSound {
@@ -53,10 +65,13 @@ namespace gargantuan {
 		std::shared_ptr<AssetService> Assets;
 		std::shared_ptr<SemanticSpatialResolver> Spatial;
 		std::unique_ptr<IAudioBackend> Backend;
+		std::weak_ptr<AudioMixService> MixService;
 		DiagnosticCallback Diagnostic;
 		std::map<ObjectId, TrackedSound> Sounds;
 		std::set<std::pair<ObjectId, std::string>> EmittedDiagnostics;
 		std::array<float, AudioRuntime::MixBlockFrames * 2> MixBuffer{};
+		AudioMixService::EffectiveGains AppliedGains = UnityGains;
+		std::array<std::array<float, AudioRuntime::MixBlockFrames>, AudioMixService::CategoryCount> GainRamps;
 		std::vector<ObjectId> Completed;
 		AudioRuntimeMetrics Metrics;
 		std::uint64_t AssetChangeSequence = 1;
@@ -194,10 +209,18 @@ namespace gargantuan {
 			return {Left, std::lerp(Right0, Right1, Fraction)};
 		}
 
-		void Mix(const CFrame &Listener) {
+		void Mix(const CFrame &Listener, const AudioMixService::EffectiveGains &TargetGains) {
+			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::AudioMix);
 			const auto Started = std::chrono::steady_clock::now();
 			MixBuffer.fill(0.0f);
 			Completed.clear();
+			for (std::size_t Index = 0; Index < TargetGains.size(); ++Index) {
+				if (AppliedGains[Index] == TargetGains[Index]) continue;
+				for (std::size_t Frame = 0; Frame < AudioRuntime::MixBlockFrames; ++Frame) {
+					const float Fraction = static_cast<float>(Frame) / static_cast<float>(AudioRuntime::MixBlockFrames - 1);
+					GainRamps[Index][Frame] = std::lerp(AppliedGains[Index], TargetGains[Index], Fraction);
+				}
+			}
 			const auto ListenerPosition = Listener.Position;
 			const auto ListenerRight = Listener.GetRightVector();
 			const auto OutputRate = static_cast<double>(Backend->GetSampleRate());
@@ -209,8 +232,14 @@ namespace gargantuan {
 				auto &VoiceValue = *Tracked.ActiveVoice;
 				const auto &Audio = VoiceValue.Resource.Value;
 				const auto Step = static_cast<double>(Audio.SampleRate) / OutputRate * SoundValue->GetPlaybackSpeed();
+				const auto Category = static_cast<std::size_t>(SoundValue->GetMixCategory());
+				const bool RampExistingVoice =
+					VoiceValue.HasMixed && AppliedGains[Category] != TargetGains[Category];
+				const auto *Ramp = RampExistingVoice ? GainRamps[Category].data() : nullptr;
+				VoiceValue.HasMixed = true;
 				float LeftGain = SoundValue->GetVolume();
-				float RightGain = SoundValue->GetVolume();
+				if (!Ramp) LeftGain *= TargetGains[Category];
+				float RightGain = LeftGain;
 				const auto SemanticStarted = std::chrono::steady_clock::now();
 				const auto Position = ResolveSoundPosition(SoundValue, Spatial);
 				++Metrics.SemanticSourceResolutions;
@@ -232,26 +261,32 @@ namespace gargantuan {
 					RightGain *= DistanceGain * std::sin((Pan + 1.0f) * Pi * 0.25f);
 				}
 
-				bool Ended = false;
-				for (std::size_t Frame = 0; Frame < AudioRuntime::MixBlockFrames; ++Frame) {
-					if (VoiceValue.FramePosition >= Audio.FrameCount) {
-						if (SoundValue->GetLooped())
+				const bool Looped = SoundValue->GetLooped();
+				const bool Spatialized = Position.has_value();
+				// Pick the gain path once per voice so a steady voice has no ramp check per sample.
+				const auto MixFrames = [&]<bool ApplyRamp>() {
+					for (std::size_t Frame = 0; Frame < AudioRuntime::MixBlockFrames; ++Frame) {
+						if (VoiceValue.FramePosition >= Audio.FrameCount) {
+							if (!Looped) return true;
 							VoiceValue.FramePosition = std::fmod(VoiceValue.FramePosition, Audio.FrameCount);
-						else {
-							Ended = true;
-							break;
 						}
+						auto [Left, Right] = ReadFrame(Audio, VoiceValue.FramePosition, Looped);
+						if (Spatialized) {
+							const auto Mono = (Left + Right) * 0.5f;
+							Left = Mono;
+							Right = Mono;
+						}
+						if constexpr (ApplyRamp) {
+							Left *= Ramp[Frame];
+							Right *= Ramp[Frame];
+						}
+						MixBuffer[Frame * 2] += Left * LeftGain;
+						MixBuffer[Frame * 2 + 1] += Right * RightGain;
+						VoiceValue.FramePosition += Step;
 					}
-					auto [Left, Right] = ReadFrame(Audio, VoiceValue.FramePosition, SoundValue->GetLooped());
-					if (Position) {
-						const auto Mono = (Left + Right) * 0.5f;
-						Left = Mono;
-						Right = Mono;
-					}
-					MixBuffer[Frame * 2] += Left * LeftGain;
-					MixBuffer[Frame * 2 + 1] += Right * RightGain;
-					VoiceValue.FramePosition += Step;
-				}
+					return false;
+				};
+				const bool Ended = Ramp ? MixFrames.operator()<true>() : MixFrames.operator()<false>();
 				if (Ended)
 					Completed.push_back(Id);
 				else
@@ -260,6 +295,7 @@ namespace gargantuan {
 					);
 			}
 
+			AppliedGains = TargetGains;
 			for (auto &Sample : MixBuffer)
 				Sample = std::clamp(Sample, -1.0f, 1.0f);
 			for (const auto Id : Completed) {
@@ -298,6 +334,21 @@ namespace gargantuan {
 		Shutdown();
 	}
 
+	void AudioRuntime::AttachMixService(const std::shared_ptr<AudioMixService> &Service, RuntimeMode Mode) {
+		AssertAuthoritativeMutation("[Audio:Mix] Attach local mix");
+		if (Mode != RuntimeMode::Offline && Mode != RuntimeMode::NetworkClient)
+			throw std::invalid_argument("[Audio:Mix] Runtime mode has no local presentation");
+		if (!State || State->ShutDown || !State->MixService.expired())
+			throw std::logic_error("[Audio:Mix] Runtime already has a mix or is stopped");
+		const auto World = Service ? Service->GetDataModel() : nullptr;
+		const auto Parent = Service ? Service->GetParent() : std::nullopt;
+		if (!World || !Parent || *Parent != World || !State->Assets || State->Assets->GetDataModel() != World ||
+			Service->GetDestroyed() || Service->IsDestroying())
+			throw std::invalid_argument("[Audio:Mix] Mix service must belong to the runtime's DataModel");
+		Service->AttachRuntime();
+		State->MixService = Service;
+	}
+
 	void AudioRuntime::RegisterSound(const std::shared_ptr<Sound> &SoundValue) {
 		if (!State || State->ShutDown || !SoundValue || SoundValue->GetDestroyed() || SoundValue->IsDestroying())
 			return;
@@ -306,15 +357,18 @@ namespace gargantuan {
 
 	void AudioRuntime::Step(const CFrame &Listener) {
 		if (!State || State->ShutDown) return;
-		State->Reconcile();
+		runtime_detail::MeasureWork(runtime_detail::WorkPhase::AudioReconcile, [&] { State->Reconcile(); });
+		const auto Service = State->MixService.lock();
+		const auto TargetGains = Service ? Service->CaptureEffectiveGains() : Impl::UnityGains;
 		if (!State->Backend || !State->Backend->IsAvailable() || State->ActiveVoiceCount() == 0) {
+			State->AppliedGains = TargetGains;
 			State->Metrics.ActiveVoices = State->ActiveVoiceCount();
 			if (State->Backend) State->Metrics.Backend = State->Backend->GetMetrics();
 			return;
 		}
 		auto QueuedFrames = State->Backend->GetQueuedFrames();
 		for (std::size_t Block = 0; Block < MaximumBlocksPerStep && QueuedFrames < TargetQueuedFrames; ++Block) {
-			State->Mix(Listener);
+			State->Mix(Listener, TargetGains);
 			if (!State->Backend->Submit(State->MixBuffer)) {
 				State->FailVoices();
 				break;
@@ -328,6 +382,8 @@ namespace gargantuan {
 	void AudioRuntime::Shutdown() {
 		if (!State || State->ShutDown) return;
 		State->ShutDown = true;
+		if (auto Service = State->MixService.lock()) Service->DetachRuntime();
+		State->MixService.reset();
 		for (auto &[Id, Tracked] : State->Sounds) {
 			(void)Id;
 			if (auto SoundValue = Tracked.Value.lock()) SoundValue->RejectRuntimePlayback();

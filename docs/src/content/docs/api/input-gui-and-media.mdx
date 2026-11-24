@@ -23,7 +23,11 @@ description: Local player and actions, screen controls, asset lookup, sound, and
 
 ## Screen GUI
 
-`ScreenGui` is a screen-space root; `Frame`, `TextLabel`, `TextButton`, `TextBox`, `ImageLabel`, and `ScrollingFrame` are concrete GUI classes. `GuiObject` defines `Position` and `Size` as `UDim2`, plus `AnchorPoint`, background, visibility, clipping, ordering, focus, interaction, and input-sink properties. `AbsolutePosition` and `AbsoluteSize` are read-only calculated values. `TextButton` inherits text and GUI properties; its defaults make it interactive and selectable. `GuiBase2d.Activated`, `Focused`, `FocusLost`, `PointerDown`, `PointerUp`, `PointerEnter`, `PointerLeave`, and `PointerMoved` are routed signals. `GuiObject:CaptureFocus()`, `ReleaseFocus()`, `CapturePointer(PointerId)`, and `ReleasePointer(PointerId)` request or release local input ownership; they do not grant system input privileges.
+`ScreenGui` is a screen-space root. Concrete controls include `Frame`, `TextLabel`, `TextButton`, `TextBox`, `ImageLabel`, `ImageButton`, and `ScrollingFrame`. `GuiObject` defines `Position` and `Size` as `UDim2`, plus `AnchorPoint`, background, visibility, clipping, ordering, focus, interaction, and input-sink properties. `AbsolutePosition` and `AbsoluteSize` are read-only calculated values.
+
+`TextButton` inherits text presentation. `ImageButton` inherits `ImageLabel`, including its strict `Image` asset reference, tint, transparency, and `ScaleType`. `Stretch` fills the control by default. `Fit` centers the whole image without changing its aspect ratio or the control's input geometry. Both buttons start interactable and selectable, provide the automatic Button accessibility role, and respond to pointer input and focused Space/Return.
+
+`GuiBase2d.Activated`, `Focused`, `FocusLost`, `PointerDown`, `PointerUp`, `PointerEnter`, `PointerLeave`, and `PointerMoved` are routed signals. `GuiObject:CaptureFocus()`, `ReleaseFocus()`, `CapturePointer(PointerId)`, and `ReleasePointer(PointerId)` request or release local input ownership.
 
 The GUI runtime resolves screen roots against viewport and safe area, routes pointer events, and publishes render data. A server can author replicated GUI state, but activation and device focus are local presentation facts. The shipped interaction overlay in `assets/runtime/DefaultInteractionRuntime.luau` is a useful real usage reference.
 
@@ -36,6 +40,22 @@ Radiance `.hdr` square faces and 2:1 panoramas can be imported through the trust
 `Animator:LoadAnimation(AnimationId: string) -> AnimationTrack` requires a strict available Animation asset. The `Animator` must be a direct child of a live `MeshPart` with a compatible skinned mesh. Missing assets, incompatible skeletons, and track capacity errors raise script errors; wrap optional content loads with `pcall`. The returned `AnimationTrack` is runtime-only userdata, with `Play()`, `Pause()`, `Resume()`, `Stop()`, `AdjustSpeed()`, and `AdjustWeight()`, plus `Duration`, `Ended`, `Looped`, `PlaybackState`, `RootMotionEnabled`, `Speed`, `TimePosition`, and `Weight`. `Speed` is finite 0–16; `Weight` is finite 0–1. Destroying the owner invalidates retained tracks. Clips and tracks are not themselves persisted Instances.
 
 `Sound` is an Instance with `Play()`, `Pause()`, `Resume()`, `Stop()`, `Ended`, and authored audio properties. Playback is a runtime voice; saving the Instance does not save an active voice or its device handle. `Sound` and animation content availability may vary by packaged asset catalog. For an optional clip, inspect metadata then handle `LoadAnimation` failure without assuming availability guarantees every compatibility condition.
+
+`Sound.MixCategory` selects `Enum.SoundMixCategory.Effects`, `UI`, `Ambience`, or
+`Music`. It defaults to `Effects` and saves and replicates with the Sound.
+An offline or network-client runtime exposes `game:GetService("AudioMixService")`
+to client scripts. Settings reset for each runtime session and do not change
+the project, other clients, or the server.
+
+| Local mix methods | Parameters and result |
+| --- | --- |
+| `GetMasterGain()` / `SetMasterGain(Gain)` | Finite linear gain in `[0, 1]` |
+| `GetMasterMuted()` / `SetMasterMuted(Muted)` | Boolean master mute |
+| `GetCategoryGain(Category)` / `SetCategoryGain(Category, Gain)` | `Enum.SoundMixCategory` and finite gain in `[0, 1]` |
+| `GetCategoryMuted(Category)` / `SetCategoryMuted(Category, Muted)` | `Enum.SoundMixCategory` and boolean mute |
+
+Gains default to `1`. Muting preserves the gain setting and leaves playback
+running. These settings also work in headless client runs.
 
 For the advanced creator workflow, see [Character authoring](../../guides/character-authoring/).
 Its project-owned Luau examples choose locomotion/action clips and crossfades,

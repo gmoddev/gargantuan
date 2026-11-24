@@ -91,6 +91,7 @@ namespace gargantuan {
 		float BackgroundAlpha = 0.0f;
 		Color3 ContentColor{1.0f, 1.0f, 1.0f};
 		float ContentAlpha = 1.0f;
+		float ImageAspectRatio = 0.0f;
 		std::optional<RenderTextureIdentity> ImageTexture;
 		std::shared_ptr<const GuiShapedText> Text;
 		float TextOffsetX = 0.0f;

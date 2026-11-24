@@ -552,6 +552,17 @@ namespace {
 			const auto First = World.CreateBody(DescriptionAt(1));
 			Check(First.IsValid(), "two-shape limit admits one chunked mesh consumer");
 			if (!First.IsValid()) return;
+			auto SurfaceEdit = DescriptionAt(1);
+			SurfaceEdit.Friction = 1.5f;
+			SurfaceEdit.Restitution = 0.25f;
+			Check(World.UpdateBody(First, SurfaceEdit).Succeeded(),
+				"chunked mesh surface edits succeed at the native shape limit");
+			const auto SurfaceState = World.GetBodyState(First);
+			const auto SurfaceResidency = World.GetCollisionResidency();
+			Check(SurfaceState && Near(SurfaceState->Description.Friction, 1.5f) &&
+				Near(SurfaceState->Description.Restitution, 0.25f) &&
+				SurfaceResidency.CreatedMeshShapes == 2 && SurfaceResidency.RetiredMeshShapes == 0,
+				"chunked mesh surface edits preserve native shape identities");
 			Check(!World.CreateBody(DescriptionAt(1)).IsValid(),
 				"two-shape limit denies a second shared chunked mesh consumer");
 			Check(!World.UpdateBody(First, DescriptionAt(2)).Succeeded(),
@@ -856,6 +867,9 @@ namespace {
 		Part->SetParent(Workspace);
 		const auto Body = WorldRootTestAccess::Body(*Workspace, *Part);
 		Check(Body.IsValid(), "parented Part receives neutral body identity");
+		const auto Original = WorldRootTestAccess::State(*Workspace, Body);
+		Check(Original && Near(Original->Description.Friction, 0.6f) &&
+			Near(Original->Description.Restitution, 0.0f), "existing rigid surface defaults are preserved");
 
 		Part->SetCFrame(CFrame(3.0f, 4.0f, 5.0f));
 		Part->SetSize({2.0f, 4.0f, 6.0f});
@@ -863,6 +877,12 @@ namespace {
 		Part->SetCanCollide(false);
 		Part->SetCanTouch(false);
 		Part->SetShape(Enums::PartType::Ball);
+		Part->SetFriction(0.15f);
+		Part->SetRestitution(0.85f);
+		const auto BeforeSafePoint = WorldRootTestAccess::State(*Workspace, Body);
+		Check(BeforeSafePoint && Near(BeforeSafePoint->Description.Friction, 0.6f) &&
+			Near(BeforeSafePoint->Description.Restitution, 0.0f),
+			"authored surfaces do not mutate the provider from a setter");
 		Workspace->StepPhysics(0.0, std::nullopt);
 		auto State = WorldRootTestAccess::State(*Workspace, Body);
 		Check(State.has_value(), "updated body remains live");
@@ -874,6 +894,8 @@ namespace {
 			Check(!State->Description.Anchored, "committed Anchored reaches backend motion state");
 			Check(!State->Description.CanCollide, "committed CanCollide reaches backend collision state");
 			Check(!State->Description.CanTouch, "committed CanTouch reaches backend event state");
+			Check(Near(State->Description.Friction, 0.15f) && Near(State->Description.Restitution, 0.85f),
+				"committed rigid surface reaches the provider safe point");
 		}
 		Check(WorldRootTestAccess::Body(*Workspace, *Part) == Body,
 			"private shape reconstruction preserves Gargantuan body identity");
@@ -2019,6 +2041,61 @@ namespace {
 		Part->Destroy();
 	}
 
+	void TestRigidSurfaceResponse() {
+		using namespace gargantuan;
+		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, -30.0f, 0.0f}});
+		PhysicsBodyDesc Floor;
+		Floor.Anchored = true;
+		Floor.Shape.Size = {60.0f, 1.0f, 20.0f};
+		Floor.Transform = CFrame(0.0f, -0.5f, 0.0f);
+		Floor.Friction = 0.0f;
+		const auto FloorId = World.CreateBody(Floor);
+		PhysicsBodyDesc Slider;
+		Slider.Transform = CFrame(0.0f, 0.5f, 0.0f);
+		const auto SliderId = World.CreateBody(Slider);
+		Check(FloorId.IsValid() && SliderId.IsValid(), "rigid surface fixture admits both bodies");
+		if (!FloorId.IsValid() || !SliderId.IsValid()) return;
+		Check(World.SetLinearVelocity(SliderId, {8.0f, 0.0f, 0.0f}).Succeeded(), "slider starts with tangential velocity");
+		for (int Tick = 0; Tick < 12; ++Tick) (void)World.Step({});
+		const auto Sliding = World.GetBodyState(SliderId);
+		Check(Sliding && Sliding->LinearVelocity.x > 7.5f, "zero friction preserves tangential velocity");
+
+		Floor.Friction = 1.0f;
+		Check(World.UpdateBody(FloorId, Floor).Succeeded(), "a surface edit updates an existing contact");
+		for (int Tick = 0; Tick < 60; ++Tick) (void)World.Step({});
+		const auto Stopped = World.GetBodyState(SliderId);
+		Check(Stopped && std::abs(Stopped->LinearVelocity.x) < 1.0f, "the edited surface slows the moving body");
+
+		auto Invalid = Floor;
+		Invalid.Friction = std::numeric_limits<float>::quiet_NaN();
+		Check(World.UpdateBody(FloorId, Invalid).Status == PhysicsOperationStatus::InvalidDescription,
+			"non-finite friction is rejected");
+		Invalid = Floor;
+		Invalid.Restitution = 1.1f;
+		Check(World.UpdateBody(FloorId, Invalid).Status == PhysicsOperationStatus::InvalidDescription,
+			"out-of-range restitution is rejected");
+		const auto Retained = World.GetBodyState(FloorId);
+		Check(Retained && Near(Retained->Description.Friction, 1.0f) &&
+			Near(Retained->Description.Restitution, 0.0f), "surface rejection leaves the accepted body state intact");
+
+		PhysicsBodyDesc Ball;
+		Ball.Shape.Kind = PhysicsShapeKind::Ball;
+		Ball.Transform = CFrame(-8.0f, 3.0f, 0.0f);
+		const auto Plain = World.CreateBody(Ball);
+		Ball.Transform = CFrame(-12.0f, 3.0f, 0.0f);
+		Ball.Restitution = 0.85f;
+		const auto Bouncy = World.CreateBody(Ball);
+		Check(Plain.IsValid() && Bouncy.IsValid(), "both restitution controls admit");
+		float PlainRise = 0.0f;
+		float BouncyRise = 0.0f;
+		for (int Tick = 0; Tick < 65; ++Tick) {
+			(void)World.Step({});
+			if (const auto State = World.GetBodyState(Plain)) PlainRise = std::max(PlainRise, State->LinearVelocity.y);
+			if (const auto State = World.GetBodyState(Bouncy)) BouncyRise = std::max(BouncyRise, State->LinearVelocity.y);
+		}
+		Check(PlainRise < 1.0f && BouncyRise > 4.0f, "authored restitution yields a measurable rebound");
+	}
+
 	void TestBodyControlPersistence() {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
@@ -2036,6 +2113,8 @@ namespace {
 		Part->SetGravityScale(1.5f);
 		Part->SetSleepEnabled(false);
 		Part->SetMovingBodyCCD(true);
+		Part->SetFriction(0.125f);
+		Part->SetRestitution(0.75f);
 		Part->SetParent(Workspace);
 		std::shared_ptr<Instance> Root = Game;
 		const auto Encoded = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Root);
@@ -2055,7 +2134,8 @@ namespace {
 		Check(Decoded.Ok && Loaded && Loaded->GetKinematic() && Loaded->GetCollisionGroup() == 7 &&
 			Loaded->GetCollisionMask() == 129 && Near(Loaded->GetLinearDamping(), 0.25f) &&
 			Near(Loaded->GetAngularDamping(), 0.5f) && Near(Loaded->GetGravityScale(), 1.5f) &&
-			!Loaded->GetSleepEnabled() && Loaded->GetMovingBodyCCD(),
+			!Loaded->GetSleepEnabled() && Loaded->GetMovingBodyCCD() &&
+			Near(Loaded->GetFriction(), 0.125f) && Near(Loaded->GetRestitution(), 0.75f),
 			"authored rigid controls and CCD policy survive project serialization and reopen");
 	}
 
@@ -2773,6 +2853,7 @@ int main() {
 	TestWorldRootDynamicsProjection();
 	TestBodyControlCapabilityBoundary();
 	TestForceDurationAndKinematicMotion();
+	TestRigidSurfaceResponse();
 	TestBodyControlPersistence();
 	TestContinuousCollisionPolicy();
 	TestWorldRootContinuousCollisionProjection();

@@ -2,6 +2,21 @@
   "Version": 2,
   "Assets": [
     {
+      "AssetId": "a0d10f78c368437daac002a4e59fdd64",
+      "Reference": "asset://a0d10f78c368437daac002a4e59fdd64",
+      "Kind": "Audio",
+      "Name": "Collection Tone",
+      "Source": "assets/collection-tone.wav",
+      "ContentId": "8b541fde640cfa0c3607d66a652f85629e14ad1fa6f88d0e0aa821fe7a1b4c3b",
+      "ContentRevision": 1,
+      "State": "Ready",
+      "Diagnostic": null,
+      "SourceGroupId": "a0d10f78c368437daac002a4e59fdd64",
+      "LogicalKey": "asset",
+      "PrimarySourceAsset": true,
+      "Dependencies": []
+    },
+    {
       "AssetId": "ca34ffb8742655186db2cfb54124a5ff",
       "Reference": "asset://ca34ffb8742655186db2cfb54124a5ff",
       "Kind": "Animation",
@@ -17,6 +32,21 @@
       "Dependencies": [
         "d549080bd1e64aaee8041f4ece3e9f75"
       ]
+    },
+    {
+      "AssetId": "d18f6e730a55d41e65e2cc2447294884",
+      "Reference": "asset://d18f6e730a55d41e65e2cc2447294884",
+      "Kind": "Image",
+      "Name": "Collection Badge",
+      "Source": "assets/collection-badge.png",
+      "ContentId": "9d8931de5ed49b4bae7062bf82725cb8f9df9ed96b1324bf22c759201dc53177",
+      "ContentRevision": 2,
+      "State": "Ready",
+      "Diagnostic": null,
+      "SourceGroupId": "d18f6e730a55d41e65e2cc2447294884",
+      "LogicalKey": "asset",
+      "PrimarySourceAsset": true,
+      "Dependencies": []
     },
     {
       "AssetId": "d549080bd1e64aaee8041f4ece3e9f75",

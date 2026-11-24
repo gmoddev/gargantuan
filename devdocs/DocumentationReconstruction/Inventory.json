@@ -575,6 +575,7 @@
       },
       "RelevantSourceSubsystem": [
         "assets/classes/Sound.luau",
+        "assets/services/AudioMixService.luau",
         "include/gargantuan/audio/AudioBackend.hpp",
         "include/gargantuan/audio/AudioRuntime.hpp",
         "include/gargantuan/classes/Sound.hpp",
@@ -582,6 +583,7 @@
         "src/audio/AudioRuntime.cpp",
         "src/audio/SdlAudioBackend.cpp",
         "src/runtime/SemanticSpatialResolver.cpp",
+        "src/services/AudioMixService.cpp",
         "tests/AudioFoundationBenchmark.cpp",
         "tests/AudioFoundationTests.cpp"
       ],
@@ -4969,6 +4971,20 @@
       "Status": "Current",
       "StatusLabel": "Current and authoritative",
       "ProposedAction": "Preserve accepted decision authority and explicit amendments; acceptance is not implementation proof",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/architecture/EngineFoundation8Inventory.md",
+      "Purpose": "Engine Foundation 8 capability inventory",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/content/docs/developing/editor-host.mdx",
+        "src/data/PublicApi.json"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Inspect owning source before promoting to current authority",
       "ObsoleteTermMentions": []
     },
     {

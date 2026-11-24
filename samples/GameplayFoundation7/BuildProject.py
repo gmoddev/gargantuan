@@ -68,6 +68,10 @@ def BuildProject():
              {"Mesh": {"String": "asset://d549080bd1e64aaee8041f4ece3e9f75"}},
              [Instance("Animator", "PulseAnimator")]),
         Part("NorthWall", [0, 4.5, -25], [64, 9, 1], [0.22, 0.28, 0.35]),
+        Part("CargoDock", [18, 0.3, 5], [12, 0.6, 8], [0.16, 0.39, 0.44],
+             Properties={"Friction": {"Float": 1.5}, "Restitution": {"Float": 0.75}}),
+        Part("CargoMarker", [15, 4, 5], [1.4, 1.4, 1.4], [1, 0.66, 0.15],
+             Properties={"Shape": {"EnumItem": ["PartType", "Ball"]}}),
     ])
     World = Instance("DataModel", "Relay Rescue", Children=[
         Instance("Workspace", "Workspace", Children=[Course]),

@@ -279,10 +279,77 @@
       "Signals": []
     },
     {
+      "Name": "AudioMixService",
+      "Kind": "Service",
+      "Source": "assets/services/AudioMixService.luau",
+      "SourceSha256": "6aeac2aa7ef40522ffba3a9db82d4889a7c9cc6087776dcc83928e53af5e40bd",
+      "Description": "Controls master and fixed category audio gain for the local runtime session.",
+      "Extends": "Instance",
+      "Abstract": true,
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [],
+      "Methods": [
+        {
+          "Name": "GetCategoryGain",
+          "Description": "Returns category gain before mute or master gain is applied.",
+          "AsLuau": true,
+          "LuauSignature": "(self: AudioMixService, Category: Enum.SoundMixCategory) -> number"
+        },
+        {
+          "Name": "GetCategoryMuted",
+          "Description": "Returns whether the selected local category is muted.",
+          "AsLuau": true,
+          "LuauSignature": "(self: AudioMixService, Category: Enum.SoundMixCategory) -> boolean"
+        },
+        {
+          "Name": "GetMasterGain",
+          "Description": "Returns master gain before mute is applied.",
+          "AsLuau": true,
+          "LuauSignature": "(self: AudioMixService) -> number"
+        },
+        {
+          "Name": "GetMasterMuted",
+          "Description": "Returns whether the local master mix is muted.",
+          "AsLuau": true,
+          "LuauSignature": "(self: AudioMixService) -> boolean"
+        },
+        {
+          "Name": "SetCategoryGain",
+          "Description": "Sets a finite local category gain from zero through one.",
+          "AsLuau": true,
+          "LuauSignature": "(self: AudioMixService, Category: Enum.SoundMixCategory, Gain: number) -> ()",
+          "RequiredCapability": "MutateDataModel"
+        },
+        {
+          "Name": "SetCategoryMuted",
+          "Description": "Mutes or unmutes the selected local category while playback continues.",
+          "AsLuau": true,
+          "LuauSignature": "(self: AudioMixService, Category: Enum.SoundMixCategory, Muted: boolean) -> ()",
+          "RequiredCapability": "MutateDataModel"
+        },
+        {
+          "Name": "SetMasterGain",
+          "Description": "Sets a finite local master gain from zero through one.",
+          "AsLuau": true,
+          "LuauSignature": "(self: AudioMixService, Gain: number) -> ()",
+          "RequiredCapability": "MutateDataModel"
+        },
+        {
+          "Name": "SetMasterMuted",
+          "Description": "Mutes or unmutes the local master mix while playback continues.",
+          "AsLuau": true,
+          "LuauSignature": "(self: AudioMixService, Muted: boolean) -> ()",
+          "RequiredCapability": "MutateDataModel"
+        }
+      ],
+      "Signals": []
+    },
+    {
       "Name": "BasePart",
       "Kind": "Class",
       "Source": "assets/classes/BasePart.luau",
-      "SourceSha256": "a1aa2d4362d9f59a359a44bfed740c2a65e7f08691ed6357808561b2bf708f9e",
+      "SourceSha256": "6f4dc2bd7dfe1ae403d89d515321b663c8d62045f077b205351f1ffab070dcd6",
       "Description": "Abstract class for workspace objects that physically interact.",
       "Extends": "Instance",
       "Abstract": true,
@@ -377,6 +444,16 @@
           "Range": "{ minimum = 0, maximum = 1 }"
         },
         {
+          "Name": "Friction",
+          "Description": "Rigid contact friction. The solver combines the two surfaces using their geometric mean.",
+          "Type": "t.Float",
+          "Unmodified": "0.6f",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Collision",
+          "Range": "{ minimum = 0, maximum = 4 }"
+        },
+        {
           "Name": "GravityScale",
           "Description": "Per-body multiplier of WorldRoot gravity.",
           "Type": "t.Float",
@@ -423,6 +500,16 @@
           "OverrideWrite": "SetPosition",
           "Category": "Transform",
           "Editable": false
+        },
+        {
+          "Name": "Restitution",
+          "Description": "Rigid contact bounciness. The greater of the two surfaces' values applies to qualifying impacts.",
+          "Type": "t.Float",
+          "Unmodified": "0.0f",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Collision",
+          "Range": "{ minimum = 0, maximum = 1 }"
         },
         {
           "Name": "Rotation",
@@ -1476,10 +1563,24 @@
       "Signals": []
     },
     {
+      "Name": "ImageButton",
+      "Kind": "Class",
+      "Source": "assets/classes/ImageButton.luau",
+      "SourceSha256": "7536ade9ac8ae18d7ea6e54fe6ea8b8815211a9880cc0e4702fe88eddf4e0823",
+      "Description": "A focusable image control with pointer and keyboard activation",
+      "Extends": "ImageLabel",
+      "Abstract": false,
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [],
+      "Methods": [],
+      "Signals": []
+    },
+    {
       "Name": "ImageLabel",
       "Kind": "Class",
       "Source": "assets/classes/ImageLabel.luau",
-      "SourceSha256": "590f85c667ea65042a830613e23f4186db0e6f38f753ac4e98e3972909079eda",
+      "SourceSha256": "c63a56a3976912d80568117926d8f6ae49efae008d074a7605d3e74bcca7bb09",
       "Description": "A retained GUI object that presents a logical image resource",
       "Extends": "GuiObject",
       "Abstract": false,
@@ -1494,7 +1595,8 @@
           "OverrideRead": "GetImage",
           "OverrideWrite": "SetImage",
           "Serializable": true,
-          "Replicated": true
+          "Replicated": true,
+          "EditorHint": "AssetReference:Image"
         },
         {
           "Name": "ImageColor3",
@@ -1515,7 +1617,7 @@
         },
         {
           "Name": "ScaleType",
-          "Description": "Image fitting policy; Foundation 1 supports Stretch",
+          "Description": "Stretch fills the control; Fit centers the whole image at its original aspect ratio.",
           "Type": "t.EnumItem(\"GuiImageScaleType\")",
           "Unmodified": "Enums::GuiImageScaleType::Stretch",
           "Serializable": true,
@@ -3906,7 +4008,7 @@
       "Name": "Sound",
       "Kind": "Class",
       "Source": "assets/classes/Sound.luau",
-      "SourceSha256": "eb53b8ecc8c4a425df6744f7c784cecaea7744546ae1d8208648035081d4bfb6",
+      "SourceSha256": "cd3773843099f6ebb62fb69b89aa95263d5aa07a5b9803b9156255f88cfe1619",
       "Description": "Plays one canonical AssetService Audio asset as a 2D or hierarchy-anchored 3D voice.",
       "Extends": "Instance",
       "Abstract": false,
@@ -3921,6 +4023,17 @@
           "Serializable": true,
           "Replicated": true,
           "Category": "Playback"
+        },
+        {
+          "Name": "MixCategory",
+          "Description": "Fixed presentation category for each local player's mix. Defaults to Effects.",
+          "Type": "t.EnumItem(\"SoundMixCategory\")",
+          "Unmodified": "Enums::SoundMixCategory::Effects",
+          "OverrideRead": "GetMixCategory",
+          "OverrideWrite": "SetMixCategory",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Audio"
         },
         {
           "Name": "PlaybackSpeed",
@@ -4901,6 +5014,7 @@
       "Path": "include/gargantuan/audio/AudioRuntime.hpp",
       "Types": [
         "AssetService",
+        "AudioMixService",
         "AudioRuntime",
         "AudioRuntimeMetrics",
         "Impl",
@@ -5026,6 +5140,12 @@
       "Types": [
         "GuiObject",
         "GuiRuntime"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/classes/ImageButton.hpp",
+      "Types": [
+        "ImageButton"
       ]
     },
     {
@@ -6657,9 +6777,10 @@
     {
       "Path": "include/gargantuan/scripting/ThreadEngine.hpp",
       "Types": [
+        "ArgumentRange",
         "CompareWakeTime",
-        "DeferredTask",
         "ScheduledTask",
+        "TaskEntry",
         "ThreadEngine",
         "Type"
       ]
@@ -6727,6 +6848,13 @@
         "BaseFilesystem",
         "Impl",
         "SourceMount"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/services/AudioMixService.hpp",
+      "Types": [
+        "AudioMixService",
+        "MixControl"
       ]
     },
     {

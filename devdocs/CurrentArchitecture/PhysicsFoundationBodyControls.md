@@ -31,10 +31,21 @@ prepared for a later kinematic transition. An unanchored nonkinematic Part is
 dynamic. Static triangle mesh collision remains static only; an unanchored
 MeshPart requesting that mode retains the existing Box fallback.
 
-The damping and gravity scale range is finite `[0, 100]`. The native adapter
+The damping and gravity scale range is finite `[0, 100]`. `Friction` and
+`Restitution` are also saved and replicated. They default to 0.6 and 0,
+matching the previous rigid solver defaults. Friction is finite in `[0, 4]`
+and restitution is finite in `[0, 1]`. The native adapter
 rejects invalid direct neutral descriptions before mutation. A failed shape
 replacement keeps the old shape and body ID. `WorldRoot` applies authored
 changes at the existing safe point, before a query or fixed step.
+
+When two rigid shapes touch, the solver takes the geometric mean of their
+friction and the greater of their restitution values. Restitution applies to
+impacts above the solver contact threshold. Surface-only edits update the
+existing primitives and static mesh chunks in place. The next processed
+contact reads the new values. Body, joint, and shape identities, collision
+filters, and mass stay intact. The fields describe rigid contacts. Kinematic
+Character movement and deformable contact response retain their own policies.
 
 ## Runtime controls and observation
 

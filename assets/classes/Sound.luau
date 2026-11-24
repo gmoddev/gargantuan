@@ -26,6 +26,16 @@ return c({
 			category = "Audio",
 			range = { minimum = 0, maximum = 1 },
 		},
+		MixCategory = {
+			description = "Fixed presentation category for each local player's mix. Defaults to Effects.",
+			type = t.EnumItem("SoundMixCategory"),
+			unmodified = "Enums::SoundMixCategory::Effects",
+			overrideRead = "GetMixCategory",
+			overrideWrite = "SetMixCategory",
+			serializable = true,
+			replicated = true,
+			category = "Audio",
+		},
 		PlaybackSpeed = {
 			description = "Simple sample-rate multiplier that changes speed and pitch together.",
 			type = t.Float,

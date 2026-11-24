@@ -71,7 +71,13 @@ guarded by ViewportControl; it is not a general IPC or capability delegation sur
 Task scheduling and Luau signal connections capture the current context and
 restore it whenever a continuation or callback resumes. A native event fired
 later from ambient Core therefore cannot upgrade the callback that an ordinary
-runtime Script registered. Signal Wait uses the same rule. `ProcessService`
+runtime Script registered. Signal Wait uses the same rule. `task.cancel`
+uses the live thread handle within its own VM and releases only pending
+scheduler roots. The scheduler retains ownership of every pending deferred
+entry while its peers run, so cancellation and shutdown can reach later
+callbacks in the same step. Running continuations, independently rooted waits
+and requests, and the captured contexts of surviving tasks retain their own
+lifetimes. `ProcessService`
 checks `ProcessControl` for exit and stdout operations; ordinary player/runtime
 profiles do not receive it.
 

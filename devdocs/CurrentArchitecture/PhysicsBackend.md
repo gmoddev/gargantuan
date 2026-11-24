@@ -63,7 +63,8 @@ The engine-facing contract is defined by `PhysicsTypes.hpp` and
 - `PhysicsShapeDesc` describes the supported Part primitives, size, and optional
   immutable collision triangle resource;
 - `PhysicsBodyDesc` describes transform, shape, motion mode, collision group/mask,
-  damping, gravity scale, sleep, moving-body CCD, touch, and density;
+  damping, gravity scale, sleep, moving-body CCD, touch, density, and rigid
+  contact friction and restitution;
 - `PhysicsConstraintDesc` describes weld, ball socket, hinge, slider and
   distance joints between neutral body IDs, with local frames and bounded
   limit, motor and spring parameters;
@@ -203,7 +204,8 @@ Generated setters commit authoritative Instance state and then fire their normal
 property signal. For a tracked `BasePart`, `WorldRoot` observes `CFrame`, `Size`,
 `Anchored`, `Kinematic`, `CanCollide`, `CanTouch`, `CollisionGroup`,
 `CollisionMask`, `LinearDamping`, `AngularDamping`, `GravityScale`,
-`SleepEnabled`, `MovingBodyCCD`, and `Shape` where present. It records only a
+`SleepEnabled`, `MovingBodyCCD`, `Friction`, `Restitution`, and `Shape` where
+present. It records only a
 dirty neutral body intent and does not call Box3D from the setter callback.
 For MeshPart, it also observes `Mesh` and `CollisionMode`.
 

@@ -4,14 +4,29 @@
 
 #include <lua.h>
 #include <cstddef>
-#include <queue>
+#include <deque>
+#include <optional>
 #include <vector>
 
 namespace gargantuan {
 	inline constexpr std::size_t MaximumQueuedScriptTasks = 65'536;
 
 	class ThreadEngine {
+		struct TaskEntry {
+			lua_State *Thread = nullptr;
+			int ThreadReference = LUA_NOREF;
+			int ArgumentReference = LUA_NOREF;
+			int ArgumentCount = 0;
+			ScriptSecurityContext SecurityContext;
+		};
+
 	  public:
+		struct ArgumentRange {
+			lua_State *Source = nullptr;
+			int First = 0;
+			int Count = 0;
+		};
+
 		struct ScheduledTask {
 			enum class Type {
 				// task.wait()
@@ -21,19 +36,9 @@ namespace gargantuan {
 			};
 
 			Type type = Type::Wait;
-			lua_State *Thread = nullptr;
-			int ThreadReference = LUA_NOREF;
-			int ArgumentCount = 0;
+			TaskEntry Entry;
 			double ScheduledTime = 0;
 			double WakeTime = 0;
-			ScriptSecurityContext SecurityContext;
-		};
-
-		struct DeferredTask {
-			lua_State *Thread = nullptr;
-			int ThreadReference = LUA_NOREF;
-			int ArgumentCount = 0;
-			ScriptSecurityContext SecurityContext;
 		};
 
 		ThreadEngine(lua_State *mainState);
@@ -41,22 +46,26 @@ namespace gargantuan {
 		void ShutdownRuntime();
 		void Step();
 		void ResumeThread(lua_State *thread, int threadReference, int argumentCount);
-		bool QueueScheduledTask(lua_State *thread, ScheduledTask::Type type, double delaySeconds, int argumentCount);
-		bool QueueDeferredTask(lua_State *thread, int argumentCount);
+		bool CancelPendingTasks(lua_State *Caller, lua_State *Thread);
+		bool QueueScheduledTask(lua_State *Thread, ScheduledTask::Type Type, double DelaySeconds, ArgumentRange Arguments);
+		bool QueueDeferredTask(lua_State *Thread, ArgumentRange Arguments);
 
 	  private:
 		lua_State *L;
 		bool Stopping = false;
 
 		struct CompareWakeTime {
-			bool operator()(const ScheduledTask &lhs, const ScheduledTask &rhs) {
-				return lhs.WakeTime > rhs.WakeTime;
+			bool operator()(const ScheduledTask &Left, const ScheduledTask &Right) const {
+				return Left.WakeTime > Right.WakeTime;
 			};
 		};
 
-		std::priority_queue<ScheduledTask, std::vector<ScheduledTask>, CompareWakeTime> ScheduledQueue;
-		std::vector<DeferredTask> DeferredQueue;
+		std::vector<ScheduledTask> ScheduledQueue;
+		std::deque<TaskEntry> DeferredQueue;
 
+		TaskEntry CaptureTask(lua_State *Thread, ArgumentRange Arguments);
+		void ReleaseTask(const TaskEntry &Task);
+		void ResumeQueuedTask(TaskEntry Task, std::optional<double> Elapsed = std::nullopt);
 		void ResumeThreadWithContext(
 			lua_State *thread,
 			int threadReference,

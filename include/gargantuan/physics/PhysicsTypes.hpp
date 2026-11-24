@@ -18,6 +18,7 @@ namespace gargantuan {
 	inline constexpr std::size_t MaximumRaycastFilterBodies = 4096;
 	inline constexpr std::uint16_t MaximumPhysicsCollisionMask = 0xffff;
 	inline constexpr std::uint16_t MaximumPhysicsCollisionGroup = 15;
+	inline constexpr float MaximumPhysicsFriction = 4.0f;
 	[[nodiscard]] inline constexpr bool PhysicsCanCollide(
 		std::uint16_t GroupA, std::uint16_t MaskA, std::uint16_t GroupB, std::uint16_t MaskB
 	) {
@@ -93,6 +94,8 @@ namespace gargantuan {
 		// Opt into swept collision against moving non-bullet rigid bodies.
 		// Static-body CCD remains a world policy independent of this flag.
 		bool MovingBodyCCD = false;
+		float Friction = 0.6f;
+		float Restitution = 0.0f;
 	};
 
 	enum class PhysicsConstraintKind : std::uint8_t {

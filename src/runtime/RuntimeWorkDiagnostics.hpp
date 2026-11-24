@@ -41,6 +41,7 @@ enum class WorkPhase : std::size_t {
 	ReplicaLiveCreate, ReplicaLiveParent, ReplicaLiveOperations, ReplicaRetirement, ReplicaNotifications, ReplicaPreflightRelease,
 	SnapshotValidation, SnapshotConstruction, SnapshotParenting, SnapshotProperties,
 	RenderDraw, HostFramePacing,
+	AudioReconcile, AudioMix,
 	Count
 };
 
@@ -69,7 +70,8 @@ inline constexpr std::array<std::string_view, static_cast<std::size_t>(WorkPhase
 	"ReplicaCandidateCopy", "ReplicaCandidatePlan", "ReplicaNativePreflight", "ReplicaLiveApply",
 	"ReplicaLiveCreate", "ReplicaLiveParent", "ReplicaLiveOperations", "ReplicaRetirement", "ReplicaNotifications", "ReplicaPreflightRelease",
 	"SnapshotValidation", "SnapshotConstruction", "SnapshotParenting", "SnapshotProperties",
-	"RenderDraw", "HostFramePacing"
+	"RenderDraw", "HostFramePacing",
+	"AudioReconcile", "AudioMix"
 };
 
 struct WorkDuration {

@@ -6,6 +6,7 @@
 #include "gargantuan/Log.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Frame.hpp"
+#include "gargantuan/classes/ImageButton.hpp"
 #include "gargantuan/classes/ImageLabel.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/classes/LayerCollector.hpp"
@@ -57,6 +58,11 @@ namespace gargantuan {
 			return std::clamp(std::isfinite(Value) ? Value : 0.0f, 0.0f, 1.0f);
 		}
 
+		std::shared_ptr<GuiObject> GetButton(const std::shared_ptr<Instance> &Object) {
+			if (auto Button = std::dynamic_pointer_cast<TextButton>(Object)) return Button;
+			return std::dynamic_pointer_cast<ImageButton>(Object);
+		}
+
 		float Resolve(const UDim &Value, float Parent) {
 			const float Result = Parent * Value.Scale + static_cast<float>(Value.Offset);
 			return std::isfinite(Result) ? Result : 0.0f;
@@ -95,6 +101,7 @@ namespace gargantuan {
 				Left.BackgroundAlpha == Right.BackgroundAlpha && Left.ContentColor.R == Right.ContentColor.R &&
 				Left.ContentColor.G == Right.ContentColor.G && Left.ContentColor.B == Right.ContentColor.B &&
 				Left.ContentAlpha == Right.ContentAlpha && Left.ImageTexture == Right.ImageTexture &&
+				Left.ImageAspectRatio == Right.ImageAspectRatio &&
 				Left.Text == Right.Text && Left.TextOffsetX == Right.TextOffsetX && Left.TextOffsetY == Right.TextOffsetY &&
 				Left.DrawCaret == Right.DrawCaret && Left.CaretX == Right.CaretX && Left.SelectionX == Right.SelectionX &&
 				Left.SelectionWidth == Right.SelectionWidth;
@@ -372,7 +379,7 @@ namespace gargantuan {
 			Connect("CanvasPosition", DirtyScroll | DirtyPresentation | DirtyInput | DirtyAccessibility);
 			Connect("Size", DirtyLayout | DirtyText | DirtyPresentation | DirtyInput);
 			for (const auto *Name : {"BackgroundColor3", "BackgroundTransparency", "TextColor3", "TextTransparency",
-				"ImageColor3", "ImageTransparency"}) Connect(Name, DirtyPresentation);
+				"ImageColor3", "ImageTransparency", "ScaleType"}) Connect(Name, DirtyPresentation);
 			for (const auto *Name : {"Text", "TextSize", "TextWrapped", "TextXAlignment", "TextYAlignment", "FontFace",
 				"PlaceholderText", "SecureTextEntry", "MultiLine"})
 				Connect(Name, DirtyLayout | DirtyText | DirtyPresentation | DirtyAccessibility);
@@ -458,7 +465,12 @@ namespace gargantuan {
 				Result.Kind = GuiPresentationKind::Image;
 				Result.ContentColor = Image->GetImageColor3();
 				Result.ContentAlpha = 1.0f - ClampUnit(Image->GetImageTransparency());
-				if (Working.Image) Result.ImageTexture = Working.Image->Texture;
+				if (Working.Image) {
+					Result.ImageTexture = Working.Image->Texture;
+					if (Image->GetScaleType() == Enums::GuiImageScaleType::Fit)
+						Result.ImageAspectRatio = static_cast<float>(Working.Image->Width) /
+							static_cast<float>(Working.Image->Height);
+				}
 			} else if (std::dynamic_pointer_cast<ScrollingFrame>(Object)) {
 				Result.Kind = GuiPresentationKind::ScrollView;
 			} else if (std::dynamic_pointer_cast<Frame>(Object)) {
@@ -1166,9 +1178,17 @@ namespace gargantuan {
 					!AddQuad(Next->Frame, Node, Node.Bounds, {0, 0, 1, 1}, Resolved.BackgroundColor,
 						Resolved.BackgroundAlpha, std::nullopt, Node.EffectiveClip,
 						Resolved.Kind == GuiPresentationKind::Rectangle ? &NextSolidSpans[Node.Object] : nullptr)) return false;
-				if (Resolved.Kind == GuiPresentationKind::Image && Resolved.ImageTexture &&
-					!AddQuad(Next->Frame, Node, Node.Bounds, {0, 0, 1, 1}, Resolved.ContentColor,
+				if (Resolved.Kind == GuiPresentationKind::Image && Resolved.ImageTexture) {
+					auto Destination = Node.Bounds;
+					if (Resolved.ImageAspectRatio > 0.0f) {
+						Destination.Width = std::min(Node.Bounds.Width, Node.Bounds.Height * Resolved.ImageAspectRatio);
+						Destination.Height = std::min(Node.Bounds.Height, Node.Bounds.Width / Resolved.ImageAspectRatio);
+						Destination.X += (Node.Bounds.Width - Destination.Width) * 0.5f;
+						Destination.Y += (Node.Bounds.Height - Destination.Height) * 0.5f;
+					}
+					if (!AddQuad(Next->Frame, Node, Destination, {0, 0, 1, 1}, Resolved.ContentColor,
 						Resolved.ContentAlpha, Resolved.ImageTexture, Node.EffectiveClip)) return false;
+				}
 				if (Resolved.SelectionWidth > 0.0f) {
 					const GuiRect Selection{
 						Node.Bounds.X + Resolved.TextOffsetX + Resolved.SelectionX,
@@ -1293,7 +1313,7 @@ namespace gargantuan {
 			if (std::dynamic_pointer_cast<ScreenGui>(Object)) return Enums::AccessibilityRole::Group;
 			if (std::dynamic_pointer_cast<TextBox>(Object)) return Enums::AccessibilityRole::TextBox;
 			if (std::dynamic_pointer_cast<ScrollingFrame>(Object)) return Enums::AccessibilityRole::ScrollView;
-			if (std::dynamic_pointer_cast<TextButton>(Object)) return Enums::AccessibilityRole::Button;
+			if (GetButton(Object)) return Enums::AccessibilityRole::Button;
 			if (std::dynamic_pointer_cast<TextLabel>(Object)) return Enums::AccessibilityRole::Text;
 			if (std::dynamic_pointer_cast<ImageLabel>(Object) && !Object->GetAccessibleName().empty()) return Enums::AccessibilityRole::Image;
 			if (!Object->GetAccessibleName().empty()) return Enums::AccessibilityRole::Group;
@@ -1337,7 +1357,7 @@ namespace gargantuan {
 				}
 				const bool Focused = FocusedByRoot.contains(Node.Root) && FocusedByRoot.at(Node.Root) == Node.Object;
 				const auto GuiObjectValue = std::dynamic_pointer_cast<GuiObject>(Object);
-				const auto ButtonValue = std::dynamic_pointer_cast<TextButton>(Object);
+				const auto ButtonValue = GetButton(Object);
 				const auto InputValue = std::dynamic_pointer_cast<TextBox>(Object);
 				const auto ScrollValue = std::dynamic_pointer_cast<ScrollingFrame>(Object);
 				const auto Editing = InputValue ? TextEditing.find(Node.Object) : TextEditing.end();
@@ -2036,7 +2056,7 @@ namespace gargantuan {
 			if (State->HandleScrollKey(*Key)) return true;
 			if (Key->Logical != LogicalKey::Space && Key->Logical != LogicalKey::Return) return false;
 			const ObjectId Focused = State->KeyboardFocus();
-			auto Button = std::dynamic_pointer_cast<TextButton>(ObjectRegistry::Get().Lookup(Focused));
+			auto Button = GetButton(ObjectRegistry::Get().Lookup(Focused));
 			if (!Button) return false;
 			if (!Button->GetInteractable()) {
 				if (State->KeyboardPressed == Focused) {
@@ -2138,7 +2158,7 @@ namespace gargantuan {
 			State->Captured.erase(Input.PointerId);
 			State->RefreshInteraction(Pressed);
 			if (Input.Action == GuiPointerAction::Up && Hit && *Hit == Pressed) {
-				if (auto Button = std::dynamic_pointer_cast<TextButton>(ObjectRegistry::Get().Lookup(Pressed));
+				if (auto Button = GetButton(ObjectRegistry::Get().Lookup(Pressed));
 					Button && Button->GetInteractable())
 					Button->Activated->Fire({});
 			}

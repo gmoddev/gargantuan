@@ -1,8 +1,11 @@
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/animation/AnimationRuntime.hpp"
+#include "gargantuan/audio/AudioRuntime.hpp"
 #include "gargantuan/classes/Character.hpp"
+#include "gargantuan/classes/ImageButton.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Player.hpp"
+#include "gargantuan/classes/Sound.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/network/GameSession.hpp"
@@ -176,7 +179,7 @@ namespace {
 		return std::move(*Document);
 	}
 
-	void RunRelayRescue(bool UseGns, bool RenderGpu, const std::filesystem::path &ProjectRoot,
+	void RunRelayRescue(bool UseGns, bool RenderGpu, bool EnableAudio, const std::filesystem::path &ProjectRoot,
 		const std::optional<std::filesystem::path> &GasPlacePath) {
 		auto Network = UseGns ? nullptr : SimulatedNetwork::Create({.BaseLatency = 6ms});
 		const auto CreateTransport = [&]() -> std::shared_ptr<IGameTransport> {
@@ -200,6 +203,9 @@ namespace {
 		ServerWorld->InitializeLoadedProjectRevision();
 		auto Assets = std::dynamic_pointer_cast<AssetService>(TrustedWorld->GetService("AssetService"));
 		Require(Assets != nullptr, "sample asset catalog loads");
+		Require(Assets->ResolveImage("asset://d18f6e730a55d41e65e2cc2447294884") &&
+			Assets->ResolveAudio("asset://a0d10f78c368437daac002a4e59fdd64"),
+			"the sample image and audio resolve from its own asset catalog");
 		const auto AssetSnapshot = Assets->CaptureRuntimeAssets();
 		std::size_t ScriptErrors = 0;
 		const auto ReportError = [&](std::string Code, std::string Message) {
@@ -256,7 +262,7 @@ namespace {
 						if (RenderGpu) Peer.Renderer = std::make_unique<RelayGpuRenderer>(Vector2(320, 240));
 						else Peer.Renderer = std::make_unique<HeadlessRenderer>(Vector2(320, 240));
 						Peer.Runtime = std::make_unique<Engine>(World, Peer.Renderer.get(), ReportError,
-							EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient});
+								EngineProviderConfiguration{.AudioEnabled = EnableAudio, .Mode = RuntimeMode::NetworkClient});
 						Peer.Runtime->ProcessService->Alive = true;
 						Require(Peer.Session->AttachClientRuntime(*Peer.Runtime),
 							"relay client attaches to its trusted Player");
@@ -293,6 +299,32 @@ namespace {
 			}
 			return Server->GetMetrics().ReadyPeers == 2;
 		});
+		const auto GetMixToggle = [](const Client &Peer) {
+			return std::dynamic_pointer_cast<ImageButton>(Peer.Runtime->DataModel->FindFirstDescendant("RelayMixToggle"));
+		};
+		auto PilotToggle = GetMixToggle(Clients.front());
+		auto ObserverToggle = GetMixToggle(Clients.back());
+		Require(PilotToggle && ObserverToggle && PilotToggle->GetScaleType() == Enums::GuiImageScaleType::Fit &&
+			ObserverToggle->GetScaleType() == Enums::GuiImageScaleType::Fit,
+			"saved Luau creates an asset-backed fit ImageButton on both clients");
+		const auto ClickPilotMixToggle = [&] {
+			for (const auto State : {ButtonState::Pressed, ButtonState::Released})
+				(void)Clients.front().Runtime->ProcessEvent(PointerButtonEvent{
+					.Device = {2}, .Button = PointerButton::Left, .State = State, .Position = {280, 98},
+				});
+		};
+		ClickPilotMixToggle();
+		Require(PilotToggle->GetAccessibilitySelected() && !ObserverToggle->GetAccessibilitySelected(),
+			"routed ImageButton activation changes only its client's audio mute");
+		ClickPilotMixToggle();
+		Require(!PilotToggle->GetAccessibilitySelected() && !ObserverToggle->GetAccessibilitySelected(),
+			"the second activation restores the pilot's audio independently");
+		for (const auto &Peer : Clients) {
+			const auto Cue = std::dynamic_pointer_cast<Sound>(Peer.Runtime->Workspace->FindFirstChild("RelayChargeTone", true));
+			Require(Cue && Cue->GetMixCategory() == Enums::SoundMixCategory::Effects &&
+				Cue->GetParent().value_or(nullptr) == Peer.Runtime->Workspace->FindFirstChild("RelayBeacon", true),
+				"each client attaches its local charge cue to the streamed beacon");
+		}
 		const auto FindServerPlayer = [&](const Client &Peer) -> std::shared_ptr<Player> {
 			const auto Id = (*Peer.Runtime->Players->GetLocalPlayer())->GetPlayerId();
 			for (const auto &Value : ServerRuntime.Players->GetPlayers())
@@ -392,11 +424,27 @@ namespace {
 			NumberEquals(*SwitchOperator, "RelayCharges", 0), "only the pilot owns each earned cell");
 		for (const auto &Cell : Inventory->GetChildren())
 			Require(AttributeEquals(*Cell, "Kind", WireValue(std::string("RelayCell"))), "a charge creates a relay cell");
+		const auto Dock = std::dynamic_pointer_cast<Part>(Course->FindFirstChild("CargoDock", std::nullopt));
+		const auto Marker = std::dynamic_pointer_cast<Part>(Course->FindFirstChild("CargoMarker", std::nullopt));
+		Require(Dock && Marker && Dock->GetFriction() == 1.5f && Dock->GetRestitution() == 0.75f &&
+			!Marker->GetAnchored() && Marker->GetPosition().y < 4.0f,
+			"the authoritative mission releases dynamic cargo onto the authored contact surface");
+		Until(60, "the dynamic cargo rebounds from the dock", [&] {
+			return Marker->GetLinearVelocity().y > 0.5f;
+		});
 		Until(60, "other client receives authoritative mission completion", [&] {
 			const auto &World = Clients.back().Runtime->Workspace;
 			const auto Replica = World->FindFirstChild("RelayCourse", std::nullopt);
 			return Replica && NumberEquals(*Replica, "RelayCharges", 3);
 		});
+		if (EnableAudio) {
+			for (const auto &Peer : Clients) {
+				const auto Audio = Peer.Runtime->Audio->GetMetrics();
+				Require(Peer.Runtime->Audio->IsAvailable() && Audio.VoiceAdmissions > 0 &&
+					Audio.MixedFrames > 0 && Audio.Backend.SubmittedFrames > 0,
+					"each client submits its asset-backed cue to the audio backend");
+			}
+		}
 		if (RenderGpu) {
 			Require(PilotClient.GetGpu().HasDroneMotion() && Clients.back().GetGpu().HasDroneMotion(),
 				"both GPU clients consumed moving drone transforms");
@@ -452,6 +500,7 @@ int main(int ArgumentCount, char **Arguments) {
 	try {
 		bool UseGns = false;
 		bool RenderGpu = false;
+		bool EnableAudio = false;
 		std::filesystem::path ProjectRoot = GARGANTUAN_GAMEPLAY_SAMPLE_ROOT;
 		std::optional<std::filesystem::path> GasPlacePath;
 		for (int Index = 1; Index < ArgumentCount; ++Index) {
@@ -459,11 +508,13 @@ int main(int ArgumentCount, char **Arguments) {
 			if (Argument == "--gns" || Argument == "--gns-gpu") {
 				UseGns = true;
 				RenderGpu = RenderGpu || Argument == "--gns-gpu";
-			} else if (Argument == "--project" && Index + 1 < ArgumentCount)
+			} else if (Argument == "--audio")
+				EnableAudio = true;
+			else if (Argument == "--project" && Index + 1 < ArgumentCount)
 				ProjectRoot = std::filesystem::absolute(Arguments[++Index]);
 			else if (Argument == "--gasp" && Index + 1 < ArgumentCount)
 				GasPlacePath = std::filesystem::absolute(Arguments[++Index]);
-			else throw std::invalid_argument("Use --gns, --gns-gpu, --project <root>, or --gasp <file>");
+			else throw std::invalid_argument("Use --gns, --gns-gpu, --audio, --project <root>, or --gasp <file>");
 		}
 		struct SdlLifetime {
 			bool Active;
@@ -475,7 +526,7 @@ int main(int ArgumentCount, char **Arguments) {
 			gargantuan::BootstrapPackagedRuntimeSchema(gargantuan::ReadProjectPreRunSource(ProjectRoot));
 		else
 			gargantuan::BootstrapNativeRuntimeSchema();
-		RunRelayRescue(UseGns, RenderGpu, ProjectRoot, GasPlacePath);
+		RunRelayRescue(UseGns, RenderGpu, EnableAudio, ProjectRoot, GasPlacePath);
 		std::cout << "[Gameplay:Relay] Saved two-player mission passed\n";
 		return 0;
 	} catch (const std::exception &Error) {

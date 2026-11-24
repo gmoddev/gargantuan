@@ -7,6 +7,13 @@ description: Parts, physics operations and queries, frame signals, camera, and l
 
 ## Parts and motion
 
+`BasePart.Friction` controls rigid contact grip from 0 to 4 and defaults to
+0.6. `BasePart.Restitution` controls rebound from 0 to 1 and defaults to 0.
+These properties save and replicate like other Part properties. Changes
+affect rigid contacts at the next physics safe point, including authored
+static mesh surfaces. The solver combines friction by geometric mean and
+takes the larger restitution for qualifying impacts.
+
 `BasePart` declares `Anchored`, `CanCollide`, `CanTouch`, `CastShadow`, `Kinematic`, `CFrame`, `Position`, `Rotation`, `Size`, `Color`, `Transparency`, `CollisionGroup` (0–15), `CollisionMask` (16 bits), damping, `GravityScale`, `SleepEnabled`, and `MovingBodyCCD`. `Part.Shape` selects a primitive. `MeshPart.Mesh` is a strict Mesh asset reference, `Material` an optional Material override, and `CollisionMode` selects box or eligible anchored static mesh collision. Unanchored MeshParts use box collision. `Workspace.Gravity` defaults to 196.2 in the declaration.
 
 `BasePart:ApplyImpulse(Impulse: Vector3)`, `ApplyAngularImpulse`, `ApplyImpulseAtPosition(Impulse, Position)`, `ApplyForce`, `ApplyTorque`, `SetLinearVelocity`, `SetAngularVelocity`, and `SetAwake` queue physical controls for a safe point or fixed step. `GetLinearVelocity()`, `GetAngularVelocity()`, `GetMass()`, `GetLocalInertia()`, and `GetAwake()` read the latest published state; mass is zero before body admission. `Touched(OtherPart)` and `TouchEnded(OtherPart)` are signals, not collision callbacks that authorize arbitrary cross-thread graph mutation. Rigid bodies and constraint handles are engine-owned; script identity is the Instance.

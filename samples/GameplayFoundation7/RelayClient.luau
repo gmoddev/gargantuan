@@ -3,6 +3,7 @@ local ActionMap = game:GetService("ActionMap")
 local CharacterControl = game:GetService("CharacterControlService")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+local Mix = game:GetService("AudioMixService")
 local Player = Players.LocalPlayer
 if not Player then
 	warn("[Gameplay:Relay] Local player is unavailable")
@@ -24,10 +25,50 @@ Status.TextSize = 17
 Status.TextWrapped = true
 Status.Parent = Hud
 
+local MixToggle = Instance.new("ImageButton")
+MixToggle.Name = "RelayMixToggle"
+MixToggle.Position = UDim2.new(1, -64, 0, 80)
+MixToggle.Size = UDim2.new(0, 48, 0, 36)
+MixToggle.Image = "asset://d18f6e730a55d41e65e2cc2447294884"
+MixToggle.ScaleType = Enum.GuiImageScaleType.Fit
+MixToggle.BackgroundColor3 = Color3.new(0.12, 0.22, 0.26)
+MixToggle.Interactable = Mix ~= nil
+MixToggle.Parent = Hud
+
+local MixFeedback
+local function ShowMixState(Muted)
+	MixToggle.AccessibilitySelected = Muted
+	MixToggle.AccessibleName = if Muted then "Unmute game audio" else "Mute game audio"
+	MixToggle.ImageColor3 = if Muted then Color3.new(0.50, 0.58, 0.62) else Color3.new(1, 1, 1)
+end
+ShowMixState(Mix ~= nil and Mix:GetMasterMuted())
+
+local MixConnection = MixToggle.Activated:Connect(function()
+	if not Mix then
+		return
+	end
+	local Muted = not Mix:GetMasterMuted()
+	Mix:SetMasterMuted(Muted)
+	ShowMixState(Muted)
+	MixToggle:ReleaseFocus()
+	if MixFeedback then
+		task.cancel(MixFeedback)
+	end
+	MixToggle.BackgroundColor3 = Color3.new(0.25, 0.49, 0.53)
+	MixFeedback = task.delay(0.25, function()
+		MixFeedback = nil
+		MixToggle.BackgroundColor3 = Color3.new(0.12, 0.22, 0.26)
+	end)
+end)
+
 local PulseReference = "asset://ca34ffb8742655186db2cfb54124a5ff"
+local ToneReference = "asset://a0d10f78c368437daac002a4e59fdd64"
 local BeaconAnimator
 local TriedAnimator
 local Pulse
+local CueBeacon
+local ChargeTone
+local PreviousCharges
 local PreviousRelayEnabled
 local LandRequested = false
 local LastFacing = 0
@@ -108,6 +149,28 @@ local RenderConnection = RunService.PreRender:Connect(function(DeltaTime)
 
 	local Health = Player:GetAttribute("Health") or 100
 	local Charges = if Course then Course:GetAttribute("RelayCharges") or 0 else 0
+	if CueBeacon ~= Beacon then
+		CueBeacon = Beacon
+		PreviousCharges = nil
+		if ChargeTone and not ChargeTone.Destroyed then
+			ChargeTone:Destroy()
+		end
+		ChargeTone = nil
+		if Beacon then
+			local Cue = Instance.new("Sound")
+			Cue.Name = "RelayChargeTone"
+			Cue.SoundId = ToneReference
+			Cue.MixCategory = Enum.SoundMixCategory.Effects
+			Cue.Volume = 0.4
+			Cue.Parent = Beacon
+			ChargeTone = Cue
+		end
+	end
+	if ChargeTone and PreviousCharges and Charges > PreviousCharges then
+		ChargeTone:Play()
+	end
+	PreviousCharges = Charges
+
 	local Mode = Player:GetAttribute("RelayMode")
 	local Help
 	if Charges == 3 then
@@ -131,6 +194,13 @@ script.Destroying:Connect(function()
 	RenderConnection:Disconnect()
 	SimulationConnection:Disconnect()
 	ActionConnection:Disconnect()
+	MixConnection:Disconnect()
+	if MixFeedback then
+		task.cancel(MixFeedback)
+	end
+	if ChargeTone and not ChargeTone.Destroyed then
+		ChargeTone:Destroy()
+	end
 	if Pulse then
 		Pulse:Stop()
 	end
