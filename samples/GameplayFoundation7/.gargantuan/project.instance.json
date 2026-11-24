@@ -1,5 +1,5 @@
 {
-  "Version": 4,
+  "Version": 5,
   "Name": "Relay Rescue",
   "ClassName": "DataModel",
   "ClassSchemaId": "5ed5470f622082d244a9379d906bbd16",
@@ -82,7 +82,8 @@
               "Extensions": [],
               "CustomProperties": [],
               "Tags": [],
-              "Children": []
+              "Children": [],
+              "NodeId": 4
             },
             {
               "Name": "LaunchPad",
@@ -134,7 +135,8 @@
               "Extensions": [],
               "CustomProperties": [],
               "Tags": [],
-              "Children": []
+              "Children": [],
+              "NodeId": 5
             },
             {
               "Name": "GroundSwitch",
@@ -186,7 +188,8 @@
               "Extensions": [],
               "CustomProperties": [],
               "Tags": [],
-              "Children": []
+              "Children": [],
+              "NodeId": 6
             },
             {
               "Name": "Hazard",
@@ -238,7 +241,8 @@
               "Extensions": [],
               "CustomProperties": [],
               "Tags": [],
-              "Children": []
+              "Children": [],
+              "NodeId": 7
             },
             {
               "Name": "AirspaceDivider",
@@ -290,7 +294,8 @@
               "Extensions": [],
               "CustomProperties": [],
               "Tags": [],
-              "Children": []
+              "Children": [],
+              "NodeId": 8
             },
             {
               "Name": "RelayPlatform",
@@ -342,7 +347,8 @@
               "Extensions": [],
               "CustomProperties": [],
               "Tags": [],
-              "Children": []
+              "Children": [],
+              "NodeId": 9
             },
             {
               "Name": "RelayBeacon",
@@ -408,9 +414,11 @@
                   "Extensions": [],
                   "CustomProperties": [],
                   "Tags": [],
-                  "Children": []
+                  "Children": [],
+                  "NodeId": 11
                 }
-              ]
+              ],
+              "NodeId": 10
             },
             {
               "Name": "NorthWall",
@@ -462,7 +470,8 @@
               "Extensions": [],
               "CustomProperties": [],
               "Tags": [],
-              "Children": []
+              "Children": [],
+              "NodeId": 12
             },
             {
               "Name": "CargoDock",
@@ -520,7 +529,8 @@
               "Extensions": [],
               "CustomProperties": [],
               "Tags": [],
-              "Children": []
+              "Children": [],
+              "NodeId": 13
             },
             {
               "Name": "CargoMarker",
@@ -578,11 +588,440 @@
               "Extensions": [],
               "CustomProperties": [],
               "Tags": [],
-              "Children": []
+              "Children": [],
+              "NodeId": 14
             }
-          ]
+          ],
+          "NodeId": 3
         }
-      ]
+      ],
+      "NodeId": 2
+    },
+    {
+      "Name": "StarterGui",
+      "ClassName": "StarterGui",
+      "ClassSchemaId": "dcd45746f05b46ef1878421e1b584c3b",
+      "ClassDefinitionVersion": 1,
+      "Properties": {},
+      "Attributes": {},
+      "Extensions": [],
+      "CustomProperties": [],
+      "Tags": [],
+      "Children": [
+        {
+          "Name": "RelayHud",
+          "ClassName": "ScreenGui",
+          "ClassSchemaId": "eeb2271af087e2bc4b7daf31c48ca860",
+          "ClassDefinitionVersion": 1,
+          "Properties": {
+            "ResetOnSpawn": {
+              "Bool": false
+            }
+          },
+          "Attributes": {},
+          "Extensions": [],
+          "CustomProperties": [],
+          "Tags": [],
+          "Children": [
+            {
+              "Name": "RelayStatus",
+              "ClassName": "TextLabel",
+              "ClassSchemaId": "d4e8cf1ffaaeafec999969428a2e32f8",
+              "ClassDefinitionVersion": 1,
+              "Properties": {
+                "Position": {
+                  "UDim2": [
+                    0,
+                    16,
+                    0,
+                    16
+                  ]
+                },
+                "Size": {
+                  "UDim2": [
+                    1,
+                    -32,
+                    0,
+                    56
+                  ]
+                },
+                "Text": {
+                  "String": "Relay Rescue"
+                },
+                "BackgroundColor3": {
+                  "Color3": [
+                    0.03,
+                    0.08,
+                    0.13
+                  ]
+                },
+                "BackgroundTransparency": {
+                  "Float": 0.15
+                },
+                "TextColor3": {
+                  "Color3": [
+                    0.84,
+                    1,
+                    0.94
+                  ]
+                },
+                "TextSize": {
+                  "Float": 17
+                },
+                "TextWrapped": {
+                  "Bool": true
+                }
+              },
+              "Attributes": {},
+              "Extensions": [],
+              "CustomProperties": [],
+              "Tags": [],
+              "Children": [],
+              "NodeId": 17
+            },
+            {
+              "Name": "RelayMixToggle",
+              "ClassName": "ImageButton",
+              "ClassSchemaId": "faf06fa435e7be2ac710c271254a4ae6",
+              "ClassDefinitionVersion": 1,
+              "Properties": {
+                "Position": {
+                  "UDim2": [
+                    1,
+                    -64,
+                    0,
+                    80
+                  ]
+                },
+                "Size": {
+                  "UDim2": [
+                    0,
+                    48,
+                    0,
+                    36
+                  ]
+                },
+                "Image": {
+                  "String": "asset://d18f6e730a55d41e65e2cc2447294884"
+                },
+                "ScaleType": {
+                  "EnumItem": [
+                    "GuiImageScaleType",
+                    "Fit"
+                  ]
+                },
+                "BackgroundColor3": {
+                  "Color3": [
+                    0.12,
+                    0.22,
+                    0.26
+                  ]
+                },
+                "AccessibleName": {
+                  "String": "Mute game audio"
+                }
+              },
+              "Attributes": {},
+              "Extensions": [],
+              "CustomProperties": [],
+              "Tags": [],
+              "Children": [],
+              "NodeId": 18
+            },
+            {
+              "Name": "EquipmentToggle",
+              "ClassName": "ImageButton",
+              "ClassSchemaId": "faf06fa435e7be2ac710c271254a4ae6",
+              "ClassDefinitionVersion": 1,
+              "Properties": {
+                "Position": {
+                  "UDim2": [
+                    1,
+                    -118,
+                    0,
+                    80
+                  ]
+                },
+                "Size": {
+                  "UDim2": [
+                    0,
+                    48,
+                    0,
+                    36
+                  ]
+                },
+                "Image": {
+                  "String": "asset://d18f6e730a55d41e65e2cc2447294884"
+                },
+                "ScaleType": {
+                  "EnumItem": [
+                    "GuiImageScaleType",
+                    "Fit"
+                  ]
+                },
+                "ImageColor3": {
+                  "Color3": [
+                    0.62,
+                    0.86,
+                    1.0
+                  ]
+                },
+                "AccessibleName": {
+                  "String": "Toggle equipment preview"
+                }
+              },
+              "Attributes": {},
+              "Extensions": [],
+              "CustomProperties": [],
+              "Tags": [],
+              "Children": [],
+              "NodeId": 19
+            },
+            {
+              "Name": "EquipmentPreview",
+              "ClassName": "ViewportFrame",
+              "ClassSchemaId": "ebf35a29db2f03c0ab39bb86cc89e88c",
+              "ClassDefinitionVersion": 1,
+              "Properties": {
+                "Position": {
+                  "UDim2": [
+                    1,
+                    -134,
+                    1,
+                    -100
+                  ]
+                },
+                "Size": {
+                  "UDim2": [
+                    0,
+                    118,
+                    0,
+                    84
+                  ]
+                },
+                "BackgroundColor3": {
+                  "Color3": [
+                    0.04,
+                    0.09,
+                    0.13
+                  ]
+                },
+                "BackgroundTransparency": {
+                  "Float": 0.12
+                },
+                "ClipsDescendants": {
+                  "Bool": true
+                },
+                "CurrentCamera": {
+                  "InstanceReference": 21
+                }
+              },
+              "Attributes": {},
+              "Extensions": [],
+              "CustomProperties": [],
+              "Tags": [],
+              "Children": [
+                {
+                  "Name": "EquipmentCamera",
+                  "ClassName": "Camera",
+                  "ClassSchemaId": "8152394d3f103e16a76125bab068cc7a",
+                  "ClassDefinitionVersion": 1,
+                  "Properties": {
+                    "CFrame": {
+                      "CFrame": [
+                        0,
+                        0,
+                        5,
+                        1,
+                        0,
+                        0,
+                        0,
+                        1,
+                        0,
+                        0,
+                        0,
+                        1
+                      ]
+                    },
+                    "FieldOfView": {
+                      "Float": 42
+                    }
+                  },
+                  "Attributes": {},
+                  "Extensions": [],
+                  "CustomProperties": [],
+                  "Tags": [],
+                  "Children": [],
+                  "NodeId": 21
+                },
+                {
+                  "Name": "Crystal",
+                  "ClassName": "MeshPart",
+                  "ClassSchemaId": "6ae6d9714ca7c7d16cff97f58d855f1d",
+                  "ClassDefinitionVersion": 1,
+                  "Properties": {
+                    "Anchored": {
+                      "Bool": true
+                    },
+                    "CanCollide": {
+                      "Bool": false
+                    },
+                    "CanTouch": {
+                      "Bool": false
+                    },
+                    "CFrame": {
+                      "CFrame": [
+                        0,
+                        0,
+                        0,
+                        1,
+                        0,
+                        0,
+                        0,
+                        1,
+                        0,
+                        0,
+                        0,
+                        1
+                      ]
+                    },
+                    "Size": {
+                      "Vector3": [
+                        2,
+                        2,
+                        2
+                      ]
+                    },
+                    "Color": {
+                      "Color3": [
+                        0.39,
+                        0.92,
+                        1
+                      ]
+                    },
+                    "Mesh": {
+                      "String": "asset://d549080bd1e64aaee8041f4ece3e9f75"
+                    }
+                  },
+                  "Attributes": {},
+                  "Extensions": [],
+                  "CustomProperties": [],
+                  "Tags": [],
+                  "Children": [
+                    {
+                      "Name": "PreviewAnimator",
+                      "ClassName": "Animator",
+                      "ClassSchemaId": "7b80b401f8112e6c1cb141a88ff418b0",
+                      "ClassDefinitionVersion": 1,
+                      "Properties": {},
+                      "Attributes": {},
+                      "Extensions": [],
+                      "CustomProperties": [],
+                      "Tags": [],
+                      "Children": [],
+                      "NodeId": 23
+                    }
+                  ],
+                  "NodeId": 22
+                }
+              ],
+              "NodeId": 20
+            },
+            {
+              "Name": "RelayEquipment",
+              "ClassName": "Script",
+              "ClassSchemaId": "c77fa1af2c8ca9d2e04f3d523d8cd7de",
+              "ClassDefinitionVersion": 1,
+              "Properties": {
+                "Enabled": {
+                  "Bool": true
+                },
+                "RunContext": {
+                  "EnumItem": [
+                    "RunContext",
+                    "Client"
+                  ]
+                },
+                "SourceId": {
+                  "String": "ffb5ccbb7c96448a921874cebb5b9cc9"
+                },
+                "Source": {
+                  "String": "local Hud = script.Parent\nlocal Toggle\nlocal Preview\nlocal Animator\nfor Attempt = 1, 300 do\n\tToggle = Hud:FindFirstChild(\"EquipmentToggle\")\n\tPreview = Hud:FindFirstChild(\"EquipmentPreview\")\n\tlocal Crystal = Preview and Preview:FindFirstChild(\"Crystal\")\n\tAnimator = Crystal and Crystal:FindFirstChild(\"PreviewAnimator\")\n\tif Toggle and Preview and Animator then\n\t\tbreak\n\tend\n\ttask.wait()\nend\nif not (Toggle and Preview and Animator) then\n\twarn(\"[Gameplay:Relay] Equipment preview did not receive its complete scene\")\n\treturn\nend\n\nlocal Loaded, Track = pcall(function()\n\treturn Animator:LoadAnimation(\"asset://ca34ffb8742655186db2cfb54124a5ff\")\nend)\nif Loaded then\n\tTrack.Looped = true\n\tTrack:Play()\nelse\n\twarn(\"[Gameplay:Relay] Equipment preview animation failed to load\")\nend\n\nToggle.AccessibilitySelected = Preview.Visible\nlocal Connection = Toggle.Activated:Connect(function()\n\tPreview.Visible = not Preview.Visible\n\tToggle.AccessibilitySelected = Preview.Visible\n\tToggle:ReleaseFocus()\n\tif Loaded then\n\t\tif Preview.Visible then\n\t\t\tTrack:Play()\n\t\telse\n\t\t\tTrack:Stop()\n\t\tend\n\tend\nend)\nscript.Destroying:Connect(function()\n\tConnection:Disconnect()\n\tif Loaded then\n\t\tTrack:Stop()\n\tend\nend)\n"
+                }
+              },
+              "Attributes": {},
+              "Extensions": [],
+              "CustomProperties": [],
+              "Tags": [],
+              "Children": [],
+              "NodeId": 24
+            }
+          ],
+          "NodeId": 16
+        },
+        {
+          "Name": "RelayBriefing",
+          "ClassName": "ScreenGui",
+          "ClassSchemaId": "eeb2271af087e2bc4b7daf31c48ca860",
+          "ClassDefinitionVersion": 1,
+          "Properties": {
+            "ResetOnSpawn": {
+              "Bool": true
+            }
+          },
+          "Attributes": {},
+          "Extensions": [],
+          "CustomProperties": [],
+          "Tags": [],
+          "Children": [
+            {
+              "Name": "Briefing",
+              "ClassName": "TextLabel",
+              "ClassSchemaId": "d4e8cf1ffaaeafec999969428a2e32f8",
+              "ClassDefinitionVersion": 1,
+              "Properties": {
+                "Position": {
+                  "UDim2": [
+                    0,
+                    16,
+                    1,
+                    -46
+                  ]
+                },
+                "Size": {
+                  "UDim2": [
+                    0,
+                    156,
+                    0,
+                    30
+                  ]
+                },
+                "Text": {
+                  "String": "Relay crystal equipped"
+                },
+                "TextSize": {
+                  "Float": 14
+                },
+                "TextColor3": {
+                  "Color3": [
+                    0.6,
+                    0.86,
+                    0.9
+                  ]
+                }
+              },
+              "Attributes": {},
+              "Extensions": [],
+              "CustomProperties": [],
+              "Tags": [],
+              "Children": [],
+              "NodeId": 26
+            }
+          ],
+          "NodeId": 25
+        }
+      ],
+      "NodeId": 15
     },
     {
       "Name": "GameScripts",
@@ -621,7 +1060,8 @@
           "Extensions": [],
           "CustomProperties": [],
           "Tags": [],
-          "Children": []
+          "Children": [],
+          "NodeId": 28
         },
         {
           "Name": "RelayClient",
@@ -642,16 +1082,19 @@
               "String": "a3af72783f3147098ab0a0f72c610eb5"
             },
             "Source": {
-              "String": "local Players = game:GetService(\"Players\")\nlocal ActionMap = game:GetService(\"ActionMap\")\nlocal CharacterControl = game:GetService(\"CharacterControlService\")\nlocal RunService = game:GetService(\"RunService\")\nlocal Workspace = game:GetService(\"Workspace\")\nlocal Mix = game:GetService(\"AudioMixService\")\nlocal Player = Players.LocalPlayer\nif not Player then\n\twarn(\"[Gameplay:Relay] Local player is unavailable\")\n\treturn\nend\n\nlocal Hud = Instance.new(\"ScreenGui\")\nHud.Name = \"RelayHud\"\nHud.ResetOnSpawn = false\nHud.Parent = game\nlocal Status = Instance.new(\"TextLabel\")\nStatus.Name = \"RelayStatus\"\nStatus.Position = UDim2.new(0, 16, 0, 16)\nStatus.Size = UDim2.new(1, -32, 0, 56)\nStatus.BackgroundColor3 = Color3.new(0.03, 0.08, 0.13)\nStatus.BackgroundTransparency = 0.15\nStatus.TextColor3 = Color3.new(0.84, 1, 0.94)\nStatus.TextSize = 17\nStatus.TextWrapped = true\nStatus.Parent = Hud\n\nlocal MixToggle = Instance.new(\"ImageButton\")\nMixToggle.Name = \"RelayMixToggle\"\nMixToggle.Position = UDim2.new(1, -64, 0, 80)\nMixToggle.Size = UDim2.new(0, 48, 0, 36)\nMixToggle.Image = \"asset://d18f6e730a55d41e65e2cc2447294884\"\nMixToggle.ScaleType = Enum.GuiImageScaleType.Fit\nMixToggle.BackgroundColor3 = Color3.new(0.12, 0.22, 0.26)\nMixToggle.Interactable = Mix ~= nil\nMixToggle.Parent = Hud\n\nlocal MixFeedback\nlocal function ShowMixState(Muted)\n\tMixToggle.AccessibilitySelected = Muted\n\tMixToggle.AccessibleName = if Muted then \"Unmute game audio\" else \"Mute game audio\"\n\tMixToggle.ImageColor3 = if Muted then Color3.new(0.50, 0.58, 0.62) else Color3.new(1, 1, 1)\nend\nShowMixState(Mix ~= nil and Mix:GetMasterMuted())\n\nlocal MixConnection = MixToggle.Activated:Connect(function()\n\tif not Mix then\n\t\treturn\n\tend\n\tlocal Muted = not Mix:GetMasterMuted()\n\tMix:SetMasterMuted(Muted)\n\tShowMixState(Muted)\n\tMixToggle:ReleaseFocus()\n\tif MixFeedback then\n\t\ttask.cancel(MixFeedback)\n\tend\n\tMixToggle.BackgroundColor3 = Color3.new(0.25, 0.49, 0.53)\n\tMixFeedback = task.delay(0.25, function()\n\t\tMixFeedback = nil\n\t\tMixToggle.BackgroundColor3 = Color3.new(0.12, 0.22, 0.26)\n\tend)\nend)\n\nlocal PulseReference = \"asset://ca34ffb8742655186db2cfb54124a5ff\"\nlocal ToneReference = \"asset://a0d10f78c368437daac002a4e59fdd64\"\nlocal BeaconAnimator\nlocal TriedAnimator\nlocal Pulse\nlocal CueBeacon\nlocal ChargeTone\nlocal PreviousCharges\nlocal PreviousRelayEnabled\nlocal LandRequested = false\nlocal LastFacing = 0\nlocal LastDrone\n\nlocal function GetDrone()\n\tlocal Entity = Player.PossessedEntity\n\tif Entity and Entity:IsA(\"BasePart\") and Entity:GetAttribute(\"RelayDrone\") == true then\n\t\treturn Entity\n\tend\n\treturn nil\nend\n\nlocal ActionConnection = ActionMap.ActionBegan:Connect(function(ActionName)\n\tif ActionName == \"Jump\" and GetDrone() then\n\t\tLandRequested = true\n\tend\nend)\n\nlocal SimulationConnection = RunService.PreSimulation:Connect(function()\n\tif not GetDrone() then\n\t\tLandRequested = false\n\t\treturn\n\tend\n\tlocal Horizontal = ActionMap:GetValue(\"MoveRight\") - ActionMap:GetValue(\"MoveLeft\")\n\tlocal Forward = ActionMap:GetValue(\"MoveForward\") - ActionMap:GetValue(\"MoveBackward\")\n\tlocal Direction = Vector2.new(Horizontal, -Forward)\n\tif Direction.Magnitude > 1 then\n\t\tDirection = Direction.Unit\n\tend\n\tif Direction.Magnitude > 0.001 then\n\t\tLastFacing = math.atan2(-Direction.X, -Direction.Y)\n\tend\n\tif CharacterControl:SubmitPossessionIntent(Direction, LastFacing, LandRequested) then\n\t\tLandRequested = false\n\tend\nend)\n\nlocal RenderConnection = RunService.PreRender:Connect(function(DeltaTime)\n\tlocal Drone = GetDrone()\n\tif Drone then\n\t\tlocal Camera = Workspace.CurrentCamera\n\t\tlocal Focus = Drone.Position\n\t\tlocal View = CFrame.new(Focus + Vector3.new(0, 6, 12), Focus)\n\t\tCamera.CFrame = if Drone == LastDrone then Camera.CFrame:Lerp(View, math.clamp(DeltaTime * 14, 0, 1)) else View\n\tend\n\tLastDrone = Drone\n\n\tlocal Course = Workspace:FindFirstChild(\"RelayCourse\")\n\tlocal Beacon = Course and Course:FindFirstChild(\"RelayBeacon\")\n\tBeaconAnimator = Beacon and Beacon:FindFirstChildOfClass(\"Animator\")\n\tif BeaconAnimator ~= TriedAnimator then\n\t\tif Pulse then\n\t\t\tPulse:Stop()\n\t\t\tPulse = nil\n\t\tend\n\t\tTriedAnimator = BeaconAnimator\n\t\tPreviousRelayEnabled = nil\n\t\tif BeaconAnimator then\n\t\t\tlocal Loaded, Track = pcall(function()\n\t\t\t\treturn BeaconAnimator:LoadAnimation(PulseReference)\n\t\t\tend)\n\t\t\tif Loaded then\n\t\t\t\tPulse = Track\n\t\t\t\tPulse.Looped = true\n\t\t\t\tPulse:Play()\n\t\t\telse\n\t\t\t\twarn(\"[Gameplay:Relay] Relay beacon animation failed to load\")\n\t\t\tend\n\t\tend\n\tend\n\n\tlocal Enabled = Course and Course:GetAttribute(\"RelayEnabled\") == true\n\tif Pulse and Enabled ~= PreviousRelayEnabled then\n\t\tPulse.Speed = if Enabled then 2 else 0.35\n\t\tPreviousRelayEnabled = Enabled\n\tend\n\n\tlocal Health = Player:GetAttribute(\"Health\") or 100\n\tlocal Charges = if Course then Course:GetAttribute(\"RelayCharges\") or 0 else 0\n\tif CueBeacon ~= Beacon then\n\t\tCueBeacon = Beacon\n\t\tPreviousCharges = nil\n\t\tif ChargeTone and not ChargeTone.Destroyed then\n\t\t\tChargeTone:Destroy()\n\t\tend\n\t\tChargeTone = nil\n\t\tif Beacon then\n\t\t\tlocal Cue = Instance.new(\"Sound\")\n\t\t\tCue.Name = \"RelayChargeTone\"\n\t\t\tCue.SoundId = ToneReference\n\t\t\tCue.MixCategory = Enum.SoundMixCategory.Effects\n\t\t\tCue.Volume = 0.4\n\t\t\tCue.Parent = Beacon\n\t\t\tChargeTone = Cue\n\t\tend\n\tend\n\tif ChargeTone and PreviousCharges and Charges > PreviousCharges then\n\t\tChargeTone:Play()\n\tend\n\tPreviousCharges = Charges\n\n\tlocal Mode = Player:GetAttribute(\"RelayMode\")\n\tlocal Help\n\tif Charges == 3 then\n\t\tHelp = \"Relay restored\"\n\telseif Mode == \"Respawning\" then\n\t\tHelp = \"Respawning at the start\"\n\telseif Drone then\n\t\tHelp = if Enabled then \"Fly to the elevated relay. Space to land.\" else \"Ask a teammate to hold the green switch. Space to land.\"\n\telseif Course and Course:GetAttribute(\"RelayMultiplayer\") == false then\n\t\tHelp = \"Local preview. Walk with WASD and jump with Space.\"\n\telse\n\t\tHelp = \"Walk onto the cyan launch pad or hold the green switch.\"\n\tend\n\tlocal Text = string.format(\"Health %d   |   Relay %d / 3\\n%s\", Health, Charges, Help)\n\tif Status.Text ~= Text then\n\t\tStatus.Text = Text\n\tend\nend)\n\nscript.Destroying:Connect(function()\n\tRenderConnection:Disconnect()\n\tSimulationConnection:Disconnect()\n\tActionConnection:Disconnect()\n\tMixConnection:Disconnect()\n\tif MixFeedback then\n\t\ttask.cancel(MixFeedback)\n\tend\n\tif ChargeTone and not ChargeTone.Destroyed then\n\t\tChargeTone:Destroy()\n\tend\n\tif Pulse then\n\t\tPulse:Stop()\n\tend\n\tif not Hud.Destroyed then\n\t\tHud:Destroy()\n\tend\nend)\n"
+              "String": "local Players = game:GetService(\"Players\")\nlocal ActionMap = game:GetService(\"ActionMap\")\nlocal CharacterControl = game:GetService(\"CharacterControlService\")\nlocal RunService = game:GetService(\"RunService\")\nlocal Workspace = game:GetService(\"Workspace\")\nlocal Mix = game:GetService(\"AudioMixService\")\nlocal Player = Players.LocalPlayer\nif not Player then\n\twarn(\"[Gameplay:Relay] Local player is unavailable\")\n\treturn\nend\n\nlocal Status\nlocal MixToggle\nfor Attempt = 1, 300 do\n\tlocal PlayerGui = Player.PlayerGui\n\tlocal Hud = PlayerGui and PlayerGui:FindFirstChild(\"RelayHud\")\n\tif Hud then\n\t\tStatus = Hud:FindFirstChild(\"RelayStatus\")\n\t\tMixToggle = Hud:FindFirstChild(\"RelayMixToggle\")\n\t\tif Status and MixToggle then\n\t\t\tbreak\n\t\tend\n\tend\n\ttask.wait()\nend\nif not (Status and MixToggle) then\n\twarn(\"[Gameplay:Relay] PlayerGui did not receive the complete HUD\")\n\treturn\nend\nMixToggle.Interactable = Mix ~= nil\n\nlocal MixFeedback\nlocal function ShowMixState(Muted)\n\tMixToggle.AccessibilitySelected = Muted\n\tMixToggle.AccessibleName = if Muted then \"Unmute game audio\" else \"Mute game audio\"\n\tMixToggle.ImageColor3 = if Muted then Color3.new(0.50, 0.58, 0.62) else Color3.new(1, 1, 1)\nend\nShowMixState(Mix ~= nil and Mix:GetMasterMuted())\n\nlocal MixConnection = MixToggle.Activated:Connect(function()\n\tif not Mix then\n\t\treturn\n\tend\n\tlocal Muted = not Mix:GetMasterMuted()\n\tMix:SetMasterMuted(Muted)\n\tShowMixState(Muted)\n\tMixToggle:ReleaseFocus()\n\tif MixFeedback then\n\t\ttask.cancel(MixFeedback)\n\tend\n\tMixToggle.BackgroundColor3 = Color3.new(0.25, 0.49, 0.53)\n\tMixFeedback = task.delay(0.25, function()\n\t\tMixFeedback = nil\n\t\tMixToggle.BackgroundColor3 = Color3.new(0.12, 0.22, 0.26)\n\tend)\nend)\n\nlocal PulseReference = \"asset://ca34ffb8742655186db2cfb54124a5ff\"\nlocal ToneReference = \"asset://a0d10f78c368437daac002a4e59fdd64\"\nlocal BeaconAnimator\nlocal TriedAnimator\nlocal Pulse\nlocal CueBeacon\nlocal ChargeTone\nlocal PreviousCharges\nlocal PreviousRelayEnabled\nlocal LandRequested = false\nlocal LastFacing = 0\nlocal LastDrone\n\nlocal function GetDrone()\n\tlocal Entity = Player.PossessedEntity\n\tif Entity and Entity:IsA(\"BasePart\") and Entity:GetAttribute(\"RelayDrone\") == true then\n\t\treturn Entity\n\tend\n\treturn nil\nend\n\nlocal ActionConnection = ActionMap.ActionBegan:Connect(function(ActionName)\n\tif ActionName == \"Jump\" and GetDrone() then\n\t\tLandRequested = true\n\tend\nend)\n\nlocal SimulationConnection = RunService.PreSimulation:Connect(function()\n\tif not GetDrone() then\n\t\tLandRequested = false\n\t\treturn\n\tend\n\tlocal Horizontal = ActionMap:GetValue(\"MoveRight\") - ActionMap:GetValue(\"MoveLeft\")\n\tlocal Forward = ActionMap:GetValue(\"MoveForward\") - ActionMap:GetValue(\"MoveBackward\")\n\tlocal Direction = Vector2.new(Horizontal, -Forward)\n\tif Direction.Magnitude > 1 then\n\t\tDirection = Direction.Unit\n\tend\n\tif Direction.Magnitude > 0.001 then\n\t\tLastFacing = math.atan2(-Direction.X, -Direction.Y)\n\tend\n\tif CharacterControl:SubmitPossessionIntent(Direction, LastFacing, LandRequested) then\n\t\tLandRequested = false\n\tend\nend)\n\nlocal RenderConnection = RunService.PreRender:Connect(function(DeltaTime)\n\tlocal Drone = GetDrone()\n\tif Drone then\n\t\tlocal Camera = Workspace.CurrentCamera\n\t\tlocal Focus = Drone.Position\n\t\tlocal View = CFrame.new(Focus + Vector3.new(0, 6, 12), Focus)\n\t\tCamera.CFrame = if Drone == LastDrone then Camera.CFrame:Lerp(View, math.clamp(DeltaTime * 14, 0, 1)) else View\n\tend\n\tLastDrone = Drone\n\n\tlocal Course = Workspace:FindFirstChild(\"RelayCourse\")\n\tlocal Beacon = Course and Course:FindFirstChild(\"RelayBeacon\")\n\tBeaconAnimator = Beacon and Beacon:FindFirstChildOfClass(\"Animator\")\n\tif BeaconAnimator ~= TriedAnimator then\n\t\tif Pulse then\n\t\t\tPulse:Stop()\n\t\t\tPulse = nil\n\t\tend\n\t\tTriedAnimator = BeaconAnimator\n\t\tPreviousRelayEnabled = nil\n\t\tif BeaconAnimator then\n\t\t\tlocal Loaded, Track = pcall(function()\n\t\t\t\treturn BeaconAnimator:LoadAnimation(PulseReference)\n\t\t\tend)\n\t\t\tif Loaded then\n\t\t\t\tPulse = Track\n\t\t\t\tPulse.Looped = true\n\t\t\t\tPulse:Play()\n\t\t\telse\n\t\t\t\twarn(\"[Gameplay:Relay] Relay beacon animation failed to load\")\n\t\t\tend\n\t\tend\n\tend\n\n\tlocal Enabled = Course and Course:GetAttribute(\"RelayEnabled\") == true\n\tif Pulse and Enabled ~= PreviousRelayEnabled then\n\t\tPulse.Speed = if Enabled then 2 else 0.35\n\t\tPreviousRelayEnabled = Enabled\n\tend\n\n\tlocal Health = Player:GetAttribute(\"Health\") or 100\n\tlocal Charges = if Course then Course:GetAttribute(\"RelayCharges\") or 0 else 0\n\tif CueBeacon ~= Beacon then\n\t\tCueBeacon = Beacon\n\t\tPreviousCharges = nil\n\t\tif ChargeTone and not ChargeTone.Destroyed then\n\t\t\tChargeTone:Destroy()\n\t\tend\n\t\tChargeTone = nil\n\t\tif Beacon then\n\t\t\tlocal Cue = Instance.new(\"Sound\")\n\t\t\tCue.Name = \"RelayChargeTone\"\n\t\t\tCue.SoundId = ToneReference\n\t\t\tCue.MixCategory = Enum.SoundMixCategory.Effects\n\t\t\tCue.Volume = 0.4\n\t\t\tCue.Parent = Beacon\n\t\t\tChargeTone = Cue\n\t\tend\n\tend\n\tif ChargeTone and PreviousCharges and Charges > PreviousCharges then\n\t\tChargeTone:Play()\n\tend\n\tPreviousCharges = Charges\n\n\tlocal Mode = Player:GetAttribute(\"RelayMode\")\n\tlocal Help\n\tif Charges == 3 then\n\t\tHelp = \"Relay restored\"\n\telseif Mode == \"Respawning\" then\n\t\tHelp = \"Respawning at the start\"\n\telseif Drone then\n\t\tHelp = if Enabled then \"Fly to the elevated relay. Space to land.\" else \"Ask a teammate to hold the green switch. Space to land.\"\n\telseif Course and Course:GetAttribute(\"RelayMultiplayer\") == false then\n\t\tHelp = \"Local preview. Walk with WASD and jump with Space.\"\n\telse\n\t\tHelp = \"Walk onto the cyan launch pad or hold the green switch.\"\n\tend\n\tlocal Text = string.format(\"Health %d   |   Relay %d / 3\\n%s\", Health, Charges, Help)\n\tif Status.Text ~= Text then\n\t\tStatus.Text = Text\n\tend\nend)\n\nscript.Destroying:Connect(function()\n\tRenderConnection:Disconnect()\n\tSimulationConnection:Disconnect()\n\tActionConnection:Disconnect()\n\tMixConnection:Disconnect()\n\tif MixFeedback then\n\t\ttask.cancel(MixFeedback)\n\tend\n\tif ChargeTone and not ChargeTone.Destroyed then\n\t\tChargeTone:Destroy()\n\tend\n\tif Pulse then\n\t\tPulse:Stop()\n\tend\nend)\n"
             }
           },
           "Attributes": {},
           "Extensions": [],
           "CustomProperties": [],
           "Tags": [],
-          "Children": []
+          "Children": [],
+          "NodeId": 29
         }
-      ]
+      ],
+      "NodeId": 27
     }
-  ]
+  ],
+  "NodeId": 1
 }

@@ -10,30 +10,25 @@ if not Player then
 	return
 end
 
-local Hud = Instance.new("ScreenGui")
-Hud.Name = "RelayHud"
-Hud.ResetOnSpawn = false
-Hud.Parent = game
-local Status = Instance.new("TextLabel")
-Status.Name = "RelayStatus"
-Status.Position = UDim2.new(0, 16, 0, 16)
-Status.Size = UDim2.new(1, -32, 0, 56)
-Status.BackgroundColor3 = Color3.new(0.03, 0.08, 0.13)
-Status.BackgroundTransparency = 0.15
-Status.TextColor3 = Color3.new(0.84, 1, 0.94)
-Status.TextSize = 17
-Status.TextWrapped = true
-Status.Parent = Hud
-
-local MixToggle = Instance.new("ImageButton")
-MixToggle.Name = "RelayMixToggle"
-MixToggle.Position = UDim2.new(1, -64, 0, 80)
-MixToggle.Size = UDim2.new(0, 48, 0, 36)
-MixToggle.Image = "asset://d18f6e730a55d41e65e2cc2447294884"
-MixToggle.ScaleType = Enum.GuiImageScaleType.Fit
-MixToggle.BackgroundColor3 = Color3.new(0.12, 0.22, 0.26)
+local Status
+local MixToggle
+for Attempt = 1, 300 do
+	local PlayerGui = Player.PlayerGui
+	local Hud = PlayerGui and PlayerGui:FindFirstChild("RelayHud")
+	if Hud then
+		Status = Hud:FindFirstChild("RelayStatus")
+		MixToggle = Hud:FindFirstChild("RelayMixToggle")
+		if Status and MixToggle then
+			break
+		end
+	end
+	task.wait()
+end
+if not (Status and MixToggle) then
+	warn("[Gameplay:Relay] PlayerGui did not receive the complete HUD")
+	return
+end
 MixToggle.Interactable = Mix ~= nil
-MixToggle.Parent = Hud
 
 local MixFeedback
 local function ShowMixState(Muted)
@@ -203,8 +198,5 @@ script.Destroying:Connect(function()
 	end
 	if Pulse then
 		Pulse:Stop()
-	end
-	if not Hud.Destroyed then
-		Hud:Destroy()
 	end
 end)
