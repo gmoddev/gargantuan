@@ -86,7 +86,7 @@ namespace gargantuan {
 		ScriptSecurityContext StudioSecurity = ScriptSecurityContext::StudioCoreUi();
 		bool AudioEnabled = false;
 		std::optional<RenderCameraInput> ViewportCamera;
-		RenderPublisher ViewportPublisher;
+		std::unique_ptr<RenderPublisher> ViewportPublisher = std::make_unique<RenderPublisher>();
 		std::shared_ptr<SemanticSpatialResolver> ViewportSpatial;
 		std::unique_ptr<GuiPreviewState> GuiPreview;
 		std::vector<RenderTextureRemove> RetiredGuiPreviewTextures;
@@ -127,6 +127,7 @@ namespace gargantuan {
 
 		void AdvanceViewportGeneration();
 		void ResetViewportSpatial();
+		void ResetEditorViewportDocument();
 		void StepViewportSpatial();
 		void ResetGuiPreview();
 		void PublishEditViewport(Workspace &WorkspaceService, const RenderCameraInput &Camera);

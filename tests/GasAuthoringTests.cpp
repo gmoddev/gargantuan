@@ -393,6 +393,24 @@ namespace {
 		});
 		Require(Workspace != Objects.end() && Panel != Objects.end(), "Find scoped model and parent identities");
 		const auto Revision = Opened.at("Result").at("ProjectState").at("AuthoritativeRevision");
+		std::vector<std::uint8_t> Pixels;
+		std::vector<bool> FullCaptures;
+		if (LatestFrameMailbox::IsSupported()) {
+			Host.SetViewportCaptureForTesting([&](RenderPublicationPtr Publication) {
+				FullCaptures.push_back(Publication->FullResync);
+				const auto Width = Publication->Frame.ViewportWidth;
+				const auto Height = Publication->Frame.ViewportHeight;
+				Pixels.resize(static_cast<std::size_t>(Width) * Height * 4);
+				return EditorViewportCaptureView{.Width = Width, .Height = Height, .BgraPixels = Pixels};
+			});
+			Require(Call("OpenViewportTransport", {{"Transport", "LatestFrameMailbox"}, {"Version", 2},
+				{"PixelFormat", "BGRA8"}}).at("Ok") == true &&
+				Call("ConfigureViewport", {{"Width", 200}, {"Height", 120}}).at("Ok") == true &&
+				Call("StartViewportPresentation", {{"FrameRateMode", "Adaptive"}}).at("Ok") == true,
+				"Start a viewport consumer before replacing the GAS document");
+			Host.PumpViewportPresentationForTesting();
+			Require(FullCaptures == std::vector{true}, "Publish the first document's asset residency");
+		}
 		const auto Model = Call("ExportGasModel", {{"Roots", Json::array({Panel->at("Id")})}});
 		const auto Place = Call("ExportGasPlace", Json::object());
 		Require(Model.at("Ok") == true && Place.at("Ok") == true, "Export both GAS profiles through EditorHost");
@@ -413,6 +431,12 @@ namespace {
 			Reopened.at("Result").at("Root") != Opened.at("Result").at("Root"),
 			"Open a staged place through EditorHost in a new scope");
 		Require(Call("GetSnapshot", Json::object()).at("Ok") == true, "Refresh the snapshot after the place changes scope");
+		if (LatestFrameMailbox::IsSupported()) {
+			Host.PumpViewportPresentationForTesting();
+			Require(FullCaptures == std::vector{true, true},
+				"A replacement GASP republishes its assets without reusing the previous document's texture residency");
+			Host.SetViewportCaptureForTesting({});
+		}
 	}
 
 	void TestPlace() {

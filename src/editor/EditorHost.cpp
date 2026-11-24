@@ -1093,9 +1093,19 @@ namespace gargantuan {
 	}
 
 	void EditorHost::ResetViewportSpatial() {
-		ViewportPublisher.SetSpatialResolver(nullptr);
+		ViewportPublisher->SetSpatialResolver(nullptr);
 		if (ViewportSpatial) ViewportSpatial->Shutdown();
 		ViewportSpatial.reset();
+	}
+
+	void EditorHost::ResetEditorViewportDocument() {
+		auto NewPublisher = std::make_unique<RenderPublisher>();
+		ResetViewportSpatial();
+		GuiPreview.reset();
+		RetiredGuiPreviewTextures.clear();
+		GuiPreviewFramePublished = false;
+		ViewportRenderer.reset();
+		ViewportPublisher = std::move(NewPublisher);
 	}
 
 	void EditorHost::StepViewportSpatial() {
@@ -1105,7 +1115,7 @@ namespace gargantuan {
 			const auto Assets = ExistingAssets ? std::dynamic_pointer_cast<AssetService>(*ExistingAssets) : nullptr;
 			if (!Assets) return;
 			ViewportSpatial = std::make_shared<SemanticSpatialResolver>(Assets);
-			ViewportPublisher.SetSpatialResolver(ViewportSpatial);
+			ViewportPublisher->SetSpatialResolver(ViewportSpatial);
 		}
 		// The bounded visual producer registers required attachments on extraction.
 		// Existing observations then update without another whole-scene walk.
@@ -1123,33 +1133,40 @@ namespace gargantuan {
 		if (GuiPreview) {
 			auto &Preview = *GuiPreview;
 			const auto Placement = GetGuiPreviewPlacement(Preview.Width, Preview.Height, ViewportWidth, ViewportHeight);
-			Preview.Runtime.SetViewport({Placement.Width, Placement.Height, 1.0f, {}});
+			const GuiViewportConfiguration Configuration{Placement.Width, Placement.Height, 1.0f, {}};
+			Preview.Runtime.SetViewport(Configuration);
 			(void)Preview.Runtime.Reconcile();
 			const auto Presentation = Preview.Runtime.GetCommittedPresentation();
 			if (!Preview.PlacedFrame || Preview.LayoutGeneration != Presentation->Generation || Preview.Placement != Placement) {
-				Preview.PlacedFrame = PlaceGuiPreview(*Presentation, Placement);
-				Preview.DisplayedLayout = Preview.Runtime.GetCommittedLayout();
+				const auto Layout = Preview.Runtime.GetPresentedLayout();
+				if (Layout && Layout->Viewport == Configuration) {
+					Preview.PlacedFrame = PlaceGuiPreview(*Presentation, Placement);
+					Preview.DisplayedLayout = Layout;
+				} else {
+					Preview.PlacedFrame = std::make_shared<const RenderUiFrame>();
+					Preview.DisplayedLayout.reset();
+				}
 				Preview.LayoutGeneration = Presentation->Generation;
 				Preview.Placement = Placement;
 				Preview.PlacementGeneration = NextGuiPreviewPlacementGeneration++;
 			}
-			Preview.Runtime.Publish(ViewportPublisher, Preview.PlacedFrame, Preview.PlacementGeneration,
-				CollectEditorViewportAssets(World, ViewportPublisher, RetiredGuiPreviewTextures));
+			Preview.Runtime.Publish(*ViewportPublisher, Preview.PlacedFrame, Preview.PlacementGeneration,
+				CollectEditorViewportAssets(World, *ViewportPublisher, RetiredGuiPreviewTextures));
 			GuiPreviewFramePublished = true;
 		} else {
 			if (GuiPreviewFramePublished) {
-				ViewportPublisher.SetUiFrame(RenderUiFrame{});
-				ViewportPublisher.SetViewportScenes(nullptr);
+				ViewportPublisher->SetUiFrame(RenderUiFrame{});
+				ViewportPublisher->SetViewportScenes(nullptr);
 				GuiPreviewFramePublished = false;
 			}
-			auto Textures = CollectEditorViewportAssets(World, ViewportPublisher, RetiredGuiPreviewTextures);
+			auto Textures = CollectEditorViewportAssets(World, *ViewportPublisher, RetiredGuiPreviewTextures);
 			if (!Textures.Creates.empty() || !Textures.Updates.empty() || !Textures.Removes.empty())
-				ViewportPublisher.SetUiTextureChanges(std::move(Textures.Creates),
+				ViewportPublisher->SetUiTextureChanges(std::move(Textures.Creates),
 					std::move(Textures.Updates), std::move(Textures.Removes));
 		}
 		RetiredGuiPreviewTextures.clear();
 		StepViewportSpatial();
-		LastViewportPublication = ViewportPublisher.Publish(
+		LastViewportPublication = ViewportPublisher->Publish(
 			WorkspaceService, Camera, ViewportWidth, ViewportHeight
 		);
 	}
@@ -1172,7 +1189,7 @@ namespace gargantuan {
 		ViewportLastMode = LatestFrameMailboxLayout::Mode::Edit;
 		LastViewportPublication.reset();
 		ViewportProjection.Clear();
-		ViewportPublisher.RequestFullResync();
+		ViewportPublisher->RequestFullResync();
 		if (ActivePlaySession && ActivePlaySession->GetState() == PlaySessionState::Running)
 			ActivePlaySession->RequestRenderFullResync();
 		NextViewportFrame = std::chrono::steady_clock::now();
@@ -1182,7 +1199,7 @@ namespace gargantuan {
 		if (ViewportRenderer) return;
 		ViewportRenderer = std::make_unique<EditorViewportRenderer>(ViewportWidth, ViewportHeight);
 		if (!ActivePlaySession || ActivePlaySession->GetState() != PlaySessionState::Running) {
-			ViewportPublisher.RequestFullResync();
+			ViewportPublisher->RequestFullResync();
 			return;
 		}
 		// A CPU-only consumer may have advanced past the full publication before
@@ -1279,7 +1296,7 @@ namespace gargantuan {
 			ViewportRenderer.reset();
 			LastViewportPublication.reset();
 			ViewportProjection.Clear();
-			ViewportPublisher.RequestFullResync();
+			ViewportPublisher->RequestFullResync();
 			if (ActivePlaySession) ActivePlaySession->RequestRenderFullResync();
 		}
 	}
@@ -2101,8 +2118,7 @@ namespace gargantuan {
 				auto root = std::filesystem::weakly_canonical(std::filesystem::path(parameters["Root"].get<std::string>()));
 				if (!std::filesystem::is_directory(root))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectNotFound", "Project root is not a directory"));
-				ResetGuiPreview();
-				ResetViewportSpatial();
+				ResetEditorViewportDocument();
 				if (World) {
 					(void)World->Transactions.TerminateOwner(*World, TransactionOwner); World->Destroy();
 				}
@@ -2114,7 +2130,7 @@ namespace gargantuan {
 				ViewportCamera.reset();
 				LastViewportPublication.reset();
 				ViewportProjection.Clear();
-				ViewportPublisher.RequestFullResync();
+				ViewportPublisher->RequestFullResync();
 				Cursor.reset();
 				ViewportWidth = 0;
 				ViewportHeight = 0;
@@ -2228,8 +2244,7 @@ namespace gargantuan {
 				}
 
 				try {
-					ResetGuiPreview();
-					ResetViewportSpatial();
+					ResetEditorViewportDocument();
 					if (World) {
 						(void)World->Transactions.TerminateOwner(*World, TransactionOwner);
 						World->Destroy();
@@ -2242,7 +2257,7 @@ namespace gargantuan {
 					ViewportCamera.reset();
 					LastViewportPublication.reset();
 					ViewportProjection.Clear();
-					ViewportPublisher.RequestFullResync();
+					ViewportPublisher->RequestFullResync();
 					Cursor.reset();
 					ViewportWidth = 0;
 					ViewportHeight = 0;
@@ -3106,8 +3121,7 @@ namespace gargantuan {
 				} catch (const std::exception &) {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "GasImportFailed", "GASP place could not be opened with the current project inputs"));
 				}
-				ResetGuiPreview();
-				ResetViewportSpatial();
+				ResetEditorViewportDocument();
 				World->Destroy();
 				World = std::move(Candidate);
 				ActiveAnimationPreview.reset();
@@ -3362,7 +3376,7 @@ namespace gargantuan {
 					}));
 				} catch (const std::exception &error) {
 					ViewportRenderer.reset();
-					ViewportPublisher.RequestFullResync();
+					ViewportPublisher->RequestFullResync();
 					LastViewportPublication.reset();
 					ViewportProjection.Clear();
 					if (ActivePlaySession) {

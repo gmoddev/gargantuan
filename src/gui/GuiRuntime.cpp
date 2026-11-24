@@ -268,6 +268,7 @@ namespace gargantuan {
 		bool TextInputWasActive = false;
 		bool ClearingTransientState = false;
 		std::shared_ptr<const GuiLayoutSnapshot> Layout = std::make_shared<const GuiLayoutSnapshot>();
+		std::shared_ptr<const GuiLayoutSnapshot> PresentedLayout;
 		std::shared_ptr<const GuiPresentationSnapshot> Presentation = std::make_shared<const GuiPresentationSnapshot>();
 		struct ViewportRequest { ObjectId Viewport; float Width; float Height; };
 		struct ViewportSample {
@@ -2089,6 +2090,7 @@ namespace gargantuan {
 				State->AddDiagnostic("DisplayLimit", "GUI display list exceeded a Foundation 1 resource bound; the previous presentation was retained", {});
 			} else {
 				State->PresentationDirty = false;
+				if (State->Mode == GuiRuntimeMode::AuthoringPreview) State->PresentedLayout = State->Layout;
 			}
 		}
 
@@ -2471,6 +2473,7 @@ namespace gargantuan {
 	}
 
 	std::shared_ptr<const GuiLayoutSnapshot> GuiRuntime::GetCommittedLayout() const { return State->Layout; }
+	std::shared_ptr<const GuiLayoutSnapshot> GuiRuntime::GetPresentedLayout() const { return State->PresentedLayout; }
 	std::shared_ptr<const GuiPresentationSnapshot> GuiRuntime::GetCommittedPresentation() const { return State->Presentation; }
 	std::shared_ptr<const GuiAccessibilitySnapshot> GuiRuntime::GetAccessibilitySnapshot() const { return State->Accessibility; }
 	GuiRuntimeProfile GuiRuntime::GetLastProfile() const { return State->Profile; }

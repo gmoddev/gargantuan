@@ -3819,6 +3819,21 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "devdocs/CurrentArchitecture/ViewportFrameFoundation9.md",
+      "Purpose": "ViewportFrame in Foundation 9",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": [
+        "Filament"
+      ]
+    },
+    {
       "Path": "devdocs/CurrentArchitecture/VpsPhysicalPreflight3L.md",
       "Purpose": "Foundation 3L existing VPS infrastructure preflight",
       "LastMeaningfulUpdate": {
@@ -4974,6 +4989,22 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "docs/adr/PlanarMirror.md",
+      "Purpose": "First-class planar Mirror",
+      "LastMeaningfulUpdate": {
+        "Date": "2026-11-24",
+        "Basis": "Document-declared verification/review date; scope remains revision-specific"
+      },
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/content/docs/developing/render-extraction.mdx"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Preserve accepted decision authority and explicit amendments; acceptance is not implementation proof",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "docs/architecture/EngineFoundation8Inventory.md",
       "Purpose": "Engine Foundation 8 capability inventory",
       "LastMeaningfulUpdate": null,
@@ -4981,6 +5012,19 @@
       "RelevantSourceSubsystem": [
         "src/content/docs/developing/editor-host.mdx",
         "src/data/PublicApi.json"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Inspect owning source before promoting to current authority",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/architecture/Foundation9Presentation.md",
+      "Purpose": "Foundation 9 runtime presentation and creator integration",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
       ],
       "Status": "Unverified",
       "StatusLabel": "Unverified",

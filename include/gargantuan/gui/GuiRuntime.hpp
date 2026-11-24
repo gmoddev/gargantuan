@@ -59,6 +59,7 @@ namespace gargantuan {
 			std::span<const std::uint8_t> Rgba8);
 
 		[[nodiscard]] std::shared_ptr<const GuiLayoutSnapshot> GetCommittedLayout() const;
+		[[nodiscard]] std::shared_ptr<const GuiLayoutSnapshot> GetPresentedLayout() const;
 		[[nodiscard]] std::shared_ptr<const GuiPresentationSnapshot> GetCommittedPresentation() const;
 		[[nodiscard]] std::shared_ptr<const GuiAccessibilitySnapshot> GetAccessibilitySnapshot() const;
 		[[nodiscard]] GuiRuntimeProfile GetLastProfile() const;
