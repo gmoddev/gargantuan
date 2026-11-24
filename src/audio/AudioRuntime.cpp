@@ -261,30 +261,32 @@ namespace gargantuan {
 					RightGain *= DistanceGain * std::sin((Pan + 1.0f) * Pi * 0.25f);
 				}
 
-				bool Ended = false;
-				for (std::size_t Frame = 0; Frame < AudioRuntime::MixBlockFrames; ++Frame) {
-					if (VoiceValue.FramePosition >= Audio.FrameCount) {
-						if (SoundValue->GetLooped())
+				const bool Looped = SoundValue->GetLooped();
+				const bool Spatialized = Position.has_value();
+				// Pick the gain path once per voice so a steady voice has no ramp check per sample.
+				const auto MixFrames = [&]<bool ApplyRamp>() {
+					for (std::size_t Frame = 0; Frame < AudioRuntime::MixBlockFrames; ++Frame) {
+						if (VoiceValue.FramePosition >= Audio.FrameCount) {
+							if (!Looped) return true;
 							VoiceValue.FramePosition = std::fmod(VoiceValue.FramePosition, Audio.FrameCount);
-						else {
-							Ended = true;
-							break;
 						}
+						auto [Left, Right] = ReadFrame(Audio, VoiceValue.FramePosition, Looped);
+						if (Spatialized) {
+							const auto Mono = (Left + Right) * 0.5f;
+							Left = Mono;
+							Right = Mono;
+						}
+						if constexpr (ApplyRamp) {
+							Left *= Ramp[Frame];
+							Right *= Ramp[Frame];
+						}
+						MixBuffer[Frame * 2] += Left * LeftGain;
+						MixBuffer[Frame * 2 + 1] += Right * RightGain;
+						VoiceValue.FramePosition += Step;
 					}
-					auto [Left, Right] = ReadFrame(Audio, VoiceValue.FramePosition, SoundValue->GetLooped());
-					if (Position) {
-						const auto Mono = (Left + Right) * 0.5f;
-						Left = Mono;
-						Right = Mono;
-					}
-					if (Ramp) {
-						Left *= Ramp[Frame];
-						Right *= Ramp[Frame];
-					}
-					MixBuffer[Frame * 2] += Left * LeftGain;
-					MixBuffer[Frame * 2 + 1] += Right * RightGain;
-					VoiceValue.FramePosition += Step;
-				}
+					return false;
+				};
+				const bool Ended = Ramp ? MixFrames.operator()<true>() : MixFrames.operator()<false>();
 				if (Ended)
 					Completed.push_back(Id);
 				else
