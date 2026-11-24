@@ -193,6 +193,11 @@ a goal; each migration must verify claims against current code and tests.
 
 ## Accepted and future direction
 
+- The proposed [First-class planar Mirror ADR](../adr/PlanarMirror.md) defines
+  the finite surface, clipped reflected camera, rendering budget, and Studio
+  workflow for a future campaign. Foundation 9 supplies shared offscreen
+  infrastructure through [ViewportFrame](../../devdocs/CurrentArchitecture/ViewportFrameFoundation9.md).
+
 - [Gargantuan physical readiness profile](../../tools/physical-qualifier/docs/PROTOCOL.md)
   retains project-specific probe/capture/evidence policy; generic coordination is
   owned by [GantriaEngine Agent Coordinator](https://github.com/GantriaEngine/agent-coordinator).
