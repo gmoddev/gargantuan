@@ -33,6 +33,17 @@ return c({
 			readLevel = "Engine",
 			writeLevel = "Engine",
 		},
+		GuiTemplateSourceId = {
+			description = "Engine-owned provenance for a PlayerGui clone of a packaged StarterGui source.",
+			type = t.String,
+			unmodified = "std::string()",
+			overrideRead = "GetGuiTemplateSourceId",
+			overrideWrite = "SetGuiTemplateSourceId",
+			replicated = true,
+			editable = false,
+			readLevel = "Engine",
+			writeLevel = "Engine",
+		},
 		SourceVersion = {
 			description = "Transient source invalidation token",
 			type = t.Integer,

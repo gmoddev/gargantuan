@@ -23,6 +23,7 @@ namespace gargantuan {
 	  private:
 		std::string SourceId = ProjectId::New().ToString();
 		bool SourceIdLoaded = false;
+		std::string GuiTemplateSourceId;
 		std::string Source;
 		int SourceVersion = 1;
 		void AssignSource(std::string Value, bool Authoritative);
@@ -32,6 +33,8 @@ namespace gargantuan {
 
 	  public:
 		[[nodiscard]] bool WasSourceIdLoaded() const { return SourceIdLoaded; }
+		[[nodiscard]] bool HasSource() const { return !Source.empty(); }
+		bool HydrateGuiTemplateSource(std::string Value);
 		std::string ChunkName = GetFullName();
 
 		std::vector<char> Bytecode;

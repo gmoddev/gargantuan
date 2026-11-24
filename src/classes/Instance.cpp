@@ -2,6 +2,8 @@
 #include "gargantuan/runtime/ServicePolicy.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Player.hpp"
+#include "gargantuan/classes/PlayerGui.hpp"
 #include "gargantuan/classes/ServiceProvider.hpp"
 #include "gargantuan/InstanceProperty.hpp"
 #include "gargantuan/datatypes/Signal.hpp"
@@ -364,6 +366,12 @@ namespace gargantuan {
 	void Instance::Destroy() {
 		AssertAuthoritativeMutation("Instance::Destroy");
 		if (Destroyed || DestroyingState) return;
+		if (dynamic_cast<PlayerGui *>(this) &&
+			GetCurrentScriptSecurityContext().Domain != ScriptExecutionDomain::Core) {
+			const auto Owner = ParentReference.lock();
+			if (Owner && !Owner->IsDestroying())
+				throw std::runtime_error("[Gui:Ownership] PlayerGui is owned by its Player lifecycle");
+		}
 		if (GetCurrentScriptSecurityContext().Domain == ScriptExecutionDomain::Client &&
 			GetInstanceServicePolicy(*this) == SchemaServicePolicy::Replicated)
 			throw std::runtime_error("[Storage:Authority] Replicated service state is server-authoritative");
@@ -602,7 +610,7 @@ namespace gargantuan {
 				std::vector<std::string> PropertyNames;
 				PropertyNames.reserve(Definition->AllProperties.size());
 				for (const auto &[Name, Property] : Definition->AllProperties)
-					if (Name != "Parent" && Name != "Name" && Name != "SourceVersion" &&
+					if (Name != "Parent" && Name != "Name" && Name != "SourceVersion" && Name != "GuiTemplateSourceId" &&
 						!Property->Signal && Property->Read && Property->Write &&
 						Property->WritePermission != Enums::Permission::Never)
 						PropertyNames.push_back(Name);
@@ -1159,6 +1167,12 @@ namespace gargantuan {
 		if (newParent) newParent->AssertIsAlive();
 		auto oldParent = ParentReference.lock();
 		if (oldParent == newParent) return;
+		if (dynamic_cast<PlayerGui *>(this) && !DestroyingState) {
+			const auto Owner = std::dynamic_pointer_cast<Player>(newParent);
+			if (!Owner || oldParent || Owner->GetPlayerGui() ||
+				GetCurrentScriptSecurityContext().Domain != ScriptExecutionDomain::Core)
+				throw std::runtime_error("[Gui:Ownership] PlayerGui requires a unique engine-owned Player parent");
+		}
 		auto oldDataModel = GetDataModel();
 		auto newDataModel = newParent ? newParent->GetDataModel() : oldDataModel;
 		if (oldDataModel && newParent && !newDataModel)

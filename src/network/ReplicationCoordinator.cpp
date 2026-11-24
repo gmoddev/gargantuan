@@ -756,22 +756,30 @@ namespace gargantuan::network {
 		return false;
 	}
 
-	bool ReplicationCoordinator::IsServiceVisible(ObjectId Object) const {
+	bool ReplicationCoordinator::IsVisibleToPeer(ObjectId Object, ObjectId LocalPlayer) const {
 		const auto &Schema = FrozenSchema ? *FrozenSchema : detail::GetReplicationSchemaRegistry();
+		bool ViewportScene = false;
+		bool OwnedGui = false;
 		for (std::size_t Depth = 0; Object.IsValid(); ++Depth) {
 			if (Depth > MaximumDependencyClosureDepth)
 				throw std::runtime_error("Replication service ancestry exceeds the existing closure limit");
 			const auto Found = Catalog.find(Object);
-			if (Found == Catalog.end()) return true; // Existing stale-object validation owns this case.
+			if (Found == Catalog.end()) break; // Existing stale-object validation owns this case.
 			const auto &Publication = Found->second->Publication;
 			const auto *Definition = Schema.FindClassById(Publication.ClassSchemaId);
 			if (!Definition) throw std::runtime_error("Replication service class definition is missing");
 			if (Definition->ServicePolicy == SchemaServicePolicy::ServerOnly ||
 				Publication.ClassSchemaId == SchemaId::FromNativeName("Engine", "AudioMixService")) return false;
-			if (!Publication.Parent) return true;
+			if (Publication.ClassSchemaId == SchemaId::FromNativeName("Engine", "PlayerGui")) {
+				if (!LocalPlayer.IsValid() || Publication.Parent != LocalPlayer) return false;
+				OwnedGui = true;
+			}
+			ViewportScene = ViewportScene ||
+				Publication.ClassSchemaId == SchemaId::FromNativeName("Engine", "ViewportFrame");
+			if (!Publication.Parent) break;
 			Object = *Publication.Parent;
 		}
-		return true;
+		return !ViewportScene || OwnedGui;
 	}
 
 	bool ReplicationCoordinator::BuildDependencyClosure(
@@ -795,10 +803,10 @@ namespace gargantuan::network {
 		Pending.reserve(Selection.DesiredObjects.size());
 		Required.insert(Selection.RequiredObjects.begin(), Selection.RequiredObjects.end());
 		for (const auto Object : Selection.DesiredObjects)
-			if (IsServiceVisible(Object)) Pending.push_back({Object, 0});
+			if (IsVisibleToPeer(Object, Selection.LocalPlayer)) Pending.push_back({Object, 0});
 		for (const auto Object : Selection.RequiredObjects) {
-			if (!IsServiceVisible(Object)) {
-				Error = "Required object belongs to a server-only service";
+			if (!IsVisibleToPeer(Object, Selection.LocalPlayer)) {
+				Error = "Required object is outside the peer's visibility scope";
 				return false;
 			}
 			Pending.push_back({Object, 0});
@@ -838,8 +846,8 @@ namespace gargantuan::network {
 				return false;
 			}
 			const auto &Publication = Found->second->Publication;
-			if (!IsServiceVisible(Object)) {
-				Error = "Hard replication dependency belongs to a server-only service";
+			if (!IsVisibleToPeer(Object, Selection.LocalPlayer)) {
+				Error = "Hard replication dependency is outside the peer's visibility scope";
 				return false;
 			}
 			if (Publication.Parent) {
@@ -1114,6 +1122,10 @@ namespace gargantuan::network {
 			Error = "A structural frame is awaiting scheduler acceptance";
 			return false;
 		}
+		if (Selection.LocalPlayer != Peer.LocalPlayer) {
+			Error = "The local player of a replication peer is immutable";
+			return false;
+		}
 		const bool SelectionChanged = Selection != Peer.LastSelection;
 		const bool TopologyChanged = Peer.DesiredDependencyCursor.Scope != DependencyCursor.Scope ||
 			Peer.DesiredDependencyCursor.NextSequence != DependencyCursor.NextSequence;
@@ -1162,6 +1174,7 @@ namespace gargantuan::network {
 		PeerRelevanceSelection RequiredSelection{
 			.RequiredObjects = Selection.RequiredObjects,
 			.DesiredObjects = Selection.RequiredObjects,
+			.LocalPlayer = Peer.LocalPlayer,
 		};
 		if (RequiredSelection.DesiredObjects.empty() && SourceRootId.IsValid())
 			RequiredSelection.RequiredObjects = RequiredSelection.DesiredObjects = {SourceRootId};
@@ -1316,6 +1329,7 @@ namespace gargantuan::network {
 
 	PreparedPublishReplication ReplicationCoordinator::MakePeerPublish(
 		ObjectId Object,
+		ObjectId LocalPlayer,
 		const std::set<ObjectId> &Known,
 		ReplicationMetrics &CandidateMetrics,
 		std::set<ObjectId> &CandidateRequestedTemplates,
@@ -1323,7 +1337,7 @@ namespace gargantuan::network {
 	) {
 		auto Found = Catalog.find(Object);
 		if (Found == Catalog.end()) return {};
-		if (!IsServiceVisible(Object)) throw std::runtime_error("Cannot publish a server-only service object");
+		if (!IsVisibleToPeer(Object, LocalPlayer)) throw std::runtime_error("Cannot publish an object outside peer visibility");
 		PreparedPublishReplication Publish{Object, Found->second.Template};
 		if (!StructuralTemplateReuseEnabled ||
 			(!RequestedTemplates.contains(Object) && CandidateRequestedTemplates.insert(Object).second))
@@ -1335,7 +1349,8 @@ namespace gargantuan::network {
 		if (AllowSoftReferencePatches)
 			for (const auto &[Name, Value] : Found->second->Publication.Properties) {
 				const auto *Reference = std::get_if<WireObjectReference>(&Value);
-				if (Reference && !Known.contains(Reference->Object.ToObjectId()) &&
+				if (Reference && (!Known.contains(Reference->Object.ToObjectId()) ||
+					!IsVisibleToPeer(Reference->Object.ToObjectId(), LocalPlayer)) &&
 					!IsHardReference(Found->second->Publication, Name))
 					Publish.NilProperties.Add(Name);
 			}
@@ -1346,6 +1361,7 @@ namespace gargantuan::network {
 
 	PreparedPublishReplication ReplicationCoordinator::MakePeerPublish(
 		ObjectId Object,
+		ObjectId LocalPlayer,
 		const ReplicationView &View,
 		const std::set<ObjectId> &Entering,
 		const std::set<ObjectId> &Leaving,
@@ -1354,6 +1370,7 @@ namespace gargantuan::network {
 	) {
 		auto Found = Catalog.find(Object);
 		if (Found == Catalog.end()) return {};
+		if (!IsVisibleToPeer(Object, LocalPlayer)) throw std::runtime_error("Cannot publish an object outside peer visibility");
 		PreparedPublishReplication Publish{Object, Found->second.Template};
 		if (!StructuralTemplateReuseEnabled ||
 			(!RequestedTemplates.contains(Object) && CandidateRequestedTemplates.insert(Object).second))
@@ -1366,7 +1383,8 @@ namespace gargantuan::network {
 			const auto *Reference = std::get_if<WireObjectReference>(&Value);
 			if (!Reference) continue;
 			const auto Target = Reference->Object.ToObjectId();
-			const bool KnownAfterFrame = (View.Knows(Target) && !Leaving.contains(Target)) || Entering.contains(Target);
+			const bool KnownAfterFrame = IsVisibleToPeer(Target, LocalPlayer) &&
+				((View.Knows(Target) && !Leaving.contains(Target)) || Entering.contains(Target));
 			if (!KnownAfterFrame && !IsHardReference(Found->second->Publication, Name)) Publish.NilProperties.Add(Name);
 		}
 		SaturatingAdd(CandidateMetrics.PeerPatchOperations, 1);
@@ -1716,7 +1734,7 @@ namespace gargantuan::network {
 			auto Found = Catalog.find(Object);
 			if (Found == Catalog.end()) return {{}, "Cannot publish a stale authoritative object"};
 			auto Publish = MakePeerPublish(
-				Object, CurrentPeer.View, Entering, Leaving, CandidateMetrics, CandidateRequestedTemplates
+				Object, CurrentPeer.LocalPlayer, CurrentPeer.View, Entering, Leaving, CandidateMetrics, CandidateRequestedTemplates
 			);
 			if (!PublishReferencesKnown(CurrentPeer.View, Publish, Entering))
 				return {{}, "Hard materialization dependency is not available"};
@@ -1885,7 +1903,7 @@ namespace gargantuan::network {
 		if (!RefreshCatalog(Error)) return {{}, std::move(Error)};
 		PeerRelevanceSelection Selection;
 		for (const auto &[Object, State] : Catalog) {
-			if (IsServiceVisible(Object) && (!State->Publication.Parent || !IsInitiallyRelevant || IsInitiallyRelevant(Object)))
+			if (IsVisibleToPeer(Object, {}) && (!State->Publication.Parent || !IsInitiallyRelevant || IsInitiallyRelevant(Object)))
 				Selection.DesiredObjects.push_back(Object);
 		}
 		Selection.RequiredObjects = Selection.DesiredObjects;
@@ -1931,6 +1949,7 @@ namespace gargantuan::network {
 			if (Existing.Slot == Connection.Slot && State.View.Connection.IsValid())
 				return {"A live replication peer already owns this connection slot"};
 		PeerState State{{Connection, Epoch}, CatalogCursor, ReliableReplicationSequence(1)};
+		State.LocalPlayer = Selection.LocalPlayer;
 		State.PolicyManaged = true;
 		State.ExplicitSchedulerCommit = ExplicitSchedulerCommit;
 		auto [Peer, Added] = Peers.emplace(Connection, std::move(State));
@@ -2296,9 +2315,9 @@ namespace gargantuan::network {
 			}
 			const auto Known = ReadView().Knows(Record.Object);
 			const auto Relevant = ReadView().RelevantObjects.contains(Record.Object);
-			if (!IsServiceVisible(Record.Object)) {
+			if (!IsVisibleToPeer(Record.Object, Peer->second.LocalPlayer)) {
 				if (Known && !PolicyManaged)
-					return {{}, "Service visibility changed; this peer requires relevance reconciliation"};
+					return {{}, "Object visibility changed; this peer requires relevance reconciliation"};
 				continue;
 			}
 			if (PolicyManaged && !Relevant) continue;
@@ -2324,7 +2343,8 @@ namespace gargantuan::network {
 						);
 						Available.insert(BatchPublishObjects.begin(), BatchPublishObjects.end());
 						auto Publish = MakePeerPublish(
-							Record.Object, Available, CandidateMetrics, CandidateRequestedTemplates, PolicyManaged
+								Record.Object, Peer->second.LocalPlayer, Available, CandidateMetrics,
+								CandidateRequestedTemplates, PolicyManaged
 						);
 						const auto &Publication = Publish.Template->Publication;
 						if (Publication.Parent && !ReadView().Knows(*Publication.Parent) &&
@@ -2571,10 +2591,13 @@ namespace gargantuan::network {
 			auto Found = Catalog.find(Object);
 			if (Found == Catalog.end() || RetiredObjects.contains(Object))
 				return {{}, "Cannot publish a stale authoritative object"};
+			if (!IsVisibleToPeer(Object, CandidatePeer.LocalPlayer))
+				return {{}, "Cannot publish an object outside peer visibility"};
 			if (CandidatePeer.View.Knows(Object)) return {{}, "Object is already published"};
 			if (CandidatePeer.PublicationJournalEnds.size() >= MaximumPeerDesiredObjects)
 				return {{}, "Publication journal watermark limit exceeded"};
-			auto Publish = MakePeerPublish(Object, {Object}, CandidateMetrics, CandidateRequestedTemplates, false);
+			auto Publish = MakePeerPublish(Object, CandidatePeer.LocalPlayer, {Object}, CandidateMetrics,
+				CandidateRequestedTemplates, false);
 			const auto &Publication = Publish.Template->Publication;
 			if (Publication.Parent && !CandidatePeer.View.Knows(*Publication.Parent))
 				return {{}, "Publish parent is not materialized for this peer"};

@@ -1,4 +1,6 @@
 #include "gargantuan/Engine.hpp"
+#include "gargantuan/assets/GasInstanceSerialization.hpp"
+#include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/Camera.hpp"
 #include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -7,6 +9,8 @@
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Player.hpp"
+#include "gargantuan/classes/PlayerGui.hpp"
+#include "gargantuan/classes/ScreenGui.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/Renderer.hpp"
@@ -17,9 +21,11 @@
 #include "gargantuan/services/Workspace.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -72,6 +78,98 @@ namespace {
 			.Logical = Logical,
 			.State = State,
 		};
+	}
+
+	void TestPlayerGuiLifecycle() {
+		using namespace gargantuan;
+		auto World = std::make_shared<DataModel>();
+		auto PlayersService = std::dynamic_pointer_cast<Players>(World->GetService("Players"));
+		auto Starter = World->GetService("StarterGui");
+		Starter->SetArchivable(true);
+		auto KeepTemplate = std::make_shared<ScreenGui>();
+		KeepTemplate->SetName("Keep");
+		KeepTemplate->SetArchivable(true);
+		KeepTemplate->SetParent(Starter);
+		auto ResetTemplate = std::make_shared<ScreenGui>();
+		ResetTemplate->SetName("Reset");
+		ResetTemplate->SetResetOnSpawn(true);
+		ResetTemplate->SetArchivable(true);
+		ResetTemplate->SetParent(Starter);
+		bool ObservedProvisionedGui = false;
+		auto Added = PlayersService->PlayerAdded->Connect([&](const auto &Player) {
+			const auto Gui = Player->GetPlayerGui().value_or(nullptr);
+			ObservedProvisionedGui = Gui && Gui->GetChildren().size() == 2 && !Player->GetCharacter();
+		});
+		auto First = PlayersService->CreateSessionPlayer({"test", "starter-gui-one"});
+		const auto Gui = First->GetPlayerGui().value();
+		const auto Keep = Gui->FindFirstChild("Keep", false);
+		const auto OldReset = Gui->FindFirstChild("Reset", false);
+		Check(ObservedProvisionedGui && Keep && OldReset && OldReset != ResetTemplate && Keep != KeepTemplate,
+			"join provisions fresh PlayerGui roots before PlayerAdded without a Character or controller");
+		if (!Keep || !OldReset) return;
+		Added->Disconnect();
+		ResetTemplate->SetEnabled(false);
+		Keep->SetName("PlayerState");
+		auto Later = PlayersService->CreateSessionPlayer({"test", "starter-gui-later"});
+		const auto LaterReset = std::dynamic_pointer_cast<ScreenGui>(
+			Later->GetPlayerGui().value()->FindFirstChild("Reset", false));
+		Check(std::static_pointer_cast<ScreenGui>(OldReset)->GetEnabled() && LaterReset && !LaterReset->GetEnabled(),
+			"template property edits affect later provisioning and preserve existing clones");
+
+		auto WorkspaceValue = World->GetService("Workspace");
+		auto Spawn = [&] {
+			auto Character = std::make_shared<KinematicCharacter>();
+			Character->SetParent(WorkspaceValue);
+			First->SetCharacter(Character);
+		};
+		auto ServerReset = std::make_shared<ScreenGui>();
+		ServerReset->SetResetOnSpawn(true);
+		ServerReset->SetParent(Gui);
+		Spawn();
+		Check(!OldReset->GetDestroyed() && !ServerReset->GetDestroyed(), "first Character binding keeps initially provisioned GUI");
+		First->RemoveCharacter();
+		Spawn();
+		const auto NewReset = std::dynamic_pointer_cast<ScreenGui>(Gui->FindFirstChild("Reset", false));
+		Check(NewReset && NewReset != OldReset && !NewReset->GetEnabled() && OldReset->GetDestroyed() &&
+			ServerReset->GetDestroyed() && Gui->FindFirstChild("PlayerState", false) == Keep,
+			"respawn recreates current reset templates, removes ad hoc reset roots, and preserves persistent runtime state");
+
+		First->SetArchivable(true);
+		Gui->MarkPersistenceSubtreeArchivable();
+		const std::array<std::shared_ptr<Instance>, 1> PlayerDocument{First};
+		const auto GasState = InstanceSerialization::CaptureGasDocument(PlayerDocument, Gas::DocumentKind::Model);
+		std::shared_ptr<Instance> PersistedPlayer = First;
+		Check(GasState && GasState->Nodes.size() == 1 &&
+			InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, PersistedPlayer).find("PlayerGui") ==
+				std::string::npos,
+			"JSON and GAS exclude PlayerGui even inside an explicitly archivable Player graph");
+		const auto StarterJson = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Starter);
+		std::istringstream Input(StarterJson);
+		const auto StarterRoundtrip = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Input);
+		Check(StarterRoundtrip.Ok && StarterRoundtrip.Instance && StarterRoundtrip.Instance->FindFirstChild("Reset", false),
+			"authored StarterGui templates roundtrip through JSON");
+		bool Blocked = false;
+		{
+			ScriptSecurityScope Security(ScriptSecurityContext::ClientRuntime());
+			try { Gui->Destroy(); } catch (const std::runtime_error &) { Blocked = true; }
+		}
+		Check(Blocked && !Gui->GetDestroyed(), "Client domain cannot destroy the lifecycle-owned GUI container");
+
+		if (NewReset) {
+			auto Removed = NewReset->Destroying->Once([&](std::monostate) { First->Destroy(); });
+			Spawn();
+			Check(First->GetDestroyed() && Gui->GetDestroyed() && !Gui->GetParent(),
+				"player retirement from a GUI removal callback aborts replacement provisioning");
+		}
+		auto AbortProvision = PlayersService->ChildAdded->Once([](const auto &Child) { Child->Destroy(); });
+		Blocked = false;
+		try { (void)PlayersService->CreateSessionPlayer({"test", "retired-during-provision"}); }
+		catch (const std::runtime_error &) { Blocked = true; }
+		Check(Blocked && PlayersService->GetPlayers() == std::vector{Later},
+			"session player destroyed during initial attachment is never returned as a live join");
+		Check(PlayersService->RemoveSessionPlayer(Later) && LaterReset && LaterReset->GetDestroyed(),
+			"disconnect destroys this session player's runtime GUI");
+		World->Destroy();
 	}
 
 	void TestActionMapContract() {
@@ -967,6 +1065,7 @@ int main() {
 		return 1;
 	}
 	TestActionMapContract();
+	TestPlayerGuiLifecycle();
 	TestCharacterSchema();
 	TestDefaultPlayerRuntime();
 	TestEngineReattachAfterShutdown();

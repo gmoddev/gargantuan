@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -21,6 +22,7 @@
 namespace gargantuan {
 	class DataModel;
 	class Engine;
+	class LuaSourceContainer;
 	class Player;
 }
 
@@ -59,6 +61,9 @@ namespace gargantuan::network {
 		// Trusted startup-only client declaration of the canonical ordinary source
 		// class. It neither configures server funding nor changes the wire protocol.
 		bool DeclareNormalOrdinaryService = false;
+		// Native client host callback backed by trusted package code. GRPL only
+		// supplies a clone's source identity and regular structural properties.
+		std::function<bool(const std::shared_ptr<LuaSourceContainer> &)> HydratePlayerGuiCode;
 
 		[[nodiscard]] bool IsValid() const;
 		[[nodiscard]] static NetworkLimits DefaultLimits();

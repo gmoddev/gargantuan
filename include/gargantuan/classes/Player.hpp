@@ -36,8 +36,13 @@ namespace gargantuan {
 		bool PublishingPossessionChange = false;
 		bool NotifyingCharacterRemoval = false;
 		bool ShuttingDownCharacter = false;
+		bool GuiProvisionedHere = false;
+		bool HadCharacterForGui = false;
+		bool ResettingGui = false;
 
 		void InitializeIdentity(int Value);
+		void ProvisionGui(const std::shared_ptr<DataModel> &World);
+		void ResetGuiOnCharacter(const std::shared_ptr<Character> &Replacement);
 		void CommitPossession(const std::shared_ptr<Instance> &Entity);
 		void ClosePossession();
 		void DisconnectPossessionSignals();

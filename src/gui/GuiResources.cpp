@@ -111,6 +111,7 @@ namespace gargantuan {
 
 		struct FontKey {
 			std::string Reference;
+			AssetId Asset;
 			std::uint64_t ContentRevision = 0;
 			int Size64 = 0;
 			int Dpi64 = 0;
@@ -120,7 +121,8 @@ namespace gargantuan {
 
 		struct FontKeyHash {
 			std::size_t operator()(const FontKey &Key) const noexcept {
-				return std::hash<std::string>{}(Key.Reference) ^ (std::hash<std::uint64_t>{}(Key.ContentRevision) << 1) ^
+				return std::hash<std::string>{}(Key.Reference) ^ AssetIdHash{}(Key.Asset) ^
+					(std::hash<std::uint64_t>{}(Key.ContentRevision) << 1) ^
 					(std::hash<int>{}(Key.Size64) << 2) ^ (std::hash<int>{}(Key.Dpi64) << 3) ^
 					(std::hash<int>{}(Key.Alignment) << 4);
 			}
@@ -141,6 +143,7 @@ namespace gargantuan {
 		struct ShapeKey {
 			std::string Text;
 			std::string FontFace;
+			AssetId FontAsset;
 			std::uint64_t FontRevision = 0;
 			int Size64 = 0;
 			int Dpi64 = 0;
@@ -155,6 +158,7 @@ namespace gargantuan {
 			std::size_t operator()(const ShapeKey &Key) const noexcept {
 				std::size_t Result = std::hash<std::string>{}(Key.Text);
 				Result ^= std::hash<std::string>{}(Key.FontFace) << 1;
+				Result ^= AssetIdHash{}(Key.FontAsset);
 				Result ^= std::hash<std::uint64_t>{}(Key.FontRevision) << 2;
 				Result ^= std::hash<int>{}(Key.Size64) << 3;
 				Result ^= std::hash<int>{}(Key.Dpi64) << 4;
@@ -205,6 +209,7 @@ namespace gargantuan {
 			std::shared_ptr<const std::vector<std::uint8_t>> Bytes;
 		};
 		std::shared_ptr<AssetService> Assets;
+		std::shared_ptr<AssetService> ProjectFontAssets;
 		TTF_TextEngine Engine{};
 		std::unordered_map<FontKey, OpenFont, FontKeyHash> Fonts;
 		std::unordered_map<GlyphKey, AtlasEntry, GlyphKeyHash> Glyphs;
@@ -240,6 +245,7 @@ namespace gargantuan {
 		TTF_Font *GetFont(const GuiTextRequest &Request, const AssetFontResource &Source) {
 			const FontKey Key{
 				Request.FontFace.empty() ? "builtin://font/default" : Request.FontFace,
+				Source.Id,
 				Source.ContentRevision,
 				static_cast<int>(std::lround(Request.LogicalSize * 64.0f)),
 				static_cast<int>(std::lround(Request.DpiScale * 64.0f)),
@@ -389,12 +395,19 @@ namespace gargantuan {
 		: State(std::make_unique<Impl>(std::move(Assets))) {}
 	GuiTextSystem::~GuiTextSystem() = default;
 
+	void GuiTextSystem::SetProjectFontAssets(std::shared_ptr<AssetService> Assets) {
+		State->ProjectFontAssets = std::move(Assets);
+	}
+
 	std::shared_ptr<const GuiShapedText> GuiTextSystem::Shape(const GuiTextRequest &Request) {
 		const auto Sanitized = SanitizeUtf8(Request.Text);
-		const auto FontSource = State->Assets->ResolveFont(Request.FontFace);
+		auto FontSource = State->ProjectFontAssets && !Request.FontFace.empty() && Request.FontFace != "builtin://font/default"
+			? State->ProjectFontAssets->ResolveFont(Request.FontFace) : std::nullopt;
+		if (!FontSource) FontSource = State->Assets->ResolveFont(Request.FontFace);
 		const ShapeKey Key{
 			Sanitized.Bytes,
 			Request.FontFace,
+			FontSource ? FontSource->Id : AssetId{},
 			FontSource ? FontSource->ContentRevision : 0,
 			static_cast<int>(std::lround(Request.LogicalSize * 64.0f)),
 			static_cast<int>(std::lround(Request.DpiScale * 64.0f)),

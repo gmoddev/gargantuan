@@ -23,6 +23,26 @@ namespace gargantuan {
 		SourceIdLoaded = true;
 	}
 
+	std::string LuaSourceContainer::GetGuiTemplateSourceId() const { return GuiTemplateSourceId; }
+
+	void LuaSourceContainer::SetGuiTemplateSourceId(std::string Value) {
+		AssertCanMutate();
+		if (GetCurrentScriptSecurityContext().Domain != ScriptExecutionDomain::Core)
+			throw std::invalid_argument("GUI template source provenance is engine-owned");
+		if (Value == GuiTemplateSourceId) return;
+		if (!GuiTemplateSourceId.empty() || !ProjectId::Parse(Value))
+			throw std::invalid_argument("GUI template source provenance is immutable and requires a canonical SourceId");
+		GuiTemplateSourceId = std::move(Value);
+		NotifyPropertyCommitted("GuiTemplateSourceId");
+	}
+
+	bool LuaSourceContainer::HydrateGuiTemplateSource(std::string Value) {
+		if (GetCurrentScriptSecurityContext().Domain != ScriptExecutionDomain::Core ||
+			GuiTemplateSourceId.empty() || (!Source.empty() && Source != Value)) return false;
+		AssignSource(std::move(Value), false);
+		return true;
+	}
+
 	std::string LuaSourceContainer::GetSource() const {
 		return Source;
 	}

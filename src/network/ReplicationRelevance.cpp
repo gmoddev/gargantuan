@@ -8,7 +8,10 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
+#include "gargantuan/classes/Player.hpp"
+#include "gargantuan/classes/PlayerGui.hpp"
 #include "gargantuan/classes/RemoteBase.hpp"
+#include "gargantuan/gui/PlayerGuiScope.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 
@@ -172,6 +175,12 @@ namespace gargantuan::network {
 	struct ReplicationRelevance::Implementation {
 		struct ObjectLocation {
 			std::optional<ObjectId> SpatialRoot;
+			ObjectId GuiOwner;
+		};
+
+		struct PrivateGuiObjects {
+			ObjectId Container;
+			std::set<ObjectId> Objects;
 		};
 
 		struct SpatialEntry {
@@ -208,6 +217,7 @@ namespace gargantuan::network {
 		ReplicationRelevanceConfiguration Configuration;
 		std::map<ObjectId, ObjectLocation> ObjectLocations;
 		std::set<ObjectId> GlobalObjects;
+		std::map<ObjectId, PrivateGuiObjects> PlayerGuiObjects;
 		std::set<ObjectId> ReplicatedServiceRoots;
 		std::map<ObjectId, SpatialEntry> SpatialObjects;
 		std::set<ObjectId> UnqualifiedMeshRoots;
@@ -448,6 +458,27 @@ namespace gargantuan::network {
 			const auto Id = Object->GetObjectId();
 			if (!Id.IsValid() || ObjectLocations.contains(Id) || (IsExcluded && IsExcluded(Id))) return;
 			if (GetInstanceServicePolicy(*Object) == SchemaServicePolicy::ServerOnly) return;
+			std::shared_ptr<PlayerGui> Gui;
+			bool ViewportScene = false;
+			for (auto Current = Object; Current; Current = Current->GetParent().value_or(nullptr)) {
+				Gui = std::dynamic_pointer_cast<PlayerGui>(Current);
+				if (Gui) break;
+				if (const auto *Class = InstanceClassRegistry::GetDefinition(Current.get()))
+					ViewportScene = ViewportScene || Class->Id == SchemaId::FromNativeName("Engine", "ViewportFrame");
+			}
+			if (Gui) {
+				const auto Owner = FindPlayerGuiOwner(*Gui);
+				if (!Owner) return;
+				const auto OwnerId = Owner->GetObjectId();
+				auto &Entry = PlayerGuiObjects[OwnerId];
+				Entry.Container = Gui->GetObjectId();
+				Entry.Objects.insert(Id);
+				ObjectLocations.emplace(Id, ObjectLocation{.GuiOwner = OwnerId});
+				WorldDirty = true;
+				NextWorkTick = 0;
+				return;
+			}
+			if (ViewportScene) return;
 			const auto *Definition = InstanceClassRegistry::GetDefinition(Object.get());
 			const auto Parent = Object->GetParent();
 			if (Definition && Definition->ServicePolicy == SchemaServicePolicy::Replicated && Parent && *Parent == SourceRoot)
@@ -489,6 +520,12 @@ namespace gargantuan::network {
 						FailProjection("Spatial root projection removal", Status);
 					SpatialObjects.erase(Root);
 					SaturatingIncrement(Metrics.SpatialRemovals);
+				}
+			} else if (Location->second.GuiOwner.IsValid()) {
+				auto Gui = PlayerGuiObjects.find(Location->second.GuiOwner);
+				if (Gui != PlayerGuiObjects.end()) {
+					Gui->second.Objects.erase(Object);
+					if (Gui->second.Objects.empty()) PlayerGuiObjects.erase(Gui);
 				}
 			} else {
 				GlobalObjects.erase(Object);
@@ -628,6 +665,10 @@ namespace gargantuan::network {
 			std::set<ObjectId> Desired = GlobalObjects;
 			runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::RelevanceSelection, GlobalObjects.size());
 			if (Peer.LocalPlayer.IsValid()) Required.insert(Peer.LocalPlayer);
+			if (const auto Gui = PlayerGuiObjects.find(Peer.LocalPlayer); Gui != PlayerGuiObjects.end()) {
+				Desired.insert(Gui->second.Objects.begin(), Gui->second.Objects.end());
+				if (Gui->second.Objects.contains(Gui->second.Container)) Required.insert(Gui->second.Container);
+			}
 			Peer.RuntimeCharacterCandidates.clear();
 			for (const auto RootId : Peer.RelevantSpatialRoots) {
 				runtime_detail::CountWork(runtime_detail::WorkCounter::RelevanceRoots);
@@ -648,12 +689,13 @@ namespace gargantuan::network {
 				Fail("Peer relevance selection exceeds its object limit");
 				return false;
 			}
-			if (!std::ranges::equal(Required, Peer.Selection->RequiredObjects) ||
+			if (Peer.Selection->LocalPlayer != Peer.LocalPlayer || !std::ranges::equal(Required, Peer.Selection->RequiredObjects) ||
 				!std::ranges::equal(Desired, Peer.Selection->DesiredObjects)) {
 				runtime_detail::WorkScope CommitWork(runtime_detail::WorkPhase::RelevanceCommit);
 				PeerRelevanceSelection Selection;
 				Selection.RequiredObjects.assign(Required.begin(), Required.end());
 				Selection.DesiredObjects.assign(Desired.begin(), Desired.end());
+				Selection.LocalPlayer = Peer.LocalPlayer;
 				Peer.Selection = std::make_shared<const PeerRelevanceSelection>(std::move(Selection));
 			}
 			return true;

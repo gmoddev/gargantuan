@@ -130,10 +130,10 @@ struct ReplicationCoordinator::PlanningContinuation {
 			for (int Pass = 0; Pass != 2; ++Pass) {
 				auto &Closure = Pass == 0 ? Working.DesiredObjects : Working.RequiredObjects;
 				const auto &Seeds = Pass == 0 ? Selection->DesiredObjects : Selection->RequiredObjects;
-				for (const auto Object : Seeds) { co_yield 0; if (!Owner.IsServiceVisible(Object)) continue; Retain(Owner); Frontier.push_back({Object, 0}); runtime_detail::CountWork(runtime_detail::WorkCounter::DependencySeeds); }
+			for (const auto Object : Seeds) { co_yield 0; if (!Owner.IsVisibleToPeer(Object, Peer.LocalPlayer)) continue; Retain(Owner); Frontier.push_back({Object, 0}); runtime_detail::CountWork(runtime_detail::WorkCounter::DependencySeeds); }
 				for (const auto Object : Selection->RequiredObjects) {
 					co_yield 0;
-					if (!Owner.IsServiceVisible(Object)) { AwaitingSelection = true; co_return; }
+					if (!Owner.IsVisibleToPeer(Object, Peer.LocalPlayer)) { AwaitingSelection = true; co_return; }
 					Retain(Owner); Frontier.push_back({Object, 0}); runtime_detail::CountWork(runtime_detail::WorkCounter::DependencySeeds);
 				}
 				if (Pass == 1 && Frontier.empty()) { Retain(Owner); Frontier.push_back({Owner.SourceRootId, 0}); }
@@ -156,7 +156,7 @@ struct ReplicationCoordinator::PlanningContinuation {
 					}
 					if (Depth > MaximumDependencyClosureDepth || Closure.size() == MaximumPeerDesiredObjects)
 						throw std::runtime_error("Replication dependency closure limit exceeded");
-					if (!Owner.IsServiceVisible(Object))
+					if (!Owner.IsVisibleToPeer(Object, Peer.LocalPlayer))
 						throw std::runtime_error("Hard replication dependency belongs to a server-only service");
 					Retain(Owner);
 					Closure.insert(Object);
@@ -413,6 +413,7 @@ ReplicationScheduleResult ReplicationCoordinator::RegisterPeerPlanned(Connection
 	std::string Error;
 	if (!RefreshCatalog(Error)) return {std::move(Error)};
 	PeerState Peer{{Connection, Epoch}, CatalogCursor, ReliableReplicationSequence(1)};
+	Peer.LocalPlayer = Selection->LocalPlayer;
 	Peer.PolicyManaged = true;
 	Peer.ExplicitSchedulerCommit = true;
 	Peer.Planned = true;
@@ -427,6 +428,7 @@ ReplicationScheduleResult ReplicationCoordinator::RequestPlanning(ConnectionId C
 	auto Found = Peers.find(Connection);
 	if (Found == Peers.end() || !Found->second.Planned || !Selection) return {"Invalid structural planning peer"};
 	auto &Peer = Found->second;
+	if (Selection->LocalPlayer != Peer.LocalPlayer) return {"The local player of a replication peer is immutable"};
 	if (!Peer.PlanningError.empty()) return {Peer.PlanningError};
 	if (Peer.PreparedCommit) return {"A structural frame is awaiting scheduler acceptance"};
 	if (Selection->DesiredObjects.size() > MaximumPeerDesiredObjects || Selection->RequiredObjects.size() > MaximumPeerDesiredObjects)
@@ -659,7 +661,7 @@ ReplicationProduceResult ReplicationCoordinator::ProducePlannedFrame(ConnectionI
 	for (const auto &[Object, Depth] : OrderByAncestry(Plan.Entering, CurrentParent, true)) {
 		(void)Depth;
 		if (!Catalog.contains(Object) || RetiredObjects.contains(Object)) return {{}, "Cannot publish a stale authoritative object"};
-		auto Publish = MakePeerPublish(Object, Peer.View, Plan.Entering, Plan.Leaving, CandidateMetrics, Requested);
+		auto Publish = MakePeerPublish(Object, Peer.LocalPlayer, Peer.View, Plan.Entering, Plan.Leaving, CandidateMetrics, Requested);
 		if (!PublishReferencesKnown(Peer.View, Publish, Plan.Entering)) return {{}, "Hard materialization dependency is not available"};
 		Frame.Operations.push_back({Frame.Epoch, FinalizePeerPublish(std::move(Publish))});
 	}

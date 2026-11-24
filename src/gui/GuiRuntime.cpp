@@ -10,6 +10,8 @@
 #include "gargantuan/classes/ImageLabel.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/classes/LayerCollector.hpp"
+#include "gargantuan/classes/Player.hpp"
+#include "gargantuan/classes/PlayerGui.hpp"
 #include "gargantuan/classes/ScreenGui.hpp"
 #include "gargantuan/classes/ScrollingFrame.hpp"
 #include "gargantuan/classes/TextBox.hpp"
@@ -19,6 +21,7 @@
 #include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/gui/GuiLimits.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
+#include "gargantuan/services/Players.hpp"
 #include "runtime/RuntimeWorkDiagnostics.hpp"
 
 #include <algorithm>
@@ -237,7 +240,10 @@ namespace gargantuan {
 		};
 
 		std::shared_ptr<DataModel> World;
+		const GuiRuntimeMode Mode;
 		std::shared_ptr<AssetService> Assets;
+		std::shared_ptr<AssetService> AuthoringAssets;
+		ObjectId ProjectedPlayer;
 		GuiViewportConfiguration Viewport;
 		GuiTextSystem Text;
 		std::function<void()> DescendantBinding;
@@ -297,18 +303,20 @@ namespace gargantuan {
 
 		static std::shared_ptr<AssetService> PrepareAssets(
 			const std::shared_ptr<DataModel> &World,
-			const std::filesystem::path &FontPath
+			const std::filesystem::path &FontPath,
+			GuiRuntimeMode Mode
 		) {
 			if (!World) throw std::invalid_argument("GuiRuntime requires a DataModel");
-			auto Service = std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
+			auto Service = Mode == GuiRuntimeMode::Runtime
+				? std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"))
+				: std::make_shared<AssetService>();
 			if (!Service) throw std::runtime_error("AssetService schema resolved to an incompatible service");
 			Service->ConfigureBuiltInFont(FontPath);
 			return Service;
 		}
 
-		Impl(std::shared_ptr<DataModel> WorldValue, std::filesystem::path FontPath)
-			: World(std::move(WorldValue)), Assets(PrepareAssets(World, FontPath)), Text(Assets) {
-			if (!World) throw std::invalid_argument("GuiRuntime requires a DataModel");
+		Impl(std::shared_ptr<DataModel> WorldValue, std::filesystem::path FontPath, GuiRuntimeMode ModeValue)
+			: World(std::move(WorldValue)), Mode(ModeValue), Assets(PrepareAssets(World, FontPath, Mode)), Text(Assets) {
 			Viewport = {1, 1, 1.0f, {}};
 			DescendantBinding = World->BindDescendants([this](std::shared_ptr<Instance> Object) {
 				const auto Start = Clock::now();
@@ -336,7 +344,46 @@ namespace gargantuan {
 		bool IsGuiRelevant(const std::shared_ptr<Instance> &Object) const {
 			if (!Object) return false;
 			if (std::dynamic_pointer_cast<GuiBase>(Object)) return true;
+			if (Object->IsA("PlayerGui") || Object->IsA("StarterGui")) return true;
 			return Object->FindFirstAncestorWhichIsA("ScreenGui") != nullptr;
+		}
+
+		void RefreshScope() {
+			if (Mode == GuiRuntimeMode::Runtime) {
+				const auto PlayersService = std::dynamic_pointer_cast<Players>(
+					World->FindFirstChildOfClass("Players", false));
+				const auto LocalPlayer = PlayersService ? PlayersService->GetLocalPlayer().value_or(nullptr) : nullptr;
+				const auto Next = LocalPlayer ? LocalPlayer->GetObjectId() : ObjectId{};
+				if (ProjectedPlayer != Next) {
+					ProjectedPlayer = Next;
+					StructureDirty = true;
+				}
+				return;
+			}
+
+			// The editor publishes the canonical stream once for scene materials
+			// and GUI images. Only the text atlas and default font are preview-owned.
+			const auto Source = std::dynamic_pointer_cast<AssetService>(
+				World->FindFirstChildOfClass("AssetService", false));
+			if (Source != AuthoringAssets) {
+				AuthoringAssets = Source;
+				AssetChangeSequence = 0;
+				Text.SetProjectFontAssets(Source);
+			}
+		}
+
+		AssetService &ImageAssets() const { return AuthoringAssets ? *AuthoringAssets : *Assets; }
+
+		bool IsInProjection(const std::shared_ptr<ScreenGui> &Root) const {
+			const auto Parent = Root->GetParent().value_or(nullptr);
+			if (Mode == GuiRuntimeMode::AuthoringPreview)
+				return Parent && Parent->IsA("StarterGui") && Parent->GetParent().value_or(nullptr) == World;
+			if (Root->FindFirstAncestorWhichIsA("StarterGui")) return false;
+			const auto Container = Root->FindFirstAncestorWhichIsA("PlayerGui");
+			if (!Container) return true;
+			if (Parent != Container) return false;
+			const auto Owner = std::dynamic_pointer_cast<Player>(Container->GetParent().value_or(nullptr));
+			return Owner && Owner->GetObjectId() == ProjectedPlayer && Owner->GetPlayerGui().value_or(nullptr) == Container;
 		}
 
 		void AddDiagnostic(std::string Code, std::string Message, ObjectId Object) {
@@ -409,7 +456,7 @@ namespace gargantuan {
 			std::vector<std::shared_ptr<ScreenGui>> Roots;
 			for (const auto &Object : World->GetDescendants()) {
 				auto Root = std::dynamic_pointer_cast<ScreenGui>(Object);
-				if (!Root) continue;
+				if (!Root || !IsInProjection(Root)) continue;
 				if (Root->FindFirstAncestorWhichIsA("ScreenGui")) {
 					AddDiagnostic("NestedRoot", "Nested ScreenGui roots are ignored", Root->GetObjectId());
 					continue;
@@ -687,7 +734,7 @@ namespace gargantuan {
 					DesiredWidth = Node.Text ? Node.Text->Width : 0.0f;
 					DesiredHeight = Node.Text ? Node.Text->Height : 0.0f;
 				} else if (auto Image = std::dynamic_pointer_cast<ImageLabel>(Node.Object)) {
-					Node.Image = Assets->ResolveImage(Image->GetImage());
+					Node.Image = ImageAssets().ResolveImage(Image->GetImage());
 					if (Node.Image) {
 						DesiredWidth = static_cast<float>(Node.Image->Width) / Viewport.DpiScale;
 						DesiredHeight = static_cast<float>(Node.Image->Height) / Viewport.DpiScale;
@@ -731,7 +778,7 @@ namespace gargantuan {
 					const auto Previous = Scroll->GetContentExtent();
 					if (std::abs(Previous.GetX() - ExtentX) > 0.01f || std::abs(Previous.GetY() - ExtentY) > 0.01f)
 						Changed = true;
-					Scroll->CommitRuntimeContentExtent({ExtentX, ExtentY});
+					if (Mode == GuiRuntimeMode::Runtime) Scroll->CommitRuntimeContentExtent({ExtentX, ExtentY});
 				}
 				if (std::dynamic_pointer_cast<TextLabel>(Node.Object) || std::dynamic_pointer_cast<ImageLabel>(Node.Object)) continue;
 				const float ContentWidth = ContentWidths[Reverse];
@@ -813,7 +860,8 @@ namespace gargantuan {
 			RootNode.TreeOrder = 0;
 			RootNode.Depth = 0;
 			Cache.Nodes.push_back(RootNode);
-			Root->CommitRuntimeGeometry({RootBounds.X, RootBounds.Y}, {RootBounds.Width, RootBounds.Height}, 0.0f);
+			if (Mode == GuiRuntimeMode::Runtime)
+				Root->CommitRuntimeGeometry({RootBounds.X, RootBounds.Y}, {RootBounds.Width, RootBounds.Height}, 0.0f);
 
 			for (std::size_t Index = 0; Index < Working.size(); ++Index) {
 				auto &Node = Working[Index];
@@ -866,9 +914,10 @@ namespace gargantuan {
 				}
 				Committed.Presentation = ResolvePresentation(Node);
 				Cache.Nodes.push_back(std::move(Committed));
-				Node.Object->CommitRuntimeGeometry(
-					{Node.Bounds.X, Node.Bounds.Y}, {Node.Bounds.Width, Node.Bounds.Height}, Node.Object->GetRotation()
-				);
+				if (Mode == GuiRuntimeMode::Runtime)
+					Node.Object->CommitRuntimeGeometry(
+						{Node.Bounds.X, Node.Bounds.Y}, {Node.Bounds.Width, Node.Bounds.Height}, Node.Object->GetRotation()
+					);
 			}
 			Cache.NodeByObject.reserve(Cache.Nodes.size());
 			for (std::size_t Index = 0; Index < Cache.Nodes.size(); ++Index)
@@ -911,7 +960,7 @@ namespace gargantuan {
 					Working.Object = Object;
 					Working.Bounds = Node.Bounds;
 					Working.Text = Node.Presentation.Text;
-					if (auto Image = std::dynamic_pointer_cast<ImageLabel>(Object)) Working.Image = Assets->ResolveImage(Image->GetImage());
+					if (auto Image = std::dynamic_pointer_cast<ImageLabel>(Object)) Working.Image = ImageAssets().ResolveImage(Image->GetImage());
 					Node.Presentation = ResolvePresentation(Working);
 					if (!SameVisualPresentation(Previous, Node.Presentation)) {
 						Result.VisualChanged = true;
@@ -985,7 +1034,7 @@ namespace gargantuan {
 				Working.Object = Object;
 				Working.Bounds = Bounds;
 				Working.Text = Existing.Presentation.Text;
-				if (auto Image = std::dynamic_pointer_cast<ImageLabel>(Object)) Working.Image = Assets->ResolveImage(Image->GetImage());
+				if (auto Image = std::dynamic_pointer_cast<ImageLabel>(Object)) Working.Image = ImageAssets().ResolveImage(Image->GetImage());
 				Next.Presentation = ResolvePresentation(Working);
 				const bool NodeVisualChanged = !SameVisualPresentation(Existing.Presentation, Next.Presentation) ||
 					Existing.Bounds.X != Next.Bounds.X || Existing.Bounds.Y != Next.Bounds.Y ||
@@ -1000,6 +1049,7 @@ namespace gargantuan {
 					(Own != DirtyObjects.end() && (Own->second & DirtyAccessibility) != 0);
 				Result.SnapshotChanged = true;
 				Cache.Nodes[Index] = std::move(Next);
+			if (Mode == GuiRuntimeMode::Runtime)
 				Object->CommitRuntimeGeometry({Bounds.X, Bounds.Y}, {Bounds.Width, Bounds.Height}, Object->GetRotation());
 				++Profile.LayoutNodes;
 			}
@@ -1046,7 +1096,8 @@ namespace gargantuan {
 							(!Node.EffectiveClip || !Node.EffectiveClip->IsEmpty());
 					}
 					if (auto Object = std::dynamic_pointer_cast<GuiObject>(ObjectRegistry::Get().Lookup(Node.Object)))
-						Object->CommitRuntimeGeometry({Node.Bounds.X, Node.Bounds.Y}, {Node.Bounds.Width, Node.Bounds.Height}, Object->GetRotation());
+						if (Mode == GuiRuntimeMode::Runtime)
+							Object->CommitRuntimeGeometry({Node.Bounds.X, Node.Bounds.Y}, {Node.Bounds.Width, Node.Bounds.Height}, Object->GetRotation());
 					PendingVisualObjects.insert(Node.Object);
 					++Profile.LayoutNodes;
 				}
@@ -1592,6 +1643,7 @@ namespace gargantuan {
 		}
 
 		void RefreshInteraction(ObjectId Object) {
+			if (Mode == GuiRuntimeMode::AuthoringPreview) return;
 			const auto Start = Clock::now();
 			auto Gui = std::dynamic_pointer_cast<GuiObject>(ObjectRegistry::Get().Lookup(Object));
 			if (!Gui) return;
@@ -1873,13 +1925,15 @@ namespace gargantuan {
 		}
 	};
 
-	GuiRuntime::GuiRuntime(std::shared_ptr<DataModel> World, std::filesystem::path DefaultFontPath)
-		: State(std::make_unique<Impl>(std::move(World), std::move(DefaultFontPath))) {
+	GuiRuntime::GuiRuntime(std::shared_ptr<DataModel> World, std::filesystem::path DefaultFontPath, GuiRuntimeMode Mode)
+		: State(std::make_unique<Impl>(std::move(World), std::move(DefaultFontPath), Mode)) {
+		if (Mode == GuiRuntimeMode::AuthoringPreview) return;
 		std::scoped_lock Lock(RuntimeRegistryMutex);
 		RuntimeRegistry.emplace(State->World.get(), this);
 	}
 
 	GuiRuntime::~GuiRuntime() {
+		if (State->Mode == GuiRuntimeMode::AuthoringPreview) return;
 		std::scoped_lock Lock(RuntimeRegistryMutex);
 		RuntimeRegistry.erase(State->World.get());
 	}
@@ -1906,6 +1960,7 @@ namespace gargantuan {
 
 	bool GuiRuntime::Reconcile(const AnimationRuntime *Animation) {
 		const auto DirtyStart = Clock::now();
+		State->RefreshScope();
 		State->Profile = {};
 		State->Profile.ObservationNanoseconds = std::exchange(State->PendingObservationNanoseconds, 0);
 		State->Profile.DirtyMarkingNanoseconds = std::exchange(State->PendingDirtyMarkingNanoseconds, 0);
@@ -1915,7 +1970,7 @@ namespace gargantuan {
 		State->SelectionOperationsThisFrame = 0;
 		State->MeasuredTextThisFrame.clear();
 		State->PendingVisualObjects.clear();
-		auto AssetChanges = State->Assets->ReadChanges(State->AssetChangeSequence);
+		auto AssetChanges = State->ImageAssets().ReadChanges(State->AssetChangeSequence);
 		State->AssetChangeSequence = AssetChanges.NextSequence;
 		if (AssetChanges.RescanRequired || std::ranges::any_of(AssetChanges.Changes, [](const auto &Change) {
 			return Change.Kind == AssetKind::Image || Change.Kind == AssetKind::Mesh || Change.Kind == AssetKind::Material;
@@ -2039,7 +2094,7 @@ namespace gargantuan {
 
 		const bool ViewportsChanged = State->ReconcileViewports(Animation);
 		auto TextChanges = State->Text.DrainTextureChanges();
-		auto ImageChanges = State->Assets->DrainTextureChanges();
+		auto ImageChanges = State->AuthoringAssets ? AssetTextureChanges{} : State->Assets->DrainTextureChanges();
 		State->PendingTextures.Creates.insert(State->PendingTextures.Creates.end(),
 			std::make_move_iterator(TextChanges.Creates.begin()), std::make_move_iterator(TextChanges.Creates.end()));
 		State->PendingTextures.Creates.insert(State->PendingTextures.Creates.end(),
@@ -2122,6 +2177,7 @@ namespace gargantuan {
 	}
 
 	bool GuiRuntime::ProcessEvent(const HostEvent &Event) {
+		if (State->Mode == GuiRuntimeMode::AuthoringPreview) return false;
 		if (const auto *Move = std::get_if<PointerMoveEvent>(&Event)) {
 			return ProcessPointer({static_cast<int>(Move->Device.Value), Enums::GuiPointerType::Mouse,
 				Enums::GuiPointerButton::None, GuiPointerAction::Move, {Move->Position.X, Move->Position.Y}});
@@ -2203,6 +2259,7 @@ namespace gargantuan {
 	}
 
 	bool GuiRuntime::ProcessPointer(const GuiPointerInput &Input) {
+		if (State->Mode == GuiRuntimeMode::AuthoringPreview) return false;
 		if (Input.PointerId < 0 || !std::isfinite(Input.PhysicalPosition.GetX()) ||
 			!std::isfinite(Input.PhysicalPosition.GetY())) return false;
 		const Vector2 Logical = Input.PhysicalPosition / State->Viewport.DpiScale;
@@ -2292,6 +2349,7 @@ namespace gargantuan {
 	}
 
 	std::optional<HostCommand> GuiRuntime::SynchronizeTextInput() {
+		if (State->Mode == GuiRuntimeMode::AuthoringPreview) return std::nullopt;
 		if (!State->TextInputCommandDirty) return std::nullopt;
 		State->TextInputCommandDirty = false;
 		const auto Focused = State->KeyboardFocus();
@@ -2319,7 +2377,9 @@ namespace gargantuan {
 		}};
 	}
 
-	void GuiRuntime::RequestFocus(ObjectId Object) { State->Focus(Object); }
+	void GuiRuntime::RequestFocus(ObjectId Object) {
+		if (State->Mode == GuiRuntimeMode::Runtime) State->Focus(Object);
+	}
 	void GuiRuntime::ReleaseFocus(ObjectId Object) {
 		const auto Root = State->RootForObject(Object);
 		if (!Root.IsValid() || !State->FocusedByRoot.contains(Root) || State->FocusedByRoot.at(Root) != Object) return;
@@ -2340,6 +2400,7 @@ namespace gargantuan {
 	}
 
 	void GuiRuntime::CapturePointer(int PointerId, ObjectId Object) {
+		if (State->Mode == GuiRuntimeMode::AuthoringPreview) return;
 		if (PointerId < 0 || !State->Layout->NodeByObject.contains(Object)) return;
 		if (!State->Captured.contains(PointerId) && State->Captured.size() >= GuiLimits::MaximumCapturedPointers) return;
 		State->Captured[PointerId] = Object;
@@ -2398,6 +2459,8 @@ namespace gargantuan {
 		std::uint32_t Height,
 		std::span<const std::uint8_t> Rgba8
 	) {
+		if (State->Mode == GuiRuntimeMode::AuthoringPreview)
+			throw std::logic_error("Authoring preview resolves images through the project's AssetService");
 		auto Reference = State->Assets->RegisterMemoryImage(std::move(LogicalId), Width, Height, Rgba8);
 		for (const auto &[Root, Cache] : State->RootCaches) {
 			(void)Cache;

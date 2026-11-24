@@ -64,10 +64,13 @@ namespace gargantuan {
 		Value->InitializeIdentity(1);
 		Value->InitializeAuthenticationIdentity({"local", "player-1"});
 		Value->SetName("Player1");
+		Value->ProvisionGui(GetDataModel());
 		Value->SetParent(shared_from_this());
+		if (Value->GetDestroyed() || Value->IsDestroying() || Value->GetParent().value_or(nullptr).get() != this) return;
 		LocalPlayerValue = Value;
 		NotifyPropertyCommitted("LocalPlayer");
 		PlayerAdded->Fire(Value);
+		if (!GetLocalPlayer()) ClearTrustedLocalPlayer();
 	}
 
 	std::shared_ptr<Player> Players::CreateSessionPlayer(PlayerIdentity Identity) {
@@ -78,8 +81,13 @@ namespace gargantuan {
 		Value->InitializeIdentity(NextSessionPlayerId++);
 		Value->InitializeAuthenticationIdentity(std::move(Identity));
 		Value->SetName("Player" + std::to_string(Value->GetPlayerId()));
+		Value->ProvisionGui(GetDataModel());
 		Value->SetParent(shared_from_this());
+		if (Value->GetDestroyed() || Value->IsDestroying() || Value->GetParent().value_or(nullptr).get() != this)
+			throw std::runtime_error("[Gui:Provision] Session Player retired during GUI provisioning");
 		PlayerAdded->Fire(Value);
+		if (Value->GetDestroyed() || Value->IsDestroying() || Value->GetParent().value_or(nullptr).get() != this)
+			throw std::runtime_error("[Gui:Provision] Session Player retired during PlayerAdded");
 		return Value;
 	}
 

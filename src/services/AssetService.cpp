@@ -1288,7 +1288,8 @@ namespace gargantuan {
 			Existing = State->Records.find(std::string(DefaultFontReference));
 		if (Existing == State->Records.end() || !Existing->second.Asset) return std::nullopt;
 		const auto *Font = std::get_if<ImportedFont>(Existing->second.Asset.get());
-		return Font ? std::optional(AssetFontResource{Font->Bytes, Existing->second.ContentRevision, Font->FaceCount}) : std::nullopt;
+		return Font ? std::optional(AssetFontResource{Font->Bytes, Existing->second.ContentRevision,
+			Font->FaceCount, Existing->second.Id}) : std::nullopt;
 	}
 
 	std::optional<ImportedMesh> AssetService::ResolveMesh(std::string_view Reference) const {

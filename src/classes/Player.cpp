@@ -3,11 +3,17 @@
 #include "gargantuan/Log.hpp"
 #include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/LuaSourceContainer.hpp"
+#include "gargantuan/classes/PlayerGui.hpp"
+#include "gargantuan/classes/ScreenGui.hpp"
+#include "gargantuan/gui/GuiLimits.hpp"
+#include "gargantuan/gui/PlayerGuiScope.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "gargantuan/services/Players.hpp"
 
 #include <exception>
 #include <stdexcept>
+#include <utility>
 
 namespace gargantuan {
 	namespace {
@@ -48,6 +54,55 @@ namespace gargantuan {
 				LOG_ERROR(App, "[Player:Character] Teardown observer failed");
 			}
 		}
+
+		std::vector<std::shared_ptr<ScreenGui>> PrepareGuiTemplates(
+			const std::shared_ptr<DataModel> &World, bool ResetOnly
+		) {
+			constexpr std::size_t MaximumTemplateObjects = 1024;
+			std::vector<std::shared_ptr<ScreenGui>> Roots;
+			const auto Starter = World ? World->FindFirstChildOfClass("StarterGui", false) : nullptr;
+			if (!Starter || Starter->GetDestroyed() || Starter->IsDestroying()) return Roots;
+			std::vector<std::pair<std::shared_ptr<ScreenGui>, std::vector<std::shared_ptr<Instance>>>> Templates;
+			std::size_t TotalObjects = 0;
+			for (const auto &Child : Starter->GetChildren()) {
+				const auto Root = std::dynamic_pointer_cast<ScreenGui>(Child);
+				if (!Root || !Root->GetArchivable() || Root->GetDestroyed() || Root->IsDestroying() ||
+					(ResetOnly && !Root->GetResetOnSpawn())) continue;
+				if (Templates.size() == GuiLimits::MaximumRoots || TotalObjects == MaximumTemplateObjects)
+					throw std::length_error("StarterGui exceeds the template root or object limit");
+				std::vector<std::shared_ptr<Instance>> Nodes;
+				std::vector<std::shared_ptr<Instance>> Pending{Root};
+				while (!Pending.empty()) {
+					auto Node = std::move(Pending.back());
+					Pending.pop_back();
+					const auto Children = Node->GetChildren();
+					++TotalObjects;
+					if (Children.size() + Pending.size() > MaximumTemplateObjects - TotalObjects)
+						throw std::length_error("StarterGui exceeds the template object limit");
+					if (Node != Root) Nodes.push_back(Node);
+					Pending.insert(Pending.end(), Children.rbegin(), Children.rend());
+				}
+				Templates.emplace_back(Root, std::move(Nodes));
+			}
+			Roots.reserve(Templates.size());
+			for (const auto &[Root, SourceNodes] : Templates) {
+				auto Copy = std::static_pointer_cast<ScreenGui>(Root->Clone());
+				const auto CloneNodes = Copy->GetDescendants();
+				if (CloneNodes.size() != SourceNodes.size())
+					throw std::logic_error("PlayerGui clone has a different template topology");
+				for (std::size_t Index = 0; Index < SourceNodes.size(); ++Index) {
+					const auto Original = std::dynamic_pointer_cast<LuaSourceContainer>(SourceNodes[Index]);
+					if (!Original || !IsClientPlayerGuiSource(*Original)) continue;
+					const auto Cloned = std::dynamic_pointer_cast<LuaSourceContainer>(CloneNodes[Index]);
+					if (!Cloned || Cloned->GetClassName() != Original->GetClassName())
+						throw std::logic_error("PlayerGui clone has a different script class");
+					ScriptSecurityScope Security(ScriptSecurityContext::CoreTrusted());
+					Cloned->SetGuiTemplateSourceId(Original->GetSourceId());
+				}
+				Roots.push_back(std::move(Copy));
+			}
+			return Roots;
+		}
 	}
 
 	Player::Player() {
@@ -67,6 +122,55 @@ namespace gargantuan {
 			throw std::logic_error("Player identity must be initialized exactly once");
 		PlayerIdValue = Value;
 		NotifyPropertyCommitted("PlayerId");
+	}
+
+	std::optional<std::shared_ptr<PlayerGui>> Player::GetPlayerGui() const {
+		for (const auto &Child : Children) {
+			if (auto Gui = std::dynamic_pointer_cast<PlayerGui>(Child);
+				Gui && !Gui->GetDestroyed() && !Gui->IsDestroying()) return Gui;
+		}
+		return std::nullopt;
+	}
+
+	void Player::ProvisionGui(const std::shared_ptr<DataModel> &World) {
+		auto Container = std::make_shared<PlayerGui>();
+		Container->SetName("PlayerGui");
+		Container->SetArchivable(false);
+		try {
+			for (const auto &Root : PrepareGuiTemplates(World, false)) Root->SetParent(Container);
+		} catch (const std::exception &Error) {
+			LOG_WARN(App, "[Gui:Provision] StarterGui could not be provisioned: %.160s", Error.what());
+			Container->ClearAllChildren();
+		}
+		Container->SetParent(shared_from_this());
+		GuiProvisionedHere = true;
+	}
+
+	void Player::ResetGuiOnCharacter(const std::shared_ptr<Character> &Replacement) {
+		const auto Container = GetPlayerGui().value_or(nullptr);
+		if (!Container || ResettingGui || CharacterValue != Replacement || Replacement->GetDestroyed() ||
+			Replacement->IsDestroying()) return;
+		struct ResetGuard {
+			bool &Flag;
+			explicit ResetGuard(bool &Value) : Flag(Value) { Flag = true; }
+			~ResetGuard() { Flag = false; }
+		} Guard(ResettingGui);
+		try {
+			const auto Roots = PrepareGuiTemplates(GetDataModel(), true);
+			auto Existing = Container->GetChildren();
+			for (const auto &Child : Existing) {
+				if (Container->GetDestroyed() || Container->IsDestroying()) return;
+				if (const auto Root = std::dynamic_pointer_cast<ScreenGui>(Child);
+					Root && Root->GetResetOnSpawn() && Root->GetParent().value_or(nullptr) == Container)
+					Root->Destroy();
+			}
+			for (const auto &Root : Roots) {
+				if (Container->GetDestroyed() || Container->IsDestroying()) return;
+				Root->SetParent(Container);
+			}
+		} catch (const std::exception &Error) {
+			LOG_WARN(App, "[Gui:Provision] PlayerGui reset failed: %.160s", Error.what());
+		}
 	}
 
 	void Player::SetReplicatedPlayerId(int Value) {
@@ -275,10 +379,13 @@ namespace gargantuan {
 			if (CharacterDestroyingConnection) CharacterDestroyingConnection->Disconnect();
 			CharacterDestroyingConnection = ReplacementConnection;
 			CharacterValue = Replacement;
+			const bool ResetGui = Replacement && GuiProvisionedHere && Source == CharacterWriteSource::Gameplay &&
+				std::exchange(HadCharacterForGui, true);
 			std::exception_ptr CallbackFailure;
 			CaptureFirstCallbackFailure(CallbackFailure, [&] { NotifyPropertyCommitted("Character"); });
 			if (Previous && !Previous->GetDestroyed() && !Previous->IsDestroying())
 				CaptureFirstCallbackFailure(CallbackFailure, [&] { Previous->Destroy(); });
+			if (ResetGui) ResetGuiOnCharacter(Replacement);
 			if (CallbackFailure) std::rethrow_exception(CallbackFailure);
 		}
 

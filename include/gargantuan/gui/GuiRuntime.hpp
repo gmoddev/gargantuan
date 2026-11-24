@@ -20,6 +20,7 @@ namespace gargantuan {
 	class RenderPublisher;
 
 	enum class GuiPointerAction : std::uint8_t { Move, Down, Up, Cancel };
+	enum class GuiRuntimeMode : std::uint8_t { Runtime, AuthoringPreview };
 
 	struct GuiPointerInput {
 		int PointerId = 0;
@@ -31,7 +32,8 @@ namespace gargantuan {
 
 	class GuiRuntime final {
 	  public:
-		GuiRuntime(std::shared_ptr<DataModel> World, std::filesystem::path DefaultFontPath);
+		GuiRuntime(std::shared_ptr<DataModel> World, std::filesystem::path DefaultFontPath,
+			GuiRuntimeMode Mode = GuiRuntimeMode::Runtime);
 		~GuiRuntime();
 		GuiRuntime(const GuiRuntime &) = delete;
 		GuiRuntime &operator=(const GuiRuntime &) = delete;

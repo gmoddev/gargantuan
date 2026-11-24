@@ -227,6 +227,7 @@ namespace gargantuan {
 		std::shared_ptr<const std::vector<std::uint8_t>> Bytes;
 		std::uint64_t ContentRevision = 0;
 		std::uint32_t FaceCount = 0;
+		AssetId Id;
 	};
 
 	struct AssetMeshResource {

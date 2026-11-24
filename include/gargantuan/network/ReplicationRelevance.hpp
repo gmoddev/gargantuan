@@ -54,6 +54,7 @@ namespace gargantuan::network {
 	struct PeerRelevanceSelection {
 		std::vector<ObjectId> RequiredObjects;
 		std::vector<ObjectId> DesiredObjects;
+		ObjectId LocalPlayer;
 		bool operator==(const PeerRelevanceSelection &) const = default;
 	};
 

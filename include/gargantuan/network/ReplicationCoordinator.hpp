@@ -321,6 +321,7 @@ namespace gargantuan::network {
 			ReplicationView View;
 			ChangeCursor JournalCursor;
 			ReliableReplicationSequence NextSequence{1};
+			ObjectId LocalPlayer;
 			// Exclusive source cursor captured by each accepted complete Enter.
 			// Only lagging current materializations need an entry; never a payload.
 			std::map<ObjectId, std::uint64_t> PublicationJournalEnds;
@@ -394,7 +395,7 @@ namespace gargantuan::network {
 			std::size_t AvailableFrameBytes);
 
 		bool RefreshCatalog(std::string &Error);
-		bool IsServiceVisible(ObjectId Object) const;
+		bool IsVisibleToPeer(ObjectId Object, ObjectId LocalPlayer) const;
 		void BeginRetirementTick(std::uint64_t SimulationTick);
 		void ReclaimRetiredTemplates();
 		bool BuildDependencyClosure(
@@ -414,6 +415,7 @@ namespace gargantuan::network {
 		static void ApplyAcceptedParents(PeerState &Peer, AcceptedParentMap Parents);
 		PreparedPublishReplication MakePeerPublish(
 			ObjectId Object,
+			ObjectId LocalPlayer,
 			const std::set<ObjectId> &Known,
 			ReplicationMetrics &CandidateMetrics,
 			std::set<ObjectId> &CandidateRequestedTemplates,
@@ -421,6 +423,7 @@ namespace gargantuan::network {
 		);
 		PreparedPublishReplication MakePeerPublish(
 			ObjectId Object,
+			ObjectId LocalPlayer,
 			const ReplicationView &View,
 			const std::set<ObjectId> &Entering,
 			const std::set<ObjectId> &Leaving,

@@ -4,6 +4,7 @@
 #include "gargantuan/animation/AnimationTrack.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
+#include "gargantuan/classes/PlayerGui.hpp"
 #include "gargantuan/classes/RemoteFunction.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/datatypes/Axes.hpp"
@@ -18,6 +19,7 @@
 #include "gargantuan/datatypes/UDim.hpp"
 #include "gargantuan/datatypes/UDim2.hpp"
 #include "gargantuan/datatypes/Vector2.hpp"
+#include "gargantuan/gui/PlayerGuiScope.hpp"
 #include "gargantuan/scripting/ThreadEngine.hpp"
 #include "gargantuan/scripting/UserdataTag.hpp"
 
@@ -420,7 +422,11 @@ namespace gargantuan {
 	}
 
 	bool ScriptEngine::CanRunScript(const Script &ScriptValue) const {
-		if (GetInstanceServicePolicy(ScriptValue) == SchemaServicePolicy::Replicated) return false;
+		if (GetInstanceServicePolicy(ScriptValue) == SchemaServicePolicy::Replicated ||
+			IsStarterGuiTemplate(ScriptValue)) return false;
+		if (const auto Gui = FindPlayerGuiScope(ScriptValue))
+			return Mode != RuntimeMode::NetworkServer && IsLocalPlayerGui(*Gui) &&
+				IsClientPlayerGuiSource(ScriptValue) && ScriptValue.HasSource();
 		if (Mode == RuntimeMode::Offline) return true;
 		if (Mode == RuntimeMode::NetworkClient) return ScriptValue.GetRunContext() == Enums::RunContext::Client;
 		return ScriptValue.GetRunContext() != Enums::RunContext::Client;
