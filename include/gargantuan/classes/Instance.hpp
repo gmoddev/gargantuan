@@ -19,6 +19,7 @@
 
 namespace gargantuan {
 	class DataModel;
+	namespace network { class ReplicaApplier; }
 	[[nodiscard]] InstanceProperty MakeCustomClassInstanceProperty(
 		SchemaId declaringClassId,
 		std::uint32_t definitionVersion,
@@ -35,6 +36,7 @@ namespace gargantuan {
 
 	  private:
 		friend class MutationGateway;
+		friend class network::ReplicaApplier;
 		void SetParentInternal(std::optional<std::shared_ptr<Instance>> Value,
 			std::vector<std::shared_ptr<Instance>> *DeferredNotifications);
 		void NotifyParentChanged(const std::shared_ptr<Instance> &SelfValue,
@@ -46,6 +48,7 @@ namespace gargantuan {
 		std::vector<std::string> DetachedTags;
 		SchemaId RuntimeSchemaClassId{};
 		std::unordered_map<std::string, std::shared_ptr<Signal<std::monostate>>> AttributeChangedSignals;
+		bool ReplicaMaterialization = false;
 
 	  public:
 		std::weak_ptr<Instance> ParentReference;
@@ -146,6 +149,7 @@ namespace gargantuan {
 		void BindRuntimeSchemaClass(SchemaId classId);
 		[[nodiscard]] ObjectId GetObjectId() const;
 		[[nodiscard]] bool IsDestroying() const { return DestroyingState; }
+		[[nodiscard]] bool IsReplicaMaterialization() const { return ReplicaMaterialization; }
 	);
 
 	template <typename Subclass>

@@ -367,6 +367,8 @@ namespace {
 		Image->SetParent(Template.Root);
 		Image->SetArchivable(true);
 		const auto ImageRevision = Game->GetAuthoritativeRevision();
+		const auto PositionSignal = Template.Button->GetPropertyChangedSignal("Position");
+		const auto OriginalConnections = PositionSignal->Connections.size();
 		{
 			GuiRuntime Preview(Game, std::filesystem::path(DefaultGuiFontPath), GuiRuntimeMode::AuthoringPreview);
 			Preview.SetViewport({800, 600, 1.0f, {}});
@@ -395,7 +397,14 @@ namespace {
 				Game->GetAuthoritativeRevision() == ImageRevision,
 				"preview never registers for runtime input or mutates authored geometry and revision");
 			Activation->Disconnect();
+			Template.Button->SetParent(nullptr);
+			Template.Button->SetParent(Template.Root);
+			Check(PositionSignal->Connections.size() == OriginalConnections + 1,
+				"moving a preview control removes its old layout observation before it is registered again");
 		}
+		Check(PositionSignal->Connections.size() == OriginalConnections,
+			"preview retirement disconnects observers on authored objects that remain open");
+		Template.Button->SetPosition(UDim2::fromOffset(24, 30));
 		auto PlayersService = std::dynamic_pointer_cast<Players>(Game->GetService("Players"));
 		auto First = PlayersService->CreateSessionPlayer({"test", "gui-first"});
 		auto Second = PlayersService->CreateSessionPlayer({"test", "gui-second"});
@@ -412,6 +421,34 @@ namespace {
 			!FindNode(Layout, SecondButton->GetObjectId()) && !FindNode(Layout, Template.Button->GetObjectId()) &&
 			FindNode(Layout, Legacy.Button->GetObjectId()),
 			"runtime projects the matching PlayerGui and legacy roots while templates and other owners stay out");
+		const auto AddFocusTarget = [&] {
+			const auto Target = std::make_shared<TextBox>();
+			Target->SetSize(UDim2::fromOffset(160, 32));
+			Target->SetParent(FirstGui->FindFirstChildOfClass("ScreenGui", false));
+			return Target;
+		};
+		const auto FirstFocus = AddFocusTarget();
+		const auto RequestedFocus = AddFocusTarget();
+		const auto RedirectedFocus = AddFocusTarget();
+		(void)Runtime.Reconcile();
+		FirstFocus->CaptureFocus();
+		std::vector<std::string_view> FocusEvents;
+		const auto Lost = FirstFocus->FocusLost->Connect([&](std::monostate) {
+			FocusEvents.emplace_back("FirstLost");
+			RedirectedFocus->CaptureFocus();
+		});
+		const auto UnexpectedGain = RequestedFocus->Focused->Connect([&](std::monostate) { FocusEvents.emplace_back("RequestedGained"); });
+		const auto UnexpectedLoss = RequestedFocus->FocusLost->Connect([&](std::monostate) { FocusEvents.emplace_back("RequestedLost"); });
+		const auto RedirectedGain = RedirectedFocus->Focused->Connect([&](std::monostate) { FocusEvents.emplace_back("RedirectedGained"); });
+		const auto RedirectedLoss = RedirectedFocus->FocusLost->Connect([&](std::monostate) {
+			FocusEvents.emplace_back("RedirectedLost");
+			RequestedFocus->CaptureFocus();
+		});
+		RequestedFocus->CaptureFocus();
+		Runtime.ClearTransientState();
+		Check(FocusEvents == std::vector<std::string_view>{"FirstLost", "RedirectedGained", "RedirectedLost"},
+			"an owner GUI can redirect focus without a stale notification and clear focus without reacquiring it");
+		for (const auto &Observer : {Lost, UnexpectedGain, UnexpectedLoss, RedirectedGain, RedirectedLoss}) Observer->Disconnect();
 		Game->Destroy();
 	}
 

@@ -73,6 +73,10 @@ namespace gargantuan {
 			return std::isfinite(Result) ? Result : 0.0f;
 		}
 
+		GuiRect ClipToBounds(const std::optional<GuiRect> &ParentClip, const GuiRect &Bounds) {
+			return ParentClip ? GuiRect::Intersect(*ParentClip, Bounds).value_or(GuiRect{}) : Bounds;
+		}
+
 		GuiRect TransformBounds(const GuiTransform &Transform, const GuiRect &Bounds) {
 			const std::array<Vector2, 4> Corners{
 				Transform.Apply({Bounds.X, Bounds.Y}),
@@ -93,7 +97,8 @@ namespace gargantuan {
 			return {MinimumX, MinimumY, MaximumX - MinimumX, MaximumY - MinimumY};
 		}
 
-		bool SameClip(const std::optional<RenderUiClipRect> &Left, const std::optional<RenderUiClipRect> &Right) {
+		template <typename Rect>
+		bool SameClip(const std::optional<Rect> &Left, const std::optional<Rect> &Right) {
 			if (Left.has_value() != Right.has_value()) return false;
 			if (!Left) return true;
 			return Left->X == Right->X && Left->Y == Right->Y && Left->Width == Right->Width &&
@@ -248,7 +253,21 @@ namespace gargantuan {
 		GuiTextSystem Text;
 		std::function<void()> DescendantBinding;
 		SignalConnection::Pointer DescendantRemovedConnection;
-		std::unordered_map<ObjectId, std::vector<SignalConnection::Pointer>> Observers;
+		struct ObservedSignals {
+			struct Entry {
+				std::weak_ptr<BaseSignal> Signal;
+				SignalConnection::Pointer Connection;
+			};
+			std::vector<Entry> Entries;
+			~ObservedSignals() {
+				for (const auto &Entry : Entries) {
+					if (!Entry.Connection) continue;
+					Entry.Connection->Disconnect();
+					if (const auto Signal = Entry.Signal.lock()) std::erase(Signal->Connections, Entry.Connection);
+				}
+			}
+		};
+		std::unordered_map<ObjectId, ObservedSignals> Observers;
 		std::unordered_map<ObjectId, RootCache> RootCaches;
 		std::vector<std::shared_ptr<ScreenGui>> Roots;
 		std::unordered_map<ObjectId, std::uint32_t> RootDirty;
@@ -261,6 +280,7 @@ namespace gargantuan {
 		std::unordered_map<int, ObjectId> Pressed;
 		std::unordered_map<int, ObjectId> Captured;
 		std::unordered_map<ObjectId, ObjectId> FocusedByRoot;
+		std::uint64_t FocusRequestSerial = 0;
 		std::unordered_map<ObjectId, TextEditingState> TextEditing;
 		std::unordered_map<int, ScrollGesture> ScrollGestures;
 		ObjectId KeyboardPressed;
@@ -349,10 +369,17 @@ namespace gargantuan {
 			return Object->FindFirstAncestorWhichIsA("ScreenGui") != nullptr;
 		}
 
+		template <typename Service>
+		std::shared_ptr<Service> FindAttachedService() const {
+			for (const auto &Child : World->Children) {
+				if (auto Match = std::dynamic_pointer_cast<Service>(Child); Match && !Match->GetDestroyed()) return Match;
+			}
+			return nullptr;
+		}
+
 		void RefreshScope() {
 			if (Mode == GuiRuntimeMode::Runtime) {
-				const auto PlayersService = std::dynamic_pointer_cast<Players>(
-					World->FindFirstChildOfClass("Players", false));
+				const auto PlayersService = FindAttachedService<Players>();
 				const auto LocalPlayer = PlayersService ? PlayersService->GetLocalPlayer().value_or(nullptr) : nullptr;
 				const auto Next = LocalPlayer ? LocalPlayer->GetObjectId() : ObjectId{};
 				if (ProjectedPlayer != Next) {
@@ -364,8 +391,7 @@ namespace gargantuan {
 
 			// The editor publishes the canonical stream once for scene materials
 			// and GUI images. Only the text atlas and default font are preview-owned.
-			const auto Source = std::dynamic_pointer_cast<AssetService>(
-				World->FindFirstChildOfClass("AssetService", false));
+			const auto Source = FindAttachedService<AssetService>();
 			if (Source != AuthoringAssets) {
 				AuthoringAssets = Source;
 				AssetChangeSequence = 0;
@@ -422,13 +448,14 @@ namespace gargantuan {
 		void Observe(const std::shared_ptr<Instance> &Object) {
 			if (!Object || !std::dynamic_pointer_cast<GuiBase>(Object)) return;
 			const auto Id = Object->GetObjectId();
-			if (Observers.contains(Id)) return;
-			auto &Connections = Observers[Id];
+			const auto [Observer, Added] = Observers.try_emplace(Id);
+			if (!Added) return;
 			auto Connect = [&](std::string_view Name, std::uint32_t Domains) {
 				if (!Object->FindProperty(std::string(Name))) return;
-				Connections.push_back(Object->GetPropertyChangedSignal(std::string(Name))->Connect(
-					[this, Id, Domains](std::monostate) { Mark(Id, Domains); }
-				));
+				const auto Signal = Object->GetPropertyChangedSignal(std::string(Name));
+				auto &Entry = Observer->second.Entries.emplace_back();
+				Entry.Signal = Signal;
+				Entry.Connection = Signal->Connect([this, Id, Domains](std::monostate) { Mark(Id, Domains); });
 			};
 			for (const auto *Name : {"Position", "AnchorPoint", "AutomaticSize", "Opacity", "Rotation", "ZIndex",
 				"LayoutOrder", "ClipsDescendants", "FillDirection", "Padding"})
@@ -883,7 +910,7 @@ namespace gargantuan {
 				}
 				if (Node.Parent != NoParent && Working[Node.Parent].Object->GetClipsDescendants()) {
 					const auto ParentBounds = Working[Node.Parent].TransformedBounds;
-					Node.Clip = Node.Clip ? GuiRect::Intersect(*Node.Clip, ParentBounds) : std::optional(ParentBounds);
+					Node.Clip = ClipToBounds(Node.Clip, ParentBounds);
 				}
 
 				GuiLayoutNode Committed;
@@ -1017,7 +1044,7 @@ namespace gargantuan {
 				if (auto ParentObject = std::dynamic_pointer_cast<GuiObject>(ObjectRegistry::Get().Lookup(Existing.Parent));
 					ParentObject && ParentObject->GetClipsDescendants()) {
 					const auto ParentBounds = ParentNode.TransformedBounds;
-					Clip = Clip ? GuiRect::Intersect(*Clip, ParentBounds) : std::optional(ParentBounds);
+					Clip = ClipToBounds(Clip, ParentBounds);
 				}
 				auto Next = Existing;
 				Next.Bounds = Bounds;
@@ -1038,10 +1065,13 @@ namespace gargantuan {
 				if (auto Image = std::dynamic_pointer_cast<ImageLabel>(Object)) Working.Image = ImageAssets().ResolveImage(Image->GetImage());
 				Next.Presentation = ResolvePresentation(Working);
 				const bool NodeVisualChanged = !SameVisualPresentation(Existing.Presentation, Next.Presentation) ||
+					Existing.EffectiveVisible != Next.EffectiveVisible || Existing.EffectiveOpacity != Next.EffectiveOpacity ||
+					Existing.EffectiveLayer != Next.EffectiveLayer || !SameClip(Existing.EffectiveClip, Next.EffectiveClip) ||
 					Existing.Bounds.X != Next.Bounds.X || Existing.Bounds.Y != Next.Bounds.Y ||
 					Existing.Bounds.Width != Next.Bounds.Width || Existing.Bounds.Height != Next.Bounds.Height ||
 					Existing.Transform.M00 != Next.Transform.M00 || Existing.Transform.M01 != Next.Transform.M01 ||
-					Existing.Transform.M10 != Next.Transform.M10 || Existing.Transform.M11 != Next.Transform.M11;
+					Existing.Transform.M10 != Next.Transform.M10 || Existing.Transform.M11 != Next.Transform.M11 ||
+					Existing.Transform.Tx != Next.Transform.Tx || Existing.Transform.Ty != Next.Transform.Ty;
 				if (NodeVisualChanged) {
 					Result.VisualChanged = true;
 					PendingVisualObjects.insert(Existing.Object);
@@ -1090,8 +1120,7 @@ namespace gargantuan {
 						Node.EffectiveClip = ParentNode.EffectiveClip;
 						if (auto ParentObject = std::dynamic_pointer_cast<GuiObject>(ObjectRegistry::Get().Lookup(Node.Parent));
 							ParentObject && ParentObject->GetClipsDescendants())
-							Node.EffectiveClip = Node.EffectiveClip ? GuiRect::Intersect(*Node.EffectiveClip, ParentNode.TransformedBounds) :
-								std::optional(ParentNode.TransformedBounds);
+							Node.EffectiveClip = ClipToBounds(Node.EffectiveClip, ParentNode.TransformedBounds);
 						auto Object = std::dynamic_pointer_cast<GuiObject>(ObjectRegistry::Get().Lookup(Node.Object));
 						Node.EffectiveVisible = ParentNode.EffectiveVisible && Object && Object->GetVisible() &&
 							(!Node.EffectiveClip || !Node.EffectiveClip->IsEmpty());
@@ -1284,8 +1313,7 @@ namespace gargantuan {
 						0.55f, std::nullopt, Node.EffectiveClip)) return false;
 				}
 				if (Resolved.Text && Resolved.ContentAlpha > 0.0f) {
-					auto TextClip = Node.EffectiveClip ? GuiRect::Intersect(*Node.EffectiveClip, Node.TransformedBounds) :
-						std::optional(Node.TransformedBounds);
+						const auto TextClip = ClipToBounds(Node.EffectiveClip, Node.TransformedBounds);
 					for (const auto &Glyph : Resolved.Text->Glyphs) {
 						const GuiRect Destination{
 							Node.Bounds.X + Resolved.TextOffsetX + Glyph.Destination.X,
@@ -1363,6 +1391,7 @@ namespace gargantuan {
 						static_cast<float>(MaximumRenderViewportDimension) / std::max(Request.Width, Request.Height));
 					const auto Width = static_cast<std::uint32_t>(std::max(1.0f, std::round(Request.Width * Scale)));
 					const auto Height = static_cast<std::uint32_t>(std::max(1.0f, std::round(Request.Height * Scale)));
+					runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::ViewportExtract);
 					auto Scene = ExtractViewportScene(*Object, *ViewportAssets, Animation, Width, Height);
 					if (Scene) {
 						Scene->AssetRevision = ViewportAssetRevision;
@@ -1683,12 +1712,17 @@ namespace gargantuan {
 		}
 
 		void Focus(ObjectId Object) {
+			if (ClearingTransientState) return;
 			auto Node = Layout->NodeByObject.find(Object);
-			if (Node == Layout->NodeByObject.end() || !Layout->Nodes[Node->second].FocusEligible) return;
+			if (Node == Layout->NodeByObject.end() || !Layout->Nodes[Node->second].FocusEligible ||
+				!Layout->Nodes[Node->second].EffectiveVisible || !ObjectRegistry::Get().Lookup(Object)) return;
 			const auto Root = Layout->Nodes[Node->second].Root;
 			const ObjectId Previous = FocusedByRoot.contains(Root) ? FocusedByRoot.at(Root) : ObjectId{};
 			if (Previous == Object) return;
-			FocusedByRoot[Root] = Object;
+			const auto Request = ++FocusRequestSerial;
+			FocusedByRoot.erase(Root);
+			TextInputCommandDirty = true;
+			if (Previous.IsValid()) Mark(Previous, DirtyAccessibility | DirtyPresentation);
 			if (auto PreviousInput = std::dynamic_pointer_cast<TextBox>(ObjectRegistry::Get().Lookup(Previous))) {
 				if (auto Editing = TextEditing.find(Previous); Editing != TextEditing.end()) Editing->second.Composition.clear();
 				PreviousInput->CommitRuntimeEditing(
@@ -1696,6 +1730,7 @@ namespace gargantuan {
 			}
 			if (auto PreviousObject = std::dynamic_pointer_cast<GuiBase2d>(ObjectRegistry::Get().Lookup(Previous)))
 				PreviousObject->FocusLost->Fire({});
+			if (Request != FocusRequestSerial || RootForObject(Object) != Root) return;
 			if (auto Input = std::dynamic_pointer_cast<TextBox>(ObjectRegistry::Get().Lookup(Object))) {
 				auto &Editing = TextEditing[Object];
 				const auto Count = Utf8Boundaries(Input->GetText()).size() - 1;
@@ -1706,11 +1741,12 @@ namespace gargantuan {
 					static_cast<int>(std::max(Editing.Caret, Editing.Anchor) - std::min(Editing.Caret, Editing.Anchor)),
 					Editing.Composition);
 			}
-			if (auto NextObject = std::dynamic_pointer_cast<GuiBase2d>(ObjectRegistry::Get().Lookup(Object)))
-				NextObject->Focused->Fire({});
-			TextInputCommandDirty = true;
+			const auto NextObject = std::dynamic_pointer_cast<GuiBase2d>(ObjectRegistry::Get().Lookup(Object));
+			const auto NextRoot = FindRoot(NextObject);
+			if (!NextRoot || NextRoot->GetObjectId() != Root || Request != FocusRequestSerial || RootForObject(Object) != Root) return;
+			FocusedByRoot[Root] = Object;
 			Mark(Object, DirtyAccessibility | DirtyPresentation);
-			if (Previous.IsValid()) Mark(Previous, DirtyAccessibility | DirtyPresentation);
+			NextObject->Focused->Fire({});
 		}
 
 		void FocusNext() {
@@ -2385,6 +2421,7 @@ namespace gargantuan {
 	void GuiRuntime::ReleaseFocus(ObjectId Object) {
 		const auto Root = State->RootForObject(Object);
 		if (!Root.IsValid() || !State->FocusedByRoot.contains(Root) || State->FocusedByRoot.at(Root) != Object) return;
+		++State->FocusRequestSerial;
 		State->FocusedByRoot.erase(Root);
 		if (auto Gui = std::dynamic_pointer_cast<GuiBase2d>(ObjectRegistry::Get().Lookup(Object))) Gui->FocusLost->Fire({});
 		if (auto Editing = State->TextEditing.find(Object); Editing != State->TextEditing.end()) {
@@ -2416,6 +2453,7 @@ namespace gargantuan {
 	void GuiRuntime::ClearTransientState() {
 		if (State->ClearingTransientState) return;
 		State->ClearingTransientState = true;
+		++State->FocusRequestSerial;
 		struct ClearGuard {
 			bool &Active;
 			~ClearGuard() { Active = false; }
@@ -2423,12 +2461,9 @@ namespace gargantuan {
 		std::unordered_set<ObjectId> Changed;
 		for (const auto &[Pointer, Object] : State->Hovered) { (void)Pointer; Changed.insert(Object); }
 		for (const auto &[Pointer, Object] : State->Pressed) { (void)Pointer; Changed.insert(Object); }
-		// FocusLost can synchronously destroy the Engine or change focus. Iterate
-		// a snapshot so nested teardown and focus changes cannot invalidate us.
-		std::vector<std::pair<ObjectId, ObjectId>> Focused(State->FocusedByRoot.begin(), State->FocusedByRoot.end());
-		for (const auto &[Root, Object] : Focused) {
-			auto Current = State->FocusedByRoot.find(Root);
-			if (Current == State->FocusedByRoot.end() || Current->second != Object) continue;
+		const auto RetiredFocus = std::exchange(State->FocusedByRoot, {});
+		for (const auto &[Root, Object] : RetiredFocus) {
+			(void)Root;
 			Changed.insert(Object);
 			if (auto Gui = std::dynamic_pointer_cast<GuiBase2d>(ObjectRegistry::Get().Lookup(Object))) Gui->FocusLost->Fire({});
 		}
@@ -2449,7 +2484,6 @@ namespace gargantuan {
 		State->Pressed.clear();
 		State->Captured.clear();
 		State->ScrollGestures.clear();
-		State->FocusedByRoot.clear();
 		State->TextInputCommandDirty = true;
 		State->KeyboardPressed = {};
 		for (const auto Object : Changed) State->RefreshInteraction(Object);

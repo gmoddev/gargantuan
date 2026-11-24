@@ -1,5 +1,6 @@
 #include "gargantuan/classes/LuaSourceContainer.hpp"
 
+#include "gargantuan/assets/AssetTypes.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 
@@ -38,9 +39,42 @@ namespace gargantuan {
 
 	bool LuaSourceContainer::HydrateGuiTemplateSource(std::string Value) {
 		if (GetCurrentScriptSecurityContext().Domain != ScriptExecutionDomain::Core ||
-			GuiTemplateSourceId.empty() || (!Source.empty() && Source != Value)) return false;
+			GuiTemplateSourceId.empty() || GuiTemplateSourceDigest.empty() || GuiTemplateSourceVersion != SourceVersion ||
+			(!Source.empty() && Source != Value)) return false;
 		AssignSource(std::move(Value), false);
 		return true;
+	}
+
+	std::string LuaSourceContainer::GetSourceDigest() const {
+		return AssetContentId::Hash(std::span(
+			reinterpret_cast<const std::uint8_t *>(Source.data()), Source.size()
+		)).ToString();
+	}
+
+	std::string LuaSourceContainer::GetGuiTemplateSourceDigest() const { return GuiTemplateSourceDigest; }
+
+	void LuaSourceContainer::SetGuiTemplateSourceDigest(std::string Value) {
+		AssertCanMutate();
+		if (GetCurrentScriptSecurityContext().Domain != ScriptExecutionDomain::Core)
+			throw std::invalid_argument("GUI template source digest is engine-owned");
+		if (Value == GuiTemplateSourceDigest) return;
+		if (!GuiTemplateSourceDigest.empty() || !AssetContentId::Parse(Value))
+			throw std::invalid_argument("GUI template source digest is immutable and requires a canonical digest");
+		GuiTemplateSourceDigest = std::move(Value);
+		NotifyPropertyCommitted("GuiTemplateSourceDigest");
+	}
+
+	int LuaSourceContainer::GetGuiTemplateSourceVersion() const { return GuiTemplateSourceVersion; }
+
+	void LuaSourceContainer::SetGuiTemplateSourceVersion(int Value) {
+		AssertCanMutate();
+		if (GetCurrentScriptSecurityContext().Domain != ScriptExecutionDomain::Core)
+			throw std::invalid_argument("GUI template source version is engine-owned");
+		if (Value == GuiTemplateSourceVersion) return;
+		if (GuiTemplateSourceVersion != 0 || Value <= 0)
+			throw std::invalid_argument("GUI template source version is immutable and must be positive");
+		GuiTemplateSourceVersion = Value;
+		NotifyPropertyCommitted("GuiTemplateSourceVersion");
 	}
 
 	std::string LuaSourceContainer::GetSource() const {
@@ -56,6 +90,8 @@ namespace gargantuan {
 		if (Value <= 0) throw std::invalid_argument("Script source version must be positive");
 		if (SourceVersion == Value) return;
 		SourceVersion = Value;
+		if (IsReplicaMaterialization() && GuiTemplateSourceVersion != 0 && GuiTemplateSourceVersion != Value)
+			AssignSource({}, false);
 		NotifyPropertyCommitted("SourceVersion");
 	}
 

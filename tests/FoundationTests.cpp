@@ -471,12 +471,20 @@ namespace {
 		auto detachedPart0 = std::make_shared<Part>();
 		auto detachedPart1 = std::make_shared<Part>();
 		auto detachedWeld = std::make_shared<WeldConstraint>();
+		detachedPart0->SetName("Nested lookup Part");
 		detachedPart0->SetParent(detachedRoot);
 		detachedPart1->SetParent(detachedRoot);
 		detachedWeld->SetPart0(detachedPart0);
 		detachedWeld->SetPart1(detachedPart1);
 		detachedWeld->SetParent(detachedRoot);
 		detachedRoot->SetParent(workspace);
+		Check(!workspace->FindFirstChild("Nested lookup Part", false) &&
+			workspace->FindFirstChild("Nested lookup Part", true) == detachedPart0 &&
+			!workspace->FindFirstChildOfClass("WeldConstraint", false) &&
+			workspace->FindFirstChildOfClass("WeldConstraint", true) == detachedWeld &&
+			!workspace->FindFirstChildWhichIsA("Constraint", false) &&
+			workspace->FindFirstChildWhichIsA("Constraint", true) == detachedWeld,
+			"explicit false limits native child lookup to direct children");
 		Check(detachedPart0->GetDataModel() == game && detachedPart1->GetDataModel() == game &&
 			detachedWeld->GetDataModel() == game,
 			"first adoption validates and adopts a detached constraint subtree atomically");
@@ -5243,7 +5251,7 @@ namespace {
 		const auto CreatedProjectDocument = Json::parse(CreatedProjectStream);
 		CreatedProjectStream.close();
 		Check(CreatedProjectDocument["Version"] == 5 && CreatedProjectDocument["Name"] == "Created Project" &&
-			CreatedProjectDocument["Children"].size() == 6 &&
+			CreatedProjectDocument["Children"].size() == 7 &&
 			std::ranges::any_of(CreatedProjectDocument["Children"], [](const Json &Child) {
 				return Child["ClassName"] == "Workspace" && Child["Name"] == "Workspace";
 			}) &&
@@ -5261,15 +5269,18 @@ namespace {
 			}) &&
 			std::ranges::any_of(CreatedProjectDocument["Children"], [](const Json &Child) {
 				return Child["ClassName"] == "Players" && Child["Name"] == "Players";
+			}) &&
+			std::ranges::any_of(CreatedProjectDocument["Children"], [](const Json &Child) {
+				return Child["ClassName"] == "StarterGui" && Child["Name"] == "StarterGui";
 			}),
-			"CreateProject persists all six canonical authoring services, including Players policy, in project format v5");
+			"CreateProject persists all seven canonical authoring services, including Players policy and StarterGui, in project format v5");
 		auto ExistingProjectCreate = call("CreateProject", {
 			{"Destination", CreatedRoot.string()}, {"Name", "Overwrite Attempt"}
 		}, "test-token");
 		Check(!ExistingProjectCreate["Ok"].get<bool>() && ExistingProjectCreate["Error"]["Code"] == "ExistingProject",
 			"CreateProject never overwrites an existing Gargantuan project");
 		auto CreatedSnapshot = call("GetSnapshot", Json::object(), "test-token");
-		Check(CreatedSnapshot["Ok"].get<bool>() && CreatedSnapshot["Result"]["Snapshot"]["Objects"].size() == 7,
+		Check(CreatedSnapshot["Ok"].get<bool>() && CreatedSnapshot["Result"]["Snapshot"]["Objects"].size() == 8,
 			"the minimum new project is immediately available through the normal authoritative snapshot path");
 		auto CreatedWorkspace = std::find_if(
 			CreatedSnapshot["Result"]["Snapshot"]["Objects"].begin(),
@@ -6937,6 +6948,36 @@ namespace {
 					{"Generation", Frame["Result"]["Generation"].get<std::uint64_t>() + 1}}, "test-token");
 				Check(!WrongGeneration["Ok"].get<bool>() && WrongGeneration["Error"]["Code"] == "StaleFrame",
 					"GUI preview rejects a frame from another viewport generation");
+				const auto InvalidRoot = temporaryRoot / "invalid-open";
+				const auto InvalidConfig = InvalidRoot / ".gargantuan";
+				std::filesystem::create_directories(InvalidConfig);
+				{
+					std::ofstream InvalidDocument(InvalidConfig / "project.instance.json", std::ios::binary);
+					InvalidDocument << "{\"Version\":5,";
+				}
+				const auto InvalidPreRun = InvalidConfig / "prerun.luau";
+				std::filesystem::copy_file(temporaryRoot / ".gargantuan" / "prerun.luau", InvalidPreRun);
+				const auto &Lifecycle = GetRuntimeSchemaLifecycle();
+				const auto Registry = Lifecycle.GetActiveRegistry();
+				const auto SchemaGeneration = Lifecycle.GetActiveGeneration();
+				for (const bool MatchingSchema : {true, false}) {
+					if (!MatchingSchema) std::filesystem::remove(InvalidPreRun);
+					const auto FailedOpen = call("OpenProject", {{"Root", InvalidRoot.string()}}, "test-token");
+					const auto CurrentPreview = call("GetGuiPreview", Json::object(), "test-token");
+					const auto CurrentChanges = call("PollChanges", Json::object(), "test-token");
+					const auto RetainedPick = call("PickGuiPreview", {{"X", 120.0}, {"Y", 10.0},
+						{"FrameNumber", Frame["Result"]["LatestSequence"]}, {"Generation", Frame["Result"]["Generation"]}},
+						"test-token");
+					Check(!FailedOpen["Ok"].get<bool>() && FailedOpen["Error"]["Code"] == "RequestRejected" &&
+						GetRuntimeSchemaLifecycle().GetActiveRegistry() == Registry &&
+						GetRuntimeSchemaLifecycle().GetActiveGeneration() == SchemaGeneration &&
+						call("GetProjectState", Json::object(), "test-token")["Result"] == Baseline["Result"] &&
+						CurrentPreview["Result"] == Enabled["Result"] &&
+						CurrentChanges["Ok"].get<bool>() && CurrentChanges["Result"]["Records"].empty() &&
+						RetainedPick["Ok"].get<bool>() && RetainedPick["Result"] == Pick["Result"],
+						MatchingSchema ? "malformed same-schema replacement preserves the document, cursor and captured preview"
+							: "cross-schema JSON preflight preserves the document, cursor and captured preview");
+				}
 				const auto Disabled = call("SetGuiPreview", {{"Enabled", false}}, "test-token");
 				host.PumpViewportPresentationForTesting();
 				Check(Disabled["Ok"].get<bool>() && Disabled["Result"]["Enabled"] == false &&

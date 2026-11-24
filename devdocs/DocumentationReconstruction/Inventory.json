@@ -2300,6 +2300,27 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "devdocs/CurrentArchitecture/PlayerGui.md",
+      "Purpose": "StarterGui and PlayerGui",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "assets/classes/PlayerGui.luau",
+        "assets/services/StarterGui.luau",
+        "src/classes/Player.cpp",
+        "src/gui/GuiRuntime.cpp",
+        "src/network/GameSession.cpp",
+        "src/network/ReplicationCoordinator.cpp",
+        "src/network/ReplicationRelevance.cpp",
+        "src/packaging/PackageBuilder.cpp",
+        "src/services/Players.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "devdocs/CurrentArchitecture/PlayerRuntime.md",
       "Purpose": "Player runtime contracts",
       "LastMeaningfulUpdate": {
