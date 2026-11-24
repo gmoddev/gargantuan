@@ -121,6 +121,7 @@ namespace {
 			auto Character = std::make_shared<KinematicCharacter>();
 			Character->SetParent(WorkspaceValue);
 			First->SetCharacter(Character);
+			return Character;
 		};
 		auto ServerReset = std::make_shared<ScreenGui>();
 		ServerReset->SetResetOnSpawn(true);
@@ -133,6 +134,38 @@ namespace {
 		Check(NewReset && NewReset != OldReset && !NewReset->GetEnabled() && OldReset->GetDestroyed() &&
 			ServerReset->GetDestroyed() && Gui->FindFirstChild("PlayerState", false) == Keep,
 			"respawn recreates current reset templates, removes ad hoc reset roots, and preserves persistent runtime state");
+		if (!NewReset) return;
+		std::vector<std::shared_ptr<Character>> AddedCharacters;
+		bool LatestGuiObserved = false;
+		auto CharacterAdded = First->CharacterAdded->Connect([&](const auto &Value) {
+			AddedCharacters.push_back(Value);
+			auto Root = std::dynamic_pointer_cast<ScreenGui>(Gui->FindFirstChild("Reset", false));
+			LatestGuiObserved = Root && Root->GetEnabled();
+		});
+		std::shared_ptr<KinematicCharacter> Nested;
+		NewReset->Destroying->Once([&](std::monostate) {
+			ResetTemplate->SetEnabled(true);
+			Nested = Spawn();
+		});
+		const auto Displaced = Spawn();
+		Check(Nested && First->GetCharacter().value_or(nullptr) == Nested && Displaced->GetDestroyed() &&
+			AddedCharacters == std::vector<std::shared_ptr<Character>>{Nested} && LatestGuiObserved,
+			"a respawn requested from GUI Destroying coalesces to the live Character and its current template");
+
+		AddedCharacters.clear();
+		std::shared_ptr<ScreenGui> Stale;
+		Gui->ChildAdded->Once([&](const auto &Child) {
+			Stale = std::dynamic_pointer_cast<ScreenGui>(Child);
+			if (Stale) Stale->SetResetOnSpawn(false);
+			Nested = Spawn();
+		});
+		const auto ReplacedDuringAttachment = Spawn();
+		const auto LatestReset = std::dynamic_pointer_cast<ScreenGui>(Gui->FindFirstChild("Reset", false));
+		Check(Nested && First->GetCharacter().value_or(nullptr) == Nested && ReplacedDuringAttachment->GetDestroyed() &&
+			Stale && Stale->GetDestroyed() && LatestReset && LatestReset != Stale && Gui->GetChildren().size() == 2 &&
+			AddedCharacters == std::vector<std::shared_ptr<Character>>{Nested},
+			"GUI ChildAdded reentry retires stale attached clones even if callback changes their reset policy");
+		CharacterAdded->Disconnect();
 
 		First->SetArchivable(true);
 		Gui->MarkPersistenceSubtreeArchivable();
@@ -155,8 +188,8 @@ namespace {
 		}
 		Check(Blocked && !Gui->GetDestroyed(), "Client domain cannot destroy the lifecycle-owned GUI container");
 
-		if (NewReset) {
-			auto Removed = NewReset->Destroying->Once([&](std::monostate) { First->Destroy(); });
+		if (LatestReset) {
+			auto Removed = LatestReset->Destroying->Once([&](std::monostate) { First->Destroy(); });
 			Spawn();
 			Check(First->GetDestroyed() && Gui->GetDestroyed() && !Gui->GetParent(),
 				"player retirement from a GUI removal callback aborts replacement provisioning");

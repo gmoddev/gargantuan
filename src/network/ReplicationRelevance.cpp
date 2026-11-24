@@ -34,6 +34,8 @@
 
 namespace gargantuan::network {
 	namespace {
+		constexpr auto ViewportFrameId = SchemaId::FromNativeName("Engine", "ViewportFrame");
+
 		template <typename Value> void SaturatingIncrement(Value &Counter, Value Amount = 1) {
 			Counter = Amount > std::numeric_limits<Value>::max() - Counter ? std::numeric_limits<Value>::max()
 																		   : Counter + Amount;
@@ -464,7 +466,7 @@ namespace gargantuan::network {
 				Gui = std::dynamic_pointer_cast<PlayerGui>(Current);
 				if (Gui) break;
 				if (const auto *Class = InstanceClassRegistry::GetDefinition(Current.get()))
-					ViewportScene = ViewportScene || Class->Id == SchemaId::FromNativeName("Engine", "ViewportFrame");
+					ViewportScene = ViewportScene || Class->Id == ViewportFrameId;
 			}
 			if (Gui) {
 				const auto Owner = FindPlayerGuiOwner(*Gui);

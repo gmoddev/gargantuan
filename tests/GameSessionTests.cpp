@@ -2563,6 +2563,11 @@ end)
 		WrongRole->SetName("WrongRole");
 		WrongRole->SetGuiTemplateSourceId(Source->GetSourceId());
 		WrongRole->SetParent(LateContent);
+		auto WrongContext = std::make_shared<Script>();
+		WrongContext->SetName("WrongContext");
+		WrongContext->SetRunContext(Enums::RunContext::Server);
+		WrongContext->SetGuiTemplateSourceId(Source->GetSourceId());
+		WrongContext->SetParent(LateContent);
 		auto UntrustedScript = std::make_shared<Script>();
 		UntrustedScript->SetName("UntrustedScript");
 		UntrustedScript->SetRunContext(Enums::RunContext::Client);
@@ -2574,7 +2579,10 @@ end)
 			LateReplica->FindFirstChild("WrongRole", false)) : nullptr;
 		const auto UntrustedReplica = LateReplica ? std::dynamic_pointer_cast<Script>(
 			LateReplica->FindFirstChild("UntrustedScript", false)) : nullptr;
+		const auto WrongContextReplica = LateReplica ? std::dynamic_pointer_cast<Script>(
+			LateReplica->FindFirstChild("WrongContext", false)) : nullptr;
 		Check(LateReplica && WrongReplica && !WrongReplica->HasSource() &&
+			WrongContextReplica && !WrongContextReplica->HasSource() &&
 			UntrustedReplica && !UntrustedReplica->HasSource() && !LateReplica->GetAttributeValue("UntrustedRan") &&
 			!OtherGui->FindFirstChild("ServerAdded", false),
 			"runtime-created private content reaches only the owner and code with wrong or missing provenance stays inactive");

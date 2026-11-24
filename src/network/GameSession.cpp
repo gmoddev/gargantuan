@@ -918,8 +918,16 @@ namespace gargantuan::network {
 				FailSession({DisconnectReason::ResourceExhaustion, "Injected replication-peer acquisition failure"});
 				return;
 			}
+			const auto LocalPeer = PrimaryConnection ? Peers.find(*PrimaryConnection) : Peers.end();
+			const auto TrustedOwner = LocalPeer != Peers.end() ? LocalPeer->second.PlayerObject : ObjectId{};
+			bool CharacterProjected = false;
 			for (const auto &Operation : Frame->Operations) {
 				const auto Object = ReplicationObject(Operation.Intent);
+				if (Object == TrustedOwner) {
+					const auto *Property = std::get_if<PropertyReplicationUpdate>(&Operation.Intent);
+					CharacterProjected = CharacterProjected || IsPublishReplication(Operation.Intent) ||
+						(Property && Property->PropertyName == "Character");
+				}
 				if (IsPublishReplication(Operation.Intent)) {
 					ClientKnownObjects.insert(Object);
 					if (Remotes && !Remotes->MarkMaterialized(Message.Connection, Object)) {
@@ -1004,10 +1012,11 @@ namespace gargantuan::network {
 				});
 				return;
 			}
-			TryFinalizeClientBootstrap();
+			TryFinalizeClientBootstrap(CharacterProjected);
 		}
 
-		void ReconcileClientGui(const std::shared_ptr<Player> &Owner, const std::shared_ptr<PlayerGui> &Gui) {
+		void ReconcileClientGui(const std::shared_ptr<Player> &Owner, const std::shared_ptr<PlayerGui> &Gui,
+			bool CharacterProjected) {
 			if (Owner->GetDestroyed() || Owner->IsDestroying() || Gui->GetDestroyed() || Gui->IsDestroying()) return;
 			for (const auto Object : PendingClientGuiCode) {
 				const auto Source = std::dynamic_pointer_cast<LuaSourceContainer>(Replica.Resolve(Object));
@@ -1020,6 +1029,7 @@ namespace gargantuan::network {
 			}
 			PendingClientGuiCode.clear();
 
+			if (!CharacterProjected) return;
 			const auto Character = Owner->GetCharacter().value_or(nullptr);
 			if (!Character || Character->GetDestroyed() || Character->IsDestroying()) return;
 			const auto CharacterId = Character->GetObjectId();
@@ -1046,7 +1056,7 @@ namespace gargantuan::network {
 			}
 		}
 
-		void TryFinalizeClientBootstrap() {
+		void TryFinalizeClientBootstrap(bool CharacterProjected = false) {
 			if (!PrimaryConnection || !BaselineApplied) return;
 			auto PeerIterator = Peers.find(*PrimaryConnection);
 			if (PeerIterator == Peers.end() || PeerIterator->second.Phase != PeerPhase::Accepted ||
@@ -1059,6 +1069,7 @@ namespace gargantuan::network {
 			if (!PlayerValue) return;
 			const auto Gui = PlayerValue->GetPlayerGui().value_or(nullptr);
 			if (!Gui) return;
+			const bool InitialLocalBinding = PlayersValue && !PlayersValue->GetLocalPlayer();
 			if (!Root || !PlayersValue || PeerIterator->second.PlayerId == 0 ||
 				static_cast<std::uint32_t>(PlayerValue->GetPlayerId()) != PeerIterator->second.PlayerId ||
 				!PlayersValue->SetTrustedLocalPlayer(PlayerValue)) {
@@ -1069,7 +1080,7 @@ namespace gargantuan::network {
 				);
 				return;
 			}
-			ReconcileClientGui(PlayerValue, Gui);
+			ReconcileClientGui(PlayerValue, Gui, InitialLocalBinding || CharacterProjected);
 			if (InjectFailure(detail::GameSessionFailurePoint::LocalPlayerResolution)) {
 				FailSession({DisconnectReason::ResourceExhaustion, "Injected LocalPlayer resolution failure"});
 				return;

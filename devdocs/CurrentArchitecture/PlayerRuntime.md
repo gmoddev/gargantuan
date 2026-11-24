@@ -112,6 +112,10 @@ invent a local player. Constructing a runtime `Engine` creates exactly one
 parents it under `Players`, and fires `PlayerAdded`. `GetPlayers()` returns live
 players in deterministic identity order.
 
+Local Play and session players receive a runtime-owned `PlayerGui` before
+`PlayerAdded`. GUI provisioning and respawn policy are documented in
+[StarterGui and PlayerGui](PlayerGui.md).
+
 `PlayerId` is gameplay identity. It is not an EditorHost connection ID,
 transport peer ID, socket, authentication identity, or object address. No
 current code connects `Player` to gargantuan-node, PlayerAuth, matchmaking, or

@@ -27,6 +27,9 @@
 
 namespace gargantuan::network {
 	namespace {
+		constexpr auto AudioMixServiceId = SchemaId::FromNativeName("Engine", "AudioMixService");
+		constexpr auto PlayerGuiId = SchemaId::FromNativeName("Engine", "PlayerGui");
+		constexpr auto ViewportFrameId = SchemaId::FromNativeName("Engine", "ViewportFrame");
 		constexpr std::size_t MaximumDependencyClosureDepth = 64;
 		constexpr std::size_t MaximumDependencyClosureObjects = MaximumPeerDesiredObjects;
 		constexpr std::size_t MaximumCatalogRefreshBatches = 16;
@@ -769,13 +772,12 @@ namespace gargantuan::network {
 			const auto *Definition = Schema.FindClassById(Publication.ClassSchemaId);
 			if (!Definition) throw std::runtime_error("Replication service class definition is missing");
 			if (Definition->ServicePolicy == SchemaServicePolicy::ServerOnly ||
-				Publication.ClassSchemaId == SchemaId::FromNativeName("Engine", "AudioMixService")) return false;
-			if (Publication.ClassSchemaId == SchemaId::FromNativeName("Engine", "PlayerGui")) {
+				Publication.ClassSchemaId == AudioMixServiceId) return false;
+			if (Publication.ClassSchemaId == PlayerGuiId) {
 				if (!LocalPlayer.IsValid() || Publication.Parent != LocalPlayer) return false;
 				OwnedGui = true;
 			}
-			ViewportScene = ViewportScene ||
-				Publication.ClassSchemaId == SchemaId::FromNativeName("Engine", "ViewportFrame");
+			ViewportScene = ViewportScene || Publication.ClassSchemaId == ViewportFrameId;
 			if (!Publication.Parent) break;
 			Object = *Publication.Parent;
 		}

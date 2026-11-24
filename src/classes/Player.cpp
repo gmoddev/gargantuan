@@ -146,31 +146,79 @@ namespace gargantuan {
 		GuiProvisionedHere = true;
 	}
 
-	void Player::ResetGuiOnCharacter(const std::shared_ptr<Character> &Replacement) {
-		const auto Container = GetPlayerGui().value_or(nullptr);
-		if (!Container || ResettingGui || CharacterValue != Replacement || Replacement->GetDestroyed() ||
-			Replacement->IsDestroying()) return;
+	void Player::ResetGuiOnCharacter(GuiResetRequest Request) {
+		const auto IsCurrent = [this](const GuiResetRequest &Candidate) {
+			return CharacterDestroyingConnection == Candidate.Binding && CharacterValue == Candidate.CharacterValue &&
+				!Candidate.CharacterValue->GetDestroyed() && !Candidate.CharacterValue->IsDestroying();
+		};
+		if (!IsCurrent(Request)) return;
+		PendingGuiReset = std::move(Request);
+		if (ResettingGui) return;
+
 		struct ResetGuard {
 			bool &Flag;
 			explicit ResetGuard(bool &Value) : Flag(Value) { Flag = true; }
 			~ResetGuard() { Flag = false; }
-		} Guard(ResettingGui);
-		try {
-			const auto Roots = PrepareGuiTemplates(GetDataModel(), true);
-			auto Existing = Container->GetChildren();
-			for (const auto &Child : Existing) {
-				if (Container->GetDestroyed() || Container->IsDestroying()) return;
-				if (const auto Root = std::dynamic_pointer_cast<ScreenGui>(Child);
-					Root && Root->GetResetOnSpawn() && Root->GetParent().value_or(nullptr) == Container)
-					Root->Destroy();
+		};
+		std::optional<GuiResetRequest> Completed;
+		{
+			ResetGuard Guard(ResettingGui);
+			constexpr std::size_t MaximumReentrantResets = 8;
+			for (std::size_t Attempt = 0; PendingGuiReset && Attempt < MaximumReentrantResets; ++Attempt) {
+				auto Current = std::exchange(PendingGuiReset, std::nullopt).value();
+				if (!IsCurrent(Current)) continue;
+				const auto Container = GetPlayerGui().value_or(nullptr);
+				if (!Container) {
+					Completed = std::move(Current);
+					continue;
+				}
+				const auto KeepProvisioning = [&] {
+					return IsCurrent(Current) && !Container->GetDestroyed() && !Container->IsDestroying();
+				};
+				std::vector<std::shared_ptr<ScreenGui>> Published;
+				try {
+					const auto Roots = PrepareGuiTemplates(GetDataModel(), true);
+					Published.reserve(Roots.size());
+					for (const auto &Child : Container->GetChildren()) {
+						if (!KeepProvisioning()) break;
+						if (const auto Root = std::dynamic_pointer_cast<ScreenGui>(Child);
+							Root && Root->GetResetOnSpawn() && Root->GetParent().value_or(nullptr) == Container)
+							Root->Destroy();
+					}
+					for (const auto &Root : Roots) {
+						if (!KeepProvisioning()) break;
+						Published.push_back(Root);
+						Root->SetParent(Container);
+					}
+				} catch (const std::exception &Error) {
+					LOG_WARN(App, "[Gui:Provision] PlayerGui reset failed: %.160s", Error.what());
+				} catch (...) {
+					LOG_WARN(App, "[Gui:Provision] PlayerGui reset failed");
+				}
+				if (IsCurrent(Current)) {
+					Completed = std::move(Current);
+					continue;
+				}
+				// A callback committed a different Character. Retire only roots
+				// this stale pass attached, even if callback code changed their flags.
+				for (const auto &Root : Published) {
+					if (Root->GetDestroyed() || Root->IsDestroying() || !Root->GetDataModel()) continue;
+					try {
+						Root->Destroy();
+					} catch (const std::exception &Error) {
+						LOG_WARN(App, "[Gui:Provision] Stale GUI cleanup failed: %.160s", Error.what());
+					} catch (...) {
+						LOG_WARN(App, "[Gui:Provision] Stale GUI cleanup failed");
+					}
+				}
 			}
-			for (const auto &Root : Roots) {
-				if (Container->GetDestroyed() || Container->IsDestroying()) return;
-				Root->SetParent(Container);
+			if (PendingGuiReset) {
+				LOG_WARN(App, "[Gui:Provision] PlayerGui reset reentry limit exceeded");
+				Completed = std::exchange(PendingGuiReset, std::nullopt);
 			}
-		} catch (const std::exception &Error) {
-			LOG_WARN(App, "[Gui:Provision] PlayerGui reset failed: %.160s", Error.what());
 		}
+		if (Completed && Completed->NotifyCharacterAdded && IsCurrent(*Completed))
+			CharacterAdded->Fire(Completed->CharacterValue);
 	}
 
 	void Player::SetReplicatedPlayerId(int Value) {
@@ -367,6 +415,8 @@ namespace gargantuan {
 
 		// A committed property observer can start another assignment. Keep the
 		// previous Character reserved until its own retirement is complete.
+		bool ResetGui = false;
+		std::exception_ptr CallbackFailure;
 		{
 			struct RetirementGuard {
 				const CharacterRetirement *&Head;
@@ -379,15 +429,18 @@ namespace gargantuan {
 			if (CharacterDestroyingConnection) CharacterDestroyingConnection->Disconnect();
 			CharacterDestroyingConnection = ReplacementConnection;
 			CharacterValue = Replacement;
-			const bool ResetGui = Replacement && GuiProvisionedHere && Source == CharacterWriteSource::Gameplay &&
+			ResetGui = Replacement && GuiProvisionedHere && Source == CharacterWriteSource::Gameplay &&
 				std::exchange(HadCharacterForGui, true);
-			std::exception_ptr CallbackFailure;
 			CaptureFirstCallbackFailure(CallbackFailure, [&] { NotifyPropertyCommitted("Character"); });
 			if (Previous && !Previous->GetDestroyed() && !Previous->IsDestroying())
 				CaptureFirstCallbackFailure(CallbackFailure, [&] { Previous->Destroy(); });
-			if (ResetGui) ResetGuiOnCharacter(Replacement);
-			if (CallbackFailure) std::rethrow_exception(CallbackFailure);
 		}
+		if (ResetGui)
+			CaptureFirstCallbackFailure(CallbackFailure, [&] {
+				ResetGuiOnCharacter({Replacement, ReplacementConnection, !CallbackFailure});
+			});
+		if (CallbackFailure) std::rethrow_exception(CallbackFailure);
+		if (ResetGui) return; // A coalesced reset delivers the matching CharacterAdded.
 
 		if (ReplacementConnection && CharacterDestroyingConnection == ReplacementConnection &&
 			!Replacement->GetDestroyed() && !Replacement->IsDestroying())
