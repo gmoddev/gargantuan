@@ -2,6 +2,7 @@
 
 #include "gargantuan/audio/AudioBackend.hpp"
 #include "gargantuan/datatypes/CFrame.hpp"
+#include "gargantuan/runtime/RuntimeMode.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -11,6 +12,7 @@
 
 namespace gargantuan {
 	class AssetService;
+	class AudioMixService;
 	class SemanticSpatialResolver;
 	class Sound;
 
@@ -44,6 +46,8 @@ namespace gargantuan {
 		AudioRuntime(const AudioRuntime &) = delete;
 		AudioRuntime &operator=(const AudioRuntime &) = delete;
 
+		// Trusted host composition for the current local DataModel and mode.
+		void AttachMixService(const std::shared_ptr<AudioMixService> &Service, RuntimeMode Mode);
 		void RegisterSound(const std::shared_ptr<Sound> &SoundValue);
 		void Step(const CFrame &Listener);
 		void Shutdown();

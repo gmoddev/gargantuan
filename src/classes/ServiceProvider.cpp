@@ -1,11 +1,14 @@
 #include "gargantuan/classes/ServiceProvider.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
+#include "gargantuan/services/AudioMixService.hpp"
 
 #include <SDL3/SDL.h>
 #include <optional>
 
 namespace gargantuan {
 	namespace {
+		constexpr auto AudioMixServiceId = SchemaId::FromNativeName("Engine", "AudioMixService");
+
 		bool IsCanonicalService(
 			ServiceProvider *Provider,
 			const std::shared_ptr<Instance> &Service,
@@ -26,9 +29,23 @@ namespace gargantuan {
 		if (Class && Class->ServicePolicy == SchemaServicePolicy::ServerOnly &&
 			GetCurrentScriptSecurityContext().Domain == ScriptExecutionDomain::Client) return std::nullopt;
 		auto Existing = Services.find(Name);
-		if (Existing == Services.end()) return std::nullopt;
-		if (IsCanonicalService(this, Existing->second, Definition->second)) return Existing->second;
-		Services.erase(Existing);
+		const auto IsAvailable = [&](const std::shared_ptr<Instance> &Service) {
+			if (!IsCanonicalService(this, Service, Definition->second)) return false;
+			return Definition->second != AudioMixServiceId || static_cast<AudioMixService &>(*Service).HasAttachedRuntime();
+		};
+		if (Existing != Services.end()) {
+			if (IsAvailable(Existing->second)) return Existing->second;
+			Services.erase(Existing);
+		}
+		// Local presentation services are installed by the runtime host, so no
+		// script can materialize a mix in an authoring world or on the server.
+		if (Definition->second == AudioMixServiceId) {
+			auto Attached = FindFirstChildOfClass("AudioMixService", false);
+			if (IsAvailable(Attached)) {
+				Services.emplace(Name, Attached);
+				return Attached;
+			}
+		}
 		return std::nullopt;
 	}
 
@@ -38,6 +55,7 @@ namespace gargantuan {
 		auto Registered = Definitions.find(Name);
 		if (Registered == Definitions.end()) return std::nullopt;
 		if (auto Existing = FindService(Name)) return Existing;
+		if (Registered->second == AudioMixServiceId) return std::nullopt;
 
 		auto *Definition = InstanceClassRegistry::GetDefinitionBySchemaId(Registered->second);
 		if (!Definition || !InstanceClassRegistry::IsConstructible(*Definition))

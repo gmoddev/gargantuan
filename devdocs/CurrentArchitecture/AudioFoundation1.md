@@ -4,12 +4,14 @@ date: 2026-08-29
 owner: runtime-audio
 related_code:
   - assets/classes/Sound.luau
+  - assets/services/AudioMixService.luau
   - include/gargantuan/audio/AudioBackend.hpp
   - include/gargantuan/audio/AudioRuntime.hpp
   - include/gargantuan/classes/Sound.hpp
   - src/assets/AssetImporter.cpp
   - src/audio/AudioRuntime.cpp
   - src/audio/SdlAudioBackend.cpp
+  - src/services/AudioMixService.cpp
   - src/runtime/SemanticSpatialResolver.cpp
   - tests/AudioFoundationTests.cpp
   - tests/AudioFoundationBenchmark.cpp
@@ -20,8 +22,8 @@ related_code:
 ## Public Sound API
 
 `Sound` is a constructible schema-backed `Instance`; audio files remain assets
-owned by the one public `AssetService`. There is no public `AudioService`,
-`AudioAssetService`, `SoundAssetService`, or `MusicService`.
+owned by the one public `AssetService`. Foundation 8 adds `AudioMixService`
+for local presentation controls.
 
 The authored properties are:
 
@@ -29,6 +31,7 @@ The authored properties are:
 | --- | --- |
 | `SoundId : string` | Empty or strict `asset://`/`builtin://` reference with the `AssetReference:Audio` editor hint. Playback accepts only a resolved Audio-kind asset. |
 | `Volume : number` | Finite linear gain in `[0, 1]`; default `1`. |
+| `MixCategory : Enum.SoundMixCategory` | `Effects`, `UI`, `Ambience`, or `Music`; default `Effects`. |
 | `PlaybackSpeed : number` | Finite simple-rate multiplier in `[0.25, 4]`; default `1`. Speed and pitch change together. |
 | `Looped : boolean` | Wraps at the canonical frame boundary without queue growth. |
 | `RollOffMinDistance : number` | Finite nonnegative full-gain distance; default `10`. It must remain below max. |
@@ -177,6 +180,36 @@ newest request is rejected, its Sound returns to Stopped/position zero, and one
 bounded diagnostic is emitted per Sound/code. Foundation 1 has no speculative
 priority property or stealing heuristic.
 
+### Local master and category mix
+
+`AudioMixService` is a native service attached by Engine to an offline or
+network-client runtime DataModel, including headless modes and the isolated
+Studio Play world. Local client scripts use `game:GetService("AudioMixService")`
+to set master and category gain and mute. Main-only native access requires an
+attached runtime and the relevant read or mutate capability. Trusted Core and
+Client domains can use the controls. A dedicated server or authoring world has
+no attached mixer and ordinary service discovery cannot create one.
+
+Master and category gains accept finite numbers in `[0, 1]`. Gains start at
+`1` and mute flags start at `false`. A mute flag suppresses the effective gain
+while retaining the configured value for unmute. Each voice multiplies its own
+Volume by effective master and category gains while retaining the same
+positional attenuation, pan, and final clamp. AudioRuntime reads a fixed array
+of effective gains once per step. A gain change ramps from its previous value
+to the target across one newly mixed 256-frame block for voices that have
+already mixed audio. New voices start at the current target gain, so a sound
+played after mute contributes no opening audio. Already queued frames
+play out under the bounded backend queue. Muted voices keep advancing on the
+existing playback clock and fire natural `Ended` normally when a device is
+available. Gain changes add no voice, queue, asset decoding, or work on the
+device thread.
+
+Mix preferences are private to one attached runtime session. Gain and mute
+changes produce no DataModel revision, journal or network update. Teardown
+detaches the service before retiring voices, clears its settings and makes a
+retained handle inactive. The next runtime gets unity defaults. Headless
+clients can configure local preferences without initializing SDL audio.
+
 ## Device failure and headless behavior
 
 `EngineProviderConfiguration.AudioEnabled` defaults false. Headless players,
@@ -194,8 +227,13 @@ never throws through the game loop for device availability.
 ## Persistence, packaging, and Studio
 
 Authored Sound properties serialize through schema version 1; runtime state and
-`TimePosition` do not. The shared JSON and GAS graph loader restores both saved
-rolloff distances through the reflected Sound setters in an order that preserves
+`TimePosition` do not. The saved and replicated `MixCategory` enum selects how
+each local mixer routes the Sound. Existing projects without a saved category
+keep the `Effects` default. Authored JSON, GAS, and structural snapshots omit
+the local mixer and its descendants. The frozen schema exposes the mix methods
+without providing a construction factory for authored or replicated nodes.
+The shared JSON and
+GAS graph loader restores both saved rolloff distances through the reflected Sound setters in an order that preserves
 `min < max` even when the saved range lies outside the construction defaults.
 Invalid pairs fail graph admission. Where a file omits either field, the omitted
 distance keeps its construction default and the supplied field is validated against
@@ -211,8 +249,8 @@ the selected backend. FirstCompleteGame's package smoke now carries and validate
 its Audio catalog/artifact after relocation.
 
 Studio needs no audio panel. The generic schema Insert Object path discovers
-Sound, the inspector edits its six authored fields, and `AssetReference:Audio`
-filters the common picker to Audio. The common import dialog admits `.wav`; the
+Sound and the inspector edits its authored fields including the mix category.
+`AssetReference:Audio` filters the common picker to Audio. The common import dialog admits `.wav`; the
 catalog, reimport, delete, save/reopen, Play, and diagnostics stay generic.
 
 ## Performance and validation
@@ -223,6 +261,8 @@ heap allocations, admitted/rejected voices, submitted frames, and queue-empty
 observations. Cases cover 1, 32, 128, and 257 requests, 32 moving positional
 voices, short looping SFX, and the maximum resident clip. Queue-empty metrics
 are software-side observations, not fabricated hardware/audible latency.
+Foundation 8 adds `AudioReconcile` and `AudioMix` to opt-in runtime work
+captures for admission and block-mixing costs.
 
 The 2026-08-26 Windows Release baseline decoded the maximum clip in 46.072 ms
 and resolved it 100,000 times in 17.088 ms. Across 500 mixer steps, measured
@@ -243,14 +283,16 @@ mix and proves that pan changes with the same animated Attachment used by
 Interaction, without per-pose allocation. FirstCompleteGame adds three
 positional pickup cues, one quiet looping joint-bound cue, and one 2D
 round-completion cue without making gameplay depend on hearing them.
+The mix regression checks native and Luau argument bounds, authority and
+session isolation, unity and adjusted PCM, mute and completion, and authored
+category persistence and structural snapshot selection.
 
 ## Explicit deferrals
 
-Foundation 1 does not implement OGG/MP3, streaming or long-form music,
+Audio currently omits OGG/MP3, streaming and long-form music,
 pitch-preserving time stretch, overlapping voices from one Sound, priorities or
-voice stealing, public buses/groups/master volume, advanced HRTF, Doppler,
+voice stealing, custom mixer groups or routing graphs, advanced HRTF, Doppler,
 occlusion, reverb, environmental acoustics, DSP graphs, microphone input, voice
 chat, capture, procedural synthesis, HTTP/radio, editor preview, or a music
-timeline. Foundation 2 should prioritize bounded streaming decode and buffering,
-then buses/master volume and evidence-based priority/stealing, followed by
-device hotplug/recovery and higher-quality optional spatialization.
+timeline. Bounded streaming decode and buffering, evidence-based voice priority,
+device hotplug and higher-quality spatialization remain future work.

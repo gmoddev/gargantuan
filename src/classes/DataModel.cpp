@@ -155,6 +155,7 @@ namespace gargantuan {
 		static const DataModel::ServiceDefinitions CONSTRUCTORS = {
 			{"ActionMap", SchemaId::FromNativeName("Engine", "ActionMap")},
 			{"AssetService", SchemaId::FromNativeName("Engine", "AssetService")},
+			{"AudioMixService", SchemaId::FromNativeName("Engine", "AudioMixService")},
 			{"CharacterControlService", SchemaId::FromNativeName("Engine", "CharacterControlService")},
 			{"EntitlementService", SchemaId::FromNativeName("Engine", "EntitlementService")},
 			{"InteractionService", SchemaId::FromNativeName("Engine", "InteractionService")},

@@ -4,9 +4,10 @@ description: Build screen-space interfaces with Gargantuan's retained-mode GUI f
 ---
 
 Gargantuan's runtime GUI is an ordinary schema-backed `Instance` hierarchy. A
-`ScreenGui` is the screen-space root; `Frame`, `TextLabel`, `TextButton`, and
-`ImageLabel` provide the first presentation controls, while `UIListLayout`
-arranges direct siblings horizontally or vertically.
+`ScreenGui` is the screen-space root. Use `Frame` for panels, `TextLabel` and
+`ImageLabel` for display, `TextButton` and `ImageButton` for actions,
+`TextBox` for text input, and `ScrollingFrame` for scrolling content.
+`UIListLayout` arranges direct siblings horizontally or vertically.
 
 ```luau
 local Root = Instance.new("ScreenGui")
@@ -44,22 +45,29 @@ scale, then logical safe-area insets are applied to the root.
 
 Set `AutomaticSize` to `X`, `Y`, or `XY` to measure text, intrinsic registered
 image dimensions, or child extents. A `UIListLayout` sorts direct siblings by
-`LayoutOrder` and stable tree order. Foundation 1 supports `Stretch` images and
-rectangular nested clips; grids, rounded masks, scrolling, text input, and a full
-theme system are later work.
+`LayoutOrder` and stable tree order. `ClipsDescendants` constrains rendering
+and hit testing to a rectangular parent clip.
+
+Set `Image` on an `ImageLabel` or `ImageButton` to an available project image
+reference. The default `Enum.GuiImageScaleType.Stretch` fills the control.
+`Enum.GuiImageScaleType.Fit` centers the whole image at its original aspect
+ratio. The full control rectangle remains the button's hit area inside the
+ancestor clip, including any space around the fitted image.
 
 Pointer events route through capture, target, and bubble phases. Their
 `GuiInputEvent` exposes `Target`, `CurrentTarget`, `PointerId`, `PointerType`,
 `Position`, `Button`, and `Phase`; call `Event:Consume()` to stop propagation.
 `CaptureFocus`, `ReleaseFocus`, `CapturePointer`, and `ReleasePointer` provide
-explicit control. `TextButton` supports pointer activation and focused
-Space/Return activation. Input routes against the last coherent committed layout,
-and mutations made by callbacks are reconciled before render publication.
+explicit control. Both button classes fire `Activated` after pointer
+activation or focused Space/Return activation. Input routes against the last
+coherent committed layout, and mutations made by callbacks are reconciled before
+render publication.
 
 Accessibility is semantic rather than pixel-derived. Use `AccessibleName`,
 `AccessibilityRole`, and `AccessibilitySelected`; buttons and visible text have
 useful automatic roles, while frames and images remain decorative unless given
-explicit semantics.
+explicit semantics. Give an image-only button an `AccessibleName` that
+describes the action.
 
 Authored properties persist and clone through the normal schema system. Absolute
 geometry, focus, hover, pressed state, pointer capture, glyph atlases, and GPU

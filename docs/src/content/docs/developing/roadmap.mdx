@@ -49,7 +49,7 @@ acceptance evidence. Blocked, deferred, and superseded describe planning state.
 | MCP | Foundation implemented | Not assessed here | Authenticated Studio bridge and bounded revision-aware writes exist; extend capabilities only for concrete workflows. |
 | Runtime GUI | Partial | Not assessed here | Retained controls, text editing and scrolling exist; broader controls/layout/accessibility remain. |
 | Rendering / assets | Foundation implemented | Not assessed here | Renderer 2C has a scoped SDL decision; PBR shading, rendering performance and residency maturity remain. |
-| Player / physics | Foundation implemented | Not assessed here | Controller/camera and weld baseline exist; mesh collision and broader constraints remain. |
+| Player / physics | Foundation implemented | Not assessed here | Replaceable Character control, static mesh collision, authored joints and overlap queries are available. |
 | Packaging | Windows baseline implemented | Not assessed here | Recorded Windows package smoke evidence is scoped; cross-platform creator distribution and release qualification remain. |
 | Node | Foundation implemented | Not assessed here | Durable storage, public gameplay admission and production operations remain. |
 | Telemetry | Foundation implemented | Not assessed here | Optional library and host integration exist; ABI/release operations and any new data collection need separate qualification. |
@@ -267,7 +267,7 @@ Player/server runtimes.
 - [ ] UICorners, UIGradients, UIPaddings, UIStroke, etc
 - [ ] UISizeConstraint, UIGridLayouts, UIPageLayouts, UIFlexItem etc
 - [x] TextButtons receive routed pointer/focus/keyboard input
-- [ ] ImageButtons receive input
+- [x] ImageButtons support pointer and keyboard activation
 - [x] Stateful bounded UTF-8 TextBoxes with focus, selection/editing, and secure input
 - [x] ScrollingFrames with nested scrolling and committed render/input geometry
 - [ ] Render EditableImages
@@ -278,7 +278,7 @@ Player/server runtimes.
 ### World
 
 - [x] Basic physics colliders (thanks Native315!)
-- [ ] Mesh colliders
+- [x] Anchored MeshParts can use validated static mesh collision assets
 - [ ] **Partial:** ~~canonical Material assets and imported material rendering~~; mature material authoring and renderer breadth
 - [ ] **Partial:** ~~neutral rigid-body density and deformable material parameters~~; general physical-material asset/service policy
 - [ ] MaterialService

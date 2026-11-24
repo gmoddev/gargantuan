@@ -7634,7 +7634,7 @@ namespace {
 				auto ActiveVm = ScriptWeak.lock();
 				DestroyingObservedLogicalStop = ActiveVm && ActiveVm->IsStopping() &&
 					std::ranges::all_of(Connections, [](const auto &Connection) { return !Connection->Connected; }) &&
-					!ActiveVm->Threads.QueueDeferredTask(ActiveVm->L, 0);
+					!ActiveVm->Threads.QueueDeferredTask(ActiveVm->L, {});
 			});
 			Trigger->SetName("ExternalTriggerChanged");
 			Check(Game->GetDestroyed() && Runtime.Script == nullptr && ScriptWeak.expired() &&
@@ -8004,6 +8004,131 @@ namespace {
 		engine.Threads.Step();
 		lua_getglobal(L, "LuauTaskResult");
 		Check(lua_tonumber(L, -1) == 7, "task.defer, task.delay, and task.wait resume correctly");
+
+		lua_settop(L, 0);
+		const auto CancellationLoad = Load(L, R"(
+			UnexpectedTaskRuns = 0
+			CancelOrder = ""
+			CanceledTaskWeak = setmetatable({}, { __mode = "v" })
+			local function Unexpected()
+				UnexpectedTaskRuns += 1
+			end
+
+			local Delay = task.delay(0, Unexpected)
+			assert(task.cancel(Delay) and not task.cancel(Delay))
+			assert(task.cancel(task.defer(Unexpected)))
+			local Waiting = task.spawn(function()
+				task.wait(0)
+				Unexpected()
+			end)
+			assert(task.cancel(Waiting))
+			local Duplicate = coroutine.create(Unexpected)
+			task.delay(0, Duplicate)
+			task.defer(Duplicate)
+			assert(task.cancel(Duplicate) and not task.cancel(Duplicate))
+			local Retained = coroutine.create(function(Value) return Value end)
+			do
+				local Payload = {}
+				CanceledTaskWeak[2] = Payload
+				task.defer(Retained, Payload)
+				assert(task.cancel(Retained))
+			end
+			local Resumed, Result = coroutine.resume(Retained, "manual")
+			assert(Resumed and Result == "manual")
+			local Rescheduled = coroutine.create(function(...)
+				local First, Middle, Last = ...
+				CancelRescheduledArgs = select("#", ...) == 3 and First == "second" and Middle == nil and Last == 23
+			end)
+			task.delay(0, Rescheduled, "canceled delay")
+			task.defer(Rescheduled, "canceled defer")
+			assert(task.cancel(Rescheduled))
+			task.delay(0, Rescheduled, "second", nil, 23)
+			do
+				local FarFuture = task.delay(3600, Unexpected)
+				CanceledTaskWeak[1] = FarFuture
+				assert(task.cancel(FarFuture))
+			end
+
+			local Active = task.spawn(function()
+				local Self = coroutine.running()
+				task.defer(Self)
+				CancelRejectRunning = not task.cancel(Self)
+				task.spawn(function() CancelRejectAncestor = not task.cancel(Self) end)
+				coroutine.yield()
+				Unexpected()
+			end)
+			assert(task.cancel(Active))
+			assert(not task.cancel(coroutine.create(Unexpected)))
+			assert(not task.cancel(task.spawn(function() end)))
+			assert(not pcall(task.cancel, Unexpected))
+			assert(not pcall(task.delay, 0 / 0, Unexpected))
+			assert(not pcall(task.wait, 0 / 0))
+
+			local SignalValue = Signal.new()
+			local SignalWait = task.spawn(function()
+				CancelSignalStillResumed = SignalValue:Wait() == "signal result"
+			end)
+			assert(not task.cancel(SignalWait))
+			task.defer(SignalWait, "canceled scheduler result")
+			assert(task.cancel(SignalWait))
+			SignalValue:Fire("signal result")
+
+			local Later
+			task.defer(function()
+				assert(task.cancel(Later))
+				CancelOrder ..= "first "
+				task.defer(function() CancelOrder ..= "appended" end)
+			end)
+			Later = task.defer(Unexpected)
+			task.defer(function() CancelOrder ..= "pending " end)
+		)", "luau-task-cancellation");
+		const auto CancellationRun = CancellationLoad == LUA_OK ? lua_pcall(L, 0, 0, 0) : CancellationLoad;
+		if (CancellationRun != LUA_OK)
+			std::cerr << "[Runtime:Task] " << (lua_tostring(L, -1) ? lua_tostring(L, -1) : "Unknown Luau error") << '\n';
+		Check(CancellationRun == LUA_OK, "task.cancel validates pending ownership and leaves a signal-only wait intact");
+		lua_settop(L, 0);
+		lua_gc(L, LUA_GCCOLLECT, 0);
+		lua_getglobal(L, "CanceledTaskWeak");
+		if (lua_istable(L, -1)) {
+			lua_rawgeti(L, -1, 1);
+			Check(lua_isnil(L, -1), "cancellation releases the timed coroutine registry root before its deadline");
+			lua_pop(L, 1);
+			lua_rawgeti(L, -1, 2);
+			Check(lua_isnil(L, -1), "cancellation releases references to queued arguments");
+			lua_pop(L, 1);
+		}
+		lua_pop(L, 1);
+		engine.Threads.Step();
+		engine.Threads.Step();
+		for (const char *Name : {"CancelRejectRunning", "CancelRejectAncestor", "CancelSignalStillResumed",
+								"CancelRescheduledArgs"}) {
+			lua_getglobal(L, Name);
+			Check(lua_toboolean(L, -1), Name);
+			lua_pop(L, 1);
+		}
+		lua_getglobal(L, "UnexpectedTaskRuns");
+		Check(lua_isnumber(L, -1) && lua_tonumber(L, -1) == 0,
+			"canceled delay, wait, and deferred callbacks never resume automatically");
+		lua_pop(L, 1);
+		lua_getglobal(L, "CancelOrder");
+		const char *CancelOrder = lua_tostring(L, -1);
+		Check(CancelOrder && std::string_view(CancelOrder) == "first pending appended",
+			"a deferred callback can cancel a later turn in its batch without reordering survivors");
+		lua_pop(L, 1);
+
+		auto *SharedTask = lua_newthread(L);
+		const bool SharedTaskLoaded = Load(SharedTask, "", "luau-task-cancel-bound") == LUA_OK;
+		std::size_t Added = 0;
+		if (SharedTaskLoaded)
+			while (Added < MaximumQueuedScriptTasks &&
+				engine.Threads.QueueScheduledTask(SharedTask, ThreadEngine::ScheduledTask::Type::Delay, 3600, {}))
+				++Added;
+		Check(Added == MaximumQueuedScriptTasks && !engine.Threads.QueueDeferredTask(SharedTask, {}),
+			"both task submission routes share the scheduler queue bound");
+		Check(engine.Threads.CancelPendingTasks(L, SharedTask) && !engine.Threads.CancelPendingTasks(L, SharedTask) &&
+				engine.Threads.QueueDeferredTask(SharedTask, {}) && engine.Threads.CancelPendingTasks(L, SharedTask),
+			"cancellation retires all owned entries and immediately makes room for new tasks");
+		lua_pop(L, 1);
 
 		lua_settop(L, 0);
 		lua_pushcfunction(L, [](lua_State *State) {

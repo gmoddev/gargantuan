@@ -6,7 +6,10 @@
 #include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/AudioMixService.hpp"
+#include "runtime/RuntimeWorkTrace.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -134,12 +137,16 @@ namespace {
 		std::string_view Reference,
 		std::size_t VoiceCount,
 		std::size_t Steps,
-		bool Positional
+		bool Positional,
+		const std::shared_ptr<gargantuan::AudioMixService> &Mixer = {}
 	) {
 		using namespace gargantuan;
 		auto BackendOwner = std::make_unique<BenchmarkBackend>();
 		auto *Backend = BackendOwner.get();
 		AudioRuntime Runtime(Assets, std::move(BackendOwner));
+		if (Mixer) Runtime.AttachMixService(Mixer, RuntimeMode::Offline);
+		constexpr std::array Categories{Enums::SoundMixCategory::Effects, Enums::SoundMixCategory::UI,
+			Enums::SoundMixCategory::Ambience, Enums::SoundMixCategory::Music};
 		auto Anchor = std::make_shared<Part>();
 		std::vector<std::shared_ptr<Sound>> Sounds;
 		Sounds.reserve(VoiceCount);
@@ -147,6 +154,7 @@ namespace {
 			auto SoundValue = std::make_shared<Sound>();
 			SoundValue->SetSoundId(std::string(Reference));
 			SoundValue->SetLooped(true);
+			if (Mixer) SoundValue->SetMixCategory(Categories[Index % Categories.size()]);
 			if (Positional) SoundValue->SetParent(Anchor);
 			Runtime.RegisterSound(SoundValue);
 			Sounds.push_back(std::move(SoundValue));
@@ -158,9 +166,23 @@ namespace {
 		Runtime.Step(CFrame());
 		const auto FirstSubmission = Clock::now();
 		Runtime.Step(CFrame());
+#if defined(GARGANTUAN_WORK_TRACE)
+		runtime_detail::HostWorkTrace Trace;
+		auto Previous = Clock::now();
+#endif
 		const auto AllocationsBefore = AllocationCount.load(std::memory_order_relaxed);
 		const auto Started = Clock::now();
 		for (std::size_t Step = 0; Step < Steps; ++Step) {
+#if defined(GARGANTUAN_WORK_TRACE)
+			const auto Now = Clock::now();
+			runtime_detail::HostWorkTrace::Frame TraceFrame(Trace, Now, Previous, Step);
+			Previous = Now;
+#endif
+			if (Mixer && Step % 25 == 0) {
+				const auto Change = Step / 25;
+				Mixer->SetCategoryGain(Categories[Change % Categories.size()],
+					Change / Categories.size() % 2 == 0 ? 0.25 : 1.0);
+			}
 			if (Positional)
 				Anchor->SetCFrame(
 					CFrame(glm::vec3(static_cast<float>(static_cast<int>(Step % 200) - 100), 0.0f, 15.0f))
@@ -170,6 +192,9 @@ namespace {
 		const auto Finished = Clock::now();
 		const auto Metrics = Runtime.GetMetrics();
 		const auto AllocationsAfter = AllocationCount.load(std::memory_order_relaxed);
+#if defined(GARGANTUAN_WORK_TRACE)
+		if (Mixer) Trace.Write();
+#endif
 		std::cout << "PlayToFirstSubmissionUs="
 				  << std::chrono::duration_cast<std::chrono::microseconds>(FirstSubmission - LatencyStart).count()
 				  << '\n';
@@ -199,6 +224,7 @@ namespace {
 int main(int ArgumentCount, char **Arguments) {
 	using namespace gargantuan;
 	const bool Quick = ArgumentCount > 1 && std::string_view(Arguments[1]) == "--quick";
+	const bool ProfileMix = ArgumentCount > 1 && std::string_view(Arguments[1]) == "--mix-controls";
 	const std::size_t Steps = Quick ? 20 : 500;
 	BootstrapNativeRuntimeSchema();
 	const auto Root = std::filesystem::temp_directory_path() /
@@ -223,6 +249,12 @@ int main(int ArgumentCount, char **Arguments) {
 	const auto DecodeEnd = Clock::now();
 	auto Short = Assets->ImportProjectAsset(Mount, "assets/short.wav", AssetKind::Audio, "Short SFX");
 	if (!Largest.Ok || !Largest.Record || !Short.Ok || !Short.Record) return 1;
+	if (ProfileMix) {
+		auto Mixer = std::make_shared<AudioMixService>();
+		Mixer->SetParent(World);
+		PrintResult("Categorized32GainChanges", Steps, RunVoices(Assets, Short.Record->Reference.Value, 32, Steps, false, Mixer));
+		return 0;
+	}
 	std::cout << "LargestDecodeUs="
 			  << std::chrono::duration_cast<std::chrono::microseconds>(DecodeEnd - DecodeStart).count() << '\n';
 

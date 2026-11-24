@@ -17,6 +17,7 @@
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
+#include "gargantuan/services/AudioMixService.hpp"
 #include "gargantuan/services/UserInputService.hpp"
 #include "gargantuan/services/InputService.hpp"
 #include "gargantuan/services/Workspace.hpp"
@@ -70,7 +71,8 @@ namespace gargantuan {
 		  Audio(
 			  std::make_unique<AudioRuntime>(
 				  Assets,
-				  ProviderConfiguration.AudioEnabled ? CreateSdlAudioBackend() : nullptr,
+				  ProviderConfiguration.AudioEnabled && ProviderConfiguration.Mode != RuntimeMode::NetworkServer
+					  ? CreateSdlAudioBackend() : nullptr,
 				  [](std::string Code, std::string Message) {
 					  LOG_WARN(App, "[Audio:Runtime] %s: %s", Code.c_str(), Message.c_str());
 				  },
@@ -88,6 +90,16 @@ namespace gargantuan {
 			bool Complete = false;
 			~ConstructionLifetime() { if (!Complete) Runtime.Destroy(); }
 		} Construction{*this};
+		if (ProviderConfiguration.Mode != RuntimeMode::NetworkServer) {
+			auto Mixer = std::dynamic_pointer_cast<AudioMixService>(DataModel->FindFirstChildOfClass("AudioMixService", false));
+			if (!Mixer) {
+				Mixer = std::make_shared<AudioMixService>();
+				Mixer->SetName("AudioMixService");
+				Mixer->SetParent(DataModel);
+			}
+			Mixer->SetArchivable(false);
+			Audio->AttachMixService(Mixer, ProviderConfiguration.Mode);
+		}
 		RenderPublishing.SetSpatialResolver(Spatial);
 		if (ProviderConfiguration.Entitlements &&
 			!Entitlements->ConfigureProvider(std::move(ProviderConfiguration.Entitlements)))

@@ -18,6 +18,7 @@
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/TagIndex.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
+#include "gargantuan/services/AudioMixService.hpp"
 #include "serialization/JsonCodec.hpp"
 
 #include <algorithm>
@@ -91,7 +92,11 @@ namespace gargantuan::InstanceSerialization {
 				std::uint32_t Parent;
 			};
 			std::vector<PendingNode> Pending;
-			for (auto Root = Roots.rbegin(); Root != Roots.rend(); ++Root) Pending.push_back({*Root, 1, 0});
+			for (auto Root = Roots.rbegin(); Root != Roots.rend(); ++Root) {
+				if (dynamic_cast<AudioMixService *>(Root->get()))
+					throw std::invalid_argument("AudioMixService is a runtime-only service and cannot be a document root");
+				Pending.push_back({*Root, 1, 0});
+			}
 			while (!Pending.empty()) {
 				auto [Node, Depth, Parent] = std::move(Pending.back());
 				Pending.pop_back();
@@ -103,11 +108,12 @@ namespace gargantuan::InstanceSerialization {
 				VisitNode(*Node, Parent);
 				// A non-Archivable node is included, while its descendants remain outside the document.
 				if (Node->GetArchivable()) {
-					if (Node->Children.size() > MaximumPersistenceObjects - Ids.size() -
-						std::min(Pending.size(), MaximumPersistenceObjects - Ids.size()))
-						throw std::length_error("Instance persistence hierarchy exceeds its object limit");
-					for (auto Child = Node->Children.rbegin(); Child != Node->Children.rend(); ++Child)
+					for (auto Child = Node->Children.rbegin(); Child != Node->Children.rend(); ++Child) {
+						if (dynamic_cast<AudioMixService *>(Child->get())) continue;
+						if (Pending.size() >= MaximumPersistenceObjects - Ids.size())
+							throw std::length_error("Instance persistence hierarchy exceeds its object limit");
 						Pending.push_back({*Child, Depth + 1, Id});
+					}
 				}
 			}
 		}
@@ -250,7 +256,7 @@ namespace gargantuan::InstanceSerialization {
 			std::vector<json> children;
 			children.reserve(instance->Children.size());
 			for (auto &child : instance->Children) {
-				if (instance->GetArchivable()) children.emplace_back(SerializeInstance(child, state));
+				if (state.NodeIds.contains(child.get())) children.emplace_back(SerializeInstance(child, state));
 			}
 
 			auto *definition = InstanceClassRegistry::GetDefinition(instance.get());

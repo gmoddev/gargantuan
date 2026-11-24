@@ -78,6 +78,8 @@ namespace {
 	Scene CreateScene(const std::shared_ptr<DataModel> &World, const std::shared_ptr<Instance> &Parent) {
 		Scene Result{Create<Part>("PartA", Parent), Create<Part>("PartB", Parent),
 			Create<Frame>("Panel", Parent), Create<Script>("Logic", Parent), Create<Character>("Rig", Parent)};
+		Result.PartA->SetFriction(0.125f);
+		Result.PartB->SetRestitution(0.75f);
 		const auto AttachmentA = Create<Attachment>("MountA", Result.PartA);
 		const auto AttachmentB = Create<Attachment>("MountB", Result.PartB);
 		const auto NearbySound = Create<Sound>("NearbySound", AttachmentA);
@@ -105,6 +107,8 @@ namespace {
 	}
 
 	void VerifyScene(const Scene &Restored, const std::shared_ptr<DataModel> &World) {
+		Require(Restored.PartA->GetFriction() == 0.125f && Restored.PartB->GetRestitution() == 0.75f,
+			"Restore authored rigid surface response");
 		const auto Weld = Find<WeldConstraint>(*Restored.PartA, "BridgeWeld");
 		const auto Joint = Find<JointConstraint>(*Restored.PartA, "BridgeJoint");
 		const auto AttachmentA = Find<Attachment>(*Restored.PartA, "MountA");

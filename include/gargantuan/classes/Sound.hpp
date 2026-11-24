@@ -9,6 +9,7 @@
 
 namespace gargantuan {
 	G_ENUM(SoundPlaybackState, Stopped, Playing, Paused);
+	G_ENUM(SoundMixCategory, Effects, UI, Ambience, Music);
 
 	class AudioRuntime;
 
@@ -18,6 +19,7 @@ namespace gargantuan {
 		friend class AudioRuntime;
 
 		std::string SoundId;
+		Enums::SoundMixCategory MixCategory = Enums::SoundMixCategory::Effects;
 		float TimePosition = 0.0f;
 		float RollOffMinDistance = 10.0f;
 		float RollOffMaxDistance = 100.0f;

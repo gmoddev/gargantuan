@@ -220,6 +220,26 @@ text selection, and scrolling all negotiate through the one router. A scroll dra
 may transfer capture only after its threshold; destruction, reparenting, focus
 loss, root teardown, and Play stop prune generation-checked state.
 
+### Image controls
+
+`ImageButton` inherits `ImageLabel` and uses the same pointer routing,
+focus traversal, capture and Space/Return activation as `TextButton`.
+It defaults to selectable, interactable, and `InputSink.Activate`.
+Its automatic accessibility role is Button. Set `AccessibleName` to describe
+the action when there is no visible text.
+
+`ImageLabel.ScaleType` defaults to `Stretch`. `Fit` centers the largest
+whole image of the resolved asset's aspect ratio inside the control. This
+changes only the image quad. Layout, background, clipping, hit testing and
+accessibility still use the committed control geometry. Asset residency and
+fallback behavior come from the existing ImageLabel path. A changed
+`ScaleType` or asset aspect ratio rebuilds the retained image presentation
+through the existing immutable UI publication.
+
+Both controls save the authored `Image` and `ScaleType` through ordinary
+reflection. GAS discovers their project image pins through the shared
+asset-reference property.
+
 ## Accessibility, persistence, and bounds
 
 Accessibility adds renderer-independent TextBox/TextField and ScrollView roles.

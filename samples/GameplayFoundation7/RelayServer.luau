@@ -12,6 +12,7 @@ local LaunchPad = Course:FindFirstChild("LaunchPad")
 local GroundSwitch = Course:FindFirstChild("GroundSwitch")
 local Hazard = Course:FindFirstChild("Hazard")
 local Relay = Course:FindFirstChild("RelayBeacon")
+local CargoMarker = Course:FindFirstChild("CargoMarker")
 if not LaunchPad or not GroundSwitch or not Hazard or not Relay then
 	warn("[Gameplay:Relay] A course station is missing")
 	return
@@ -214,6 +215,10 @@ local StepConnection = RunService.PreSimulation:Connect(function(DeltaTime)
 				Cell.Parent = State.Inventory
 				Course:SetAttribute("RelayCharges", Charges)
 				Player:SetAttribute("RelayCharges", (Player:GetAttribute("RelayCharges") or 0) + 1)
+				if Charges == TargetCharges and CargoMarker and CargoMarker:IsA("BasePart") then
+					CargoMarker.Anchored = false
+					CargoMarker:SetLinearVelocity(Vector3.new(2, 0, 0))
+				end
 			elseif not AtRelay then
 				State.HasCharged = false
 			end

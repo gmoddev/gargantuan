@@ -766,7 +766,8 @@ namespace gargantuan::network {
 			const auto &Publication = Found->second->Publication;
 			const auto *Definition = Schema.FindClassById(Publication.ClassSchemaId);
 			if (!Definition) throw std::runtime_error("Replication service class definition is missing");
-			if (Definition->ServicePolicy == SchemaServicePolicy::ServerOnly) return false;
+			if (Definition->ServicePolicy == SchemaServicePolicy::ServerOnly ||
+				Publication.ClassSchemaId == SchemaId::FromNativeName("Engine", "AudioMixService")) return false;
 			if (!Publication.Parent) return true;
 			Object = *Publication.Parent;
 		}

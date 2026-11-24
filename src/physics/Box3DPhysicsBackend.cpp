@@ -103,6 +103,8 @@ namespace gargantuan {
 				std::isfinite(Description.LinearDamping) && Description.LinearDamping >= 0.0f && Description.LinearDamping <= 100.0f &&
 				std::isfinite(Description.AngularDamping) && Description.AngularDamping >= 0.0f && Description.AngularDamping <= 100.0f &&
 				std::isfinite(Description.GravityScale) && Description.GravityScale >= 0.0f && Description.GravityScale <= 100.0f &&
+				std::isfinite(Description.Friction) && Description.Friction >= 0.0f && Description.Friction <= MaximumPhysicsFriction &&
+				std::isfinite(Description.Restitution) && Description.Restitution >= 0.0f && Description.Restitution <= 1.0f &&
 				IsFinite(Description.Transform) && IsFinite(Description.Shape.Size) &&
 				Description.Shape.Size.x > 0.0f && Description.Shape.Size.y > 0.0f &&
 				Description.Shape.Size.z > 0.0f && std::isfinite(Description.Density) && Description.Density >= 0.0f;
@@ -295,6 +297,13 @@ namespace gargantuan {
 					Record->AdditionalShapes = std::move(ReplacementAdditionalShapes);
 					Record->Mesh = std::move(ReplacementMesh);
 					b3Body_ApplyMassFromShapes(Record->Body);
+				} else if (Previous.Friction != Description.Friction || Previous.Restitution != Description.Restitution) {
+					ForEachShape(*Record, [&](b3ShapeId Shape) {
+						auto Material = b3Shape_GetSurfaceMaterial(Shape);
+						Material.friction = Description.Friction;
+						Material.restitution = Description.Restitution;
+						b3Shape_SetSurfaceMaterial(Shape, Material);
+					});
 				}
 
 				if (Previous.Anchored != Description.Anchored) {
@@ -1265,6 +1274,8 @@ namespace gargantuan {
 			) {
 				b3ShapeDef ShapeDefinition = b3DefaultShapeDef();
 				ShapeDefinition.density = Description.Density;
+				ShapeDefinition.baseMaterial.friction = Description.Friction;
+				ShapeDefinition.baseMaterial.restitution = Description.Restitution;
 				ShapeDefinition.filter.categoryBits = std::uint64_t{1} << Description.CollisionGroup;
 				ShapeDefinition.filter.maskBits = Description.CollisionMask;
 				ShapeDefinition.filter.groupIndex = 0;

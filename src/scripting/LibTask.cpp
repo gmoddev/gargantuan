@@ -1,6 +1,7 @@
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/scripting/ThreadEngine.hpp"
 
+#include <cmath>
 #include <lua.h>
 #include <lualib.h>
 
@@ -30,23 +31,25 @@ namespace gargantuan {
 			return nullptr;
 		}
 
-		if (argumentsToPass > 0) {
-			for (int i = startIdx + 1; i <= argumentCount; ++i) {
-				lua_pushvalue(L, i);
-			}
-			lua_xmove(L, targetThread, argumentsToPass);
-		}
-
 		return targetThread;
 	}
 
 	int LibTask_cancel(lua_State *L) {
-		luaL_error(L, "not yet implemented");
+		luaL_checktype(L, 1, LUA_TTHREAD);
+		auto *Thread = lua_tothread(L, 1);
+		lua_pushboolean(L, ScriptEngine::Get(L)->Threads.CancelPendingTasks(L, Thread));
+		return 1;
 	}
 
 	int LibTask_spawn(lua_State *L) {
 		int argumentsToPass;
 		lua_State *thread = GetThreadFromArgument(L, 1, argumentsToPass);
+		if (argumentsToPass > 0) {
+			if (!lua_checkstack(thread, argumentsToPass) || !lua_checkstack(L, argumentsToPass))
+				luaL_error(L, "too many arguments to spawn");
+			for (int Index = 2; Index <= argumentsToPass + 1; ++Index) lua_pushvalue(L, Index);
+			lua_xmove(L, thread, argumentsToPass);
+		}
 
 		auto scriptEngine = ScriptEngine::Get(L);
 		scriptEngine->Threads.ResumeThread(thread, scriptEngine->Threads.TakeThreadReference(thread), argumentsToPass);
@@ -59,7 +62,7 @@ namespace gargantuan {
 		lua_State *thread = GetThreadFromArgument(L, 1, argumentsToPass);
 
 		auto scriptEngine = ScriptEngine::Get(L);
-		if (!scriptEngine->Threads.QueueDeferredTask(thread, argumentsToPass)) {
+		if (!scriptEngine->Threads.QueueDeferredTask(thread, {L, 2, argumentsToPass})) {
 			luaL_error(L, "task queue limit exceeded");
 			return 0;
 		}
@@ -69,13 +72,14 @@ namespace gargantuan {
 
 	int LibTask_delay(lua_State *L) {
 		double delaySeconds = luaL_checknumber(L, 1);
+		if (std::isnan(delaySeconds)) luaL_error(L, "task.delay duration cannot be NaN");
 
 		int argumentsToPass;
 		lua_State *thread = GetThreadFromArgument(L, 2, argumentsToPass);
 
 		auto scriptEngine = ScriptEngine::Get(L);
 		if (!scriptEngine->Threads.QueueScheduledTask(
-			thread, ThreadEngine::ScheduledTask::Type::Delay, delaySeconds, argumentsToPass
+			thread, ThreadEngine::ScheduledTask::Type::Delay, delaySeconds, {L, 3, argumentsToPass}
 		)) {
 			luaL_error(L, "task queue limit exceeded");
 			return 0;
@@ -99,9 +103,10 @@ namespace gargantuan {
 		}
 		auto scriptEngine = ScriptEngine::Get(L);
 		double delaySeconds = luaL_optnumber(L, 1, 0.0f);
+		if (std::isnan(delaySeconds)) luaL_error(L, "task.wait duration cannot be NaN");
 		lua_settop(L, 0);
 		if (!scriptEngine->Threads.QueueScheduledTask(
-			L, ThreadEngine::ScheduledTask::Type::Wait, delaySeconds, 1
+			L, ThreadEngine::ScheduledTask::Type::Wait, delaySeconds, {}
 		)) {
 			luaL_error(L, "task queue limit exceeded");
 			return 0;

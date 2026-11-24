@@ -15,6 +15,7 @@
 #include "gargantuan/runtime/AttributeValidation.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
+#include "gargantuan/services/AudioMixService.hpp"
 #include "serialization/JsonCodec.hpp"
 #include "runtime/SnapshotValidation.hpp"
 #include "RuntimeWorkDiagnostics.hpp"
@@ -68,6 +69,7 @@ namespace gargantuan {
 			std::vector<std::shared_ptr<Instance>> &objects,
 			std::unordered_set<Instance *> &visited
 		) {
+			if (dynamic_cast<AudioMixService *>(instance.get())) return;
 			if (!instance || !visited.insert(instance.get()).second) throw std::runtime_error("Snapshot hierarchy is invalid");
 			instance->AssertIsAlive();
 			objects.push_back(instance);

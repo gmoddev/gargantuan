@@ -18,6 +18,7 @@ return c({
 			overrideWrite = "SetImage",
 			serializable = true,
 			replicated = true,
+			editorHint = "AssetReference:Image",
 		},
 		ImageColor3 = {
 			description = "Image tint color",
@@ -35,7 +36,7 @@ return c({
 			range = { minimum = 0, maximum = 1 },
 		},
 		ScaleType = {
-			description = "Image fitting policy; Foundation 1 supports Stretch",
+			description = "Stretch fills the control; Fit centers the whole image at its original aspect ratio.",
 			type = t.EnumItem("GuiImageScaleType"),
 			unmodified = "Enums::GuiImageScaleType::Stretch",
 			serializable = true,

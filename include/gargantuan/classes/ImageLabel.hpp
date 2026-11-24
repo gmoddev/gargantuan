@@ -3,7 +3,7 @@
 #include "gargantuan/classes/generated/ImageLabel.hpp"
 
 namespace gargantuan {
-	G_ENUM(GuiImageScaleType, Stretch);
+	G_ENUM(GuiImageScaleType, Stretch, Fit);
 
 	class ImageLabel : public GuiObject {
 		I_ImageLabel;

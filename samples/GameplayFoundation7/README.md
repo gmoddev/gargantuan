@@ -11,6 +11,9 @@ to complete the mission, then switch roles to try both controllers.
 - **Drone** — WASD flies the drone, and Space lands and returns the player
   to the stock Character. The drone holds altitude and stops against the
   tall divider.
+- **Sound** — the crystal button toggles game audio for your client. The
+  beacon plays a positional cue for each charge. The third charge releases
+  the orange cargo marker onto the bouncy platform beside the course.
 
 Open this directory as a project in Gargantuan Studio. Local Play previews the
 course, on-foot movement, hazard, respawn, and beacon animation. Drone flight
@@ -18,7 +21,7 @@ and the cooperative objective run in the dedicated multiplayer session.
 
 ## Run with two clients
 
-Use a GNS-enabled Release build of Gameplay Foundation 7. Run these from the
+Use a GNS-enabled Release build of Engine Foundation 8. Run these from the
 repository root using the matching build output for the packager and both
 runtime distributions.
 
@@ -52,4 +55,5 @@ Edit [RelayServer.luau](RelayServer.luau) for gameplay and
 sources in the saved project. Pass `--check` to verify the saved snapshot.
 The beacon uses Gargantuan's existing FirstCompleteGame two-joint rig and
 canonical animation artifacts copied into this sample's own catalog, so the
-project opens independently. See [asset provenance](../FirstCompleteGame/assets/NOTICE.md).
+project opens independently. The client also uses the original sample badge
+and tone. See [asset provenance](../FirstCompleteGame/assets/NOTICE.md).

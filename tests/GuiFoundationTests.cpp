@@ -3,8 +3,11 @@
 
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/GuiRuntimeConfig.hpp"
+#include "gargantuan/assets/GasDependencies.hpp"
+#include "gargantuan/assets/GasInstanceSerialization.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/Frame.hpp"
+#include "gargantuan/classes/ImageButton.hpp"
 #include "gargantuan/classes/ImageLabel.hpp"
 #include "gargantuan/classes/ScreenGui.hpp"
 #include "gargantuan/classes/ScrollingFrame.hpp"
@@ -14,18 +17,24 @@
 #include "gargantuan/classes/TextLabel.hpp"
 #include "gargantuan/classes/UIListLayout.hpp"
 #include "gargantuan/editor/PlaySession.hpp"
+#include "gargantuan/filesystem/DiskFilesystem.hpp"
+#include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
+#include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <variant>
 #include <vector>
@@ -471,6 +480,184 @@ namespace {
 		Check(Activations == 1, "re-enabling a retained focused button restores keyboard activation");
 	}
 
+	void TestImageButtonPresentationAndActivation() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		GuiRuntime Runtime(Game, std::filesystem::path(DefaultGuiFontPath));
+		Runtime.SetViewport({800, 600, 2.0f, {}});
+		auto Root = std::make_shared<ScreenGui>();
+		Root->SetParent(Game);
+		auto Panel = std::make_shared<Frame>();
+		Panel->SetPosition(UDim2::fromOffset(20, 30));
+		Panel->SetSize(UDim2::fromOffset(100, 75));
+		Panel->SetClipsDescendants(true);
+		Panel->SetParent(Root);
+		auto Button = std::make_shared<ImageButton>();
+		Button->SetSize(UDim2::fromOffset(100, 100));
+		Button->SetAccessibleName("Open map");
+		const std::vector<std::uint8_t> Pixels(4 * 2 * 4, 255);
+		const auto Reference = Runtime.RegisterImage("test/image-button", 4, 2, Pixels);
+		Button->SetImage(Reference);
+		Button->SetParent(Panel);
+		Check(Button->GetInteractable() && Button->GetSelectable() &&
+			Button->GetInputSink() == Enums::InputSink::Activate &&
+			Button->GetScaleType() == Enums::GuiImageScaleType::Stretch,
+			"ImageButton inherits Stretch and defaults to an enabled focusable control");
+
+		const auto CheckQuad = [&](const RenderUiFrame &FrameValue, float X, float Y, float Right, float Bottom) {
+			const auto Batch = std::ranges::find_if(FrameValue.Batches, [](const RenderUiBatch &Value) {
+				return Value.Texture.has_value();
+			});
+			return Batch != FrameValue.Batches.end() && Batch->Vertices.size() == 4 && Batch->Clip &&
+				Near(Batch->Clip->X, 40) && Near(Batch->Clip->Y, 60) &&
+				Near(Batch->Clip->Width, 200) && Near(Batch->Clip->Height, 150) &&
+				Near(Batch->Vertices[0].Position.x, X) && Near(Batch->Vertices[0].Position.y, Y) &&
+				Near(Batch->Vertices[2].Position.x, Right) && Near(Batch->Vertices[2].Position.y, Bottom) &&
+				Batch->Vertices[0].TextureCoordinate == glm::vec2(0, 0) &&
+				Batch->Vertices[2].TextureCoordinate == glm::vec2(1, 1);
+		};
+		(void)Runtime.Reconcile();
+		const auto Stretch = Runtime.GetCommittedPresentation();
+		Check(CheckQuad(Stretch->Frame, 40, 60, 240, 260),
+			"Stretch fills the unchanged control rectangle and retains its ancestor clip");
+		Button->SetScaleType(Enums::GuiImageScaleType::Fit);
+		(void)Runtime.Reconcile();
+		Check(CheckQuad(Runtime.GetCommittedPresentation()->Frame, 40, 110, 240, 210) &&
+			CheckQuad(Stretch->Frame, 40, 60, 240, 260),
+			"changing ScaleType centers a wide image while retaining the earlier immutable publication");
+		Check(Runtime.RegisterImage("test/image-button", 2, 4, Pixels) == Reference,
+			"an asset dimension change retains the logical image reference");
+		(void)Runtime.Reconcile();
+		Check(CheckQuad(Runtime.GetCommittedPresentation()->Frame, 90, 60, 190, 260),
+			"the same image reference fits again when its dimensions change");
+
+		auto Pointer = [&](GuiPointerAction Action, Vector2 Point = {50.0f, 70.0f}) {
+			return Runtime.ProcessPointer({7, Enums::GuiPointerType::Mouse, Enums::GuiPointerButton::Primary, Action, Point});
+		};
+		auto Key = [&](LogicalKey Logical, ButtonState State) {
+			return Runtime.ProcessEvent(KeyEvent{{1}, PhysicalKey::Space, Logical, KeyModifier::None, State, false});
+		};
+		std::vector<std::string> Events;
+		Button->Focused->Connect([&](std::monostate) { Events.emplace_back("Focus"); });
+		Button->PointerDown->Connect([&](std::shared_ptr<GuiInputEvent>) { Events.emplace_back("Down"); });
+		Button->PointerUp->Connect([&](std::shared_ptr<GuiInputEvent>) { Events.emplace_back("Up"); });
+		Button->Activated->Connect([&](std::monostate) { Events.emplace_back("Activate"); });
+		const bool Down = Pointer(GuiPointerAction::Down);
+		const bool Up = Pointer(GuiPointerAction::Up);
+		Check(Down && Up && Events == std::vector<std::string>{"Focus", "Down", "Up", "Activate"},
+			"the Fit margin remains clickable and activates after normal focus and pointer routing");
+		(void)Runtime.Reconcile();
+		const auto Access = Runtime.GetAccessibilitySnapshot();
+		const auto Index = Access->NodeByObject.find(Button->GetObjectId());
+		Check(Index != Access->NodeByObject.end() &&
+			Access->Nodes[Index->second].Role == Enums::AccessibilityRole::Button &&
+			Access->Nodes[Index->second].Name == "Open map" && Access->Nodes[Index->second].Focused,
+			"ImageButton exposes a named, focusable Button to the accessibility projection");
+
+		Events.clear();
+		(void)Key(LogicalKey::Space, ButtonState::Pressed);
+		(void)Key(LogicalKey::Space, ButtonState::Released);
+		(void)Key(LogicalKey::Return, ButtonState::Pressed);
+		(void)Key(LogicalKey::Return, ButtonState::Released);
+		Check(Events == std::vector<std::string>{"Activate", "Activate"},
+			"a focused ImageButton uses the same Space and Return activation as TextButton");
+		Events.clear();
+		(void)Pointer(GuiPointerAction::Down, {50.0f, 230.0f});
+		(void)Pointer(GuiPointerAction::Up, {50.0f, 230.0f});
+		Check(Events.empty(), "an ImageButton cannot activate outside its ancestor clip");
+		(void)Pointer(GuiPointerAction::Down);
+		Button->SetInteractable(false);
+		(void)Pointer(GuiPointerAction::Up);
+		(void)Key(LogicalKey::Space, ButtonState::Pressed);
+		(void)Key(LogicalKey::Space, ButtonState::Released);
+		Check(Events == std::vector<std::string>{"Down", "Up"} && !Button->GetActive(),
+			"disabling a captured ImageButton prevents pointer and keyboard activation");
+		Button->SetInteractable(true);
+		(void)Runtime.Reconcile();
+		Events.clear();
+		(void)Pointer(GuiPointerAction::Down);
+		Button->Destroy();
+		(void)Pointer(GuiPointerAction::Up);
+		(void)Runtime.Reconcile();
+		Check(Events == std::vector<std::string>{"Down"} &&
+			!Runtime.GetAccessibilitySnapshot()->NodeByObject.contains(Button->GetObjectId()),
+			"destroying a captured ImageButton retires activation and accessibility state");
+		Game->Destroy();
+	}
+
+	void TestImageControlGasPersistence() {
+		using namespace gargantuan;
+		constexpr std::array<std::uint8_t, 58> Bmp{
+			'B', 'M', 58, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0,
+			40, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 24, 0,
+			0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0,
+		};
+		struct TempDirectory {
+			std::filesystem::path Root;
+			~TempDirectory() {
+				std::error_code Ignored;
+				std::filesystem::remove(Root / "Icon.bmp", Ignored);
+				std::filesystem::remove(Root, Ignored);
+			}
+		} Directory{std::filesystem::temp_directory_path() / ("gargantuan-image-button-" + AssetId::New().ToString())};
+		std::filesystem::create_directory(Directory.Root);
+		{
+			std::ofstream File(Directory.Root / "Icon.bmp", std::ios::binary);
+			File.write(reinterpret_cast<const char *>(Bmp.data()), static_cast<std::streamsize>(Bmp.size()));
+			if (!File) throw std::runtime_error("Could not write ImageButton asset fixture");
+		}
+		DiskFilesystem Filesystem(Directory.Root);
+		SourceMount Mount(Filesystem);
+		auto Assets = std::make_shared<AssetService>();
+		const auto LabelImage = Assets->ImportProjectAsset(Mount, "Icon.bmp", AssetKind::Image, "Label image");
+		const auto ButtonImage = Assets->ImportProjectAsset(Mount, "Icon.bmp", AssetKind::Image, "Button image");
+		Check(LabelImage.Ok && LabelImage.Record && ButtonImage.Ok && ButtonImage.Record,
+			"the GAS fixture has separately identified project image assets");
+		if (!LabelImage.Ok || !LabelImage.Record || !ButtonImage.Ok || !ButtonImage.Record) return;
+		auto Panel = std::make_shared<Frame>();
+		auto Label = std::make_shared<ImageLabel>();
+		Label->SetName("Icon");
+		Label->SetImage(LabelImage.Record->Reference.Value);
+		Label->SetParent(Panel);
+		auto Button = std::make_shared<ImageButton>();
+		Button->SetName("OpenMap");
+		Button->SetImage(ButtonImage.Record->Reference.Value);
+		Button->SetScaleType(Enums::GuiImageScaleType::Fit);
+		Button->SetAccessibleName("Open map");
+		Button->SetParent(Panel);
+		const std::array<std::shared_ptr<Instance>, 1> Roots{Panel};
+		auto Document = InstanceSerialization::CaptureGasDocument(Roots, Gas::DocumentKind::Model);
+		Check(Document.has_value(), "GASM captures authored image controls");
+		if (!Document) return;
+		auto Pins = Gas::ResolveDependencies(*Document, Assets.get(), false);
+		Check(Pins && Pins->size() == 2 &&
+			std::ranges::find(*Pins, Gas::Dependency{LabelImage.Record->Id, LabelImage.Record->ContentId}) != Pins->end() &&
+			std::ranges::find(*Pins, Gas::Dependency{ButtonImage.Record->Id, ButtonImage.Record->ContentId}) != Pins->end(),
+			"GAS discovers asset identity and digest from ImageLabel and the inherited ImageButton property");
+		if (!Pins) return;
+		Document->Dependencies = std::move(*Pins);
+		const auto Encoded = Gas::Encode(*Document);
+		Check(Encoded.has_value(), "GASM encodes image layout and dependency pins");
+		if (!Encoded) return;
+		const auto Decoded = Gas::Decode(*Encoded);
+		Check(Decoded && Decoded->Dependencies == Document->Dependencies, "GASM preserves both image pins");
+		if (!Decoded) return;
+		const auto Restored = InstanceSerialization::MaterializeGasDocument(*Decoded, false);
+		Check(Restored.Succeeded(), "GASM materializes image controls");
+		if (!Restored.Succeeded()) return;
+		const auto RestoredLabel = std::dynamic_pointer_cast<ImageLabel>(Restored.Roots.front()->FindFirstChild("Icon", true));
+		const auto RestoredButton = std::dynamic_pointer_cast<ImageButton>(Restored.Roots.front()->FindFirstChild("OpenMap", true));
+		Check(RestoredLabel && RestoredLabel->GetImage() == LabelImage.Record->Reference.Value &&
+			RestoredLabel->GetScaleType() == Enums::GuiImageScaleType::Stretch &&
+			RestoredButton && RestoredButton->GetImage() == ButtonImage.Record->Reference.Value &&
+			RestoredButton->GetScaleType() == Enums::GuiImageScaleType::Fit && RestoredButton->GetSelectable() &&
+			RestoredButton->GetAccessibleName() == "Open map" && !RestoredButton->GetActive(),
+			"GASM round trips authored image controls while initialization starts with inactive runtime state");
+		Restored.Roots.front()->Destroy();
+		Panel->Destroy();
+	}
+
 	void TestPersistencePlayIsolationAndSignalRetirement() {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
@@ -859,12 +1046,22 @@ Button.Parent = Panel
 Button.Activated:Connect(function()
 	Button.Name = "LuauActivated"
 end)
+
+local Icon = Instance.new("ImageButton")
+Icon.Name = "LuauIconButton"
+Icon.Size = UDim2.fromOffset(32, 32)
+Icon.ScaleType = Enum.GuiImageScaleType.Fit
+Icon.AccessibleName = "Open map"
+Icon.Parent = Panel
 )");
 			Source->SetParent(Game);
 			Runtime.Script->Step();
 			(void)Runtime.Gui->Reconcile();
 			auto Button = std::dynamic_pointer_cast<TextButton>(Game->FindFirstChild("LuauPlayButton", true));
 			Check(Button != nullptr, "Luau can construct the complete ScreenGui, Frame, TextLabel, and TextButton hierarchy");
+			auto Icon = std::dynamic_pointer_cast<ImageButton>(Game->FindFirstChild("LuauIconButton", true));
+			Check(Icon && Icon->GetScaleType() == Enums::GuiImageScaleType::Fit && Icon->GetAccessibleName() == "Open map",
+				"Luau constructs ImageButton and authors its inherited image and accessibility properties");
 			if (Button) {
 				const Vector2 Center(Button->GetAbsolutePosition() + Button->GetAbsoluteSize() / 2.0f);
 				(void)Runtime.ProcessEvent(PointerButtonEvent{{2}, PointerButton::Left, ButtonState::Pressed,
@@ -986,6 +1183,8 @@ int main() {
 		RunTest("RotationOrderingAndAlpha", TestRotationOrderingAndAlpha);
 		RunTest("InputRoutingFocusAndMutationSafety", TestInputRoutingFocusAndMutationSafety);
 		RunTest("DisabledButtonNeverActivates", TestDisabledButtonNeverActivates);
+		RunTest("ImageButtonPresentationAndActivation", TestImageButtonPresentationAndActivation);
+		RunTest("ImageControlGasPersistence", TestImageControlGasPersistence);
 		RunTest("PersistencePlayIsolationAndSignalRetirement", TestPersistencePlayIsolationAndSignalRetirement);
 		RunTest("IncrementalInvalidationAndUiRetention", TestIncrementalInvalidationAndUiRetention);
 		RunTest("SiblingStackingContexts", TestSiblingStackingContexts);

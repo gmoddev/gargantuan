@@ -148,6 +148,15 @@ logging fixed during timing comparisons.
 | `GARGANTUAN_WORK_TRACE_PHASES` | All | Comma-separated names from [the work phase table](../src/runtime/RuntimeWorkDiagnostics.hpp) |
 | `GARGANTUAN_WORK_TRACE_CAPACITY` | 65,536 | Record limit, 1 through 262,144 |
 
+For a bounded audio capture, build `gargantuan_audio_foundation_benchmark` in the
+instrumented Release configuration and run it with `--mix-controls`. Use a
+fresh trace path and select `AudioReconcile,AudioMix`. The workload advances
+32 voices across all categories for 500 steps and changes one category gain
+every 25 steps. It uses a synthetic backend, so the trace measures software
+mixing and reconciliation independently of audio hardware. Run the benchmark
+without arguments in the ordinary Release build for the shared unity-gain
+workloads and their allocation counts.
+
 For example, capture a bounded real-GNS structural crossing from PowerShell
 using the existing deadline-paced workload:
 
