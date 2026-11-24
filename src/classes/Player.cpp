@@ -8,11 +8,13 @@
 #include "gargantuan/classes/ScreenGui.hpp"
 #include "gargantuan/gui/GuiLimits.hpp"
 #include "gargantuan/gui/PlayerGuiScope.hpp"
+#include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "gargantuan/services/Players.hpp"
 
 #include <exception>
 #include <stdexcept>
+#include <unordered_set>
 #include <utility>
 
 namespace gargantuan {
@@ -86,6 +88,19 @@ namespace gargantuan {
 			}
 			Roots.reserve(Templates.size());
 			for (const auto &[Root, SourceNodes] : Templates) {
+				std::unordered_set<Instance *> Members{Root.get()};
+				for (const auto &Node : SourceNodes) Members.insert(Node.get());
+				for (auto *Node : Members) {
+					const auto *Definition = InstanceClassRegistry::GetDefinition(Node);
+					if (!Definition) throw std::invalid_argument("StarterGui template has missing class metadata");
+					for (const auto &[Name, Property] : Definition->AllProperties) {
+						if (Name == "Parent" || !Property->ReadObjectReference) continue;
+						const auto Target = Property->ReadObjectReference(Node);
+						if (Target && !Members.contains(Target.get()) &&
+							(Target == Starter || IsStarterGuiTemplate(*Target)))
+							throw std::invalid_argument("StarterGui references must stay within one ScreenGui template");
+					}
+				}
 				auto Copy = std::static_pointer_cast<ScreenGui>(Root->Clone());
 				const auto CloneNodes = Copy->GetDescendants();
 				if (CloneNodes.size() != SourceNodes.size())
@@ -98,6 +113,8 @@ namespace gargantuan {
 						throw std::logic_error("PlayerGui clone has a different script class");
 					ScriptSecurityScope Security(ScriptSecurityContext::CoreTrusted());
 					Cloned->SetGuiTemplateSourceId(Original->GetSourceId());
+					Cloned->SetGuiTemplateSourceDigest(Cloned->GetSourceDigest());
+					Cloned->SetGuiTemplateSourceVersion(Cloned->GetSourceVersion());
 				}
 				Roots.push_back(std::move(Copy));
 			}

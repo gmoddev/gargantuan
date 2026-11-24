@@ -2511,6 +2511,7 @@ int main() {
 			ViewportPlay.Step();
 			const auto First = ViewportPlay.TakeRenderPublications();
 			const auto FirstPose = First.empty() ? std::nullopt : ReadViewportPose(*First.back(), View->GetObjectId());
+			Check(FirstPose.has_value(), "Studio Play's CPU-only publication renderer supplies the first viewport GPU palette");
 			View->SetVisible(false);
 			ViewportPlay.Step();
 			(void)ViewportPlay.TakeRenderPublications();
@@ -2521,7 +2522,7 @@ int main() {
 			const auto Second = ViewportPlay.TakeRenderPublications();
 			const auto SecondPose = Second.empty() ? std::nullopt : ReadViewportPose(*Second.back(), View->GetObjectId());
 			Check(FirstPose && SecondPose && *SecondPose > *FirstPose,
-				"Studio Play supplies updated viewport GPU palettes through its actual CPU-only publication renderer");
+				"Studio Play publishes a newer viewport GPU palette after a hidden preview is shown again");
 		}
 		{
 			auto Dedicated = std::make_shared<DataModel>();

@@ -240,7 +240,6 @@ namespace gargantuan::network {
 		std::set<ObjectId> ClientMaterializedCharacters;
 		std::set<ObjectId> ClientKnownObjects;
 		std::set<ObjectId> PendingClientGuiCode;
-		std::set<ObjectId> ClientPublishedScreenGuis;
 		ObjectId ClientGuiCharacter;
 		SignalConnection::Pointer ServerDescendantAdded;
 		SignalConnection::Pointer ServerDescendantRemoved;
@@ -628,7 +627,6 @@ namespace gargantuan::network {
 			ClientMaterializedCharacters.clear();
 			ClientKnownObjects.clear();
 			PendingClientGuiCode.clear();
-			ClientPublishedScreenGuis.clear();
 			ClientGuiCharacter = {};
 			PrimaryConnection.reset();
 			ConnectionsByPlayer.clear();
@@ -886,7 +884,7 @@ namespace gargantuan::network {
 			PeerValue.PlayerObject = Accepted.Player;
 			PeerValue.PlayerId = Accepted.PlayerId;
 			++Metrics.AcceptedPeers;
-			TryFinalizeClientBootstrap();
+			SynchronizeClientGuiAndBootstrap();
 		}
 
 		void ApplyReplication(const ReceivedMessageEvent &Message) {
@@ -941,7 +939,6 @@ namespace gargantuan::network {
 					if (std::dynamic_pointer_cast<KinematicCharacter>(ReplicaObject))
 						ClientCharacterObjects.insert(Object);
 					if (std::dynamic_pointer_cast<RemoteBase>(ReplicaObject)) ClientRemoteObjects.insert(Object);
-					if (std::dynamic_pointer_cast<ScreenGui>(ReplicaObject)) ClientPublishedScreenGuis.insert(Object);
 					if (Configuration.HydratePlayerGuiCode) {
 						if (const auto Source = std::dynamic_pointer_cast<LuaSourceContainer>(ReplicaObject);
 							Source && !Source->GetGuiTemplateSourceId().empty()) PendingClientGuiCode.insert(Object);
@@ -960,7 +957,6 @@ namespace gargantuan::network {
 					ClientCharacterObjects.erase(Object);
 					ClientRemoteObjects.erase(Object);
 					PendingClientGuiCode.erase(Object);
-					ClientPublishedScreenGuis.erase(Object);
 					if (Prediction && ClientMaterializedCharacters.erase(Object) &&
 						!Prediction->MarkUnmaterialized(Object)) {
 						FailSession({
@@ -1001,7 +997,6 @@ namespace gargantuan::network {
 				ClientCharacterObjects.erase(*Iterator);
 				ClientRemoteObjects.erase(*Iterator);
 				PendingClientGuiCode.erase(*Iterator);
-				ClientPublishedScreenGuis.erase(*Iterator);
 				Iterator = ClientKnownObjects.erase(Iterator);
 			}
 			BaselineApplied = BaselineApplied || Frame->Kind == ReplicationMessageKind::Baseline;
@@ -1012,7 +1007,7 @@ namespace gargantuan::network {
 				});
 				return;
 			}
-			TryFinalizeClientBootstrap(CharacterProjected);
+			SynchronizeClientGuiAndBootstrap(CharacterProjected);
 		}
 
 		void ReconcileClientGui(const std::shared_ptr<Player> &Owner, const std::shared_ptr<PlayerGui> &Gui,
@@ -1039,15 +1034,11 @@ namespace gargantuan::network {
 			if (!Respawn) return;
 			// Server-owned roots retire through structural replication. Locally
 			// created roots can opt into the same reset policy independently.
-			std::set<ObjectId> ServerRoots;
-			for (const auto Object : ClientPublishedScreenGuis)
-				if (const auto Root = Replica.Resolve(Object); Root && Root->GetParent().value_or(nullptr) == Gui)
-					ServerRoots.insert(Root->GetObjectId());
 			for (const auto &Child : Gui->GetChildren()) {
 				if (Gui->GetDestroyed() || Gui->IsDestroying()) break;
 				const auto Root = std::dynamic_pointer_cast<ScreenGui>(Child);
 				if (!Root || Root->GetParent().value_or(nullptr) != Gui || !Root->GetResetOnSpawn() ||
-					ServerRoots.contains(Root->GetObjectId())) continue;
+					Root->IsReplicaMaterialization()) continue;
 				try {
 					Root->Destroy();
 				} catch (const std::exception &Error) {
@@ -1056,12 +1047,14 @@ namespace gargantuan::network {
 			}
 		}
 
-		void TryFinalizeClientBootstrap(bool CharacterProjected = false) {
+		void SynchronizeClientGuiAndBootstrap(bool CharacterProjected = false) {
 			if (!PrimaryConnection || !BaselineApplied) return;
 			auto PeerIterator = Peers.find(*PrimaryConnection);
-			if (PeerIterator == Peers.end() || PeerIterator->second.Phase != PeerPhase::Accepted ||
+			if (PeerIterator == Peers.end() ||
+				(PeerIterator->second.Phase != PeerPhase::Accepted && PeerIterator->second.Phase != PeerPhase::Ready) ||
 				Replica.GetEpoch() != PeerIterator->second.Replication)
 				return;
+			const bool AlreadyReady = PeerIterator->second.Phase == PeerPhase::Ready;
 			auto Root = std::dynamic_pointer_cast<DataModel>(Replica.GetReplicaRoot());
 			auto PlayerValue = std::dynamic_pointer_cast<Player>(Replica.Resolve(PeerIterator->second.PlayerObject));
 			auto PlayersValue = Root ? std::dynamic_pointer_cast<Players>(Root->FindFirstChildOfClass("Players", false))
@@ -1069,10 +1062,11 @@ namespace gargantuan::network {
 			if (!PlayerValue) return;
 			const auto Gui = PlayerValue->GetPlayerGui().value_or(nullptr);
 			if (!Gui) return;
-			const bool InitialLocalBinding = PlayersValue && !PlayersValue->GetLocalPlayer();
+			const bool InitialLocalBinding = !AlreadyReady && PlayersValue && !PlayersValue->GetLocalPlayer();
 			if (!Root || !PlayersValue || PeerIterator->second.PlayerId == 0 ||
 				static_cast<std::uint32_t>(PlayerValue->GetPlayerId()) != PeerIterator->second.PlayerId ||
-				!PlayersValue->SetTrustedLocalPlayer(PlayerValue)) {
+				!(AlreadyReady ? PlayersValue->GetLocalPlayer().value_or(nullptr) == PlayerValue
+							   : PlayersValue->SetTrustedLocalPlayer(PlayerValue))) {
 				Reject(
 					*PrimaryConnection,
 					DisconnectReason::ProtocolViolation,
@@ -1081,6 +1075,7 @@ namespace gargantuan::network {
 				return;
 			}
 			ReconcileClientGui(PlayerValue, Gui, InitialLocalBinding || CharacterProjected);
+			if (AlreadyReady) return;
 			if (InjectFailure(detail::GameSessionFailurePoint::LocalPlayerResolution)) {
 				FailSession({DisconnectReason::ResourceExhaustion, "Injected LocalPlayer resolution failure"});
 				return;
@@ -1911,6 +1906,17 @@ namespace gargantuan::network {
 				}
 				ClientPossessionPoses.clear();
 				if (Runtime) Runtime->Players->ClearTrustedLocalPlayer();
+				if (const auto Owner = std::dynamic_pointer_cast<Player>(Replica.Resolve(PeerValue.PlayerObject))) {
+					if (const auto Gui = Owner->GetPlayerGui().value_or(nullptr)) {
+						try {
+							Gui->Destroy();
+						} catch (const std::exception &Error) {
+							LOG_WARN(App, "[Gui:Provision] Disconnect GUI teardown failed: %.160s", Error.what());
+						} catch (...) {
+							LOG_WARN(App, "[Gui:Provision] Disconnect GUI teardown failed");
+						}
+					}
+				}
 				Replica.Reset();
 				BaselineApplied = false;
 				ClientCharacterObjects.clear();
@@ -1918,7 +1924,6 @@ namespace gargantuan::network {
 				ClientRemoteObjects.clear();
 				ClientKnownObjects.clear();
 				PendingClientGuiCode.clear();
-				ClientPublishedScreenGuis.clear();
 				ClientGuiCharacter = {};
 				PrimaryConnection.reset();
 			}

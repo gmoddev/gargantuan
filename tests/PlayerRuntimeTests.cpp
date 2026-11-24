@@ -12,6 +12,7 @@
 #include "gargantuan/classes/PlayerGui.hpp"
 #include "gargantuan/classes/ScreenGui.hpp"
 #include "gargantuan/classes/Script.hpp"
+#include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/services/ActionMap.hpp"
@@ -93,8 +94,15 @@ namespace {
 		auto ResetTemplate = std::make_shared<ScreenGui>();
 		ResetTemplate->SetName("Reset");
 		ResetTemplate->SetResetOnSpawn(true);
-		ResetTemplate->SetArchivable(true);
 		ResetTemplate->SetParent(Starter);
+		auto TemplatePart = std::make_shared<Part>();
+		TemplatePart->SetName("PresentationPart");
+		TemplatePart->SetParent(ResetTemplate);
+		auto TemplateReference = std::make_shared<WeldConstraint>();
+		TemplateReference->SetName("ReferenceFixture");
+		TemplateReference->SetParent(ResetTemplate);
+		TemplateReference->SetPart0(TemplatePart);
+		ResetTemplate->MarkPersistenceSubtreeArchivable();
 		bool ObservedProvisionedGui = false;
 		auto Added = PlayersService->PlayerAdded->Connect([&](const auto &Player) {
 			const auto Gui = Player->GetPlayerGui().value_or(nullptr);
@@ -107,6 +115,11 @@ namespace {
 		Check(ObservedProvisionedGui && Keep && OldReset && OldReset != ResetTemplate && Keep != KeepTemplate,
 			"join provisions fresh PlayerGui roots before PlayerAdded without a Character or controller");
 		if (!Keep || !OldReset) return;
+		const auto ClonedReference = std::dynamic_pointer_cast<WeldConstraint>(OldReset->FindFirstChild("ReferenceFixture", false));
+		Check(ClonedReference && ClonedReference->GetPart0().value_or(nullptr) ==
+			OldReset->FindFirstChild("PresentationPart", false) &&
+			ClonedReference->GetPart0().value_or(nullptr) != TemplatePart,
+			"typed references inside a ScreenGui resolve to the matching cloned objects");
 		Added->Disconnect();
 		ResetTemplate->SetEnabled(false);
 		Keep->SetName("PlayerState");
@@ -202,7 +215,65 @@ namespace {
 			"session player destroyed during initial attachment is never returned as a live join");
 		Check(PlayersService->RemoveSessionPlayer(Later) && LaterReset && LaterReset->GetDestroyed(),
 			"disconnect destroys this session player's runtime GUI");
+		auto OtherTemplatePart = std::make_shared<Part>();
+		OtherTemplatePart->SetArchivable(true);
+		OtherTemplatePart->SetParent(KeepTemplate);
+		TemplateReference->SetPart0(OtherTemplatePart);
+		auto InvalidTemplates = PlayersService->CreateSessionPlayer({"test", "cross-screen-gui-reference"});
+		Check(InvalidTemplates->GetPlayerGui().value()->GetChildren().empty(),
+			"cross-ScreenGui template references reject provisioning before any template becomes private runtime state");
 		World->Destroy();
+	}
+
+	void TestPlayerGuiScriptWaitRetirement() {
+		using namespace gargantuan;
+		auto World = std::make_shared<DataModel>();
+		auto PlayersService = std::dynamic_pointer_cast<Players>(World->GetService("Players"));
+		PlayersService->SetDefaultControllerEnabled(false);
+		PlayersService->SetDefaultCameraEnabled(false);
+		PlayersService->SetCharacterAutoLoads(false);
+		auto Root = std::make_shared<ScreenGui>();
+		Root->SetResetOnSpawn(true);
+		Root->SetParent(World->GetService("StarterGui"));
+		auto Template = std::make_shared<Script>();
+		Template->SetName("ResetWait");
+		Template->SetRunContext(Enums::RunContext::Client);
+		Template->SetSource(R"(
+			task.spawn(function()
+				task.wait(0)
+				game:SetAttribute("IndependentGuiTaskContinued", true)
+			end)
+			task.wait(0)
+			game:SetAttribute("GuiMainContinued", true)
+		)");
+		Template->SetParent(Root);
+		Root->MarkPersistenceSubtreeArchivable();
+		HeadlessRenderer Renderer(Vector2(32, 32));
+		Engine Runtime(World, &Renderer, nullptr, EngineProviderConfiguration{.AudioEnabled = false});
+		const auto Owner = PlayersService->GetLocalPlayer().value();
+		const auto Gui = Owner->GetPlayerGui().value();
+		auto BindCharacter = [&] {
+			auto Value = std::make_shared<KinematicCharacter>();
+			Value->SetParent(Runtime.Workspace);
+			Owner->SetCharacter(Value);
+		};
+		BindCharacter();
+		const auto OldScript = std::dynamic_pointer_cast<Script>(Gui->FindFirstChild("ResetWait", true));
+		Runtime.Script->Step();
+		Check(OldScript && OldScript->Status == ScriptStatus::Yielded && OldScript->Thread,
+			"the original Client Script has a pending main coroutine when respawn begins");
+		BindCharacter();
+		const auto NewScript = std::dynamic_pointer_cast<Script>(Gui->FindFirstChild("ResetWait", true));
+		Runtime.Script->Step();
+		Check(OldScript && OldScript->GetDestroyed() && !OldScript->Thread && NewScript &&
+			NewScript != OldScript && NewScript->Status == ScriptStatus::Yielded &&
+			!World->GetAttributeValue("GuiMainContinued") &&
+			World->GetAttributeValue("IndependentGuiTaskContinued") == std::optional<WireValue>(true),
+			"respawn cancels the destroyed main coroutine and preserves its independently spawned task");
+		Runtime.Script->Threads.Step();
+		Check(World->GetAttributeValue("GuiMainContinued") == std::optional<WireValue>(true),
+			"the replacement GUI script can finish its own scheduled wait");
+		Runtime.Destroy();
 	}
 
 	void TestActionMapContract() {
@@ -1099,6 +1170,7 @@ int main() {
 	}
 	TestActionMapContract();
 	TestPlayerGuiLifecycle();
+	TestPlayerGuiScriptWaitRetirement();
 	TestCharacterSchema();
 	TestDefaultPlayerRuntime();
 	TestEngineReattachAfterShutdown();

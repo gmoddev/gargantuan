@@ -2795,7 +2795,7 @@
       "Name": "LuaSourceContainer",
       "Kind": "Class",
       "Source": "assets/classes/LuaSourceContainer.luau",
-      "SourceSha256": "29ed7047503190e9044cd3e7fa514586a928ee555cb7637a3cb47e56598e10b0",
+      "SourceSha256": "ab81271f7b7e03dae670060f8b08cdfb0875b33649cd1658a8672c5f79d425b3",
       "Description": "Abstract class for compiling Lua bytecode",
       "Extends": "Instance",
       "Abstract": true,
@@ -2803,12 +2803,36 @@
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
         {
+          "Name": "GuiTemplateSourceDigest",
+          "Description": "Engine-owned digest of the trusted StarterGui source bytes bound to this clone.",
+          "Type": "t.String",
+          "Unmodified": "std::string()",
+          "OverrideRead": "GetGuiTemplateSourceDigest",
+          "OverrideWrite": "SetGuiTemplateSourceDigest",
+          "Replicated": true,
+          "Editable": false,
+          "ReadLevel": "Engine",
+          "WriteLevel": "Engine"
+        },
+        {
           "Name": "GuiTemplateSourceId",
           "Description": "Engine-owned provenance for a PlayerGui clone of a packaged StarterGui source.",
           "Type": "t.String",
           "Unmodified": "std::string()",
           "OverrideRead": "GetGuiTemplateSourceId",
           "OverrideWrite": "SetGuiTemplateSourceId",
+          "Replicated": true,
+          "Editable": false,
+          "ReadLevel": "Engine",
+          "WriteLevel": "Engine"
+        },
+        {
+          "Name": "GuiTemplateSourceVersion",
+          "Description": "Engine-owned SourceVersion for the trusted StarterGui source bound to this clone.",
+          "Type": "t.Integer",
+          "Unmodified": "0",
+          "OverrideRead": "GetGuiTemplateSourceVersion",
+          "OverrideWrite": "SetGuiTemplateSourceVersion",
           "Replicated": true,
           "Editable": false,
           "ReadLevel": "Engine",
@@ -5336,6 +5360,7 @@
         "Character",
         "CharacterRetirement",
         "CharacterWriteSource",
+        "GuiResetRequest",
         "Player",
         "Players"
       ]
@@ -6598,6 +6623,7 @@
       "Types": [
         "BaseRenderer",
         "HeadlessRenderer",
+        "PublicationMode",
         "RenderAnimationVisibilityFeedback",
         "RendererCapabilities"
       ]

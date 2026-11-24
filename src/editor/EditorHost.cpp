@@ -2115,12 +2115,69 @@ namespace gargantuan {
 					parameters["Root"].get_ref<const std::string &>().size() > 32768)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "OpenProject requires a bounded Root"));
 
-				auto root = std::filesystem::weakly_canonical(std::filesystem::path(parameters["Root"].get<std::string>()));
-				if (!std::filesystem::is_directory(root))
+				const auto Root = std::filesystem::weakly_canonical(std::filesystem::path(parameters["Root"].get<std::string>()));
+				if (!std::filesystem::is_directory(Root))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectNotFound", "Project root is not a directory"));
+
+				auto CandidateFilesystem = std::make_unique<DiskFilesystem>(Root);
+				std::optional<Project> CandidateProject = Project::fromExisting(CandidateFilesystem.get());
+				auto CandidatePreRun = ReadProjectPreRunSource(Root);
+				const bool ReuseSchema = World && CandidatePreRun == ActivePreRunSource &&
+					ActivePreRunSchemaGeneration == GetRuntimeSchemaLifecycle().GetActiveGeneration();
+				struct StagedWorld {
+					std::shared_ptr<DataModel> Value;
+					~StagedWorld() {
+						if (!Value) return;
+						try {
+							ScopedChangeJournalSuppression Suppression;
+							Value->Destroy();
+						} catch (...) {}
+					}
+				} CandidateWorld;
+				std::string Response;
+				const auto LoadDocument = [&] {
+					ScopedChangeJournalSuppression Suppression;
+					CandidateWorld.Value = CandidateProject->DeserializeGame();
+					auto &Document = CandidateWorld.Value;
+					Document->InitializeLoadedProjectRevision();
+					if (!std::dynamic_pointer_cast<Workspace>(Document->GetService("Workspace"))) {
+						Response = SerializeBoundedResponse(ErrorResponse(requestId, "InvalidProject", "Project has no valid Workspace"));
+						return false;
+					}
+					auto Encoded = JsonCodec::Encode(SuccessResponse(requestId, {
+						{"Root", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Document->GetObjectId()))},
+						{"ProjectState", EncodeProjectState(Document, Document->GetAuthoritativeRevision(), CandidateProject)},
+					}), "EditorHost OpenProject response");
+					if (!Encoded || Encoded->size() > EditorHostMaximumResponseBytes) {
+						Response = SerializeBoundedResponse(ErrorResponse(requestId, "ResponseTooLarge",
+							"EditorHost response exceeded its byte limit"));
+						return false;
+					}
+					Response = std::move(*Encoded);
+					return true;
+				};
+
+				if (ReuseSchema) {
+					if (!LoadDocument()) return Response;
+				} else {
+					// Check the payload without activating another schema or changing the
+					// current document. Semantic validation needs the candidate registry.
+					if (CandidateProject->InstanceFileFormat != InstanceSerialization::InstanceFormat::Json)
+						throw std::runtime_error("Binary instance formats are not yet implemented");
+					SourceMount Mount(*CandidateFilesystem);
+					SourceMountBudget Budget;
+					const auto Payload = Mount.ReadFile(CandidateProject->InstanceFilePath.lexically_relative(Root),
+						MaximumProtocolDocumentBytes, Budget);
+					if (!Payload) throw std::runtime_error(Payload.error().Format());
+					const auto Parsed = JsonCodec::Parse(*Payload, MaximumProtocolDocumentBytes, "Instance persistence");
+					if (!Parsed) throw std::runtime_error(Parsed.error().Format());
+					if (!Parsed->is_object()) throw std::runtime_error("Expected an instance document JSON object");
+				}
+
 				ResetEditorViewportDocument();
 				if (World) {
-					(void)World->Transactions.TerminateOwner(*World, TransactionOwner); World->Destroy();
+					(void)World->Transactions.TerminateOwner(*World, TransactionOwner);
+					World->Destroy();
 				}
 				ActiveAnimationPreview.reset();
 				World.reset();
@@ -2136,28 +2193,18 @@ namespace gargantuan {
 				ViewportHeight = 0;
 				ViewportPresentationActive = false;
 				AdvanceViewportGeneration();
-				ActivePreRunSource = BootstrapProjectRuntimeSchema(root);
-				ActivePreRunSchemaGeneration = GetRuntimeSchemaLifecycle().GetActiveGeneration();
-				auto filesystem = std::make_unique<DiskFilesystem>(root);
-				auto project = Project::fromExisting(filesystem.get());
-				auto world = project.DeserializeGame();
-				world->InitializeLoadedProjectRevision();
-				Filesystem = std::move(filesystem);
-				CurrentProject = std::move(project);
-				World = std::move(world);
+				if (!ReuseSchema) {
+					ActivePreRunSource = BootstrapProjectRuntimeSchema(Root);
+					ActivePreRunSchemaGeneration = GetRuntimeSchemaLifecycle().GetActiveGeneration();
+					if (!LoadDocument()) return Response;
+				}
+				Filesystem = std::move(CandidateFilesystem);
+				CurrentProject = std::move(CandidateProject);
+				World = std::move(CandidateWorld.Value);
 				World->Filesystem = Filesystem.get();
 				PersistedRevision = World->GetAuthoritativeRevision();
-				auto workspace = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
-				if (!workspace)
-					return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidProject", "Project has no valid Workspace"));
 				ViewportCamera = RenderCameraInput{};
-				return SerializeBoundedResponse(SuccessResponse(
-					requestId,
-					{
-						{"Root", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(World->GetObjectId()))},
-						{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
-					}
-				));
+				return Response;
 			}
 
 			if (method == "CreateProject") {

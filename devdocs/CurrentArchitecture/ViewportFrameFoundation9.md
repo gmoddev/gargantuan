@@ -115,6 +115,9 @@ headless renderer retains the semantic-only animation policy.
 - `gargantuan_viewport_frame_tests` exercises camera scope and hierarchy,
   cloned identity remapping, JSON clone and GAS model/place persistence,
   aspect, hidden and clipped invalidation, render scale and world isolation.
+  The same test compares a visible preview alone with a visible preview
+  alongside 128 authored hidden previews. It reports steady CPU time and
+  permanent `ViewportExtract` timing and scene-sample counts.
 - `gargantuan_animation_foundation_tests` runs an authored skinned MeshPart
   and clip under a ViewportFrame using the normal pose evaluator, then checks
   that independent immutable palette revisions use the same source mesh.
@@ -122,7 +125,8 @@ headless renderer retains the semantic-only animation policy.
   multiple viewport images, clipping, transparent foreground, static reuse
   and cleanup. Its `--viewport-workloads` test mode holds ordinary gameplay
   draw fixed while varying view count, visibility, changed transforms,
-  resolution and identity turnover. It prints GPU wait separately from
+  resolution and identity turnover. Its mostly-hidden case leaves seven of
+  eight renderer descriptors unreferenced by GUI batches. It prints GPU wait separately from
   estimated CPU submission cost and counts GPU target allocations and bytes.
 - Runtime work traces record `ViewportExtract` and `ViewportDraw` separately.
   Neither GPU fence wait nor offscreen readback qualifies physical display

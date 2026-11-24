@@ -32,8 +32,12 @@ container before publishing the `Player` and firing `PlayerAdded`. Its typed
 read-only accessor is `Player.PlayerGui`. Each owner has one container with
 fresh ObjectIds and independent state. Template cloning uses the Instance clone
 path, which remaps internal typed references, including a ViewportFrame's
-camera reference, and retains stable asset strings. A server-created player can
-use the GUI before selecting or spawning any controlled entity.
+camera reference, and retains stable asset strings. References to another
+StarterGui template or the StarterGui container fail provisioning. Each
+ScreenGui is cloned independently. Use runtime lookup when one layout needs
+content from another, and follow the target property's reference rules.
+A server-created player can use the GUI before selecting or spawning any
+controlled entity.
 
 Changes to a template affect future provisioning. Setting
 `ScreenGui.ResetOnSpawn` opts a direct root into retirement on a later live
@@ -68,9 +72,29 @@ A connected client learns other relevant Player identities while the
 `PlayerGui` accessor only resolves for the owner. Gameplay readiness requires the
 owner's container, and GRPL can deliver descendants over successive structural
 frames. Use existing `ChildAdded`, `ChildRemoved`, and property signals for
-content that may arrive or change after initialization. The host and the owner
-can add, edit, or remove permitted descendants through the ordinary Instance
-and GUI APIs. Client changes stay local and server-authored state arrives
+content that may arrive or change after initialization. A bounded wait using
+Instance lookup and the task scheduler can also handle progressive arrival:
+
+```luau
+local function WaitForChild(Parent, Name)
+	for Attempt = 1, 60 do
+		if Parent.Destroyed then
+			return nil
+		end
+		local Child = Parent:FindFirstChild(Name, false)
+		if Child then
+			return Child
+		end
+		task.wait()
+	end
+	return nil
+end
+```
+
+The server owns the lifetime and parent of replicated GUI nodes. The owner
+can edit their permitted presentation properties and freely add, move, or
+remove locally created descendants through the ordinary Instance and GUI APIs.
+Client changes stay local and server-authored state arrives
 through existing structural replication. Server-owned reset roots follow that
 replication lifecycle, and an accepted replacement Character also retires
 opted-in client-created roots. Disconnect retires the PlayerGui subtree, and a
@@ -84,19 +108,25 @@ PlayerGui ModuleScript can be resolved by the owning client through the ordinary
 module loader. Runtime script and module clones retain their independent
 `SourceId`. The host assigns an immutable, engine-owned template source identity
 to eligible clones. The packaged client uses that identity to find trusted
-local package source and checks the exact class, runtime role, and owning
-PlayerGui scope before attaching code. GRPL carries the identity and structural
-properties. Code executes locally after successful hydration. Server-created
-structural content without matching package provenance remains presentation
+local package source and checks the exact class, runtime role, owning PlayerGui
+scope, source digest, and projected SourceVersion before attaching code. GRPL
+carries bounded provenance and structural properties. The source bytes live
+in the trusted package. A later unmatched SourceVersion clears attached
+source bytes from the replica. Code executes locally after successful hydration.
+Server-created structural content without matching package provenance remains presentation
 data. Existing action, input, and remote authority policies apply to gameplay
 requests made from UI.
 
+Destroying a reset Script retires pending task-scheduler entries for its
+original coroutine. Independently spawned coroutines retain their existing
+scheduler lifetime.
+
 ## Native regression coverage
 
-`gargantuan-player-runtime-tests` covers staged provisioning, independent player
+`gargantuan_player_runtime_tests` covers staged provisioning, independent player
 roots, later Character reset, callback reentry, teardown, and persistence
-exclusion. `gargantuan-gui-foundation-tests` covers authoring preview input and
+exclusion. `gargantuan_gui_foundation_tests` covers authoring preview input and
 geometry isolation, shared image residency, and legacy and local-root layout.
-`gargantuan-game-session-tests --player-gui` exercises two simulated peers,
+`gargantuan_game_session_tests --player-gui` exercises two simulated peers,
 late server GUI changes, packaged source hydration and denial, client-local
 changes, Character replacement, and disconnect cleanup.

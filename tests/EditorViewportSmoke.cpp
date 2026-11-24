@@ -1,6 +1,8 @@
 #include "gargantuan/editor/EditorViewport.hpp"
 #include "gargantuan/render/SDLRenderer.hpp"
 
+#include <SDL3/SDL.h>
+
 #include <cassert>
 #include <algorithm>
 #include <chrono>
@@ -140,10 +142,17 @@ namespace {
 		constexpr std::uint32_t SurfaceWidth = 640;
 		constexpr std::uint32_t SurfaceHeight = 360;
 		constexpr std::size_t Frames = 240;
-		struct Workload { const char *Name; std::size_t Count; bool Animated; bool Resizing; bool Turnover; };
+		struct Workload {
+			const char *Name;
+			std::size_t Count;
+			bool Animated;
+			bool Resizing;
+			bool Turnover;
+			std::size_t Visible = Count;
+		};
 		for (const auto &Load : {
 			Workload{"gameplay", 0, false, false, false}, Workload{"one-static", 1, false, false, false},
-			Workload{"eight-static", 8, false, false, false}, Workload{"mostly-hidden", 1, false, false, false},
+			Workload{"eight-static", 8, false, false, false}, Workload{"mostly-hidden", 8, false, false, false, 1},
 			Workload{"eight-animated", 8, true, false, false}, Workload{"resize", 4, false, true, false},
 			Workload{"turnover", 8, false, false, true},
 		}) {
@@ -170,7 +179,7 @@ namespace {
 				if (Index == 0 || Turned) {
 					Publication->UiChanged = true;
 					Publication->Ui = {SurfaceWidth, SurfaceHeight, 1.0f, {}};
-					for (std::size_t View = 0; View < Load.Count; ++View) {
+					for (std::size_t View = 0; View < Load.Visible; ++View) {
 						const ObjectId Id{static_cast<std::uint32_t>(View + 1),
 							Load.Turnover ? static_cast<std::uint32_t>(Index / 12 + 1) : 1u};
 						Publication->Ui.Batches.push_back(ViewportQuad(Id,
@@ -200,6 +209,11 @@ namespace {
 				<< " renders=" << Metrics.ViewportRenders << " failures=" << Metrics.ViewportFailures
 				<< " target_peak_bytes=" << PeakBytes << " allocations=" << Metrics.ViewportTargetAllocations
 				<< " releases=" << Metrics.ViewportTargetReleases << '\n';
+			if (Metrics.FramesSubmitted != Frames || Metrics.ViewportFailures ||
+				Metrics.ViewportRenders > 2 * Frames ||
+				(Load.Visible < Load.Count && (Metrics.ViewportRenders != Load.Visible ||
+					Metrics.ViewportTargetAllocations != Load.Visible || PeakBytes != Load.Visible * 128 * 108 * 8)))
+				throw std::runtime_error(std::string("Unexpected viewport work or failure in ") + Load.Name);
 		}
 	}
 
@@ -646,12 +660,15 @@ namespace {
 	}
 }
 
-int main(int ArgumentCount, char **Arguments) {
+int main(int ArgumentCount, char **Arguments) try {
+	if (!SDL_Init(SDL_INIT_VIDEO)) throw std::runtime_error(std::string("SDL video initialization failed: ") + SDL_GetError());
+	struct SdlVideoLifetime { ~SdlVideoLifetime() { SDL_QuitSubSystem(SDL_INIT_VIDEO); } } VideoLifetime;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--viewport-workloads") {
 		RunViewportWorkloads();
 		return 0;
 	}
 	CheckViewportComposition();
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--viewport-composition") return 0;
 	const bool RequireHdr = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--require-hdr";
 	{
 		EditorViewportRenderer Renderer(64, 64);
@@ -735,4 +752,7 @@ int main(int ArgumentCount, char **Arguments) {
 	if (Fallback.UsesHdrScene()) throw std::runtime_error("[Renderer:HDR] Direct SDR fallback did not activate");
 	CheckMaterials(Fallback);
 	return 0;
+} catch (const std::exception &Error) {
+	std::cerr << "[Render:ViewportSmoke] " << std::string_view(Error.what()).substr(0, 512) << '\n';
+	return 1;
 }

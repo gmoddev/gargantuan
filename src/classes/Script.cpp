@@ -34,7 +34,11 @@ namespace gargantuan {
 		}
 		if (Thread && ThreadReference != LUA_NOREF && ThreadReference != LUA_REFNIL) {
 			auto L = lua_mainthread(Thread);
-			ScriptEngine::Get(L)->UntrackManagedScriptThread(Thread);
+			auto *Engine = ScriptEngine::Get(L);
+			// A queued task owns its own reference to the main coroutine.
+			// Retire that entry while this Script still keeps the thread alive.
+			if (GetDestroyed() || IsDestroying()) (void)Engine->Threads.CancelPendingTasks(L, Thread);
+			Engine->UntrackManagedScriptThread(Thread);
 			lua_unref(L, ThreadReference);
 		}
 		ThreadReference = LUA_NOREF;

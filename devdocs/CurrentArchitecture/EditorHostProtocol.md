@@ -163,10 +163,18 @@ does not receive `DefineSchema`, the PreRun facade, candidate registry access,
 or mutable native metadata. The top-level EditorHost protocol remains version
 1; schema discovery is independently versioned.
 
-Replacing an open project closes and releases the prior live DataModel and
-viewport snapshot before entering the next schema candidate lifecycle. If the
-replacement PreRun or project load fails, no old world remains live against the
-new or prior registry; a later `OpenProject` may construct a fresh document.
+`OpenProject` stages a replacement that uses the active frozen schema
+generation and identical PreRun source, including a pair of absent sources.
+The candidate must load and validate before the host retires the open
+DataModel, cursor, history and viewport preview. A staging failure preserves
+those resources and the schema generation.
+
+A different schema source receives project path, metadata and bounded JSON
+syntax checks before the host retires the existing document. The old
+DataModel and its projections are released before the new PreRun lifecycle
+begins. A subsequent PreRun or schema-dependent load failure closes the
+document. The schema lifecycle retains its prior frozen registry and
+generation when candidate schema registration fails.
 
 ## Authoring GUI preview, capability version 1
 

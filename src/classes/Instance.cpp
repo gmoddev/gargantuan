@@ -4,6 +4,8 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/PlayerGui.hpp"
+#include "gargantuan/gui/PlayerGuiScope.hpp"
+#include "gargantuan/services/Players.hpp"
 #include "gargantuan/classes/ServiceProvider.hpp"
 #include "gargantuan/InstanceProperty.hpp"
 #include "gargantuan/datatypes/Signal.hpp"
@@ -44,6 +46,11 @@
 
 namespace gargantuan {
 	namespace {
+		bool IsProtectedGuiReplicaHierarchy(const Instance &Object) {
+			return dynamic_cast<const DataModel *>(&Object) || dynamic_cast<const Players *>(&Object) ||
+				dynamic_cast<const Player *>(&Object) || dynamic_cast<const PlayerGui *>(&Object) ||
+				FindPlayerGuiScope(Object);
+		}
 		std::string InstanceClassName(const Instance *InstanceValue) {
 			auto *Definition = InstanceClassRegistry::GetDefinition(const_cast<Instance *>(InstanceValue));
 			if (!Definition) return "Instance";
@@ -366,6 +373,9 @@ namespace gargantuan {
 	void Instance::Destroy() {
 		AssertAuthoritativeMutation("Instance::Destroy");
 		if (Destroyed || DestroyingState) return;
+		if (GetCurrentScriptSecurityContext().Domain == ScriptExecutionDomain::Client &&
+			ReplicaMaterialization && IsProtectedGuiReplicaHierarchy(*this))
+			throw std::runtime_error("[Gui:Ownership] Replicated player GUI hierarchy is server-owned");
 		if (dynamic_cast<PlayerGui *>(this) &&
 			GetCurrentScriptSecurityContext().Domain != ScriptExecutionDomain::Core) {
 			const auto Owner = ParentReference.lock();
@@ -610,7 +620,8 @@ namespace gargantuan {
 				std::vector<std::string> PropertyNames;
 				PropertyNames.reserve(Definition->AllProperties.size());
 				for (const auto &[Name, Property] : Definition->AllProperties)
-					if (Name != "Parent" && Name != "Name" && Name != "SourceVersion" && Name != "GuiTemplateSourceId" &&
+					if (Name != "Parent" && Name != "Name" && Name != "SourceVersion" &&
+						Name != "GuiTemplateSourceId" && Name != "GuiTemplateSourceDigest" && Name != "GuiTemplateSourceVersion" &&
 						!Property->Signal && Property->Read && Property->Write &&
 						Property->WritePermission != Enums::Permission::Never)
 						PropertyNames.push_back(Name);
@@ -1133,14 +1144,21 @@ namespace gargantuan {
 	}
 
 	void Instance::FireAncestryChanged(std::shared_ptr<Instance> child, std::shared_ptr<Instance> parent) {
+		if (child->ParentReference.lock() != parent) return;
+		const auto ExpectedParent = ParentReference.lock();
+		const auto Descendants = Children;
 		AncestryChanged->Fire({child, parent});
+		if (child->ParentReference.lock() != parent || ParentReference.lock() != ExpectedParent) return;
 		if (auto Found = PropertyChangedSignals.find("Parent");
 			Found != PropertyChangedSignals.end() && Found->second) {
 			auto Signal = Found->second;
 			Signal->Fire({});
+			if (child->ParentReference.lock() != parent || ParentReference.lock() != ExpectedParent) return;
 		}
-		for (auto &descendant : Children) {
-			descendant->FireAncestryChanged(child, parent);
+		for (const auto &Descendant : Descendants) {
+			if (child->ParentReference.lock() != parent || ParentReference.lock() != ExpectedParent) break;
+			if (!Descendant->GetDestroyed() && Descendant->ParentReference.lock().get() == this)
+				Descendant->FireAncestryChanged(child, parent);
 		}
 	}
 
@@ -1167,6 +1185,10 @@ namespace gargantuan {
 		if (newParent) newParent->AssertIsAlive();
 		auto oldParent = ParentReference.lock();
 		if (oldParent == newParent) return;
+		if (GetCurrentScriptSecurityContext().Domain == ScriptExecutionDomain::Client && ReplicaMaterialization &&
+			(IsProtectedGuiReplicaHierarchy(*this) ||
+				(newParent && (dynamic_cast<PlayerGui *>(newParent.get()) || FindPlayerGuiScope(*newParent)))))
+			throw std::runtime_error("[Gui:Ownership] Replicated player GUI hierarchy is server-owned");
 		if (dynamic_cast<PlayerGui *>(this) && !DestroyingState) {
 			const auto Owner = std::dynamic_pointer_cast<Player>(newParent);
 			if (!Owner || oldParent || Owner->GetPlayerGui() ||
@@ -1189,8 +1211,10 @@ namespace gargantuan {
 
 		std::shared_ptr<Instance> self = shared_from_this();
 		if (newParent == self) throw std::invalid_argument("An Instance cannot be parented to itself");
+		std::size_t ParentDepth = 0;
 		for (auto ancestor = newParent; ancestor; ancestor = ancestor->ParentReference.lock()) {
 			if (ancestor == self) throw std::invalid_argument("An Instance cannot be parented to its descendant");
+			++ParentDepth;
 		}
 		std::vector<std::shared_ptr<Instance>> subtree;
 		subtree.reserve(Children.size() + 1);
@@ -1209,11 +1233,9 @@ namespace gargantuan {
 		}
 		const auto oldScope = oldDataModel ? oldDataModel->GetObjectId() : ObjectId{};
 		bool FirstAdoption = !oldDataModel && newDataModel;
+		if (newParent && newDataModel && ParentDepth + SubtreeDepth > MaximumProtocolJsonDepth)
+			throw std::length_error("Cannot set Parent: hierarchy depth limit would be exceeded");
 		if (FirstAdoption) {
-			std::size_t ParentDepth = 0;
-			for (auto Current = newParent; Current; Current = Current->ParentReference.lock()) ++ParentDepth;
-			if (ParentDepth + SubtreeDepth > MaximumProtocolJsonDepth)
-				throw std::length_error("Cannot set Parent: hierarchy depth limit would be exceeded");
 			if (!newDataModel->CanAdoptInstances(subtree.size()))
 				throw std::length_error("Cannot set Parent: DataModel object-count limit would be exceeded");
 			std::unordered_set<const Instance *> SubtreeNodes;
@@ -1329,6 +1351,11 @@ namespace gargantuan {
 
 	void Instance::ClearAllChildren() {
 		auto children = Children;
+		if (GetCurrentScriptSecurityContext().Domain == ScriptExecutionDomain::Client &&
+			std::ranges::any_of(children, [](const auto &Child) {
+				return Child->IsReplicaMaterialization() && IsProtectedGuiReplicaHierarchy(*Child);
+			}))
+			throw std::runtime_error("[Gui:Ownership] Replicated player GUI hierarchy is server-owned");
 		for (auto &child : children) {
 			child->Destroy();
 		}
@@ -1576,7 +1603,7 @@ namespace gargantuan {
 	std::shared_ptr<Instance> Instance::FindFirstChild(std::string name, std::optional<bool> recursive) {
 		for (const auto &child : Children) {
 			if (child->Name == name) return child;
-			if (recursive) {
+			if (recursive.value_or(false)) {
 				if (auto found = child->FindFirstChild(name, recursive)) return found;
 			}
 		};
@@ -1588,7 +1615,7 @@ namespace gargantuan {
 		if (!requested) return nullptr;
 		for (const auto &child : Children) {
 			if (InstanceClassRegistry::GetDefinition(child.get())->Id == requested->Id) return child;
-			if (recursive) {
+			if (recursive.value_or(false)) {
 				if (auto found = child->FindFirstChildOfClass(className, recursive)) return found;
 			}
 		};
@@ -1598,7 +1625,7 @@ namespace gargantuan {
 	std::shared_ptr<Instance> Instance::FindFirstChildWhichIsA(std::string className, std::optional<bool> recursive) {
 		for (const auto &child : Children) {
 			if (child->IsA(className)) return child;
-			if (recursive) {
+			if (recursive.value_or(false)) {
 				if (auto found = child->FindFirstChildWhichIsA(className, recursive)) return found;
 			}
 		};

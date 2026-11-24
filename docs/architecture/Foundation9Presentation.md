@@ -40,7 +40,9 @@ against authored templates. The Studio toggle leaves project revisions and
 properties untouched. Studio validates the displayed frame identity before
 acting on a selection. The native GAS workflows use EditorHost for scope
 replacement and transaction semantics, with project origin used for asset and
-source resolution. [GUI viewport protocol](../../devdocs/CurrentArchitecture/EditorHostProtocol.md#authoring-gui-preview-capability-version-1)
+source resolution. The EditorHost transfer limit is 512 KiB of decoded
+data per import, export, open or save. The standalone GAS v1 document
+limit is 8 MiB. [GUI viewport protocol](../../devdocs/CurrentArchitecture/EditorHostProtocol.md#authoring-gui-preview-capability-version-1)
 · [GAS authoring contract](../protocols/GAS-Authoring-v1.md)
 
 [Relay Rescue](../../samples/GameplayFoundation7/README.md) provides a playable
@@ -71,6 +73,11 @@ gameplay, and GASM/GASP round trips.
    distinct renderer extraction, lifetime, and streaming budgets. A bounded
    effect proof should identify which parts of existing publication carry
    over.
+6. Dedicated-server and player package audience separation is separate
+   packaging work. A future artifact split needs to retain the approved
+   owner-GUI Client Script and ModuleScript sources and their provenance in
+   the player artifact. Validate hydration and deny server-only code from
+   that artifact before changing deployment policy.
 
 Qualification receipts include the precise source trees, benchmark repeats,
 and the scope of native transport and offscreen rendering evidence.

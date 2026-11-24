@@ -368,7 +368,7 @@ namespace {
 		for (const auto &Equipment : {PilotEquipment, ObserverEquipment}) {
 			const auto Camera = Equipment->FindFirstChild("EquipmentCamera", false);
 			Require(Camera && Equipment->ReadPropertyWireValue("CurrentCamera") ==
-				WireValue(WireObjectId::FromObjectId(Camera->GetObjectId())),
+				WireValue(WireObjectReference{WireObjectId::FromObjectId(Camera->GetObjectId())}),
 				"cloning and replication remap each camera reference to the same HUD subtree");
 		}
 		ClickPilot(225);

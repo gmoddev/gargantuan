@@ -1866,6 +1866,7 @@ namespace gargantuan {
 	PackageBuilder::MakePlayerGuiCodeHydrator(const std::shared_ptr<DataModel> &TrustedPackageWorld) {
 		struct TrustedSource {
 			std::string ClassName;
+			std::string Digest;
 			std::string Source;
 		};
 		std::map<std::string, TrustedSource> Sources;
@@ -1877,7 +1878,7 @@ namespace gargantuan {
 				const auto Source = std::dynamic_pointer_cast<LuaSourceContainer>(Object);
 				if (!Source || !IsClientPlayerGuiSource(*Source)) continue;
 				const auto Inserted = Sources.emplace(Source->GetSourceId(),
-					TrustedSource{Source->GetClassName(), Source->GetSource()});
+					TrustedSource{Source->GetClassName(), Source->GetSourceDigest(), Source->GetSource()});
 				if (!Inserted.second) throw std::runtime_error("Packaged StarterGui SourceId is ambiguous");
 			}
 		}
@@ -1892,6 +1893,7 @@ namespace gargantuan {
 			if (!std::dynamic_pointer_cast<ScreenGui>(Root)) return false;
 			const auto Found = Sources.find(Target->GetGuiTemplateSourceId());
 			return Found != Sources.end() && Found->second.ClassName == Target->GetClassName() &&
+				Found->second.Digest == Target->GetGuiTemplateSourceDigest() &&
 				Target->HydrateGuiTemplateSource(Found->second.Source);
 		};
 	}
