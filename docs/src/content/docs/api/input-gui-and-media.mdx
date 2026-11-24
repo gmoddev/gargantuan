@@ -31,6 +31,38 @@ description: Local player and actions, screen controls, asset lookup, sound, and
 
 The GUI runtime resolves screen roots against viewport and safe area, routes pointer events, and publishes render data. A server can author replicated GUI state, but activation and device focus are local presentation facts. The shipped interaction overlay in `assets/runtime/DefaultInteractionRuntime.luau` is a useful real usage reference.
 
+### Player GUI
+
+Place default `ScreenGui` templates directly under `StarterGui`. A live
+player receives a private `PlayerGui`, available from `Player.PlayerGui`.
+Code that starts before replication completes can observe child arrival or
+wait for its expected controls before binding events. Each clone owns its
+identities and local references. Changes to a template reach players on
+future provisioning or replacement of a matching spawn-reset root.
+
+`ScreenGui.ResetOnSpawn` defaults to false. Persistent roots keep local state
+across Character replacement and controller changes. The runtime replaces
+eligible template roots on a later Character spawn and retires private
+content with the player. An owner's client can change its own presentation.
+Use the established network intent APIs for actions that affect authoritative
+game state.
+
+### 3D previews
+
+`ViewportFrame` composes an independent presentation scene inside a
+screen-space control. Add a `Camera` inside the frame and assign it to
+`CurrentCamera` after parenting it. The camera's `CFrame` and
+`FieldOfView` determine the view, and the frame rectangle determines its
+aspect. The frame supports the ordinary GUI background, visibility,
+clipping, transforms, and stacking order.
+
+Place `Part` and asset-backed `MeshPart` instances in the presentation
+subtree. A compatible `Animator` can drive a preview mesh. Preview geometry
+uses independent transforms and shared project assets.
+`RenderScale` accepts 0.25–1 and `MaxUpdateRate` accepts 1–60, with defaults
+of 1 and 30. Rendering observes the current viewport budget, visibility,
+and retained content. Studio GUI Preview shows the authored layout and camera.
+
 ## Assets, animation, and sound
 
 `AssetService:ResolveAsset(Reference: string) -> string?` returns the same valid `asset://` or `builtin://` reference when currently available, otherwise nil. `IsAssetAvailable(Reference) -> boolean` checks the valid last-known-good catalog entry. `GetAssetMetadata(Reference) -> table?` returns a bounded semantic copy with common fields such as `Reference`, `AssetId`, `Kind`, `State`, `ContentRevision`, and `Available`; kind-specific fields can include dimensions, mesh counts, audio duration, or animation duration/track count. A syntactically invalid or unknown reference returns nil for `ResolveAsset` and `GetAssetMetadata`, or false for `IsAssetAvailable`. A non-string argument or reference longer than 256 bytes raises a script error. These calls do not expose raw asset bytes or filesystem paths. Use the result to decide whether to attach a `MeshPart.Mesh`, `ImageLabel.Image`, `Sound.SoundId`, or animation clip.

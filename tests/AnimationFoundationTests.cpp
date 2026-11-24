@@ -12,7 +12,9 @@
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/ProximityPrompt.hpp"
+#include "gargantuan/classes/ScreenGui.hpp"
 #include "gargantuan/classes/Sound.hpp"
+#include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/editor/PlaySession.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
@@ -2431,6 +2433,155 @@ int main() {
 	}
 	if (MeshRecord && WaveRecord)
 		TestAnimationUpdatePolicy(Assets, WorkspaceValue, MeshRecord->Reference.Value, WaveRecord->Reference.Value);
+	if (MeshRecord && WaveRecord) {
+		auto Preview = std::make_shared<ViewportFrame>();
+		Preview->SetParent(World);
+		auto PreviewCamera = std::make_shared<Camera>();
+		PreviewCamera->SetCFrame(CFrame(0.0f, 0.0f, 4.0f));
+		PreviewCamera->SetParent(Preview);
+		Preview->SetCurrentCamera(PreviewCamera);
+		auto PreviewRig = std::make_shared<MeshPart>();
+		PreviewRig->SetMesh(MeshRecord->Reference.Value);
+		PreviewRig->SetParent(Preview);
+		auto PreviewAnimator = std::make_shared<Animator>();
+		PreviewAnimator->SetParent(PreviewRig);
+		AnimationRuntime PreviewAnimation(Assets);
+		PreviewAnimation.RegisterAnimator(PreviewAnimator);
+		auto PreviewTrack = PreviewAnimator->CreateTrack(WaveRecord->Reference.Value);
+		PreviewTrack->Play();
+		const std::array Visible{PreviewRig->GetObjectId()};
+		const AnimationUpdateContext Context{
+			.Environment = AnimationRuntimeEnvironment::Graphical, .ViewOrigin = glm::vec3(10000.0f),
+			.HasViewOrigin = true, .VisibilityGeneration = 1, .VisibilityPublication = 1,
+			.VisibilityComplete = true, .VisiblePresentationObjects = Visible,
+		};
+		PreviewAnimation.Step(0.0f, Context);
+		const auto FirstView = ExtractViewportScene(*Preview, *Assets, &PreviewAnimation, 180, 120);
+		PreviewAnimation.ClearChanges();
+		PreviewAnimation.Step(0.125f, Context);
+		const auto SecondView = ExtractViewportScene(*Preview, *Assets, &PreviewAnimation, 180, 120);
+		const bool Published = FirstView && SecondView && FirstView->Objects.size() == 1 && SecondView->Objects.size() == 1 &&
+			FirstView->Objects.front().Pose && SecondView->Objects.front().Pose;
+		Check(Published && FirstView->Objects.front().Pose->SourceMesh == SecondView->Objects.front().Pose->SourceMesh &&
+			FirstView->Objects.front().Pose->PoseRevision < SecondView->Objects.front().Pose->PoseRevision &&
+			!SameViewportScene(*FirstView, *SecondView),
+			"visible viewport Animator advances with a shared source mesh and independent palette");
+		RenderPublisher OrdinaryPublisher;
+		OrdinaryPublisher.SetAnimationPoseChanges(PreviewAnimation.GetPoseUpdates(), PreviewAnimation.GetPoseRemoves());
+		const auto OrdinaryView = OrdinaryPublisher.Publish(*WorkspaceValue, RenderCameraInput{}, 180, 120);
+		Check(OrdinaryView->AnimationPoseUpdates.empty(),
+			"a viewport Animator does not publish its palette into the gameplay world");
+		PreviewAnimation.Shutdown();
+		Preview->Destroy();
+	}
+	if (MeshRecord && WaveRecord) {
+		const auto AddViewportRig = [&](const std::shared_ptr<DataModel> &Model) {
+			auto Screen = std::make_shared<ScreenGui>();
+			Screen->SetParent(Model);
+			auto View = std::make_shared<ViewportFrame>();
+			View->SetSize(UDim2::fromOffset(180, 120));
+			View->SetParent(Screen);
+			auto CameraValue = std::make_shared<Camera>();
+			CameraValue->SetCFrame(CFrame(0.0f, 0.0f, 4.0f));
+			CameraValue->SetParent(View);
+			View->SetCurrentCamera(CameraValue);
+			auto ModelPart = std::make_shared<MeshPart>();
+			ModelPart->SetMesh(MeshRecord->Reference.Value);
+			ModelPart->SetParent(View);
+			auto ModelAnimator = std::make_shared<Animator>();
+			ModelAnimator->SetParent(ModelPart);
+			auto Track = ModelAnimator->CreateTrack(WaveRecord->Reference.Value);
+			Track->SetLooped(true);
+			Track->Play();
+			return std::pair(View, Track);
+		};
+		const auto ReadViewportPose = [](const RenderPublication &Publication, ObjectId Target)
+			-> std::optional<std::uint64_t> {
+			if (!Publication.Viewports) return std::nullopt;
+			for (const auto &View : *Publication.Viewports)
+				if (View->Viewport == Target && View->Objects.size() == 1 && View->Objects.front().Pose)
+					return View->Objects.front().Pose->PoseRevision;
+			return std::nullopt;
+		};
+		{
+			PlaySession ViewportPlay({42}, AuthoredSnapshot.Contents, InstanceSerialization::InstanceFormat::Json,
+				Root, 320, 180, AuthoredSnapshot.Revision, AuthoredSnapshot.Assets);
+			(void)ViewportPlay.TakeRenderPublications();
+			auto [View, Track] = AddViewportRig(ViewportPlay.GetWorld());
+			ViewportPlay.Step();
+			const auto First = ViewportPlay.TakeRenderPublications();
+			const auto FirstPose = First.empty() ? std::nullopt : ReadViewportPose(*First.back(), View->GetObjectId());
+			Check(FirstPose.has_value(), "Studio Play's CPU-only publication renderer supplies the first viewport GPU palette");
+			View->SetVisible(false);
+			ViewportPlay.Step();
+			(void)ViewportPlay.TakeRenderPublications();
+			// Re-admission makes the next sample immediate without sleeping on the cadence clock.
+			Track->SetTimePosition(0.5f);
+			View->SetVisible(true);
+			ViewportPlay.Step();
+			const auto Second = ViewportPlay.TakeRenderPublications();
+			const auto SecondPose = Second.empty() ? std::nullopt : ReadViewportPose(*Second.back(), View->GetObjectId());
+			Check(FirstPose && SecondPose && *SecondPose > *FirstPose,
+				"Studio Play publishes a newer viewport GPU palette after a hidden preview is shown again");
+		}
+		{
+			auto Dedicated = std::make_shared<DataModel>();
+			Dedicated->Root = Root;
+			auto DedicatedAssets = GetAssets(Dedicated);
+			DedicatedAssets->LoadProjectAssetSnapshot(AuthoredSnapshot.Assets);
+			HeadlessRenderer Renderer(Vector2(320, 180));
+			Engine Runtime(Dedicated, &Renderer, {}, EngineProviderConfiguration{.Mode = RuntimeMode::NetworkServer});
+			Runtime.ProcessService->Alive = true;
+			auto [View, Track] = AddViewportRig(Dedicated);
+			Runtime.Step();
+			const auto Frame = Renderer.TakeLastPublication();
+			const auto Capabilities = Renderer.GetCapabilities();
+			Check(!Capabilities.Graphical && !Capabilities.GpuSkinning && Frame &&
+				!ReadViewportPose(*Frame, View->GetObjectId()) && Runtime.Animation->GetMetrics().HeadlessVisualPoseSkips > 0,
+				"a dedicated headless runtime keeps its ordinary visual-only pose suppression");
+		}
+		{
+			auto Game = std::make_shared<DataModel>();
+			Game->Root = Root;
+			GetAssets(Game)->LoadProjectAssetSnapshot(AuthoredSnapshot.Assets);
+			HeadlessRenderer Renderer(Vector2(320, 180), HeadlessRenderer::PublicationMode::DeferredGpuPresentation);
+			Engine Runtime(Game, &Renderer);
+			Runtime.ProcessService->Alive = true;
+			auto [View, Track] = AddViewportRig(Game);
+			const auto Rig = View->FindFirstChildOfClass("MeshPart", false);
+			const auto RigId = Rig->GetObjectId();
+			const auto RigAnimator = std::dynamic_pointer_cast<Animator>(Rig->FindFirstChildOfClass("Animator", false));
+			auto Later = RigAnimator->CreateTrack(WaveRecord->Reference.Value);
+			Later->SetLooped(true);
+			Later->Play();
+			Runtime.Step();
+			const auto Initial = Renderer.TakeLastPublication();
+			Check(Initial && ReadViewportPose(*Initial, View->GetObjectId()),
+				"shutdown fixture publishes an animated viewport before either track completes");
+
+			std::size_t FirstEnded = 0;
+			std::size_t LaterEnded = 0;
+			bool LaterCompleted = false;
+			Track->Ended->Once([&](std::monostate) {
+				++FirstEnded;
+				LaterCompleted = Later->HoldsNaturalEndPose();
+				Game->Destroy();
+			});
+			const auto Remaining = Later->Ended->Once([&](std::monostate) { ++LaterEnded; });
+			for (const auto &Pending : {Track, Later}) {
+				Pending->SetLooped(false);
+				Pending->SetTimePosition(0.0f);
+			}
+			// Deterministically complete both tracks in the same evaluation.
+			Runtime.Animation->Step(Track->GetDuration());
+			Runtime.Step();
+			Check(FirstEnded == 1 && LaterCompleted && LaterEnded == 0 && Game->GetDestroyed() &&
+				!Runtime.Animation->GetPose(RigId) && Runtime.Animation->GetMetrics().TrackedAnimators == 0 &&
+				!Renderer.TakeLastPublication(),
+				"the first viewport completion can destroy the live world and cancel later completion dispatch");
+			Remaining->Disconnect();
+		}
+	}
 	if (MeshRecord && WaveRecord)
 		TestAnimationPoseJobs(
 			Assets,

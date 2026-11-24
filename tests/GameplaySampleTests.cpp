@@ -2,10 +2,13 @@
 #include "gargantuan/animation/AnimationRuntime.hpp"
 #include "gargantuan/audio/AudioRuntime.hpp"
 #include "gargantuan/classes/Character.hpp"
+#include "gargantuan/classes/Frame.hpp"
 #include "gargantuan/classes/ImageButton.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Player.hpp"
+#include "gargantuan/classes/ScreenGui.hpp"
 #include "gargantuan/classes/Sound.hpp"
+#include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/network/GameSession.hpp"
@@ -23,6 +26,7 @@
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "runtime/RuntimeWorkTrace.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -216,6 +220,18 @@ namespace {
 		HeadlessRenderer ServerRenderer(Vector2(320, 240));
 		Engine ServerRuntime(ServerWorld, &ServerRenderer, ReportError,
 			{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer});
+		const auto LegacyHud = std::make_shared<ScreenGui>();
+		LegacyHud->SetName("LegacyReplicationHud");
+		LegacyHud->SetParent(ServerRuntime.Workspace);
+		const auto LegacyFrame = std::make_shared<Frame>();
+		LegacyFrame->SetName("LegacyReplicationFrame");
+		LegacyFrame->SetParent(LegacyHud);
+		const auto LegacyViewport = std::make_shared<ViewportFrame>();
+		LegacyViewport->SetName("LegacyHostViewport");
+		LegacyViewport->SetParent(LegacyHud);
+		const auto LocalGeometry = std::make_shared<Part>();
+		LocalGeometry->SetName("LegacyViewportGeometry");
+		LocalGeometry->SetParent(LegacyViewport);
 		ServerRuntime.ProcessService->Alive = true;
 		GameSessionConfiguration Configuration{
 			.Role = GameSessionRole::Server,
@@ -232,6 +248,7 @@ namespace {
 		}
 		Require(Server != nullptr, "relay server accepts the session");
 		Configuration.Role = GameSessionRole::Client;
+		Configuration.HydratePlayerGuiCode = PackageBuilder::MakePlayerGuiCodeHydrator(TrustedWorld);
 		std::array<Client, 2> Clients;
 		for (std::size_t Index = 0; Index < Clients.size(); ++Index) {
 			Configuration.ClientNonce = 0x52454c415900ull + Index;
@@ -239,8 +256,18 @@ namespace {
 			Require(Clients[Index].Session->Start().Succeeded(), "relay client connects");
 		}
 
+#if defined(GARGANTUAN_WORK_TRACE)
+		runtime_detail::HostWorkTrace WorkTrace;
+		auto PreviousFrame = Clock::now();
+		std::uint64_t FrameIndex = 0;
+#endif
 		const auto Frame = [&] {
 			std::this_thread::sleep_for(17ms);
+#if defined(GARGANTUAN_WORK_TRACE)
+			const auto FrameStarted = Clock::now();
+			runtime_detail::HostWorkTrace::Frame TracedFrame(WorkTrace, FrameStarted, PreviousFrame, FrameIndex++);
+			PreviousFrame = FrameStarted;
+#endif
 			if (Network) {
 				(void)Network->Advance(17ms);
 				Network->Pump();
@@ -288,37 +315,66 @@ namespace {
 			for (int Index = 0; Index < 5; ++Index) Frame();
 		};
 
-		Until(180, "both peers hydrate distinct stock Characters and the beacon animation", [&] {
+		const auto GetPlayerGui = [](const Client &Peer) -> std::shared_ptr<Instance> {
+			const auto LocalPlayer = Peer.Runtime->Players->GetLocalPlayer().value_or(nullptr);
+			return LocalPlayer ? LocalPlayer->FindFirstChildOfClass("PlayerGui", false) : nullptr;
+		};
+		Until(180, "both peers hydrate stock Characters, their private HUD, and both animations", [&] {
 			for (const auto &Peer : Clients) {
 				if (!Peer.Runtime || Peer.Session->GetStatus() != GameSessionStatus::Ready ||
-					Peer.Runtime->Animation->GetMetrics().ActiveTracks == 0)
+					Peer.Runtime->Animation->GetMetrics().ActiveTracks < 2)
 					return false;
 				auto PlayerValue = Peer.Runtime->Players->GetLocalPlayer().value_or(nullptr);
-				if (!PlayerValue || !PlayerValue->GetCharacter() || !NumberEquals(*PlayerValue, "Health", 100))
+				if (!PlayerValue || !PlayerValue->GetCharacter() || !NumberEquals(*PlayerValue, "Health", 100) ||
+					!GetPlayerGui(Peer))
 					return false;
 			}
 			return Server->GetMetrics().ReadyPeers == 2;
 		});
-		const auto GetMixToggle = [](const Client &Peer) {
-			return std::dynamic_pointer_cast<ImageButton>(Peer.Runtime->DataModel->FindFirstDescendant("RelayMixToggle"));
-		};
-		auto PilotToggle = GetMixToggle(Clients.front());
-		auto ObserverToggle = GetMixToggle(Clients.back());
+		const auto PilotGui = GetPlayerGui(Clients.front());
+		const auto ObserverGui = GetPlayerGui(Clients.back());
+		const auto PilotHud = PilotGui->FindFirstChild("RelayHud", false);
+		const auto ObserverHud = ObserverGui->FindFirstChild("RelayHud", false);
+		Require(PilotHud && ObserverHud && PilotHud->GetObjectId() != ObserverHud->GetObjectId(),
+			"each player gets an independent clone from StarterGui");
+		for (const auto &Peer : Clients) {
+			const auto LegacyReplica = Peer.Runtime->Workspace->FindFirstChild("LegacyReplicationHud", false);
+			Require(LegacyReplica && LegacyReplica->FindFirstChild("LegacyReplicationFrame", false) &&
+				!LegacyReplica->FindFirstChild("LegacyHostViewport", false) &&
+				!Peer.Runtime->Workspace->FindFirstDescendant("LegacyViewportGeometry"),
+				"legacy screen content replicates while its host-local viewport scene stays outside GRPL");
+		}
+		const auto PilotToggle = std::dynamic_pointer_cast<ImageButton>(PilotHud->FindFirstChild("RelayMixToggle", false));
+		const auto ObserverToggle = std::dynamic_pointer_cast<ImageButton>(ObserverHud->FindFirstChild("RelayMixToggle", false));
 		Require(PilotToggle && ObserverToggle && PilotToggle->GetScaleType() == Enums::GuiImageScaleType::Fit &&
 			ObserverToggle->GetScaleType() == Enums::GuiImageScaleType::Fit,
-			"saved Luau creates an asset-backed fit ImageButton on both clients");
-		const auto ClickPilotMixToggle = [&] {
+			"both cloned HUDs retain the authored asset-backed fit ImageButton");
+		const auto ClickPilot = [&](float X) {
 			for (const auto State : {ButtonState::Pressed, ButtonState::Released})
 				(void)Clients.front().Runtime->ProcessEvent(PointerButtonEvent{
-					.Device = {2}, .Button = PointerButton::Left, .State = State, .Position = {280, 98},
+					.Device = {2}, .Button = PointerButton::Left, .State = State, .Position = {X, 98},
 				});
 		};
-		ClickPilotMixToggle();
+		ClickPilot(280);
 		Require(PilotToggle->GetAccessibilitySelected() && !ObserverToggle->GetAccessibilitySelected(),
 			"routed ImageButton activation changes only its client's audio mute");
-		ClickPilotMixToggle();
+		ClickPilot(280);
 		Require(!PilotToggle->GetAccessibilitySelected() && !ObserverToggle->GetAccessibilitySelected(),
 			"the second activation restores the pilot's audio independently");
+		const auto PilotEquipment = std::dynamic_pointer_cast<GuiObject>(PilotHud->FindFirstChild("EquipmentPreview", false));
+		const auto ObserverEquipment = std::dynamic_pointer_cast<GuiObject>(ObserverHud->FindFirstChild("EquipmentPreview", false));
+		Require(PilotEquipment && ObserverEquipment && PilotEquipment->GetVisible() && ObserverEquipment->GetVisible(),
+			"both players begin with an authored equipment viewport");
+		for (const auto &Equipment : {PilotEquipment, ObserverEquipment}) {
+			const auto Camera = Equipment->FindFirstChild("EquipmentCamera", false);
+			Require(Camera && Equipment->ReadPropertyWireValue("CurrentCamera") ==
+				WireValue(WireObjectReference{WireObjectId::FromObjectId(Camera->GetObjectId())}),
+				"cloning and replication remap each camera reference to the same HUD subtree");
+		}
+		ClickPilot(225);
+		Require(!PilotEquipment->GetVisible() && ObserverEquipment->GetVisible(), "equipment selection is client-local");
+		ClickPilot(225);
+		Require(PilotEquipment->GetVisible(), "equipment preview can be reopened through the same HUD");
 		for (const auto &Peer : Clients) {
 			const auto Cue = std::dynamic_pointer_cast<Sound>(Peer.Runtime->Workspace->FindFirstChild("RelayChargeTone", true));
 			Require(Cue && Cue->GetMixCategory() == Enums::SoundMixCategory::Effects &&
@@ -336,6 +392,14 @@ namespace {
 		const auto SwitchOperator = FindServerPlayer(Clients.back());
 		Require(Pilot && SwitchOperator && Pilot != SwitchOperator && Pilot->GetCharacter() &&
 				SwitchOperator->GetCharacter(), "stock Characters belong to distinct server Players");
+		const auto ServerPilotGui = Pilot->FindFirstChildOfClass("PlayerGui", false);
+		Require(ServerPilotGui != nullptr, "the server owns the pilot's GUI lifecycle");
+		for (const auto &Peer : Clients) {
+			const auto Local = (*Peer.Runtime->Players->GetLocalPlayer())->GetPlayerId();
+			for (const auto &Replica : Peer.Runtime->Players->GetPlayers())
+				if (Replica->GetPlayerId() != Local)
+					Require(!Replica->FindFirstChildOfClass("PlayerGui", false), "another player's GUI is absent from the local graph");
+		}
 		const auto OldPilotCharacter = *Pilot->GetCharacter();
 		const auto Course = ServerRuntime.Workspace->FindFirstChild("RelayCourse", std::nullopt);
 		Require(Course != nullptr, "saved RelayCourse is present");
@@ -463,6 +527,10 @@ namespace {
 			});
 		}
 		const auto BeforeDeath = *Pilot->GetCharacter();
+		Require(glm::length(LocalGeometry->GetPosition()) < 0.01f,
+			"host-local viewport geometry beneath Workspace never enters gameplay physics");
+		const auto BeforeBriefing = PilotGui->FindFirstChild("RelayBriefing", false);
+		Require(BeforeBriefing != nullptr, "the pilot retains a spawn-reset briefing before death");
 		PlaceAt(Pilot, "Hazard");
 		Until(120, "server damage retires the stock Character", [&] {
 			return BeforeDeath->GetDestroyed() && !Pilot->GetCharacter() && NumberEquals(*Pilot, "Health", 0);
@@ -471,6 +539,11 @@ namespace {
 		const auto DeathTick = ServerRuntime.GetSimulationTick();
 		Until(180, "sample respawns the same Player with a new Character and full health", [&] {
 			return Pilot->GetCharacter() && *Pilot->GetCharacter() != BeforeDeath && NumberEquals(*Pilot, "Health", 100);
+		});
+		Until(60, "respawn replaces the briefing and keeps the player's active HUD", [&] {
+			const auto Briefing = PilotGui->FindFirstChild("RelayBriefing", false);
+			return Briefing && Briefing != BeforeBriefing && BeforeBriefing->GetDestroyed() &&
+				PilotGui->FindFirstChild("RelayHud", false) == PilotHud;
 		});
 		const auto RespawnMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - DeathTime);
 		std::cout << "[Gameplay:Relay] transport=" << (UseGns ? "gns-loopback" : "simulated")
@@ -487,12 +560,16 @@ namespace {
 				ServerRuntime.Players->GetPlayers() == std::vector<std::shared_ptr<Player>>{SwitchOperator};
 		});
 		Require(Inventory->GetDestroyed(), "disconnect also retires player-owned inventory");
+		Require(ServerPilotGui->GetDestroyed(), "disconnect retires the server-side private GUI");
 
 		if (RenderGpu) Clients.back().GetGpu().Report("observer");
 		Clients.back().Stop();
 		Server->Stop();
 		ServerRuntime.Destroy();
 		TrustedWorld->Destroy();
+#if defined(GARGANTUAN_WORK_TRACE)
+		WorkTrace.Write();
+#endif
 	}
 }
 

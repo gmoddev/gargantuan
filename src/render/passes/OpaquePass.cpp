@@ -352,7 +352,7 @@ namespace gargantuan {
 			}
 			SDL_GPUColorTargetInfo colorTarget = {
 				.texture = context.GetSceneColorTexture(),
-				.load_op = SDL_GPU_LOADOP_LOAD,
+				.load_op = context.ClearPresentationColor ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD,
 				.store_op = SDL_GPU_STOREOP_STORE,
 			};
 

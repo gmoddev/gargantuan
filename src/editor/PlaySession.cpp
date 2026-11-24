@@ -55,7 +55,10 @@ namespace gargantuan {
 			throw std::runtime_error("Play launch snapshot has no canonical AssetService");
 		}
 		RuntimeAssets->LoadProjectAssetSnapshot(Assets);
-		RuntimeRenderer = std::make_unique<HeadlessRenderer>(Vector2(Width, Height));
+		// EditorHost owns the SDL device. This CPU-only renderer still produces
+		// the complete visual publications its offscreen consumer needs.
+		RuntimeRenderer = std::make_unique<HeadlessRenderer>(Vector2(Width, Height),
+			HeadlessRenderer::PublicationMode::DeferredGpuPresentation);
 		EngineProviderConfiguration Providers{.AudioEnabled = AudioEnabled};
 		RuntimeEngine = std::make_unique<Engine>(
 			RuntimeWorld,

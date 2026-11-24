@@ -176,6 +176,7 @@ The following documents describe recently implemented, source-verified slices:
 - [GAS Foundation 1 qualification](../../devdocs/Validation/GASFoundation1.md)
 - [GAS and Gameplay 7 integration and Studio handoff](../../devdocs/Validation/GasGameplayIntegration.md)
 - [Engine Foundation 8 capability inventory and scope](EngineFoundation8Inventory.md)
+- [Foundation 9 runtime presentation and creator integration](Foundation9Presentation.md)
 - [Protected GAS export proposal](../adr/GAS-Protected-Exports.md)
 - [Script security](../../devdocs/CurrentArchitecture/ScriptSecurity.md)
 - [SourceMount and FileLink compatibility](../../devdocs/CurrentArchitecture/SourceMount.md)
@@ -191,6 +192,11 @@ These files are candidates for gradual migration into `docs/architecture/` and
 a goal; each migration must verify claims against current code and tests.
 
 ## Accepted and future direction
+
+- The proposed [First-class planar Mirror ADR](../adr/PlanarMirror.md) defines
+  the finite surface, clipped reflected camera, rendering budget, and Studio
+  workflow for a future campaign. Foundation 9 supplies shared offscreen
+  infrastructure through [ViewportFrame](../../devdocs/CurrentArchitecture/ViewportFrameFoundation9.md).
 
 - [Gargantuan physical readiness profile](../../tools/physical-qualifier/docs/PROTOCOL.md)
   retains project-specific probe/capture/evidence policy; generic coordination is

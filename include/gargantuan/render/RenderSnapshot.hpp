@@ -40,6 +40,7 @@ namespace gargantuan {
 		float VerticalFieldOfView = 70.0f;
 		float NearPlane = 0.1f;
 		float FarPlane = 100000.0f;
+		bool operator==(const RenderCameraSnapshot &) const = default;
 	};
 
 	struct RenderItem {
@@ -49,6 +50,7 @@ namespace gargantuan {
 		glm::mat4 InverseModelMatrix{1.0f};
 		glm::vec4 Color{1.0f};
 		bool CastShadow = true;
+		bool operator==(const RenderItem &) const = default;
 	};
 
 	enum class RenderExtractionIssue : std::uint8_t {

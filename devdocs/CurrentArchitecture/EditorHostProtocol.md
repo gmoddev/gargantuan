@@ -163,10 +163,57 @@ does not receive `DefineSchema`, the PreRun facade, candidate registry access,
 or mutable native metadata. The top-level EditorHost protocol remains version
 1; schema discovery is independently versioned.
 
-Replacing an open project closes and releases the prior live DataModel and
-viewport snapshot before entering the next schema candidate lifecycle. If the
-replacement PreRun or project load fails, no old world remains live against the
-new or prior registry; a later `OpenProject` may construct a fresh document.
+`OpenProject` stages a replacement that uses the active frozen schema
+generation and identical PreRun source, including a pair of absent sources.
+The candidate must load and validate before the host retires the open
+DataModel, cursor, history and viewport preview. A staging failure preserves
+those resources and the schema generation. After successful staging, the host
+retires both DataModels, publishes a fresh schema generation, and loads the
+replacement again under that generation.
+
+A different schema source receives project path, metadata and bounded JSON
+syntax checks before the host retires the existing document. The old
+DataModel and its projections are released before the new PreRun lifecycle
+begins. After that transition, a PreRun or document load failure leaves the
+host without an open document. The schema lifecycle retains its prior frozen
+registry and generation when candidate schema registration fails.
+
+## Authoring GUI preview, capability version 1
+
+`GuiPreview` in the handshake identifies the following viewport-control
+methods. They use the current authoring document and the same configured
+frame transport as the editor scene.
+
+| Method | Parameters | Result |
+| --- | --- | --- |
+| `SetGuiPreview` | `Enabled` boolean and optional positive unsigned `Width` and `Height` pair within editor viewport bounds | Current preview state, design size, fit rectangle, and transport generation |
+| `GetGuiPreview` | Empty | Current preview state, design size, fit rectangle, and transport generation |
+| `PickGuiPreview` | Finite capture-pixel `X`, `Y`, positive `FrameNumber`, and positive `Generation` | Scope-bound authoring `Object` ID and clipped physical `Bounds`, or null values |
+
+The state contains `Enabled`, `Width`, `Height`, `X`, `Y`,
+`DisplayWidth`, `DisplayHeight`, and `Generation`. Omitting the design
+size uses the live capture dimensions. A fixed design runs the runtime GUI
+layout at that exact size and centers an aspect-preserving fit inside the
+captured frame. The 2D batch transform preserves the authored order and clips
+it to the fit. Both the mailbox and compatibility capture report frame
+generation. An active mailbox supplies preview pixels while presentation
+is running.
+
+Enable, disable, and preset changes discard previous GUI pick snapshots and
+request the next frame. They preserve an active transport generation. The
+host retains up to eight recent captured layouts and validates the selected
+identity against the current authoring world. An expired frame or generation
+returns `StaleFrame`. The ordinary viewport pick is reserved for scene
+selection while the preview is inactive.
+
+The edit preview consumes direct `ScreenGui` roots in authored
+`StarterGui` through the runtime GUI pipeline in read-only mode. It owns no
+script VM, simulation, network session, focus, pointer dispatch, or journal
+cursor. Layout values stay in the preview projection and authored edits reach
+it through existing observation. Shared project image and material resources
+use the canonical asset stream. Preview-owned texture identities are retired
+on disable or document replacement. Play uses its independent runtime
+projection and suspends edit preview until the session ends.
 
 ## Streaming diagnostics extension, version 1
 

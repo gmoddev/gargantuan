@@ -9,6 +9,8 @@
 #include "gargantuan/classes/Frame.hpp"
 #include "gargantuan/classes/ImageButton.hpp"
 #include "gargantuan/classes/ImageLabel.hpp"
+#include "gargantuan/classes/Player.hpp"
+#include "gargantuan/classes/PlayerGui.hpp"
 #include "gargantuan/classes/ScreenGui.hpp"
 #include "gargantuan/classes/ScrollingFrame.hpp"
 #include "gargantuan/classes/Script.hpp"
@@ -22,6 +24,7 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
 #include <SDL3/SDL.h>
@@ -343,6 +346,110 @@ namespace {
 			GuiPointerAction::Up, {270.0f, 120.0f}});
 		Check(LowActivations == 0 && HighActivations == 1,
 			"hit ordering uses the same committed ZIndex order as transparent display generation");
+	}
+
+	void TestStarterGuiPreviewAndRuntimeRoots() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		Game->InitializeLoadedProjectRevision();
+		const auto Starter = Game->FindFirstChildOfClass("StarterGui", false);
+		auto Template = BuildTree(Game);
+		Template.Root->SetParent(Starter);
+		Template.Root->MarkPersistenceSubtreeArchivable();
+		const auto Legacy = BuildTree(Game);
+		const auto OriginalPosition = Template.Button->GetAbsolutePosition();
+		const auto OriginalSize = Template.Button->GetAbsoluteSize();
+		const auto Assets = std::dynamic_pointer_cast<AssetService>(Game->GetService("AssetService"));
+		const std::array<std::uint8_t, 4> Pixel{56, 92, 32, 255};
+		auto Image = std::make_shared<ImageLabel>();
+		Image->SetImage(Assets->RegisterMemoryImage("PreviewFixture", 1, 1, Pixel));
+		Image->SetSize(UDim2::fromOffset(32, 32));
+		Image->SetParent(Template.Root);
+		Image->SetArchivable(true);
+		const auto ImageRevision = Game->GetAuthoritativeRevision();
+		const auto PositionSignal = Template.Button->GetPropertyChangedSignal("Position");
+		const auto OriginalConnections = PositionSignal->Connections.size();
+		{
+			GuiRuntime Preview(Game, std::filesystem::path(DefaultGuiFontPath), GuiRuntimeMode::AuthoringPreview);
+			Preview.SetViewport({800, 600, 1.0f, {}});
+			(void)Preview.Reconcile();
+			const auto Layout = Preview.GetCommittedLayout();
+			const auto *Button = FindNode(Layout, Template.Button->GetObjectId());
+			const auto *ImageNode = FindNode(Layout, Image->GetObjectId());
+			Check(Button && Button->Bounds.Width == 160.0f &&
+				!FindNode(Layout, Legacy.Button->GetObjectId()),
+				"authoring preview resolves direct StarterGui templates and excludes legacy runtime roots");
+			Check(ImageNode && ImageNode->Presentation.ImageTexture.has_value() &&
+				ImageNode->Presentation.ImageTexture->IsValid() &&
+				!Assets->DrainTextureChanges().Creates.empty(),
+				"preview resolves the canonical image without consuming the editor upload queue");
+			int Activations = 0;
+			auto Activation = Template.Button->Activated->Connect([&](std::monostate) { ++Activations; });
+			Preview.RequestFocus(Template.Button->GetObjectId());
+			if (Button) {
+				const Vector2 Center(Button->Bounds.X + 4.0f, Button->Bounds.Y + 4.0f);
+				for (const auto Action : {GuiPointerAction::Down, GuiPointerAction::Up})
+					Check(!Preview.ProcessPointer({1, Enums::GuiPointerType::Mouse,
+						Enums::GuiPointerButton::Primary, Action, Center}), "preview leaves pointer input to the editor");
+			}
+			Check(Activations == 0 && !GuiRuntime::Find(*Template.Button) && !Preview.SynchronizeTextInput() &&
+				Template.Button->GetAbsolutePosition() == OriginalPosition && Template.Button->GetAbsoluteSize() == OriginalSize &&
+				Game->GetAuthoritativeRevision() == ImageRevision,
+				"preview never registers for runtime input or mutates authored geometry and revision");
+			Activation->Disconnect();
+			Template.Button->SetParent(nullptr);
+			Template.Button->SetParent(Template.Root);
+			Check(PositionSignal->Connections.size() == OriginalConnections + 1,
+				"moving a preview control removes its old layout observation before it is registered again");
+		}
+		Check(PositionSignal->Connections.size() == OriginalConnections,
+			"preview retirement disconnects observers on authored objects that remain open");
+		Template.Button->SetPosition(UDim2::fromOffset(24, 30));
+		auto PlayersService = std::dynamic_pointer_cast<Players>(Game->GetService("Players"));
+		auto First = PlayersService->CreateSessionPlayer({"test", "gui-first"});
+		auto Second = PlayersService->CreateSessionPlayer({"test", "gui-second"});
+		Check(PlayersService->SetTrustedLocalPlayer(First), "runtime GUI fixture installs a trusted local Player");
+		auto FirstGui = First->GetPlayerGui().value();
+		auto SecondGui = Second->GetPlayerGui().value();
+		auto FirstButton = FirstGui->FindFirstChild("PlayButton", true);
+		auto SecondButton = SecondGui->FindFirstChild("PlayButton", true);
+		GuiRuntime Runtime(Game, std::filesystem::path(DefaultGuiFontPath));
+		Runtime.SetViewport({800, 600, 1.0f, {}});
+		(void)Runtime.Reconcile();
+		const auto Layout = Runtime.GetCommittedLayout();
+		Check(FirstButton && SecondButton && FindNode(Layout, FirstButton->GetObjectId()) &&
+			!FindNode(Layout, SecondButton->GetObjectId()) && !FindNode(Layout, Template.Button->GetObjectId()) &&
+			FindNode(Layout, Legacy.Button->GetObjectId()),
+			"runtime projects the matching PlayerGui and legacy roots while templates and other owners stay out");
+		const auto AddFocusTarget = [&] {
+			const auto Target = std::make_shared<TextBox>();
+			Target->SetSize(UDim2::fromOffset(160, 32));
+			Target->SetParent(FirstGui->FindFirstChildOfClass("ScreenGui", false));
+			return Target;
+		};
+		const auto FirstFocus = AddFocusTarget();
+		const auto RequestedFocus = AddFocusTarget();
+		const auto RedirectedFocus = AddFocusTarget();
+		(void)Runtime.Reconcile();
+		FirstFocus->CaptureFocus();
+		std::vector<std::string_view> FocusEvents;
+		const auto Lost = FirstFocus->FocusLost->Connect([&](std::monostate) {
+			FocusEvents.emplace_back("FirstLost");
+			RedirectedFocus->CaptureFocus();
+		});
+		const auto UnexpectedGain = RequestedFocus->Focused->Connect([&](std::monostate) { FocusEvents.emplace_back("RequestedGained"); });
+		const auto UnexpectedLoss = RequestedFocus->FocusLost->Connect([&](std::monostate) { FocusEvents.emplace_back("RequestedLost"); });
+		const auto RedirectedGain = RedirectedFocus->Focused->Connect([&](std::monostate) { FocusEvents.emplace_back("RedirectedGained"); });
+		const auto RedirectedLoss = RedirectedFocus->FocusLost->Connect([&](std::monostate) {
+			FocusEvents.emplace_back("RedirectedLost");
+			RequestedFocus->CaptureFocus();
+		});
+		RequestedFocus->CaptureFocus();
+		Runtime.ClearTransientState();
+		Check(FocusEvents == std::vector<std::string_view>{"FirstLost", "RedirectedGained", "RedirectedLost"},
+			"an owner GUI can redirect focus without a stale notification and clear focus without reacquiring it");
+		for (const auto &Observer : {Lost, UnexpectedGain, UnexpectedLoss, RedirectedGain, RedirectedLoss}) Observer->Disconnect();
+		Game->Destroy();
 	}
 
 	void TestInputRoutingFocusAndMutationSafety() {
@@ -1182,6 +1289,7 @@ int main() {
 		RunTest("LayoutTextPresentationAndResources", TestLayoutTextPresentationAndResources);
 		RunTest("AutomaticSizeListAndClipping", TestAutomaticSizeListAndClipping);
 		RunTest("RotationOrderingAndAlpha", TestRotationOrderingAndAlpha);
+		RunTest("StarterGuiPreviewAndRuntimeRoots", TestStarterGuiPreviewAndRuntimeRoots);
 		RunTest("InputRoutingFocusAndMutationSafety", TestInputRoutingFocusAndMutationSafety);
 		RunTest("DisabledButtonNeverActivates", TestDisabledButtonNeverActivates);
 		RunTest("ImageButtonPresentationAndActivation", TestImageButtonPresentationAndActivation);

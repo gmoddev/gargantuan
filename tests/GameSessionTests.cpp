@@ -15,9 +15,12 @@
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
+#include "gargantuan/classes/ModuleScript.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Player.hpp"
+#include "gargantuan/classes/PlayerGui.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
+#include "gargantuan/classes/ScreenGui.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/network/CharacterNetwork.hpp"
@@ -2448,6 +2451,252 @@ end)
 		Runtime.Destroy();
 	}
 
+	void TestPlayerGuiPrivateSession() {
+		auto Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
+		auto World = std::make_shared<DataModel>();
+		const auto Starter = World->GetService("StarterGui");
+		const auto PlayersService = std::dynamic_pointer_cast<Players>(World->GetService("Players"));
+		PlayersService->SetDefaultControllerEnabled(false);
+		PlayersService->SetDefaultCameraEnabled(false);
+		PlayersService->SetCharacterAutoLoads(false);
+		auto Hud = std::make_shared<ScreenGui>();
+		Hud->SetName("PrivateHud");
+		Hud->SetParent(Starter);
+		auto Briefing = std::make_shared<ScreenGui>();
+		Briefing->SetName("Briefing");
+		Briefing->SetResetOnSpawn(true);
+		Briefing->SetParent(Starter);
+		auto Source = std::make_shared<Script>();
+		Source->SetName("LocalLogic");
+		Source->SetRunContext(Enums::RunContext::Client);
+		Source->SetSource(R"(script.Parent:SetAttribute("LocalLogicRan", true))");
+		Source->SetParent(Briefing);
+		auto Module = std::make_shared<ModuleScript>();
+		Module->SetName("StateModule");
+		Module->SetSource("return 17");
+		Module->SetParent(Briefing);
+		Hud->MarkPersistenceSubtreeArchivable();
+		Briefing->MarkPersistenceSubtreeArchivable();
+		auto FirstConfig = Configuration(GameSessionRole::Client, "player-gui-private");
+		FirstConfig.HydratePlayerGuiCode = PackageBuilder::MakePlayerGuiCodeHydrator(World);
+		auto SecondConfig = FirstConfig;
+		++SecondConfig.ClientNonce;
+		HeadlessRenderer ServerRenderer(Vector2(32, 32));
+		HeadlessRenderer FirstRenderer(Vector2(32, 32));
+		HeadlessRenderer SecondRenderer(Vector2(32, 32));
+		HeadlessRenderer RejoinedRenderer(Vector2(32, 32));
+		Engine ServerRuntime(World, &ServerRenderer, nullptr,
+			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer});
+		ServerRuntime.ProcessService->Alive = true;
+		std::unique_ptr<Engine> FirstRuntime;
+		std::unique_ptr<Engine> SecondRuntime;
+		std::unique_ptr<Engine> RejoinedRuntime;
+		GameSession Server(Network->CreateTransport(), Configuration(GameSessionRole::Server, "player-gui-private"), &ServerRuntime);
+		GameSession First(Network->CreateTransport(), FirstConfig);
+		GameSession Second(Network->CreateTransport(), SecondConfig);
+		Check(Server.Start().Succeeded() && First.Start().Succeeded() && Second.Start().Succeeded(),
+			"private GUI qualification starts one server and two simulated clients");
+		auto Attach = [&](GameSession &Session, HeadlessRenderer &Renderer, std::unique_ptr<Engine> &Runtime) {
+			if (Runtime || !Session.GetClientDataModel()) return;
+			Runtime = std::make_unique<Engine>(Session.GetClientDataModel(), &Renderer, nullptr,
+				EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient});
+			Runtime->ProcessService->Alive = true;
+			Check(Session.AttachClientRuntime(*Runtime), "client runtime attaches with its owned PlayerGui");
+		};
+		std::uint64_t Tick = 0;
+		std::uint64_t RejoinedTick = 0;
+		auto Pump = [&](std::uint64_t Count, GameSession *Rejoining = nullptr) {
+			for (std::uint64_t Step = 0; Step < Count; ++Step) {
+				(void)Network->Advance(2ms);
+				Network->Pump();
+				(void)Server.Poll();
+				(void)First.Poll();
+				(void)Second.Poll();
+				if (Rejoining) {
+					(void)Rejoining->Poll();
+					Attach(*Rejoining, RejoinedRenderer, RejoinedRuntime);
+				}
+				Attach(First, FirstRenderer, FirstRuntime);
+				Attach(Second, SecondRenderer, SecondRuntime);
+				ServerRuntime.Step();
+				if (FirstRuntime) FirstRuntime->Step();
+				if (SecondRuntime) SecondRuntime->Step();
+				if (RejoinedRuntime) RejoinedRuntime->Step();
+				++Tick;
+				Server.Step(Tick);
+				First.Step(Tick);
+				Second.Step(Tick);
+				// A new client starts a new handshake clock even when the server is already running.
+				if (Rejoining) Rejoining->Step(++RejoinedTick);
+				(void)Network->Advance(20ms);
+			}
+		};
+		Pump(75);
+		Check(FirstRuntime && SecondRuntime && Server.GetMetrics().ReadyPeers == 2,
+			"both clients reach readiness independently of Character provisioning");
+		if (!FirstRuntime || !SecondRuntime) return;
+		auto Owner = FirstRuntime->Players->GetLocalPlayer().value();
+		auto Other = SecondRuntime->Players->GetLocalPlayer().value();
+		auto Gui = Owner->GetPlayerGui().value();
+		auto OtherGui = Other->GetPlayerGui().value();
+		auto FirstHud = std::dynamic_pointer_cast<ScreenGui>(Gui->FindFirstChild("PrivateHud", false));
+		auto OldBriefing = Gui->FindFirstChild("Briefing", false);
+		Check(FirstHud && OldBriefing && OtherGui->FindFirstChild("PrivateHud", false) &&
+			!First.GetClientDataModel()->FindFirstChildOfClass("StarterGui", false) && !Owner->GetCharacter(),
+			"both clients receive their own templates without receiving StarterGui");
+		if (!FirstHud || !OldBriefing) return;
+		Check(FirstRuntime->Players->GetPlayers().size() == 2 && SecondRuntime->Players->GetPlayers().size() == 2,
+			"public Player identities still materialize for both peers");
+		for (const auto &Candidate : FirstRuntime->Players->GetPlayers())
+			if (Candidate != Owner) Check(!Candidate->GetPlayerGui(), "the first client sees no foreign PlayerGui");
+		for (const auto &Candidate : SecondRuntime->Players->GetPlayers())
+			if (Candidate != Other) Check(!Candidate->GetPlayerGui(), "the second client sees no foreign PlayerGui");
+		const auto FirstModule = std::dynamic_pointer_cast<ModuleScript>(OldBriefing->FindFirstChild("StateModule", false));
+		const auto FirstCode = std::dynamic_pointer_cast<Script>(OldBriefing->FindFirstChild("LocalLogic", false));
+		Check(FirstModule && FirstModule->GetSource() == "return 17" && FirstCode && FirstCode->HasSource() &&
+			FirstCode->GetSourceId() != Source->GetSourceId() && FirstCode->GetGuiTemplateSourceId() == Source->GetSourceId() &&
+			OldBriefing->GetAttributeValue("LocalLogicRan") == std::optional<WireValue>(true),
+			"trusted packaged code hydrates on the owning replica using provenance and distinct live source identity");
+
+		const auto ServerPlayers = PlayersService->GetPlayers();
+		const auto ServerOwner = std::ranges::find_if(ServerPlayers, [&](const auto &Candidate) {
+			return Candidate->GetPlayerId() == Owner->GetPlayerId();
+		});
+		if (ServerOwner == ServerPlayers.end()) { Check(false, "server owner is present"); return; }
+		auto ServerGui = (*ServerOwner)->GetPlayerGui().value();
+		Check(!ServerGui->FindFirstChild("Briefing", false)->GetAttributeValue("LocalLogicRan"),
+			"server-side template and PlayerGui Client Script never execute on the server");
+		auto LateContent = std::make_shared<ScreenGui>();
+		LateContent->SetName("ServerAdded");
+		LateContent->SetParent(ServerGui);
+		const auto SetProvenance = [&](LuaSourceContainer &Candidate, const std::string &Digest) {
+			Candidate.SetGuiTemplateSourceId(Source->GetSourceId());
+			Candidate.SetGuiTemplateSourceDigest(Digest);
+			Candidate.SetGuiTemplateSourceVersion(Candidate.GetSourceVersion());
+		};
+		auto WrongRole = std::make_shared<ModuleScript>();
+		WrongRole->SetName("WrongRole");
+		SetProvenance(*WrongRole, Source->GetSourceDigest());
+		WrongRole->SetParent(LateContent);
+		auto WrongContext = std::make_shared<Script>();
+		WrongContext->SetName("WrongContext");
+		WrongContext->SetRunContext(Enums::RunContext::Server);
+		SetProvenance(*WrongContext, Source->GetSourceDigest());
+		WrongContext->SetParent(LateContent);
+		auto WrongDigest = std::make_shared<Script>();
+		WrongDigest->SetName("WrongDigest");
+		WrongDigest->SetRunContext(Enums::RunContext::Client);
+		WrongDigest->SetSource("return false");
+		SetProvenance(*WrongDigest, WrongDigest->GetSourceDigest());
+		WrongDigest->SetParent(LateContent);
+		auto WrongVersion = std::make_shared<Script>();
+		WrongVersion->SetName("WrongVersion");
+		WrongVersion->SetRunContext(Enums::RunContext::Client);
+		SetProvenance(*WrongVersion, Source->GetSourceDigest());
+		WrongVersion->SetSourceVersion(WrongVersion->GetSourceVersion() + 1);
+		WrongVersion->SetParent(LateContent);
+		auto UntrustedScript = std::make_shared<Script>();
+		UntrustedScript->SetName("UntrustedScript");
+		UntrustedScript->SetRunContext(Enums::RunContext::Client);
+		UntrustedScript->SetSource(R"(script.Parent:SetAttribute("UntrustedRan", true))");
+		UntrustedScript->SetParent(LateContent);
+		if (const auto ServerModule = std::dynamic_pointer_cast<ModuleScript>(
+			ServerGui->FindFirstChild("StateModule", true))) ServerModule->SetSource("return 23");
+		Pump(20);
+		const auto LateReplica = Gui->FindFirstChild("ServerAdded", false);
+		const auto WrongReplica = LateReplica ? std::dynamic_pointer_cast<ModuleScript>(
+			LateReplica->FindFirstChild("WrongRole", false)) : nullptr;
+		const auto UntrustedReplica = LateReplica ? std::dynamic_pointer_cast<Script>(
+			LateReplica->FindFirstChild("UntrustedScript", false)) : nullptr;
+		const auto WrongContextReplica = LateReplica ? std::dynamic_pointer_cast<Script>(
+			LateReplica->FindFirstChild("WrongContext", false)) : nullptr;
+		const auto WrongDigestReplica = LateReplica ? std::dynamic_pointer_cast<Script>(
+			LateReplica->FindFirstChild("WrongDigest", false)) : nullptr;
+		const auto WrongVersionReplica = LateReplica ? std::dynamic_pointer_cast<Script>(
+			LateReplica->FindFirstChild("WrongVersion", false)) : nullptr;
+		Check(LateReplica && WrongReplica && !WrongReplica->HasSource() &&
+			WrongContextReplica && !WrongContextReplica->HasSource() &&
+			WrongDigestReplica && !WrongDigestReplica->HasSource() &&
+			WrongVersionReplica && !WrongVersionReplica->HasSource() && FirstModule && !FirstModule->HasSource() &&
+			UntrustedReplica && !UntrustedReplica->HasSource() && !LateReplica->GetAttributeValue("UntrustedRan") &&
+			!OtherGui->FindFirstChild("ServerAdded", false),
+			"private code with wrong class, role, digest or source version stays inactive without broadcasting");
+
+		auto LocalReset = std::make_shared<ScreenGui>();
+		LocalReset->SetResetOnSpawn(true);
+		auto LocalKeep = std::make_shared<ScreenGui>();
+		bool ReplicaDestroyBlocked = false;
+		bool ReplicaMoveBlocked = false;
+		{
+			ScriptSecurityScope Security(ScriptSecurityContext::ClientRuntime());
+			FirstHud->SetEnabled(false);
+			LocalReset->SetParent(Gui);
+			LocalKeep->SetParent(Gui);
+			auto LocalTransient = std::make_shared<ScreenGui>();
+			LocalTransient->SetParent(Gui);
+			LocalTransient->Destroy();
+			Check(LocalTransient->GetDestroyed(), "owning client can remove a GUI node created locally");
+			try { FirstHud->Destroy(); } catch (const std::runtime_error &) { ReplicaDestroyBlocked = true; }
+			try { FirstHud->SetParent(std::nullopt); } catch (const std::runtime_error &) { ReplicaMoveBlocked = true; }
+		}
+		Check(ReplicaDestroyBlocked && ReplicaMoveBlocked && !FirstHud->GetDestroyed() &&
+			FirstHud->GetParent().value_or(nullptr) == Gui && !FirstHud->GetEnabled(),
+			"owner can change presentation properties while server GUI identity and hierarchy stay valid");
+		auto BindCharacter = [&] {
+			auto Value = std::make_shared<KinematicCharacter>();
+			Value->SetParent(ServerRuntime.Workspace);
+			(*ServerOwner)->SetCharacter(Value);
+		};
+		BindCharacter();
+		Pump(20);
+		const auto FirstCharacter = Owner->GetCharacter().value_or(nullptr);
+		Check(FirstCharacter && !LocalReset->GetDestroyed() && !OldBriefing->GetDestroyed(),
+			"the ready client receives its first authoritative Character binding with the original GUI intact");
+		(*ServerOwner)->RemoveCharacter();
+		BindCharacter();
+		Pump(35);
+		const auto NewBriefing = Gui->FindFirstChild("Briefing", false);
+		const auto ReplacementCharacter = Owner->GetCharacter().value_or(nullptr);
+		Check(ReplacementCharacter && ReplacementCharacter != FirstCharacter && First.GetStatus() == GameSessionStatus::Ready,
+			"the replacement Character reaches the owner while the client session stays ready");
+		Check(NewBriefing && NewBriefing != OldBriefing && OldBriefing->GetDestroyed() &&
+			NewBriefing->GetAttributeValue("LocalLogicRan") == std::optional<WireValue>(true),
+			"respawn hydrates and executes the fresh server-authored reset clone on an already ready client");
+		Check(LocalReset->GetDestroyed() && !LocalKeep->GetDestroyed(),
+			"the ready client retires only its own opted-in roots on an authoritative respawn");
+		Check(!FirstHud->GetEnabled() &&
+			std::dynamic_pointer_cast<ScreenGui>(ServerGui->FindFirstChild("PrivateHud", false))->GetEnabled(),
+			"persistent HUD presentation edits survive the respawn and stay local to the client");
+		First.Stop();
+		Pump(15);
+		Check(Gui->GetDestroyed() && ServerGui->GetDestroyed() && !OtherGui->GetDestroyed(),
+			"disconnect retires the owned GUI on both endpoints and preserves the other player's GUI");
+		GameSession Rejoined(Network->CreateTransport(), FirstConfig);
+		Check(Rejoined.Start().Succeeded(), "disconnected identity can establish a new session");
+		Pump(75, &Rejoined);
+		const auto RejoinedPlayer = RejoinedRuntime ? RejoinedRuntime->Players->GetLocalPlayer().value_or(nullptr) : nullptr;
+		const auto ServerRejoined = RejoinedPlayer && std::ranges::any_of(Server.GetPeerIdentities(), [&](const auto &Peer) {
+			return Peer.Ready && Peer.Nonce == FirstConfig.ClientNonce &&
+				Peer.PlayerId == static_cast<std::uint32_t>(RejoinedPlayer->GetPlayerId());
+		});
+		Check(Rejoined.GetStatus() == GameSessionStatus::Ready && ServerRejoined,
+			"the returning client and its corresponding server peer both reach gameplay readiness");
+		const auto RejoinedGui = RejoinedPlayer ? RejoinedPlayer->GetPlayerGui().value_or(nullptr) : nullptr;
+		const auto RejoinedHud = RejoinedGui ? std::dynamic_pointer_cast<ScreenGui>(
+			RejoinedGui->FindFirstChild("PrivateHud", false)) : nullptr;
+		const auto RejoinedBriefing = RejoinedGui ? RejoinedGui->FindFirstChild("Briefing", false) : nullptr;
+		Check(RejoinedPlayer && RejoinedPlayer->GetPlayerId() != Owner->GetPlayerId() &&
+			RejoinedGui && RejoinedGui->GetObjectId() != Gui->GetObjectId() && RejoinedHud && RejoinedHud->GetEnabled() &&
+			RejoinedBriefing && RejoinedBriefing->GetAttributeValue("LocalLogicRan") == std::optional<WireValue>(true),
+			"reconnection provisions fresh GUI identities and template state");
+		Rejoined.Stop();
+		Second.Stop();
+		Server.Stop();
+		FirstRuntime->Destroy();
+		SecondRuntime->Destroy();
+		ServerRuntime.Destroy();
+	}
+
 	void TestServerCharacterAutoLoadsPolicy() {
 		auto Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
 		auto ServerTransport = Network->CreateTransport();
@@ -3088,6 +3337,10 @@ int main(int ArgumentCount, char **Arguments) {
 			TestCharacterRetirementAcrossStructuralFrames();
 			return Failures == 0 ? 0 : 1;
 		}
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--player-gui") {
+			TestPlayerGuiPrivateSession();
+			return Failures == 0 ? 0 : 1;
+		}
 		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--control-rebind") {
 			TestProductionLifecycleComposition(false, false, true);
 			return Failures == 0 ? 0 : 1;
@@ -3142,6 +3395,7 @@ int main(int ArgumentCount, char **Arguments) {
 		TestProductionLifecycleComposition(false, false, false, false);
 		TestProductionLifecycleComposition(false, false, false, false, true);
 		TestTwoClientIdentityAndControlIsolation();
+		TestPlayerGuiPrivateSession();
 		TestProductionLifecycleComposition(false, false, true);
 		TestCharacterRetirementAcrossStructuralFrames();
 		TestServerCharacterAutoLoadsPolicy();

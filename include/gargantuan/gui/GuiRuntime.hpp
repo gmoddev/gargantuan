@@ -14,11 +14,13 @@
 #include <vector>
 
 namespace gargantuan {
+	class AnimationRuntime;
 	class DataModel;
 	class GuiObject;
 	class RenderPublisher;
 
 	enum class GuiPointerAction : std::uint8_t { Move, Down, Up, Cancel };
+	enum class GuiRuntimeMode : std::uint8_t { Runtime, AuthoringPreview };
 
 	struct GuiPointerInput {
 		int PointerId = 0;
@@ -30,7 +32,8 @@ namespace gargantuan {
 
 	class GuiRuntime final {
 	  public:
-		GuiRuntime(std::shared_ptr<DataModel> World, std::filesystem::path DefaultFontPath);
+		GuiRuntime(std::shared_ptr<DataModel> World, std::filesystem::path DefaultFontPath,
+			GuiRuntimeMode Mode = GuiRuntimeMode::Runtime);
 		~GuiRuntime();
 		GuiRuntime(const GuiRuntime &) = delete;
 		GuiRuntime &operator=(const GuiRuntime &) = delete;
@@ -38,8 +41,11 @@ namespace gargantuan {
 		static GuiRuntime *Find(const Instance &Object);
 
 		void SetViewport(GuiViewportConfiguration Configuration);
-		[[nodiscard]] bool Reconcile();
-		void Publish(RenderPublisher &Publisher);
+		[[nodiscard]] bool Reconcile(const AnimationRuntime *Animation = nullptr);
+		[[nodiscard]] std::span<const ObjectId> GetVisibleViewportAnimationObjects() const;
+		void Publish(RenderPublisher &Publisher, std::shared_ptr<const RenderUiFrame> PlacedFrame = {},
+			std::uint64_t PlacementGeneration = 0, GuiTextureChanges ViewportTextures = {});
+		[[nodiscard]] std::vector<RenderTextureRemove> GetPreviewTextureRemovals() const;
 		[[nodiscard]] bool ProcessEvent(const HostEvent &Event);
 		[[nodiscard]] bool ProcessPointer(const GuiPointerInput &Input);
 		[[nodiscard]] std::optional<HostCommand> SynchronizeTextInput();
@@ -53,6 +59,7 @@ namespace gargantuan {
 			std::span<const std::uint8_t> Rgba8);
 
 		[[nodiscard]] std::shared_ptr<const GuiLayoutSnapshot> GetCommittedLayout() const;
+		[[nodiscard]] std::shared_ptr<const GuiLayoutSnapshot> GetPresentedLayout() const;
 		[[nodiscard]] std::shared_ptr<const GuiPresentationSnapshot> GetCommittedPresentation() const;
 		[[nodiscard]] std::shared_ptr<const GuiAccessibilitySnapshot> GetAccessibilitySnapshot() const;
 		[[nodiscard]] GuiRuntimeProfile GetLastProfile() const;

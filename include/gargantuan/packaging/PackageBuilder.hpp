@@ -17,6 +17,7 @@
 
 namespace gargantuan {
 	class DataModel;
+	class LuaSourceContainer;
 	class Project;
 	class RuntimeSchemaRegistry;
 
@@ -167,6 +168,8 @@ namespace gargantuan {
 		[[nodiscard]] static std::size_t HydrateClientCode(
 			const std::shared_ptr<DataModel> &TrustedPackageWorld, const std::shared_ptr<DataModel> &ReplicatedWorld
 		);
+		[[nodiscard]] static std::function<bool(const std::shared_ptr<LuaSourceContainer> &)>
+		MakePlayerGuiCodeHydrator(const std::shared_ptr<DataModel> &TrustedPackageWorld);
 	};
 
 	[[nodiscard]] std::string_view GetPackageConfigurationName(PackageConfiguration Configuration);

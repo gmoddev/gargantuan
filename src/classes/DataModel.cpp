@@ -83,15 +83,17 @@ namespace gargantuan {
 	bool DataModel::IsProtectedService(const std::shared_ptr<Instance> &InstanceValue) const {
 		if (!InstanceValue) return false;
 		if (InstanceValue.get() == this) return true;
+		auto *Definition = InstanceClassRegistry::GetDefinition(InstanceValue.get());
+		if (Definition && Definition->Id == SchemaId::FromNativeName("Engine", "PlayerGui")) return true;
 		auto Parent = InstanceValue->GetParent();
 		if (!Parent || Parent->get() != this) return false;
-		auto *Definition = InstanceClassRegistry::GetDefinition(InstanceValue.get());
 		if (!Definition) return true;
 		return IsProtectedServiceClass(Definition->Id);
 	}
 
 	bool DataModel::IsProtectedServiceClass(SchemaId ClassId) const {
-		if (ClassId == SchemaId::FromNativeName("Engine", "DataModel")) return true;
+		if (ClassId == SchemaId::FromNativeName("Engine", "DataModel") ||
+			ClassId == SchemaId::FromNativeName("Engine", "PlayerGui")) return true;
 		for (const auto &[Name, Id] : GetServiceDefinitions()) {
 			(void)Name;
 			if (ClassId == Id) return true;
@@ -120,6 +122,7 @@ namespace gargantuan {
 		(void)GetService("AssetService");
 		(void)GetService("Lighting");
 		(void)GetService("ReplicatedStorage");
+		GetService("StarterGui")->SetArchivable(true);
 		std::vector<std::string> CustomServices;
 		for (const auto &[Name, Id] : GetServiceDefinitions()) {
 			const auto *Definition = InstanceClassRegistry::GetDefinitionBySchemaId(Id);
@@ -165,6 +168,7 @@ namespace gargantuan {
 			{"ProcessService", SchemaId::FromNativeName("Engine", "ProcessService")},
 			{"ReplicatedStorage", SchemaId::FromNativeName("Engine", "ReplicatedStorage")},
 			{"RunService", SchemaId::FromNativeName("Engine", "RunService")},
+			{"StarterGui", SchemaId::FromNativeName("Engine", "StarterGui")},
 			{"Tags", SchemaId::FromNativeName("Engine", "Tags")},
 			{"UserInputService", SchemaId::FromNativeName("Engine", "UserInputService")},
 			{"Workspace", SchemaId::FromNativeName("Engine", "Workspace")},

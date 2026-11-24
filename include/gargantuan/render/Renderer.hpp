@@ -12,6 +12,7 @@
 
 namespace gargantuan {
 	struct RendererCapabilities {
+		// A graphical consumer can draw directly or consume deferred publications.
 		bool Graphical = true;
 		bool GpuSkinning = false;
 	};
@@ -43,9 +44,11 @@ namespace gargantuan {
 
 	class HeadlessRenderer final : public BaseRenderer {
 	  public:
-		explicit HeadlessRenderer(const Vector2 &ViewportSize)
+		enum class PublicationMode : std::uint8_t { SemanticOnly, DeferredGpuPresentation };
+
+		explicit HeadlessRenderer(const Vector2 &ViewportSize, PublicationMode Mode = PublicationMode::SemanticOnly)
 			: BaseRenderer(ViewportSize), Width(static_cast<std::uint32_t>(ViewportSize.GetX())),
-			  Height(static_cast<std::uint32_t>(ViewportSize.GetY())) {};
+			  Height(static_cast<std::uint32_t>(ViewportSize.GetY())), Mode(Mode) {};
 
 		using BaseRenderer::Draw;
 		void Draw(RenderPublicationPtr Publication) override {
@@ -59,7 +62,10 @@ namespace gargantuan {
 			Height = static_cast<std::uint32_t>(HeightValue);
 		};
 		void Destroy() override {};
-		[[nodiscard]] RendererCapabilities GetCapabilities() const override { return {false, false}; }
+		[[nodiscard]] RendererCapabilities GetCapabilities() const override {
+			const bool Deferred = Mode == PublicationMode::DeferredGpuPresentation;
+			return {.Graphical = Deferred, .GpuSkinning = Deferred};
+		}
 		[[nodiscard]] std::pair<std::uint32_t, std::uint32_t> GetViewportSize() const override {
 			return {Width, Height};
 		}
@@ -70,6 +76,7 @@ namespace gargantuan {
 	  private:
 		std::uint32_t Width = 0;
 		std::uint32_t Height = 0;
+		const PublicationMode Mode;
 		RenderProjection Projection;
 		RenderProjectionChanges LastChanges;
 		RenderPublicationPtr LastPublication;

@@ -130,12 +130,14 @@ namespace gargantuan {
 		float OcclusionStrength = 1.0f;
 		float NormalScale = 1.0f;
 		RenderMaterialSamplers TextureSamplers{};
+		bool operator==(const RenderMaterialState &) const = default;
 	};
 
 	struct RenderPrimitiveMaterialState {
 		std::uint32_t FirstIndex = 0;
 		std::uint32_t IndexCount = 0;
 		RenderMaterialState Material;
+		bool operator==(const RenderPrimitiveMaterialState &) const = default;
 	};
 
 	struct RenderObjectCreate {
@@ -270,6 +272,9 @@ namespace gargantuan {
 		float Opacity = 1.0f;
 		std::vector<RenderUiVertex> Vertices;
 		std::vector<std::uint32_t> Indices;
+		// Generation-safe reference to a renderer-owned presentation target.
+		// Mutually exclusive with an uploaded GUI texture.
+		ObjectId Viewport;
 	};
 
 	struct RenderUiFrame {
@@ -278,6 +283,28 @@ namespace gargantuan {
 		float DpiScale = 1.0f;
 		std::vector<RenderUiBatch> Batches;
 	};
+
+	inline constexpr std::size_t MaximumRenderViewports = 8;
+	inline constexpr std::uint32_t MaximumRenderViewportDimension = 512;
+	inline constexpr std::size_t MaximumRenderViewportObjects = 64;
+	inline constexpr std::size_t MaximumRenderViewportPrimitives = 256;
+	inline constexpr std::size_t MaximumRenderViewportMeshIndices = 1'048'576;
+	inline constexpr std::size_t MaximumRenderViewportRigs = 8;
+
+	struct RenderViewportObject {
+		RenderObjectCreate Visual;
+		std::optional<RenderAnimationPoseUpdate> Pose;
+	};
+
+	struct RenderViewportScene {
+		ObjectId Viewport;
+		RenderCameraSnapshot Camera;
+		std::uint32_t Width = 0;
+		std::uint32_t Height = 0;
+		std::uint64_t AssetRevision = 0;
+		std::vector<RenderViewportObject> Objects;
+	};
+	using RenderViewportScenes = std::vector<std::shared_ptr<const RenderViewportScene>>;
 
 	struct RenderPublication {
 		RenderPublicationId Id = InvalidRenderPublicationId;
@@ -307,6 +334,8 @@ namespace gargantuan {
 		// Ui remains the value-form compatibility surface for direct producers.
 		std::shared_ptr<const RenderUiFrame> SharedUi;
 		[[nodiscard]] const RenderUiFrame &GetUi() const { return SharedUi ? *SharedUi : Ui; }
+		// A non-null list replaces all active scenes. An empty list removes them.
+		std::shared_ptr<const RenderViewportScenes> Viewports;
 		std::vector<RenderExtractionDiagnostic> Diagnostics;
 	};
 

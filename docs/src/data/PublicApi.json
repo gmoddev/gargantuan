@@ -2795,13 +2795,49 @@
       "Name": "LuaSourceContainer",
       "Kind": "Class",
       "Source": "assets/classes/LuaSourceContainer.luau",
-      "SourceSha256": "41bf85477109af2f5593c0534e61d07c865b33a8e99f03a5b5cdc17859309135",
+      "SourceSha256": "ab81271f7b7e03dae670060f8b08cdfb0875b33649cd1658a8672c5f79d425b3",
       "Description": "Abstract class for compiling Lua bytecode",
       "Extends": "Instance",
       "Abstract": true,
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
+        {
+          "Name": "GuiTemplateSourceDigest",
+          "Description": "Engine-owned digest of the trusted StarterGui source bytes bound to this clone.",
+          "Type": "t.String",
+          "Unmodified": "std::string()",
+          "OverrideRead": "GetGuiTemplateSourceDigest",
+          "OverrideWrite": "SetGuiTemplateSourceDigest",
+          "Replicated": true,
+          "Editable": false,
+          "ReadLevel": "Engine",
+          "WriteLevel": "Engine"
+        },
+        {
+          "Name": "GuiTemplateSourceId",
+          "Description": "Engine-owned provenance for a PlayerGui clone of a packaged StarterGui source.",
+          "Type": "t.String",
+          "Unmodified": "std::string()",
+          "OverrideRead": "GetGuiTemplateSourceId",
+          "OverrideWrite": "SetGuiTemplateSourceId",
+          "Replicated": true,
+          "Editable": false,
+          "ReadLevel": "Engine",
+          "WriteLevel": "Engine"
+        },
+        {
+          "Name": "GuiTemplateSourceVersion",
+          "Description": "Engine-owned SourceVersion for the trusted StarterGui source bound to this clone.",
+          "Type": "t.Integer",
+          "Unmodified": "0",
+          "OverrideRead": "GetGuiTemplateSourceVersion",
+          "OverrideWrite": "SetGuiTemplateSourceVersion",
+          "Replicated": true,
+          "Editable": false,
+          "ReadLevel": "Engine",
+          "WriteLevel": "Engine"
+        },
         {
           "Name": "Source",
           "Description": "Authoritative Luau source code",
@@ -2944,7 +2980,7 @@
       "Name": "Player",
       "Kind": "Class",
       "Source": "assets/classes/Player.luau",
-      "SourceSha256": "1e6fd048472f9f3d747494bf66ea4beeb42f106da930acf2ad5b41d37d58eb72",
+      "SourceSha256": "2e9a68bf8f123300c321f3fef873505972acde44701a8bbfe8e7a112230e0427",
       "Description": "A gameplay player identity whose lifetime is independent from transport connections.",
       "Extends": "Instance",
       "Abstract": false,
@@ -2960,6 +2996,14 @@
           "OverrideWrite": "SetCharacter",
           "Replicated": true,
           "MaterializationDependency": "Hard"
+        },
+        {
+          "Name": "PlayerGui",
+          "Description": "The runtime-owned screen interface container for this player.",
+          "Type": "t.Optional(t.Instance(\"PlayerGui\"))",
+          "Unmodified": "std::nullopt",
+          "Writable": false,
+          "OverrideRead": "GetPlayerGui"
         },
         {
           "Name": "PlayerId",
@@ -3020,6 +3064,20 @@
           "Description": "Fired synchronously so replaceable Luau assembly policy can create a character."
         }
       ]
+    },
+    {
+      "Name": "PlayerGui",
+      "Kind": "Class",
+      "Source": "assets/classes/PlayerGui.luau",
+      "SourceSha256": "9fb1fdaa94d065f18d5d198f2e529828c3c7951ae5ed1bdc68700226e80464a8",
+      "Description": "The runtime-owned screen interface container for one player.",
+      "Extends": "Instance",
+      "Abstract": false,
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [],
+      "Methods": [],
+      "Signals": []
     },
     {
       "Name": "Players",
@@ -4165,6 +4223,20 @@
       "Signals": []
     },
     {
+      "Name": "StarterGui",
+      "Kind": "Service",
+      "Source": "assets/services/StarterGui.luau",
+      "SourceSha256": "b4bd5eb3d38570c3fd6d0e64ba9dae17ef15520c2d128699b342b82cda3aec1c",
+      "Description": "Provides authored screen interface templates for new players.",
+      "Extends": "Instance",
+      "Abstract": false,
+      "ServicePolicy": "ServerOnly",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [],
+      "Methods": [],
+      "Signals": []
+    },
+    {
       "Name": "Tags",
       "Kind": "Service",
       "Source": "assets/services/Tags.luau",
@@ -4714,6 +4786,52 @@
       ]
     },
     {
+      "Name": "ViewportFrame",
+      "Kind": "Class",
+      "Source": "assets/classes/ViewportFrame.luau",
+      "SourceSha256": "4114197792eaf2c19c1edfe208016b54236692374be6ad6ec5c1e8e6c90414e4",
+      "Description": "Composes a local 3D presentation scene into a GUI rectangle.",
+      "Extends": "GuiObject",
+      "Abstract": false,
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [
+        {
+          "Name": "CurrentCamera",
+          "Description": "Camera inside this ViewportFrame's presentation subtree.",
+          "Type": "t.Optional(t.Instance(\"Camera\"))",
+          "Unmodified": "std::nullopt",
+          "OverrideRead": "GetCurrentCamera",
+          "OverrideWrite": "SetCurrentCamera",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Camera"
+        },
+        {
+          "Name": "MaxUpdateRate",
+          "Description": "Maximum presentation scene updates per second when content is changing.",
+          "Type": "t.Float",
+          "Unmodified": "30.0f",
+          "Range": "{ minimum = 1, maximum = 60 }",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Behavior"
+        },
+        {
+          "Name": "RenderScale",
+          "Description": "Requested fraction of the physical GUI size used to render the preview.",
+          "Type": "t.Float",
+          "Unmodified": "1.0f",
+          "Range": "{ minimum = 0.25, maximum = 1 }",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Appearance"
+        }
+      ],
+      "Methods": [],
+      "Signals": []
+    },
+    {
       "Name": "WeldConstraint",
       "Kind": "Class",
       "Source": "assets/classes/WeldConstraint.luau",
@@ -5242,8 +5360,15 @@
         "Character",
         "CharacterRetirement",
         "CharacterWriteSource",
+        "GuiResetRequest",
         "Player",
         "Players"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/classes/PlayerGui.hpp",
+      "Types": [
+        "PlayerGui"
       ]
     },
     {
@@ -5392,6 +5517,12 @@
       "Path": "include/gargantuan/classes/UnreliableSequencedRemoteEvent.hpp",
       "Types": [
         "UnreliableSequencedRemoteEvent"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/classes/ViewportFrame.hpp",
+      "Types": [
+        "ViewportFrame"
       ]
     },
     {
@@ -5587,8 +5718,10 @@
       "Types": [
         "AnimationPreviewJob",
         "EditorHost",
+        "GuiPreviewState",
         "PackageJob",
-        "SemanticSpatialResolver"
+        "SemanticSpatialResolver",
+        "Workspace"
       ]
     },
     {
@@ -5736,11 +5869,13 @@
     {
       "Path": "include/gargantuan/gui/GuiRuntime.hpp",
       "Types": [
+        "AnimationRuntime",
         "DataModel",
         "GuiObject",
         "GuiPointerAction",
         "GuiPointerInput",
         "GuiRuntime",
+        "GuiRuntimeMode",
         "Impl",
         "RenderPublisher"
       ]
@@ -5763,6 +5898,15 @@
         "GuiTextGlyph",
         "GuiTransform",
         "GuiViewportConfiguration"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/gui/PlayerGuiScope.hpp",
+      "Types": [
+        "Instance",
+        "LuaSourceContainer",
+        "Player",
+        "PlayerGui"
       ]
     },
     {
@@ -5887,6 +6031,7 @@
         "GameSessionStatus",
         "GameSessionTestAccess",
         "Implementation",
+        "LuaSourceContainer",
         "Player"
       ]
     },
@@ -6147,6 +6292,7 @@
         "ContentUnit",
         "DataModel",
         "GamePayload",
+        "LuaSourceContainer",
         "PackageBuildRequest",
         "PackageBuildResult",
         "PackageBuilder",
@@ -6385,6 +6531,8 @@
     {
       "Path": "include/gargantuan/render/RenderExtractor.hpp",
       "Types": [
+        "AnimationRuntime",
+        "AssetService",
         "AttachmentMesh",
         "Camera",
         "PublishedAssetMesh",
@@ -6396,6 +6544,7 @@
         "RenderPublisher",
         "RenderPublisherProfile",
         "SemanticSpatialResolver",
+        "ViewportFrame",
         "VisualDependency",
         "WorldRoot"
       ]
@@ -6453,6 +6602,8 @@
         "RenderUiVertex",
         "RenderUpdateDomain",
         "RenderVertex",
+        "RenderViewportObject",
+        "RenderViewportScene",
         "alignas"
       ]
     },
@@ -6472,6 +6623,7 @@
       "Types": [
         "BaseRenderer",
         "HeadlessRenderer",
+        "PublicationMode",
         "RenderAnimationVisibilityFeedback",
         "RendererCapabilities"
       ]
@@ -6936,6 +7088,12 @@
       "Path": "include/gargantuan/services/RunService.hpp",
       "Types": [
         "RunService"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/services/StarterGui.hpp",
+      "Types": [
+        "StarterGui"
       ]
     },
     {

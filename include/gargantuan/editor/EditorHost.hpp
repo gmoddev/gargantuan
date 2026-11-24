@@ -28,6 +28,7 @@
 
 namespace gargantuan {
 	class SemanticSpatialResolver;
+	class Workspace;
 	inline constexpr std::uint32_t EditorHostProtocolVersion = 1;
 	inline constexpr std::uint32_t EditorHostPropertyBatchVersion = 1;
 	inline constexpr std::size_t EditorHostMaximumRequestBytes = 1024 * 1024;
@@ -65,6 +66,7 @@ namespace gargantuan {
 	  private:
 		struct PackageJob;
 		struct AnimationPreviewJob;
+		struct GuiPreviewState;
 		std::unique_ptr<AnimationPreviewJob> ActiveAnimationPreview;
 		std::uint64_t NextAnimationPreviewId = 1;
 		std::string SessionToken;
@@ -84,8 +86,12 @@ namespace gargantuan {
 		ScriptSecurityContext StudioSecurity = ScriptSecurityContext::StudioCoreUi();
 		bool AudioEnabled = false;
 		std::optional<RenderCameraInput> ViewportCamera;
-		RenderPublisher ViewportPublisher;
+		std::unique_ptr<RenderPublisher> ViewportPublisher = std::make_unique<RenderPublisher>();
 		std::shared_ptr<SemanticSpatialResolver> ViewportSpatial;
+		std::unique_ptr<GuiPreviewState> GuiPreview;
+		std::vector<RenderTextureRemove> RetiredGuiPreviewTextures;
+		bool GuiPreviewFramePublished = false;
+		std::uint64_t NextGuiPreviewPlacementGeneration = 1;
 		RenderPublicationPtr LastViewportPublication;
 		RenderProjection ViewportProjection;
 		std::unique_ptr<EditorViewportRenderer> ViewportRenderer;
@@ -121,7 +127,11 @@ namespace gargantuan {
 
 		void AdvanceViewportGeneration();
 		void ResetViewportSpatial();
+		void ResetEditorViewportDocument();
 		void StepViewportSpatial();
+		void ResetGuiPreview();
+		void PublishEditViewport(Workspace &WorkspaceService, const RenderCameraInput &Camera);
+		void RecordGuiPreviewFrame(std::uint64_t FrameNumber);
 		void EnsureViewportRenderer();
 		void ConsumePlayRenderPublications(EditorViewportRenderer *Renderer);
 		void PumpPlaySession();

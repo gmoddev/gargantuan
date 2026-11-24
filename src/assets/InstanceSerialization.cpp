@@ -19,6 +19,7 @@
 #include "gargantuan/runtime/TagIndex.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/services/AudioMixService.hpp"
+#include "gargantuan/classes/PlayerGui.hpp"
 #include "serialization/JsonCodec.hpp"
 
 #include <algorithm>
@@ -95,6 +96,8 @@ namespace gargantuan::InstanceSerialization {
 			for (auto Root = Roots.rbegin(); Root != Roots.rend(); ++Root) {
 				if (dynamic_cast<AudioMixService *>(Root->get()))
 					throw std::invalid_argument("AudioMixService is a runtime-only service and cannot be a document root");
+				if (dynamic_cast<PlayerGui *>(Root->get()))
+					throw std::invalid_argument("PlayerGui is a runtime-only container and cannot be a document root");
 				Pending.push_back({*Root, 1, 0});
 			}
 			while (!Pending.empty()) {
@@ -109,7 +112,7 @@ namespace gargantuan::InstanceSerialization {
 				// A non-Archivable node is included, while its descendants remain outside the document.
 				if (Node->GetArchivable()) {
 					for (auto Child = Node->Children.rbegin(); Child != Node->Children.rend(); ++Child) {
-						if (dynamic_cast<AudioMixService *>(Child->get())) continue;
+						if (dynamic_cast<AudioMixService *>(Child->get()) || dynamic_cast<PlayerGui *>(Child->get())) continue;
 						if (Pending.size() >= MaximumPersistenceObjects - Ids.size())
 							throw std::length_error("Instance persistence hierarchy exceeds its object limit");
 						Pending.push_back({*Child, Depth + 1, Id});
@@ -830,6 +833,8 @@ namespace gargantuan::InstanceSerialization {
 			state.PushError("Cannot deserialize instance {} of class {}", state.FormatCurrentPath(), className);
 			return std::nullopt;
 		}
+		if (definition->Id == SchemaId::FromNativeName("Engine", "PlayerGui"))
+			return state.ReturnError("PlayerGui is a runtime-only container");
 		std::optional<std::uint32_t> DocumentId;
 		if (state.FormatVersion >= 5) {
 			if (!contents.contains("NodeId") || !contents["NodeId"].is_number_unsigned())

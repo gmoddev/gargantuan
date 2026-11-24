@@ -209,6 +209,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 					.ClientNonce = FarmEnabled ? FarmClientNonce : 0,
 					.AllowInsecureDevelopmentNetwork = AllowInsecureDevelopmentNetwork,
 					.DeclareNormalOrdinaryService = true,
+					.HydratePlayerGuiCode = PackageBuilder::MakePlayerGuiCodeHydrator(PackagedWorld),
 				}
 			);
 			if (FarmScaleWorkload && !network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(*Session, false))

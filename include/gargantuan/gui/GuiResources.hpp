@@ -43,6 +43,7 @@ namespace gargantuan {
 		[[nodiscard]] GuiTextureChanges DrainTextureChanges();
 		[[nodiscard]] GuiRuntimeProfile ConsumeProfile();
 		void ResetFrameBudget(std::size_t ReservedUploadBytes = 0);
+		void SetProjectFontAssets(std::shared_ptr<AssetService> Assets);
 		[[nodiscard]] bool HasFont() const;
 
 	  private:

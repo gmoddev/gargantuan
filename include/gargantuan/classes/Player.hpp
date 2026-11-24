@@ -20,6 +20,11 @@ namespace gargantuan {
 			ObjectId Target;
 			const CharacterRetirement *Previous;
 		};
+		struct GuiResetRequest {
+			std::shared_ptr<Character> CharacterValue;
+			SignalConnection::Pointer Binding;
+			bool NotifyCharacterAdded;
+		};
 
 		int PlayerIdValue = 0;
 		std::shared_ptr<Character> CharacterValue;
@@ -36,8 +41,14 @@ namespace gargantuan {
 		bool PublishingPossessionChange = false;
 		bool NotifyingCharacterRemoval = false;
 		bool ShuttingDownCharacter = false;
+		bool GuiProvisionedHere = false;
+		bool HadCharacterForGui = false;
+		bool ResettingGui = false;
+		std::optional<GuiResetRequest> PendingGuiReset;
 
 		void InitializeIdentity(int Value);
+		void ProvisionGui(const std::shared_ptr<DataModel> &World);
+		void ResetGuiOnCharacter(GuiResetRequest Request);
 		void CommitPossession(const std::shared_ptr<Instance> &Entity);
 		void ClosePossession();
 		void DisconnectPossessionSignals();

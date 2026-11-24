@@ -6,6 +6,13 @@ return c({
 	since = "0.1.0",
 
 	properties = {
+		PlayerGui = {
+			description = "The runtime-owned screen interface container for this player.",
+			type = t.Optional(t.Instance("PlayerGui")),
+			unmodified = "std::nullopt",
+			writable = false,
+			overrideRead = "GetPlayerGui",
+		},
 		PlayerId = {
 			description = "Nonzero runtime player identity independent of ConnectionId.",
 			type = t.Integer,

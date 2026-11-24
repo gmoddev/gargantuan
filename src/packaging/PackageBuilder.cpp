@@ -3,9 +3,12 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/ModuleScript.hpp"
+#include "gargantuan/classes/PlayerGui.hpp"
+#include "gargantuan/classes/ScreenGui.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/content/ResidencySpatialMetadata.hpp"
 #include "gargantuan/filesystem/Project.hpp"
+#include "gargantuan/gui/PlayerGuiScope.hpp"
 #include "gargantuan/reflection/PreRunRegistration.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
@@ -1832,11 +1835,12 @@ namespace gargantuan {
 			);
 		std::map<std::pair<std::string, std::string>, std::vector<std::shared_ptr<Instance>>> Targets;
 		for (const auto &Target : ReplicatedWorld->GetDescendants())
-			Targets[std::make_pair(Target->GetFullName(), (Target->GetClassName)())].push_back(Target);
+			if (!FindPlayerGuiScope(*Target))
+				Targets[std::make_pair(Target->GetFullName(), (Target->GetClassName)())].push_back(Target);
 		std::size_t Hydrated = 0;
 		for (const auto &SourceObject : TrustedPackageWorld->GetDescendants()) {
 			auto Source = std::dynamic_pointer_cast<LuaSourceContainer>(SourceObject);
-			if (!Source) continue;
+			if (!Source || IsStarterGuiTemplate(*Source)) continue;
 			if (auto ScriptValue = std::dynamic_pointer_cast<Script>(Source);
 				ScriptValue && ScriptValue->GetRunContext() != Enums::RunContext::Client)
 				continue;
@@ -1856,5 +1860,41 @@ namespace gargantuan {
 			++Hydrated;
 		}
 		return Hydrated;
+	}
+
+	std::function<bool(const std::shared_ptr<LuaSourceContainer> &)>
+	PackageBuilder::MakePlayerGuiCodeHydrator(const std::shared_ptr<DataModel> &TrustedPackageWorld) {
+		struct TrustedSource {
+			std::string ClassName;
+			std::string Digest;
+			std::string Source;
+		};
+		std::map<std::string, TrustedSource> Sources;
+		const auto Starter = TrustedPackageWorld ? TrustedPackageWorld->FindFirstChildOfClass("StarterGui", false) : nullptr;
+		if (!Starter) return {};
+		for (const auto &Root : Starter->GetChildren()) {
+			if (!std::dynamic_pointer_cast<ScreenGui>(Root)) continue;
+			for (const auto &Object : Root->GetDescendants()) {
+				const auto Source = std::dynamic_pointer_cast<LuaSourceContainer>(Object);
+				if (!Source || !IsClientPlayerGuiSource(*Source)) continue;
+				const auto Inserted = Sources.emplace(Source->GetSourceId(),
+					TrustedSource{Source->GetClassName(), Source->GetSourceDigest(), Source->GetSource()});
+				if (!Inserted.second) throw std::runtime_error("Packaged StarterGui SourceId is ambiguous");
+			}
+		}
+		return [Sources = std::move(Sources)](const std::shared_ptr<LuaSourceContainer> &Target) {
+			if (!Target || Target->GetDestroyed() || Target->IsDestroying() || !IsClientPlayerGuiSource(*Target))
+				return false;
+			auto Gui = FindPlayerGuiScope(*Target);
+			if (!Gui || !FindPlayerGuiOwner(*Gui)) return false;
+			auto Root = Target->GetParent().value_or(nullptr);
+			while (Root && Root->GetParent().value_or(nullptr) != Gui)
+				Root = Root->GetParent().value_or(nullptr);
+			if (!std::dynamic_pointer_cast<ScreenGui>(Root)) return false;
+			const auto Found = Sources.find(Target->GetGuiTemplateSourceId());
+			return Found != Sources.end() && Found->second.ClassName == Target->GetClassName() &&
+				Found->second.Digest == Target->GetGuiTemplateSourceDigest() &&
+				Target->HydrateGuiTemplateSource(Found->second.Source);
+		};
 	}
 }

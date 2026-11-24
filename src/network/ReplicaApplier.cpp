@@ -272,6 +272,13 @@ namespace gargantuan::network {
 		if (!FollowingSequence)
 			return {ReplicaApplyStatus::SemanticRejection, 0, "Reliable replication sequence is exhausted"};
 
+		auto InstallReceiver = [this](SnapshotLoadResult Loaded) {
+			for (const auto &[Id, Value] : Loaded.Objects) {
+				(void)Id;
+				Value->ReplicaMaterialization = true;
+			}
+			Receiver = std::move(Loaded);
+		};
 		auto PhaseStarted = std::chrono::steady_clock::now();
 		auto FinishPhase = [&](std::uint64_t &Nanoseconds) {
 			const auto Now = std::chrono::steady_clock::now();
@@ -461,6 +468,7 @@ namespace gargantuan::network {
 							if (!InstanceValue || !Receiver.Objects.emplace(WireId, InstanceValue).second ||
 								!LiveAddresses->insert(InstanceValue.get()).second)
 								throw std::invalid_argument("Replica publish construction failed");
+							InstanceValue->ReplicaMaterialization = true;
 						}
 				});
 				// Establish the entire published ancestry before applying properties. A
@@ -550,7 +558,7 @@ namespace gargantuan::network {
 				runtime_detail::MeasureWork(runtime_detail::WorkPhase::ReplicaNotifications,
 					[&] { DeferNotifications.Commit(); });
 			} else
-				Receiver = std::move(Loaded);
+				InstallReceiver(std::move(Loaded));
 			FinishPhase(Metrics.LiveApplyNanoseconds);
 			SemanticState = std::move(Candidate);
 			Epoch = Frame.Epoch;
@@ -566,7 +574,7 @@ namespace gargantuan::network {
 			if (LiveCommitStarted) {
 				ScopedChangeJournalSuppression SuppressReplicaJournal;
 				auto Restored = runtime_detail::LoadReplicaSnapshot(SemanticState);
-				if (Restored.Succeeded()) Receiver = std::move(Restored);
+				if (Restored.Succeeded()) InstallReceiver(std::move(Restored));
 			}
 			const std::string Message = Error.what();
 			if (Message.find("reference") != std::string::npos || Message.find("parent") != std::string::npos)

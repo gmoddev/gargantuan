@@ -471,12 +471,20 @@ namespace {
 		auto detachedPart0 = std::make_shared<Part>();
 		auto detachedPart1 = std::make_shared<Part>();
 		auto detachedWeld = std::make_shared<WeldConstraint>();
+		detachedPart0->SetName("Nested lookup Part");
 		detachedPart0->SetParent(detachedRoot);
 		detachedPart1->SetParent(detachedRoot);
 		detachedWeld->SetPart0(detachedPart0);
 		detachedWeld->SetPart1(detachedPart1);
 		detachedWeld->SetParent(detachedRoot);
 		detachedRoot->SetParent(workspace);
+		Check(!workspace->FindFirstChild("Nested lookup Part", false) &&
+			workspace->FindFirstChild("Nested lookup Part", true) == detachedPart0 &&
+			!workspace->FindFirstChildOfClass("WeldConstraint", false) &&
+			workspace->FindFirstChildOfClass("WeldConstraint", true) == detachedWeld &&
+			!workspace->FindFirstChildWhichIsA("Constraint", false) &&
+			workspace->FindFirstChildWhichIsA("Constraint", true) == detachedWeld,
+			"explicit false limits native child lookup to direct children");
 		Check(detachedPart0->GetDataModel() == game && detachedPart1->GetDataModel() == game &&
 			detachedWeld->GetDataModel() == game,
 			"first adoption validates and adopts a detached constraint subtree atomically");
@@ -5098,7 +5106,8 @@ namespace {
 		});
 		for (const auto method : {
 			"OpenViewportTransport", "CloseViewportTransport", "ConfigureViewport",
-			"SetViewportCamera", "CaptureViewport", "PickViewport",
+			"SetViewportCamera", "CaptureViewport", "PickViewport", "SetGuiPreview",
+			"GetGuiPreview", "PickGuiPreview",
 		}) {
 			Json restrictedRequest{
 				{"Version", EditorHostProtocolVersion},
@@ -5242,7 +5251,7 @@ namespace {
 		const auto CreatedProjectDocument = Json::parse(CreatedProjectStream);
 		CreatedProjectStream.close();
 		Check(CreatedProjectDocument["Version"] == 5 && CreatedProjectDocument["Name"] == "Created Project" &&
-			CreatedProjectDocument["Children"].size() == 6 &&
+			CreatedProjectDocument["Children"].size() == 7 &&
 			std::ranges::any_of(CreatedProjectDocument["Children"], [](const Json &Child) {
 				return Child["ClassName"] == "Workspace" && Child["Name"] == "Workspace";
 			}) &&
@@ -5260,15 +5269,18 @@ namespace {
 			}) &&
 			std::ranges::any_of(CreatedProjectDocument["Children"], [](const Json &Child) {
 				return Child["ClassName"] == "Players" && Child["Name"] == "Players";
+			}) &&
+			std::ranges::any_of(CreatedProjectDocument["Children"], [](const Json &Child) {
+				return Child["ClassName"] == "StarterGui" && Child["Name"] == "StarterGui";
 			}),
-			"CreateProject persists all six canonical authoring services, including Players policy, in project format v5");
+			"CreateProject persists all seven canonical authoring services, including Players policy and StarterGui, in project format v5");
 		auto ExistingProjectCreate = call("CreateProject", {
 			{"Destination", CreatedRoot.string()}, {"Name", "Overwrite Attempt"}
 		}, "test-token");
 		Check(!ExistingProjectCreate["Ok"].get<bool>() && ExistingProjectCreate["Error"]["Code"] == "ExistingProject",
 			"CreateProject never overwrites an existing Gargantuan project");
 		auto CreatedSnapshot = call("GetSnapshot", Json::object(), "test-token");
-		Check(CreatedSnapshot["Ok"].get<bool>() && CreatedSnapshot["Result"]["Snapshot"]["Objects"].size() == 7,
+		Check(CreatedSnapshot["Ok"].get<bool>() && CreatedSnapshot["Result"]["Snapshot"]["Objects"].size() == 8,
 			"the minimum new project is immediately available through the normal authoritative snapshot path");
 		auto CreatedWorkspace = std::find_if(
 			CreatedSnapshot["Result"]["Snapshot"]["Objects"].begin(),
@@ -6680,6 +6692,11 @@ namespace {
 			"viewport camera session state does not enter the document journal"
 		);
 		auto picked = call("PickViewport", {{"X", 159.5}, {"Y", 99.5}}, "test-token");
+		const auto PreviewOff = call("GetGuiPreview", Json::object(), "test-token");
+		const auto BadPreview = call("SetGuiPreview", {{"Enabled", true}, {"Width", 100}}, "test-token");
+		Check(PreviewOff["Ok"].get<bool>() && PreviewOff["Result"]["Enabled"] == false &&
+			!BadPreview["Ok"].get<bool>() && BadPreview["Error"]["Code"] == "MalformedRequest",
+			"GUI preview starts off and requires a complete design resolution");
 		auto pickTarget = std::find_if(objects.begin(), objects.end(), [](const Json &object) {
 			return object["Name"] == "PickTarget";
 		});
@@ -6739,10 +6756,12 @@ namespace {
 			RenderProjection TestViewportProjection;
 			std::vector<RenderPublicationId> PlayApplied;
 			std::vector<RenderPublicationId> PlayCaptured;
+			RenderPublicationPtr LastCapturedPublication;
 			std::size_t PlayFullPublications = 0;
 			bool CheckPlayPublicationOrder = false;
 			host.SetViewportCaptureForTesting([&](RenderPublicationPtr Publication) {
 				if (!Publication) throw std::invalid_argument("test viewport capture requires a publication");
+				LastCapturedPublication = Publication;
 				if (CheckPlayPublicationOrder) {
 					if (TestViewportProjection.GetLastPublicationId() != Publication->Id)
 						throw std::logic_error("test capture missed one or more Play publications");
@@ -6884,6 +6903,90 @@ namespace {
 					EditAfterPlayPresentationState["Result"]["PresentationFailures"] == FailuresBeforePlay,
 				"Play to Edit retires the runtime generation without flashing a stale Play frame"
 			);
+			const auto PreviewSnapshot = call("GetSnapshot", Json::object(), "test-token");
+			const auto &PreviewObjects = PreviewSnapshot["Result"]["Snapshot"]["Objects"];
+			const auto Starter = std::ranges::find_if(PreviewObjects, [](const Json &Object) {
+				return Object["Name"] == "StarterGui";
+			});
+			Check(Starter != PreviewObjects.end(), "editor projects expose the canonical StarterGui");
+			if (Starter != PreviewObjects.end()) {
+				const auto Screen = call("CreateInstance", {
+					{"ClassSchemaId", SchemaId::FromNativeName("Engine", "ScreenGui").ToString()},
+					{"DefinitionVersion", 1}, {"Parent", (*Starter)["Id"]}, {"Name", "AuthoringPreviewScreen"},
+				}, "test-token");
+				const auto Button = call("CreateInstance", {
+					{"ClassSchemaId", SchemaId::FromNativeName("Engine", "TextButton").ToString()},
+					{"DefinitionVersion", 1}, {"Parent", Screen["Result"]["Object"]}, {"Name", "AuthoringPreviewButton"},
+					{"InitialProperties", Json::array({Json{
+						{"DeclaringClassSchemaId", SchemaId::FromNativeName("Engine", "GuiObject").ToString()},
+						{"DeclaringDefinitionVersion", 1}, {"Property", "Size"},
+						{"Value", JsonCodec::EncodeWireValue(WireUDim2{{0, 50}, {0, 40}})},
+					}})},
+				}, "test-token");
+				Check(Screen["Ok"].get<bool>() && Button["Ok"].get<bool>(), "Studio creates a GUI template with ordinary authoring commands");
+				const auto Baseline = call("GetProjectState", Json::object(), "test-token");
+				(void)call("PollChanges", Json::object(), "test-token");
+				const auto Before = call("GetViewportPresentationState", Json::object(), "test-token");
+				const auto Enabled = call("SetGuiPreview", {{"Enabled", true}, {"Width", 100}, {"Height", 200}}, "test-token");
+				Check(Enabled["Ok"].get<bool>() && Enabled["Result"]["Enabled"] == true &&
+					Enabled["Result"]["Generation"] == Before["Result"]["Generation"] &&
+					Enabled["Result"]["X"] == 110 && Enabled["Result"]["DisplayWidth"] == 100,
+					"portrait preview preserves the active transport and fits its design into a centered rectangle");
+				host.PumpViewportPresentationForTesting();
+				const auto Frame = call("GetViewportPresentationState", Json::object(), "test-token");
+				Check(LastCapturedPublication && !LastCapturedPublication->GetUi().Batches.empty() &&
+					Frame["Result"]["Mode"] == "Edit", "GUI authoring uses an ordinary edit frame with runtime UI batches");
+				host.PumpViewportPresentationForTesting();
+				const auto Pick = call("PickGuiPreview", {{"X", 120.0}, {"Y", 10.0},
+					{"FrameNumber", Frame["Result"]["LatestSequence"]}, {"Generation", Frame["Result"]["Generation"]}},
+					"test-token");
+				Check(Pick["Ok"].get<bool>() && Pick["Result"]["Object"] == Button["Result"]["Object"] &&
+					Pick["Result"]["Bounds"]["X"] == 110 && Pick["Result"]["Bounds"]["Width"] == 50,
+					"preview picking uses the previously displayed layout and authoring object identity");
+				const auto WrongGeneration = call("PickGuiPreview", {{"X", 120.0}, {"Y", 10.0},
+					{"FrameNumber", Frame["Result"]["LatestSequence"]},
+					{"Generation", Frame["Result"]["Generation"].get<std::uint64_t>() + 1}}, "test-token");
+				Check(!WrongGeneration["Ok"].get<bool>() && WrongGeneration["Error"]["Code"] == "StaleFrame",
+					"GUI preview rejects a frame from another viewport generation");
+				const auto InvalidRoot = temporaryRoot / "invalid-open";
+				const auto InvalidConfig = InvalidRoot / ".gargantuan";
+				std::filesystem::create_directories(InvalidConfig);
+				{
+					std::ofstream InvalidDocument(InvalidConfig / "project.instance.json", std::ios::binary);
+					InvalidDocument << "{\"Version\":5,";
+				}
+				const auto InvalidPreRun = InvalidConfig / "prerun.luau";
+				std::filesystem::copy_file(temporaryRoot / ".gargantuan" / "prerun.luau", InvalidPreRun);
+				const auto &Lifecycle = GetRuntimeSchemaLifecycle();
+				const auto Registry = Lifecycle.GetActiveRegistry();
+				const auto SchemaGeneration = Lifecycle.GetActiveGeneration();
+				for (const bool MatchingSchema : {true, false}) {
+					if (!MatchingSchema) std::filesystem::remove(InvalidPreRun);
+					const auto FailedOpen = call("OpenProject", {{"Root", InvalidRoot.string()}}, "test-token");
+					const auto CurrentPreview = call("GetGuiPreview", Json::object(), "test-token");
+					const auto CurrentChanges = call("PollChanges", Json::object(), "test-token");
+					const auto RetainedPick = call("PickGuiPreview", {{"X", 120.0}, {"Y", 10.0},
+						{"FrameNumber", Frame["Result"]["LatestSequence"]}, {"Generation", Frame["Result"]["Generation"]}},
+						"test-token");
+					Check(!FailedOpen["Ok"].get<bool>() && FailedOpen["Error"]["Code"] == "RequestRejected" &&
+						GetRuntimeSchemaLifecycle().GetActiveRegistry() == Registry &&
+						GetRuntimeSchemaLifecycle().GetActiveGeneration() == SchemaGeneration &&
+						call("GetProjectState", Json::object(), "test-token")["Result"] == Baseline["Result"] &&
+						CurrentPreview["Result"] == Enabled["Result"] &&
+						CurrentChanges["Ok"].get<bool>() && CurrentChanges["Result"]["Records"].empty() &&
+						RetainedPick["Ok"].get<bool>() && RetainedPick["Result"] == Pick["Result"],
+						MatchingSchema ? "malformed same-schema replacement preserves the document, cursor and captured preview"
+							: "cross-schema JSON preflight preserves the document, cursor and captured preview");
+				}
+				const auto Disabled = call("SetGuiPreview", {{"Enabled", false}}, "test-token");
+				host.PumpViewportPresentationForTesting();
+				Check(Disabled["Ok"].get<bool>() && Disabled["Result"]["Enabled"] == false &&
+					LastCapturedPublication && LastCapturedPublication->GetUi().Batches.empty() &&
+					call("GetProjectState", Json::object(), "test-token")["Result"] == Baseline["Result"] &&
+					call("PollChanges", Json::object(), "test-token")["Result"]["Records"].empty(),
+					"preview toggle and picking leave authored state, journal and history untouched");
+				(void)call("DestroyInstance", {{"Object", Screen["Result"]["Object"]}}, "test-token");
+			}
 			auto StoppedPresentation = call("StopViewportPresentation", Json::object(), "test-token");
 			auto RepeatedStop = call("StopViewportPresentation", Json::object(), "test-token");
 			Check(

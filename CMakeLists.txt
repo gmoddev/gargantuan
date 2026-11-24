@@ -1006,6 +1006,8 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_entitlement_provider_benchmark PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_gui_foundation_tests "tests/GuiFoundationTests.cpp")
 	target_link_libraries(gargantuan_gui_foundation_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_viewport_frame_tests "tests/ViewportFrameTests.cpp")
+	target_link_libraries(gargantuan_viewport_frame_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_first_complete_game_tests "tests/FirstCompleteGameTests.cpp")
 	target_link_libraries(gargantuan_first_complete_game_tests PRIVATE gargantuan_core nlohmann_json)
 	target_compile_definitions(gargantuan_first_complete_game_tests PRIVATE
@@ -1613,6 +1615,7 @@ if(BUILD_TESTING)
 			gargantuan_entitlement_service_tests
 			gargantuan_entitlement_provider_benchmark
 			gargantuan_gui_foundation_tests
+			gargantuan_viewport_frame_tests
 			gargantuan_first_complete_game_tests
 			gargantuan_packaging_tests
 			gargantuan_packaging_editor_host_tests
@@ -1779,6 +1782,7 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_entitlement_provider_benchmark_smoke
 		COMMAND gargantuan_entitlement_provider_benchmark --quick)
 	add_test(NAME gargantuan_gui_foundation COMMAND gargantuan_gui_foundation_tests)
+	add_test(NAME gargantuan_viewport_frame COMMAND gargantuan_viewport_frame_tests)
 	add_test(NAME gargantuan_first_complete_game COMMAND gargantuan_first_complete_game_tests)
 	add_test(NAME gargantuan_packaging COMMAND gargantuan_packaging_tests)
 	add_test(NAME gargantuan_packaging_editor_host COMMAND gargantuan_packaging_editor_host_tests)

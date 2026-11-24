@@ -16,14 +16,25 @@ to complete the mission, then switch roles to try both controllers.
   gameplay after activation. The beacon plays a positional cue for each
   charge. The third charge releases the orange cargo marker onto the bouncy
   platform beside the course.
+- **Equipment** — the second crystal button opens or closes a private animated
+  crystal preview. The equipment and audio choices stay with your HUD when
+  you switch controllers. The briefing panel restores its authored state on
+  respawn.
 
 Open this directory as a project in Gargantuan Studio. Local Play previews the
 course, on-foot movement, hazard, respawn, and beacon animation. Drone flight
 and the cooperative objective run in the dedicated multiplayer session.
+Turn on **GUI Preview** in Edit to inspect the authored HUD. Select the
+`StarterGui` templates in Explorer or click their frames in the preview.
+The `RelayHud` root persists across respawn. `RelayBriefing` has
+`ResetOnSpawn` enabled. Inside `EquipmentPreview`, edit the Camera or the
+model without moving the gameplay camera or inserting a physics body into the
+course. Export the HUD as a GASM model or use the GASP commands to save and reopen
+the place with the same project asset origin.
 
 ## Run with two clients
 
-Use a GNS-enabled Release build of Engine Foundation 8. Run these from the
+Use a GNS-enabled Release build of Engine Foundation 9. Run these from the
 repository root using the matching build output for the packager and both
 runtime distributions.
 

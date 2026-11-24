@@ -23,8 +23,11 @@
 
 namespace gargantuan {
 	class AttachmentMesh;
+	class AnimationRuntime;
+	class AssetService;
 	class SemanticSpatialResolver;
 	class Camera;
+	class ViewportFrame;
 	class WorldRoot;
 
 	struct RenderCameraInput {
@@ -43,6 +46,13 @@ namespace gargantuan {
 		glm::vec3 up,
 		float verticalFieldOfView = 70.0f
 	);
+	// Main-only extraction. Camera, asset resources and poses are resolved before
+	// the immutable scene crosses the renderer boundary.
+	[[nodiscard]] std::optional<RenderViewportScene> ExtractViewportScene(
+		const ViewportFrame &Viewport, AssetService &Assets, const AnimationRuntime *Animation,
+		std::uint32_t Width, std::uint32_t Height
+	);
+	[[nodiscard]] bool SameViewportScene(const RenderViewportScene &Left, const RenderViewportScene &Right);
 
 	class RenderExtractor {
 	  public:
@@ -92,6 +102,7 @@ namespace gargantuan {
 		[[nodiscard]] bool HasUiFrame(ObjectId Source, std::uint64_t SourceGeneration) const {
 			return UiSource == Source && UiSourceGeneration == SourceGeneration;
 		}
+		void SetViewportScenes(std::shared_ptr<const RenderViewportScenes> Scenes);
 		void SetUiTextureChanges(
 			std::vector<RenderTextureCreate> Creates,
 			std::vector<RenderTextureUpdate> Updates,
@@ -182,6 +193,8 @@ namespace gargantuan {
 		bool HasPublishedEnvironment = false;
 		std::shared_ptr<const RenderUiFrame> PendingUi;
 		std::shared_ptr<const RenderUiFrame> CommittedUi = std::make_shared<const RenderUiFrame>();
+		std::shared_ptr<const RenderViewportScenes> CommittedViewports;
+		bool ViewportsChanged = false;
 		ObjectId UiSource;
 		std::uint64_t UiSourceGeneration = 0;
 		std::vector<RenderTextureCreate> PendingTextureCreates;

@@ -22,6 +22,7 @@ namespace gargantuan {
 	class SDLMaterialSamplers;
 	class SDLSpotShadowAtlas;
 	class SDLInstanceGpuCache;
+	class SDLViewportRenderer;
 	struct SDLRendererMetrics;
 
 	struct SDLFrameContext {
@@ -34,6 +35,7 @@ namespace gargantuan {
 		bool UseSolidShadowDepth = true;
 		bool SolidShadowDepthAttempted = false;
 		bool SolidShadowDepthActive = false;
+		bool ClearPresentationColor = false;
 		SDLFrameContext(
 			const RenderProjection &RenderState,
 			SDLMeshCache &MeshResourcesValue,
@@ -49,6 +51,7 @@ namespace gargantuan {
 		SDLTextureCache *TextureResources = nullptr;
 		SDLInstanceGpuCache *InstanceResources = nullptr;
 		SDLMaterialSamplers *MaterialSamplers = nullptr;
+		const SDLViewportRenderer *Viewports = nullptr;
 		SDLImageBasedLightingBindings EnvironmentLighting;
 		SDLReflectionProbeBindings ReflectionProbes;
 		SDLRendererMetrics *Metrics = nullptr;

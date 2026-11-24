@@ -63,7 +63,7 @@ namespace gargantuan {
 		auto operator<=>(const GuiViewportConfiguration &) const = default;
 	};
 
-	enum class GuiPresentationKind : std::uint8_t { None, Rectangle, Text, Image, Button, ScrollView, TextInput };
+	enum class GuiPresentationKind : std::uint8_t { None, Rectangle, Text, Image, Button, ScrollView, TextInput, Viewport };
 
 	struct GuiTextGlyph {
 		RenderTextureIdentity Texture;

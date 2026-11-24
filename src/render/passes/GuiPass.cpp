@@ -3,6 +3,7 @@
 #include "gargantuan/render/SDLRenderer.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
 #include "render/sdl/SDLTextureCache.hpp"
+#include "render/sdl/SDLViewportRenderer.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
@@ -162,12 +163,19 @@ namespace gargantuan {
 			std::uint32_t FirstIndex = 0;
 			std::int32_t VertexOffset = 0;
 			for (const auto &Batch : Context.Projection.GetUi().Batches) {
-				auto *Texture = Batch.Texture && Context.TextureResources
+				const bool IsViewport = Batch.Viewport.IsValid();
+				auto *Texture = IsViewport ? (Context.Viewports ? Context.Viewports->Find(Batch.Viewport) : nullptr)
+					: Batch.Texture && Context.TextureResources
 					? Context.TextureResources->Find(*Batch.Texture) : WhiteTexture;
+				if (IsViewport && !Texture) {
+					FirstIndex += static_cast<std::uint32_t>(Batch.Indices.size());
+					VertexOffset += static_cast<std::int32_t>(Batch.Vertices.size());
+					continue;
+				}
 				if (!Texture) throw std::logic_error("GUI batch references a texture without SDL residency");
 				SDL_GPUTextureSamplerBinding TextureBinding{.texture = Texture, .sampler = Sampler};
 				SDL_BindGPUFragmentSamplers(Pass, 0, &TextureBinding, 1);
-				BatchUniforms Uniforms{{Batch.Opacity, 0.0f, 0.0f, 0.0f}};
+				BatchUniforms Uniforms{{Batch.Opacity, IsViewport ? 1.0f : 0.0f, 0.0f, 0.0f}};
 				SDL_PushGPUFragmentUniformData(Context.Commands, 0, &Uniforms, sizeof(Uniforms));
 
 				SDL_Rect Scissor{0, 0, static_cast<int>(Context.Width), static_cast<int>(Context.Height)};

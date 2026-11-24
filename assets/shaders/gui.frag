@@ -11,5 +11,9 @@ layout(set = 3, binding = 0) uniform UiBatchUniforms {
 layout(location = 0) out vec4 OutputColor;
 
 void main() {
-	OutputColor = texture(Atlas, FragmentUV) * FragmentColor * batch.Values.x;
+	vec4 Sample = texture(Atlas, FragmentUV);
+	// Geometry blended over a transparent viewport clear produces premultiplied
+	// pixels. Convert to straight alpha for the ordinary GUI blend state.
+	if (batch.Values.y > 0.5 && Sample.a > 0.0) Sample.rgb /= Sample.a;
+	OutputColor = Sample * FragmentColor * batch.Values.x;
 }
