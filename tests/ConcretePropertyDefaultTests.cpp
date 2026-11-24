@@ -1,6 +1,7 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Frame.hpp"
+#include "gargantuan/classes/ImageButton.hpp"
 #include "gargantuan/classes/ImageLabel.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/ScrollingFrame.hpp"
@@ -85,8 +86,9 @@ namespace {
 		const auto Journal = ChangeJournal::Get().CreateCursor();
 		std::vector<std::shared_ptr<Instance>> Direct{
 			std::make_shared<TextLabel>(), std::make_shared<ImageLabel>(), std::make_shared<TextBox>(),
-			std::make_shared<TextButton>(), std::make_shared<ScrollingFrame>(), std::make_shared<Frame>(),
-			std::make_shared<Part>(), std::make_shared<UIListLayout>(), std::make_shared<InheritedLabel>()};
+			std::make_shared<TextButton>(), std::make_shared<ImageButton>(), std::make_shared<ScrollingFrame>(),
+			std::make_shared<Frame>(), std::make_shared<Part>(), std::make_shared<UIListLayout>(),
+			std::make_shared<InheritedLabel>()};
 		Require(ChangeJournal::Get().Read(Journal).Records.empty() && World->GetAuthoritativeRevision() == Revision &&
 			World->Transactions.GetCommitted() == History, "direct initialization publishes no journal, revision, or history");
 		std::size_t Checked = 0;
@@ -126,13 +128,21 @@ namespace {
 				"construction creates no property notification signals");
 			Constructed->Destroy();
 		}
+		const auto Image = std::make_shared<ImageButton>();
 		Require(std::make_shared<TextLabel>()->GetBackgroundTransparency() == 1.0f &&
+			std::make_shared<ImageLabel>()->GetBackgroundTransparency() == 1.0f &&
 			std::make_shared<TextBox>()->GetBackgroundTransparency() == 0.0f &&
 			std::make_shared<TextButton>()->GetBackgroundTransparency() == 0.0f &&
+			Image->GetBackgroundTransparency() == 0.0f &&
 			std::make_shared<InheritedLabel>()->GetBackgroundTransparency() == 1.0f,
 			"nearest override wins and inherited override survives");
+		Require(Image->ReadPropertyWireValue("BackgroundColor3") == WireValue(WireColor3{0.18f, 0.22f, 0.30f}) &&
+			Image->GetInteractable() &&
+			Image->GetSelectable() && Image->GetInputSink() == Enums::InputSink::Activate,
+			"ImageButton uses the authored button defaults");
 		Require(std::make_shared<TextBox>()->GetGuiState() == Enums::GuiState::Idle &&
 			std::make_shared<TextButton>()->GetGuiState() == Enums::GuiState::Idle &&
+			Image->GetGuiState() == Enums::GuiState::Idle &&
 			std::make_shared<ScrollingFrame>()->GetGuiState() == Enums::GuiState::Idle,
 			"transient handwritten interaction initialization survives");
 		Require(std::make_shared<Workspace>()->GetCurrentCamera() != nullptr, "contextual camera construction survives");
@@ -151,7 +161,9 @@ namespace {
 					Override.Value.type() == typeid(bool) ? sizeof(bool) : sizeof(float);
 			}
 		}
-		Require(Count == 16, "exact migrated override count");
+		const auto *ImageClass = InstanceClassRegistry::GetDefinition(Image.get());
+		Require(ImageClass->DefaultOverrides.size() == 5 && Count - ImageClass->DefaultOverrides.size() == 16,
+			"five ImageButton overrides alongside the sixteen existing overrides");
 		// Older consumers can still project Classes; its defaults retain v6 meaning.
 		for (const auto &Class : Schema.at("Classes")) {
 			if (Class.at("Name") != "TextLabel") continue;
@@ -170,7 +182,7 @@ namespace {
 	}
 
 	void TestPersistence() {
-		for (const auto &ClassName : {"TextLabel", "ImageLabel", "TextBox", "TextButton", "ScrollingFrame"}) {
+		for (const auto &ClassName : {"TextLabel", "ImageLabel", "TextBox", "TextButton", "ImageButton", "ScrollingFrame"}) {
 			for (const auto Mode : {0, 1, 2}) {
 				auto Object = InstanceClassRegistry::ConstructByName(ClassName);
 				Object->SetArchivable(true);
@@ -207,7 +219,7 @@ namespace {
 	void TestNativeReset() {
 		auto World = std::make_shared<DataModel>();
 		std::size_t Cases = 0;
-		for (const auto &ClassName : {"TextLabel", "ImageLabel", "TextBox", "TextButton", "ScrollingFrame",
+		for (const auto &ClassName : {"TextLabel", "ImageLabel", "TextBox", "TextButton", "ImageButton", "ScrollingFrame",
 			"DefaultInheritedLabel", "Frame", "Part"}) {
 			auto Object = InstanceClassRegistry::ConstructByName(ClassName);
 			Object->SetParent(World);
