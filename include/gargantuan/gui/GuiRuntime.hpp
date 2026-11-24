@@ -14,6 +14,7 @@
 #include <vector>
 
 namespace gargantuan {
+	class AnimationRuntime;
 	class DataModel;
 	class GuiObject;
 	class RenderPublisher;
@@ -38,7 +39,8 @@ namespace gargantuan {
 		static GuiRuntime *Find(const Instance &Object);
 
 		void SetViewport(GuiViewportConfiguration Configuration);
-		[[nodiscard]] bool Reconcile();
+		[[nodiscard]] bool Reconcile(const AnimationRuntime *Animation = nullptr);
+		[[nodiscard]] std::span<const ObjectId> GetVisibleViewportAnimationObjects() const;
 		void Publish(RenderPublisher &Publisher, std::shared_ptr<const RenderUiFrame> PlacedFrame = {},
 			std::uint64_t PlacementGeneration = 0, GuiTextureChanges ViewportTextures = {});
 		[[nodiscard]] std::vector<RenderTextureRemove> GetPreviewTextureRemovals() const;

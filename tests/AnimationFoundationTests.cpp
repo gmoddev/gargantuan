@@ -13,6 +13,7 @@
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/ProximityPrompt.hpp"
 #include "gargantuan/classes/Sound.hpp"
+#include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/editor/PlaySession.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
@@ -2431,6 +2432,47 @@ int main() {
 	}
 	if (MeshRecord && WaveRecord)
 		TestAnimationUpdatePolicy(Assets, WorkspaceValue, MeshRecord->Reference.Value, WaveRecord->Reference.Value);
+	if (MeshRecord && WaveRecord) {
+		auto Preview = std::make_shared<ViewportFrame>();
+		Preview->SetParent(World);
+		auto PreviewCamera = std::make_shared<Camera>();
+		PreviewCamera->SetCFrame(CFrame(0.0f, 0.0f, 4.0f));
+		PreviewCamera->SetParent(Preview);
+		Preview->SetCurrentCamera(PreviewCamera);
+		auto PreviewRig = std::make_shared<MeshPart>();
+		PreviewRig->SetMesh(MeshRecord->Reference.Value);
+		PreviewRig->SetParent(Preview);
+		auto PreviewAnimator = std::make_shared<Animator>();
+		PreviewAnimator->SetParent(PreviewRig);
+		AnimationRuntime PreviewAnimation(Assets);
+		PreviewAnimation.RegisterAnimator(PreviewAnimator);
+		auto PreviewTrack = PreviewAnimator->CreateTrack(WaveRecord->Reference.Value);
+		PreviewTrack->Play();
+		const std::array Visible{PreviewRig->GetObjectId()};
+		const AnimationUpdateContext Context{
+			.Environment = AnimationRuntimeEnvironment::Graphical, .ViewOrigin = glm::vec3(10000.0f),
+			.HasViewOrigin = true, .VisibilityGeneration = 1, .VisibilityPublication = 1,
+			.VisibilityComplete = true, .VisiblePresentationObjects = Visible,
+		};
+		PreviewAnimation.Step(0.0f, Context);
+		const auto FirstView = ExtractViewportScene(*Preview, *Assets, &PreviewAnimation, 180, 120);
+		PreviewAnimation.ClearChanges();
+		PreviewAnimation.Step(0.125f, Context);
+		const auto SecondView = ExtractViewportScene(*Preview, *Assets, &PreviewAnimation, 180, 120);
+		const bool Published = FirstView && SecondView && FirstView->Objects.size() == 1 && SecondView->Objects.size() == 1 &&
+			FirstView->Objects.front().Pose && SecondView->Objects.front().Pose;
+		Check(Published && FirstView->Objects.front().Pose->SourceMesh == SecondView->Objects.front().Pose->SourceMesh &&
+			FirstView->Objects.front().Pose->PoseRevision < SecondView->Objects.front().Pose->PoseRevision &&
+			!SameViewportScene(*FirstView, *SecondView),
+			"visible viewport Animator advances with a shared source mesh and independent palette");
+		RenderPublisher OrdinaryPublisher;
+		OrdinaryPublisher.SetAnimationPoseChanges(PreviewAnimation.GetPoseUpdates(), PreviewAnimation.GetPoseRemoves());
+		const auto OrdinaryView = OrdinaryPublisher.Publish(*WorkspaceValue, RenderCameraInput{}, 180, 120);
+		Check(OrdinaryView->AnimationPoseUpdates.empty(),
+			"a viewport Animator does not publish its palette into the gameplay world");
+		PreviewAnimation.Shutdown();
+		Preview->Destroy();
+	}
 	if (MeshRecord && WaveRecord)
 		TestAnimationPoseJobs(
 			Assets,

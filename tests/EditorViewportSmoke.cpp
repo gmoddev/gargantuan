@@ -3,12 +3,14 @@
 
 #include <cassert>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <format>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
 #include <memory>
+#include <iostream>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -21,6 +23,7 @@ namespace gargantuan {
 		static void InjectPaletteUploadFailure(EditorViewportRenderer &Renderer) {
 			Renderer.InjectPaletteUploadFailureForTesting();
 		}
+		static SDLRendererMetrics GetMetrics(EditorViewportRenderer &Renderer) { return Renderer.GetMetricsForTesting(); }
 	};
 }
 
@@ -54,6 +57,150 @@ namespace {
 		Batch.Indices = {0, 1, 2, 2, 3, 0};
 		Ui.Batches.push_back(std::move(Batch));
 		return Ui;
+	}
+
+	std::shared_ptr<const RenderViewportScene> MakeViewport(
+		ObjectId Viewport, std::uint32_t Width, std::uint32_t Height, glm::vec4 Color, float X = 0.0f
+	) {
+		auto Scene = std::make_shared<RenderViewportScene>();
+		Scene->Viewport = Viewport;
+		Scene->Width = Width;
+		Scene->Height = Height;
+		Scene->Camera.ProjectionMatrix = glm::perspectiveRH_ZO(glm::radians(54.0f),
+			static_cast<float>(Width) / Height, 0.1f, 1000.0f);
+		Scene->Camera.ViewProjectionMatrix = Scene->Camera.ProjectionMatrix;
+		RenderViewportObject Box;
+		Box.Visual.Item.Object = {Viewport.Slot + 1000, Viewport.Generation};
+		Box.Visual.Item.ModelMatrix = glm::translate(glm::mat4(1.0f), glm::vec3(X, 0.0f, -3.5f));
+		Box.Visual.Item.InverseModelMatrix = glm::inverse(Box.Visual.Item.ModelMatrix);
+		Box.Visual.Item.Color = Color;
+		Box.Visual.Item.CastShadow = false;
+		Box.Visual.Material.BaseColorFactor = Color;
+		if (Color.a < 1.0f) Box.Visual.Material.OpacityMode = RenderOpacityMode::Transparent;
+		Scene->Objects.push_back(Box);
+		return Scene;
+	}
+
+	RenderUiBatch ViewportQuad(ObjectId Viewport, float X, float Y, float Width, float Height) {
+		RenderUiBatch Batch;
+		Batch.Viewport = Viewport;
+		Batch.Vertices = {
+			{{X, Y}, {0, 0}, {1, 1, 1, 1}},
+			{{X + Width, Y}, {1, 0}, {1, 1, 1, 1}},
+			{{X + Width, Y + Height}, {1, 1}, {1, 1, 1, 1}},
+			{{X, Y + Height}, {0, 1}, {1, 1, 1, 1}},
+		};
+		Batch.Indices = {0, 1, 2, 2, 3, 0};
+		return Batch;
+	}
+
+	void CheckViewportComposition() {
+		EditorViewportRenderer Renderer(96, 48);
+		auto First = MakePublication(96, 48, 1);
+		First->Frame.Environment.EnvironmentColor = {0.02f, 0.02f, 0.45f};
+		const ObjectId Left{1, 1};
+		const ObjectId Right{2, 1};
+		First->Ui = {96, 48, 1.0f, {ViewportQuad(Left, 0, 0, 48, 48), ViewportQuad(Right, 48, 0, 48, 48)}};
+		First->Ui.Batches[1].Clip = RenderUiClipRect{72.0f, 0.0f, 24.0f, 48.0f};
+		First->Viewports = std::make_shared<const RenderViewportScenes>(RenderViewportScenes{
+			MakeViewport(Left, 48, 48, {1, 0, 0, 1}), MakeViewport(Right, 48, 48, {0, 1, 0, 0.65f}),
+		});
+		const auto Captured = Renderer.Capture(First);
+		const auto At = [&](std::size_t X, std::size_t Y, std::size_t Channel) {
+			return static_cast<int>(Captured.RgbPixels[(Y * 96 + X) * 3 + Channel]);
+		};
+		if (At(24, 24, 0) <= At(24, 24, 2) + 30 || At(75, 24, 1) <= At(75, 24, 0) + 25 ||
+			At(70, 24, 2) <= At(70, 24, 1) + 40 || At(3, 3, 2) <= At(3, 3, 0) + 40)
+			throw std::runtime_error("[Render:ViewportFrame] Independent camera, alpha or clipping readback failed");
+		const auto Created = EditorViewportRendererTestAccess::GetMetrics(Renderer);
+		if (Created.ViewportFailures || Created.ViewportRenders != 2 ||
+			Created.ViewportTargetBytes != 2 * 48 * 48 * 8)
+			throw std::runtime_error("[Render:ViewportFrame] Native target budget differs from the expected two views");
+
+		auto Next = std::make_shared<RenderPublication>();
+		Next->Id = 2;
+		Next->BaseId = 1;
+		Next->Frame = First->Frame;
+		if (Renderer.Capture(Next).RgbPixels != Captured.RgbPixels ||
+			EditorViewportRendererTestAccess::GetMetrics(Renderer).ViewportRenders != 2)
+			throw std::runtime_error("[Render:ViewportFrame] Static viewport image did not reuse its targets");
+		auto Cleared = std::make_shared<RenderPublication>();
+		Cleared->Id = 3;
+		Cleared->BaseId = 2;
+		Cleared->Frame = First->Frame;
+		Cleared->UiChanged = true;
+		Cleared->Viewports = std::make_shared<const RenderViewportScenes>();
+		const auto ClearedFrame = Renderer.Capture(Cleared);
+		if (EditorViewportRendererTestAccess::GetMetrics(Renderer).ViewportTargetBytes != 0 ||
+			ClearedFrame.RgbPixels == Captured.RgbPixels)
+			throw std::runtime_error("[Render:ViewportFrame] Hidden view retained pixels or GPU targets");
+	}
+
+	void RunViewportWorkloads() {
+		constexpr std::uint32_t SurfaceWidth = 640;
+		constexpr std::uint32_t SurfaceHeight = 360;
+		constexpr std::size_t Frames = 240;
+		struct Workload { const char *Name; std::size_t Count; bool Animated; bool Resizing; bool Turnover; };
+		for (const auto &Load : {
+			Workload{"gameplay", 0, false, false, false}, Workload{"one-static", 1, false, false, false},
+			Workload{"eight-static", 8, false, false, false}, Workload{"mostly-hidden", 1, false, false, false},
+			Workload{"eight-animated", 8, true, false, false}, Workload{"resize", 4, false, true, false},
+			Workload{"turnover", 8, false, false, true},
+		}) {
+			SDLRenderer Renderer(Vector2(SurfaceWidth, SurfaceHeight), SDLRendererOptions{
+				.Offscreen = true, .WaitForGpuCompletion = true,
+			});
+			std::uint64_t PeakBytes = 0;
+			const auto WorldCamera = MakeViewport({2000, 1}, SurfaceWidth, SurfaceHeight, {1, 1, 1, 1})->Camera;
+			const auto Start = std::chrono::steady_clock::now();
+			for (std::size_t Index = 0; Index < Frames; ++Index) {
+				auto Publication = MakePublication(SurfaceWidth, SurfaceHeight, Index + 1);
+				Publication->Frame.Camera = WorldCamera;
+				if (Index == 0) {
+					for (std::uint32_t Object = 0; Object < 24; ++Object) {
+						const auto Item = MakeViewport({3000 + Object, 1}, 96, 96, {0.6f, 0.6f, 0.6f, 1.0f},
+							static_cast<float>(Object) / 8.0f - 1.5f);
+						Publication->Creates.push_back(Item->Objects.front().Visual);
+					}
+				} else {
+					Publication->FullResync = false;
+					Publication->BaseId = Index;
+				}
+				const bool Turned = Load.Turnover && Index % 12 == 0;
+				if (Index == 0 || Turned) {
+					Publication->UiChanged = true;
+					Publication->Ui = {SurfaceWidth, SurfaceHeight, 1.0f, {}};
+					for (std::size_t View = 0; View < Load.Count; ++View) {
+						const ObjectId Id{static_cast<std::uint32_t>(View + 1),
+							Load.Turnover ? static_cast<std::uint32_t>(Index / 12 + 1) : 1u};
+						Publication->Ui.Batches.push_back(ViewportQuad(Id,
+							static_cast<float>(View % 4) * 150, static_cast<float>(View / 4) * 140, 128, 108));
+					}
+				}
+				if (Index == 0 || Turned || ((Load.Animated || Load.Resizing) && Index % 2 == 0)) {
+					RenderViewportScenes Scenes;
+					for (std::size_t View = 0; View < Load.Count; ++View) {
+						const ObjectId Id{static_cast<std::uint32_t>(View + 1),
+							Load.Turnover ? static_cast<std::uint32_t>(Index / 12 + 1) : 1u};
+						const std::uint32_t Width = Load.Resizing ? 96 + static_cast<std::uint32_t>(Index % 50) : 128;
+						Scenes.push_back(MakeViewport(Id, Width, 108, {0.9f, 0.2f, 0.1f, 1.0f},
+							Load.Animated ? static_cast<float>(Index % 50) / 50 : 0.0f));
+					}
+					Publication->Viewports = std::make_shared<const RenderViewportScenes>(std::move(Scenes));
+				}
+				Renderer.Draw(Publication);
+				PeakBytes = std::max(PeakBytes, Renderer.GetMetrics().ViewportTargetBytes);
+			}
+			const auto &Metrics = Renderer.GetMetrics();
+			const auto Elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now() - Start).count();
+			std::cout << "[Render:ViewportWorkload] " << Load.Name << " frames=" << Metrics.FramesSubmitted
+				<< " elapsed_us=" << Elapsed << " secondary_cpu_ns=" << Metrics.CpuViewportNanoseconds
+				<< " submit_ns=" << Metrics.CpuSubmissionNanoseconds << " gpu_wait_ns=" << Metrics.GpuCompletionWaitNanoseconds
+				<< " renders=" << Metrics.ViewportRenders << " failures=" << Metrics.ViewportFailures
+				<< " target_peak_bytes=" << PeakBytes << " allocations=" << Metrics.ViewportTargetAllocations
+				<< " releases=" << Metrics.ViewportTargetReleases << '\n';
+		}
 	}
 
 	std::size_t CenterPixel(std::uint32_t Width, std::uint32_t Height) {
@@ -500,6 +647,11 @@ namespace {
 }
 
 int main(int ArgumentCount, char **Arguments) {
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--viewport-workloads") {
+		RunViewportWorkloads();
+		return 0;
+	}
+	CheckViewportComposition();
 	const bool RequireHdr = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--require-hdr";
 	{
 		EditorViewportRenderer Renderer(64, 64);

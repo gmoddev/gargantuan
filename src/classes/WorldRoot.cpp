@@ -1,4 +1,5 @@
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/JointConstraint.hpp"
@@ -1037,6 +1038,7 @@ namespace gargantuan {
 		DestroyingConnection = Destroying->Once([this](std::monostate) { ShutdownPhysics(); });
 
 		UnbindDescendants = BindDescendants([this](std::shared_ptr<Instance> Instance) {
+			if (ViewportFrame::FindContaining(*Instance)) return;
 			if (auto Part = std::dynamic_pointer_cast<BasePart>(Instance)) {
 				TrackPart(Part);
 				(void)CreatePartBody(Part);

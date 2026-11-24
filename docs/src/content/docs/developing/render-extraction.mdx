@@ -137,6 +137,12 @@ last-known-good coherent set. See
 
 ## Backend resource boundary
 
+Foundation 9 publishes bounded immutable ViewportFrame scenes and an
+independent generation-safe GUI batch reference. The SDL backend owns the
+offscreen color/depth targets, shares resident mesh and material resources
+and draws before the ordinary UI composition pass. See the
+[ViewportFrame contract](../../../../../devdocs/CurrentArchitecture/ViewportFrameFoundation9.md).
+
 SDL GPU types are confined to the current backend implementation and its
 private helpers. Public/general render headers, `BaseRenderer`, `Mesh`, and the
 EditorViewport semantic contract expose no SDL GPU handles. This boundary does

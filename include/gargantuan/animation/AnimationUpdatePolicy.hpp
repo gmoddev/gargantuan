@@ -36,6 +36,7 @@ namespace gargantuan {
 		std::uint64_t VisibilityPublication = 0;
 		bool VisibilityComplete = false;
 		std::span<const ObjectId> VisibleObjects;
+		std::span<const ObjectId> VisiblePresentationObjects;
 		bool SemanticRequirementsComplete = true;
 		std::span<const ObjectId> SemanticRequiredObjects;
 	};

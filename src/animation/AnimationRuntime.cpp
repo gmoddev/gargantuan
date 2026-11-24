@@ -4,6 +4,7 @@
 #include "gargantuan/classes/Animator.hpp"
 #include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
+#include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/runtime/JobSystem.hpp"
 #include "gargantuan/services/AssetService.hpp"
 
@@ -853,7 +854,7 @@ namespace gargantuan {
 			const bool RootMotionRequired = RootMotionTrack && RootMotionTrack->RootMotionEnabled &&
 				!RootMotionTrack->Invalidated &&
 				(RootMotionTrack->PlaybackState == Enums::AnimationPlaybackState::Playing ||
-				 RootMotionTrack->NaturalEndPose);
+				 RootMotionTrack->NaturalEndPose) && !ViewportFrame::FindContaining(*AnimatorValue);
 			double RootMotionIntervalStart = 0.0;
 			double RootMotionIntervalEnd = 0.0;
 			bool RootMotionHasBaseline = false;
@@ -984,7 +985,8 @@ namespace gargantuan {
 			else if (Context.Environment == AnimationRuntimeEnvironment::Headless)
 				NextPolicy = AnimationUpdatePolicyClass::VisualFrozen;
 			else if (Context.Environment == AnimationRuntimeEnvironment::Graphical) {
-				if (!VisibilityUsable || !Context.HasViewOrigin || !IsFinite(Context.ViewOrigin))
+				if (ContainsIdentity(Context.VisiblePresentationObjects, TargetObject) ||
+					!VisibilityUsable || !Context.HasViewOrigin || !IsFinite(Context.ViewOrigin))
 					NextPolicy = AnimationUpdatePolicyClass::FullRate;
 				else {
 					const auto Distance = glm::distance(MeshPartValue->GetCFrame().Position, Context.ViewOrigin);

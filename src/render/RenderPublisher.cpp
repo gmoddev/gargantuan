@@ -4,6 +4,8 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/render/RenderExtractor.hpp"
+#include "gargantuan/animation/AnimationRuntime.hpp"
+#include "gargantuan/classes/ViewportFrame.hpp"
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/DeformableBody.hpp"
@@ -100,6 +102,7 @@ namespace gargantuan {
 			auto Parent = Value.ParentReference.lock();
 			while (Parent) {
 				if (auto *Ancestor = dynamic_cast<WorldRoot *>(Parent.get())) return Ancestor == &World;
+				if (dynamic_cast<ViewportFrame *>(Parent.get())) return false;
 				Parent = Parent->ParentReference.lock();
 			}
 			return false;
@@ -109,6 +112,7 @@ namespace gargantuan {
 			auto Parent = Value.ParentReference.lock();
 			for (std::size_t Depth = 0; Parent && Depth < SemanticSpatialResolver::MaximumAttachmentDepth; ++Depth) {
 				if (auto *Ancestor = dynamic_cast<WorldRoot *>(Parent.get())) return Ancestor == &World;
+				if (dynamic_cast<ViewportFrame *>(Parent.get())) return false;
 				Parent = Parent->ParentReference.lock();
 			}
 			return false;
@@ -156,7 +160,7 @@ namespace gargantuan {
 
 		std::optional<RenderItem> ExtractItem(
 			const std::shared_ptr<Part> &PartValue, ObjectId ExpectedObject,
-			RenderExtractionDiagnostic &Diagnostic, const RenderItem *Previous
+			RenderExtractionDiagnostic &Diagnostic, const RenderItem *Previous, bool IsPresentation = false
 		) {
 			const auto Object = ExpectedObject;
 			if (!PartValue || PartValue->GetDestroyed() || PartValue->IsDestroying()) {
@@ -172,7 +176,7 @@ namespace gargantuan {
 				Diagnostic = {RenderExtractionIssue::UnsupportedGeometry, Object, "Skipped a Part with unsupported geometry"};
 				return std::nullopt;
 			}
-			const auto Frame = PartValue->GetRenderCFrame();
+			const auto Frame = IsPresentation ? PartValue->GetCFrame() : PartValue->GetRenderCFrame();
 			const auto Size = PartValue->GetSize();
 			if (!IsFinite(Frame.Position) || !IsFinite(glm::vec4(Frame.Rotation[0], 0.0f)) ||
 				!IsFinite(glm::vec4(Frame.Rotation[1], 0.0f)) || !IsFinite(glm::vec4(Frame.Rotation[2], 0.0f)) ||
@@ -209,14 +213,16 @@ namespace gargantuan {
 			RenderMeshIdentity Mesh;
 			RenderMaterialState Material;
 			std::shared_ptr<const std::vector<RenderPrimitiveMaterialState>> Primitives;
+			RenderSkeletonIdentity Skeleton;
 		};
 
 		std::optional<ExtractedMeshPart> ExtractMeshPart(
-			const WorldRoot &World,
+			AssetService *Assets,
 			const std::shared_ptr<MeshPart> &PartValue,
 			RenderExtractionDiagnostic &Diagnostic,
 			std::optional<ObjectId> ValidatedObject = std::nullopt,
-			const RenderItem *Previous = nullptr
+			const RenderItem *Previous = nullptr,
+			bool IsPresentation = false
 		) {
 			const auto Object = ValidatedObject ? *ValidatedObject :
 				(PartValue ? PartValue->GetObjectId() : ObjectId{});
@@ -229,7 +235,7 @@ namespace gargantuan {
 				Diagnostic = {RenderExtractionIssue::StaleObjectId, Object, "Skipped a MeshPart with stale identity"};
 				return std::nullopt;
 			}
-			const auto Frame = PartValue->GetRenderCFrame();
+			const auto Frame = IsPresentation ? PartValue->GetCFrame() : PartValue->GetRenderCFrame();
 			const auto Size = PartValue->GetSize();
 			if (!IsFinite(Frame.Position) || !IsFinite(glm::vec4(Frame.Rotation[0], 0.0f)) ||
 				!IsFinite(glm::vec4(Frame.Rotation[1], 0.0f)) || !IsFinite(glm::vec4(Frame.Rotation[2], 0.0f)) ||
@@ -251,8 +257,6 @@ namespace gargantuan {
 				Diagnostic = {RenderExtractionIssue::InvalidTransform, Object, "Skipped a MeshPart with a non-invertible transform"};
 				return std::nullopt;
 			}
-			auto WorldValue = World.GetDataModel();
-			auto Assets = WorldValue ? std::dynamic_pointer_cast<AssetService>(WorldValue->GetService("AssetService")) : nullptr;
 			auto Mesh = Assets ? Assets->ResolveMeshResource(PartValue->GetMesh()) : std::nullopt;
 			if (!Mesh || !Mesh->Value.Indices || Mesh->Value.Indices->empty()) {
 				Diagnostic = {RenderExtractionIssue::UnsupportedGeometry, Object,
@@ -282,7 +286,15 @@ namespace gargantuan {
 					});
 				}
 			} else PrimitiveStates->push_back({0, static_cast<std::uint32_t>(Mesh->Value.Indices->size()), ResolveMaterial({})});
-			return ExtractedMeshPart{Item, Mesh->Mesh, PrimitiveStates->front().Material, PrimitiveStates};
+			return ExtractedMeshPart{Item, Mesh->Mesh, PrimitiveStates->front().Material, PrimitiveStates,
+				Mesh->Value.Skeleton ? RenderSkeletonIdentity{Mesh->Value.Skeleton->CompatibilityId.Bytes}
+					: RenderSkeletonIdentity{}};
+		}
+
+		std::shared_ptr<AssetService> FindAssetService(const WorldRoot &World) {
+			const auto Model = World.GetDataModel();
+			const auto Service = Model ? Model->FindService("AssetService") : std::nullopt;
+			return Service ? std::dynamic_pointer_cast<AssetService>(*Service) : nullptr;
 		}
 
 		std::optional<ExtractedMeshPart> ExtractAttachmentMesh(
@@ -587,10 +599,104 @@ namespace gargantuan {
 						)
 					)
 				);
+			if (Publication.Viewports) for (const auto &Scene : *Publication.Viewports) {
+				if (!Scene) continue;
+				Result = AddBounded(Result, sizeof(RenderViewportScene));
+				for (const auto &Object : Scene->Objects) {
+					Result = AddBounded(Result, sizeof(RenderViewportObject));
+					if (Object.Visual.Primitives) Result = AddBounded(Result,
+						MultiplyBounded(Object.Visual.Primitives->size(), sizeof(RenderPrimitiveMaterialState)));
+					if (Object.Pose && Object.Pose->Palette.Entries) Result = AddBounded(Result,
+						MultiplyBounded(Object.Pose->Palette.Entries->size(), sizeof(RenderSkinPaletteEntry)));
+				}
+			}
 			for (const auto &Diagnostic : Publication.Diagnostics)
 				Result = AddBounded(Result, Diagnostic.Message.size());
 			return Result;
 		}
+	}
+
+	std::optional<RenderViewportScene> ExtractViewportScene(
+		const ViewportFrame &Viewport, AssetService &Assets, const AnimationRuntime *Animation,
+		std::uint32_t Width, std::uint32_t Height
+	) {
+		constexpr std::size_t MaximumInspectedNodes = 256;
+		constexpr std::size_t MaximumDepth = 32;
+		const auto Camera = Viewport.GetCurrentCamera();
+		if (!Camera || !Width || !Height || Width > MaximumRenderViewportDimension ||
+			Height > MaximumRenderViewportDimension || !Viewport.GetObjectId().IsValid()) return std::nullopt;
+
+		RenderViewportScene Scene{.Viewport = Viewport.GetObjectId(), .Width = Width, .Height = Height};
+		try {
+			auto Input = MakeRenderCameraInput(**Camera);
+			Input.FarPlane = 1000.0f;
+			Scene.Camera = BuildCamera(Input, Width, Height);
+		} catch (const std::invalid_argument &) {
+			return std::nullopt;
+		}
+		std::size_t Inspected = 0;
+		std::size_t Primitives = 0;
+		std::size_t MeshIndices = 0;
+		std::size_t Rigs = 0;
+		auto Extract = [&](auto &Recurse, const Instance &Parent, std::size_t Depth) -> bool {
+			if (Depth > MaximumDepth) return false;
+			for (const auto &Child : Parent.Children) {
+				if (++Inspected > MaximumInspectedNodes) return false;
+				if (!Child || Child->GetDestroyed() || Child->IsDestroying()) continue;
+				if (Child->GetClassName() == "Folder") {
+					if (!Recurse(Recurse, *Child, Depth + 1)) return false;
+					continue;
+				}
+				RenderExtractionDiagnostic Diagnostic;
+				RenderViewportObject Object;
+				if (auto MeshPartValue = std::dynamic_pointer_cast<MeshPart>(Child)) {
+					auto Mesh = ExtractMeshPart(&Assets, MeshPartValue, Diagnostic, Child->GetObjectId(), nullptr, true);
+					if (!Mesh) continue;
+					Primitives += Mesh->Primitives->size();
+					for (const auto &Range : *Mesh->Primitives) {
+						MeshIndices += Range.IndexCount;
+						if (MeshIndices > MaximumRenderViewportMeshIndices) return false;
+					}
+					Object.Visual = {Mesh->Item, Mesh->Mesh, Mesh->Material, true, std::move(Mesh->Primitives)};
+					if (Animation && Mesh->Skeleton.IsValid()) {
+						const auto Pose = Animation->GetPose(Mesh->Item.Object);
+						if (Pose && Pose->SkinPalette && Pose->SkeletonCompatibilityId.Bytes == Mesh->Skeleton.Bytes) {
+							if (++Rigs > MaximumRenderViewportRigs) return false;
+							Object.Pose = RenderAnimationPoseUpdate{
+								.Object = Mesh->Item.Object, .SourceMesh = Mesh->Mesh, .PoseRevision = Pose->PoseRevision,
+								.Palette = {Mesh->Skeleton, Pose->SkinPalette},
+							};
+						}
+					}
+				} else if (auto PartValue = std::dynamic_pointer_cast<Part>(Child)) {
+					const auto Item = ExtractItem(PartValue, Child->GetObjectId(), Diagnostic, nullptr, true);
+					if (!Item) continue;
+					++Primitives;
+					Object.Visual = {*Item, std::nullopt, BuildMaterial(*Item)};
+				} else continue;
+				if (Primitives > MaximumRenderViewportPrimitives || Scene.Objects.size() >= MaximumRenderViewportObjects)
+					return false;
+				Object.Visual.Item.CastShadow = false;
+				Scene.Objects.push_back(std::move(Object));
+			}
+			return true;
+		};
+		if (!Extract(Extract, Viewport, 1)) return std::nullopt;
+		std::ranges::sort(Scene.Objects, {}, [](const auto &Object) { return Object.Visual.Item.Object; });
+		return Scene;
+	}
+
+	bool SameViewportScene(const RenderViewportScene &Left, const RenderViewportScene &Right) {
+		return Left.Viewport == Right.Viewport && Left.Camera == Right.Camera &&
+			Left.Width == Right.Width && Left.Height == Right.Height && Left.AssetRevision == Right.AssetRevision &&
+			std::ranges::equal(Left.Objects, Right.Objects, [](const auto &A, const auto &B) {
+				const auto &First = A.Visual;
+				const auto &Second = B.Visual;
+				return First.Item == Second.Item && First.Mesh == Second.Mesh && First.Material == Second.Material &&
+					First.Visible == Second.Visible && bool(First.Primitives) == bool(Second.Primitives) &&
+					(!First.Primitives || *First.Primitives == *Second.Primitives) && bool(A.Pose) == bool(B.Pose) &&
+					(!A.Pose || A.Pose->PoseRevision == B.Pose->PoseRevision);
+			});
 	}
 
 	RenderPublisher::RenderPublisher(RenderDirtyAccumulator *DirtyAccumulator)
@@ -984,6 +1090,14 @@ namespace gargantuan {
 		if (Scope.IsValid()) Dirty->MarkUi(Scope, Bytes);
 	}
 
+	void RenderPublisher::SetViewportScenes(std::shared_ptr<const RenderViewportScenes> Scenes) {
+		if (CommittedViewports == Scenes) return;
+		if (Scenes && Scenes->size() > MaximumRenderViewports)
+			throw std::invalid_argument("Render publisher requires a bounded immutable viewport list");
+		CommittedViewports = std::move(Scenes);
+		ViewportsChanged = true;
+	}
+
 	void RenderPublisher::SetUiTextureChanges(
 		std::vector<RenderTextureCreate> Creates,
 		std::vector<RenderTextureUpdate> Updates,
@@ -1116,6 +1230,11 @@ namespace gargantuan {
 		};
 		for (const auto &Update : Updates) {
 			const auto &Pose = Update.Pose;
+			if (auto Object = ObjectRegistry::Get().Lookup(Pose.Object);
+				Object && ViewportFrame::FindContaining(*Object)) {
+				if (AnimationPoses.erase(Pose.Object) && !HasPending(Pose.Object)) AddPending(Pose.Object);
+				continue;
+			}
 			if (!Pose.Object.IsValid() || !Pose.SourceMesh.IsValid() || Pose.PoseRevision == 0 ||
 				Update.TopologyRevision == 0 || !Pose.Palette.Skeleton.IsValid() || !Pose.Palette.Entries ||
 				Pose.Palette.Entries->empty() || Pose.Palette.Entries->size() > MaximumRenderSkinPaletteEntries ||
@@ -1165,6 +1284,11 @@ namespace gargantuan {
 		const auto CurrentScope = World.GetReplicationScopeId();
 		if (!CurrentScope.IsValid()) throw std::invalid_argument("RenderPublication requires a live DataModel scope");
 		const auto Camera = BuildCamera(CameraInput, ViewportWidth, ViewportHeight);
+		std::optional<std::shared_ptr<AssetService>> Assets;
+		auto GetAssets = [&]() {
+			if (!Assets) Assets = FindAssetService(World);
+			return Assets->get();
+		};
 
 		if (PublishedWorld != &World || Scope != CurrentScope) {
 			ClearVisualDependencies();
@@ -1214,7 +1338,7 @@ namespace gargantuan {
 				auto MeshPartValue = std::dynamic_pointer_cast<MeshPart>(BasePartValue);
 				if (!MeshPartValue) continue;
 				RenderExtractionDiagnostic Diagnostic;
-				auto Extracted = ExtractMeshPart(World, MeshPartValue, Diagnostic);
+				auto Extracted = ExtractMeshPart(GetAssets(), MeshPartValue, Diagnostic);
 				if (!Extracted) {
 					Result->Diagnostics.push_back(std::move(Diagnostic));
 					continue;
@@ -1245,6 +1369,7 @@ namespace gargantuan {
 					VisualOverflow = true;
 					break;
 				}
+				if (dynamic_cast<ViewportFrame *>(Current.get())) continue;
 				if (auto Visual = std::dynamic_pointer_cast<AttachmentMesh>(Current)) {
 					if (Visuals.size() >= MaximumVisualAttachments) { VisualOverflow = true; break; }
 					Visuals.push_back(std::move(Visual));
@@ -1342,6 +1467,7 @@ namespace gargantuan {
 			}
 			Result->UiChanged = true;
 			Result->SharedUi = CommittedUi;
+			Result->Viewports = CommittedViewports;
 			std::vector<std::pair<RenderTextureIdentity, PublishedTexture>> OrderedTextures(
 				PublishedTextures.begin(), PublishedTextures.end());
 			std::ranges::sort(OrderedTextures, {}, &std::pair<RenderTextureIdentity, PublishedTexture>::first);
@@ -1361,6 +1487,7 @@ namespace gargantuan {
 			++FullResyncCount;
 			Dirty->Acknowledge(DirtyBatch);
 			PendingUi.reset();
+			ViewportsChanged = false;
 			PendingTextureCreates.clear();
 			PendingTextureUpdates.clear();
 			PendingTextureRemoves.clear();
@@ -1592,7 +1719,7 @@ namespace gargantuan {
 				const bool ShouldRender = !MeshPartValue->GetDestroyed() && !MeshPartValue->IsDestroying() &&
 					IsInWorld(*MeshPartValue, World);
 				RenderExtractionDiagnostic Diagnostic;
-				auto Extracted = ShouldRender ? ExtractMeshPart(World, MeshPartValue, Diagnostic, Object,
+				auto Extracted = ShouldRender ? ExtractMeshPart(GetAssets(), MeshPartValue, Diagnostic, Object,
 				Previous == PublishedItems.end() ? nullptr : &Previous->second) : std::nullopt;
 				if (ProfilingEnabled)
 					LastProfile.FinalStateExtractionNanoseconds +=
@@ -1672,6 +1799,10 @@ namespace gargantuan {
 			Result->UiChanged = true;
 			Result->SharedUi = PendingUi;
 		}
+		if (ViewportsChanged) {
+			static const auto Empty = std::make_shared<const RenderViewportScenes>();
+			Result->Viewports = CommittedViewports ? CommittedViewports : Empty;
+		}
 		for (const auto Object : PendingAnimationObjects) {
 			const auto PreviousPose = CommittedAnimationPoses.find(Object);
 			const auto CurrentPose = AnimationPoses.find(Object);
@@ -1749,6 +1880,7 @@ namespace gargantuan {
 		LastPublicationId = Result->Id;
 		Dirty->Acknowledge(DirtyBatch);
 		PendingUi.reset();
+		ViewportsChanged = false;
 		PendingTextureCreates.clear();
 		PendingTextureUpdates.clear();
 		PendingTextureRemoves.clear();

@@ -365,7 +365,8 @@ namespace gargantuan {
 				!std::isfinite(PublishedUi.DpiScale) || PublishedUi.DpiScale <= 0.0f)
 				throw std::invalid_argument("Render publication UI frame does not match frame state");
 			for (const auto &Batch : PublishedUi.Batches) {
-				if ((Batch.Texture && (!Batch.Texture->IsValid() || !TextureExistsAfterPublication(*Batch.Texture))) ||
+				if ((Batch.Texture && (Batch.Viewport.IsValid() || !Batch.Texture->IsValid() ||
+					!TextureExistsAfterPublication(*Batch.Texture))) ||
 					!std::isfinite(Batch.Opacity) ||
 					Batch.Opacity < 0.0f || Batch.Opacity > 1.0f)
 					throw std::invalid_argument("Render publication UI batch state is invalid");
@@ -378,6 +379,50 @@ namespace gargantuan {
 						throw std::invalid_argument("Render publication rejects non-finite UI vertices");
 				for (const auto Index : Batch.Indices) if (Index >= Batch.Vertices.size())
 					throw std::invalid_argument("Render publication rejects out-of-range UI indices");
+			}
+		}
+		if (Publication.Viewports) {
+			if (Publication.Viewports->size() > MaximumRenderViewports)
+				throw std::length_error("Render publication exceeds its viewport scene bound");
+			std::array<ObjectId, MaximumRenderViewports> Seen;
+			std::size_t Count = 0;
+			for (const auto &Scene : *Publication.Viewports) {
+				if (!Scene || !Scene->Viewport.IsValid() || Scene->Width > MaximumRenderViewportDimension ||
+					Scene->Height > MaximumRenderViewportDimension || Scene->Objects.size() > MaximumRenderViewportObjects ||
+					!IsValid(RenderFrameState{Scene->Width, Scene->Height, 1.0f, Scene->Camera}) ||
+					std::find(Seen.begin(), Seen.begin() + Count, Scene->Viewport) != Seen.begin() + Count)
+					throw std::invalid_argument("Render publication contains an invalid viewport scene");
+				Seen[Count++] = Scene->Viewport;
+				std::size_t Primitives = 0;
+				std::size_t MeshIndices = 0;
+				std::size_t Rigs = 0;
+				ObjectId Previous;
+				for (const auto &Object : Scene->Objects) {
+					const auto &Visual = Object.Visual;
+					Primitives += Visual.Primitives ? Visual.Primitives->size() : 1;
+					if (Primitives > MaximumRenderViewportPrimitives || !IsValid(Visual.Item) ||
+						Visual.Item.Object <= Previous || !IsValid(Visual.Material) || !AreValid(Visual.Primitives) ||
+						(bool(Visual.Primitives) != bool(Visual.Mesh)))
+						throw std::invalid_argument("Render publication contains invalid viewport geometry");
+					Previous = Visual.Item.Object;
+					if (Visual.Primitives) for (const auto &Range : *Visual.Primitives) {
+						MeshIndices += Range.IndexCount;
+						if (MeshIndices > MaximumRenderViewportMeshIndices)
+							throw std::length_error("Render publication exceeds the viewport index bound");
+					}
+					if (Object.Pose) {
+						const auto &Pose = *Object.Pose;
+						if (++Rigs > MaximumRenderViewportRigs || Pose.Object != Visual.Item.Object ||
+							!Visual.Mesh || *Visual.Mesh != Pose.SourceMesh || Pose.PoseRevision == 0 ||
+							!Pose.Palette.Skeleton.IsValid() || !Pose.Palette.Entries || Pose.Palette.Entries->empty() ||
+							Pose.Palette.Entries->size() > MaximumRenderSkinPaletteEntries ||
+							Pose.PosedMesh.IsValid() || Pose.Mode != RenderAnimationSkinningMode::GpuPalette ||
+							!std::ranges::all_of(*Pose.Palette.Entries, [](const auto &Entry) {
+								return IsFinite(Entry.PositionMatrix) && IsFinite(Entry.NormalMatrix);
+							}))
+							throw std::invalid_argument("Render publication contains an invalid viewport animation pose");
+					}
+				}
 			}
 		}
 
@@ -633,6 +678,7 @@ namespace gargantuan {
 			Changes.TextureUploadBytes += Update.Pixels->size();
 		}
 		if (HasUiUpdate) {
+			UiPublicationId = Publication.Id;
 			Changes.UiBatches = PublishedUi.Batches.size();
 			for (const auto &Batch : PublishedUi.Batches) {
 				Changes.UiVertices += Batch.Vertices.size();
@@ -640,6 +686,7 @@ namespace gargantuan {
 			}
 			Ui = Publication.SharedUi ? Publication.SharedUi : std::make_shared<const RenderUiFrame>(PublishedUi);
 		}
+		if (Publication.FullResync || Publication.Viewports) Viewports = Publication.Viewports;
 		if (Publication.FullResync || Publication.EnvironmentChanged) ++Changes.EnvironmentsUpdated;
 		Frame = Publication.Frame;
 		VisualAttachmentsComplete = Publication.VisualAttachmentsComplete;
@@ -647,6 +694,37 @@ namespace gargantuan {
 		Changes.MutationNanoseconds = static_cast<std::uint64_t>(
 			std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - MutationStart).count());
 		return Changes;
+	}
+
+	void RenderProjection::ApplyViewportScene(const RenderViewportScene &Scene, const RenderProjection &Resources) {
+		Clear();
+		Frame = {Scene.Width, Scene.Height, 1.0f, Scene.Camera};
+		Frame.Environment.AmbientColor = glm::vec3(0.45f);
+		Frame.Environment.SunDirection = glm::normalize(glm::vec3(-0.5f, 1.0f, 0.75f));
+		const auto Available = [&](const RenderMaterialState &Material) {
+			for (const auto &Texture : {Material.BaseColorTexture, Material.NormalTexture,
+				Material.MetallicRoughnessTexture, Material.EmissiveTexture, Material.OcclusionTexture})
+				if (Texture && !Resources.Textures.contains(*Texture)) return false;
+			return true;
+		};
+		for (const auto &Object : Scene.Objects) {
+			const auto &Visual = Object.Visual;
+			if (!Available(Visual.Material)) continue;
+			if (Visual.Mesh) {
+				const auto Mesh = Resources.Meshes.find(*Visual.Mesh);
+				if (Mesh == Resources.Meshes.end()) continue;
+				if (Visual.Primitives && (!std::ranges::all_of(*Visual.Primitives, [&](const auto &Primitive) {
+					return static_cast<std::uint64_t>(Primitive.FirstIndex) + Primitive.IndexCount <= Mesh->second.IndexCount &&
+						Available(Primitive.Material);
+				}))) continue;
+				Meshes.try_emplace(Mesh->first, Mesh->second);
+				if (Object.Pose && Mesh->second.Skeleton == Object.Pose->Palette.Skeleton &&
+					Mesh->second.SkeletonJointCount == Object.Pose->Palette.Entries->size())
+					AnimationPoses.insert_or_assign(Visual.Item.Object, *Object.Pose);
+			} else if (Visual.Primitives) continue;
+			Entries.try_emplace(Visual.Item.Object,
+				RenderProjectedObject{Visual.Item, Visual.Mesh, Visual.Material, Visual.Visible, Visual.Primitives});
+		}
 	}
 
 	RenderProjectionChanges RenderProjection::Apply(const RenderSnapshot &Snapshot) {
@@ -698,6 +776,8 @@ namespace gargantuan {
 		Frame.Environment = Snapshot.Environment;
 		++Changes.EnvironmentsUpdated;
 		Ui.reset();
+		UiPublicationId = InvalidRenderPublicationId;
+		Viewports.reset();
 		VisualAttachmentsComplete = true;
 		return Changes;
 	}
@@ -717,6 +797,8 @@ namespace gargantuan {
 		Frame = {};
 		VisualAttachmentsComplete = true;
 		Ui.reset();
+		UiPublicationId = InvalidRenderPublicationId;
+		Viewports.reset();
 	}
 
 	const RenderItem *RenderProjection::GetItem(ObjectId Object) const {

@@ -447,6 +447,8 @@ namespace gargantuan {
 						UpdateContext.VisibilityPublication = Visibility.Publication;
 						UpdateContext.VisibilityComplete = Visibility.Complete;
 						UpdateContext.VisibleObjects = Visibility.VisibleObjects;
+						if (ActiveGui) UpdateContext.VisiblePresentationObjects =
+							ActiveGui->GetVisibleViewportAnimationObjects();
 					}
 					if (Spatial) {
 						UpdateContext.SemanticRequirementsComplete = Spatial->AreAnimationRequirementsComplete();
@@ -517,7 +519,7 @@ namespace gargantuan {
 						RenderPublishing.SetAssetMeshChanges(
 							std::move(MeshChanges.Creates), std::move(MeshChanges.Removes)
 						);
-					(void)ActiveGui->Reconcile();
+					(void)ActiveGui->Reconcile(Animation.get());
 					if (Destroyed) return;
 					ActiveGui->Publish(RenderPublishing);
 				}

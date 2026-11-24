@@ -14,6 +14,7 @@
 #include "render/sdl/SDLSpotShadowAtlas.hpp"
 #include "render/sdl/SDLSkinPaletteCache.hpp"
 #include "render/sdl/SDLTextureCache.hpp"
+#include "render/sdl/SDLViewportRenderer.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
@@ -85,6 +86,7 @@ namespace gargantuan {
 		SDLMaterialSamplers MaterialSamplers;
 		std::unique_ptr<SDLSkinPaletteCache> SkinPalettes;
 		RenderProjection Projection;
+		SDLViewportRenderer Viewports;
 		std::vector<ObjectId> VisibleAnimationObjects;
 		std::uint64_t VisibilityGeneration = 0;
 		RenderPublicationId VisibilityPublication = InvalidRenderPublicationId;
@@ -209,6 +211,7 @@ namespace gargantuan {
 		State->VisibilityComplete = false;
 		State->VisibleAnimationObjects.clear();
 		if (State->Gpu) SDL_WaitForGPUIdle(State->Gpu);
+		if (State->Gpu) State->Viewports.Destroy(State->Gpu, State->Metrics);
 		if (State->MeshResources) {
 			State->MeshResources->Destroy();
 			State->MeshResources.reset();
@@ -334,6 +337,7 @@ namespace gargantuan {
 			for (const auto &Remove : Publication->Removes)
 				State->ShadowPoseRevisions.erase(Remove.Object);
 		} catch (...) {
+			State->Viewports.Destroy(State->Gpu, State->Metrics);
 			State->Projection.Clear();
 			State->MeshResources->Destroy();
 			if (State->InstanceResources) State->InstanceResources->Destroy();
@@ -434,6 +438,7 @@ namespace gargantuan {
 				while (Definitions[DefinitionIndex].Target == SDLPassTarget::Resolve && !State->HdrSceneEnabled)
 					++DefinitionIndex;
 				const auto Phase = Definitions[DefinitionIndex++].Phase;
+				if (Phase == SDLPassPhase::Gui) State->Viewports.Draw(State->Gpu, Frame);
 				const auto PassStart = Clock::now();
 				if (auto *Recorded = State->RenderPasses[Index]->Draw(State->Gpu, Frame)) SDL_EndGPURenderPass(Recorded);
 				const auto Elapsed = Nanoseconds(Clock::now() - PassStart);
@@ -447,6 +452,7 @@ namespace gargantuan {
 			}
 		} catch (...) {
 			if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
+			State->Viewports.OnFrameAborted();
 			for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
 			if (State->Options.Offscreen) SDL_CancelGPUCommandBuffer(Frame.Commands);
 			else SDL_SubmitGPUCommandBuffer(Frame.Commands);
@@ -459,6 +465,7 @@ namespace gargantuan {
 			State->Metrics.LastSubmissionNanoseconds = Nanoseconds(Clock::now() - SubmissionStart);
 			if (!Fence) {
 				if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
+				State->Viewports.OnFrameAborted();
 				for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
 				throw std::runtime_error(std::format("Failed to submit SDL GPU frame: {}", SDL_GetError()));
 			}
@@ -466,6 +473,7 @@ namespace gargantuan {
 			if (!SDL_WaitForGPUFences(State->Gpu, true, &Fence, 1)) {
 				SDL_ReleaseGPUFence(State->Gpu, Fence);
 				if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
+				State->Viewports.OnFrameAborted();
 				for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
 				throw std::runtime_error(std::format("Failed to wait for SDL GPU frame: {}", SDL_GetError()));
 			}
@@ -477,6 +485,7 @@ namespace gargantuan {
 			const auto SubmitStart = Clock::now();
 			if (!SDL_SubmitGPUCommandBuffer(Frame.Commands)) {
 				if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
+				State->Viewports.OnFrameAborted();
 				for (auto &Pass : State->RenderPasses) Pass->OnFrameAborted();
 				throw std::runtime_error(std::format("Failed to submit SDL GPU frame: {}", SDL_GetError()));
 			}
@@ -487,6 +496,7 @@ namespace gargantuan {
 		State->Metrics.CpuSubmissionNanoseconds += State->Metrics.LastSubmissionNanoseconds;
 		if (State->ShadowCache.OnFrameSubmitted()) ++State->Metrics.ShadowMapBuilds;
 		State->ShadowResources.OnFrameSubmitted();
+		State->Viewports.OnFrameSubmitted();
 		for (auto &Pass : State->RenderPasses) Pass->OnFrameSubmitted();
 		(void)State->SpotShadowAtlas.OnFrameSubmitted();
 		++State->Metrics.FramesSubmitted;

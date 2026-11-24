@@ -43,6 +43,12 @@ namespace gargantuan {
 		std::uint64_t UploadedBytes = 0;
 		std::uint64_t DrawCalls = 0;
 		std::uint64_t UiBatches = 0;
+		std::uint64_t ViewportRenders = 0;
+		std::uint64_t ViewportFailures = 0;
+		std::uint64_t ViewportTargetAllocations = 0;
+		std::uint64_t ViewportTargetReleases = 0;
+		std::uint64_t ViewportTargetBytes = 0;
+		std::uint64_t CpuViewportNanoseconds = 0;
 		std::uint64_t ScissorChanges = 0;
 		std::uint64_t PipelineSwitches = 0;
 		std::uint64_t PipelineCreations = 0;

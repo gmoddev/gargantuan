@@ -16,8 +16,10 @@
 #include "gargantuan/classes/TextButton.hpp"
 #include "gargantuan/classes/TextLabel.hpp"
 #include "gargantuan/classes/UIListLayout.hpp"
+#include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/gui/GuiLimits.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
+#include "runtime/RuntimeWorkDiagnostics.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -261,6 +263,16 @@ namespace gargantuan {
 		bool ClearingTransientState = false;
 		std::shared_ptr<const GuiLayoutSnapshot> Layout = std::make_shared<const GuiLayoutSnapshot>();
 		std::shared_ptr<const GuiPresentationSnapshot> Presentation = std::make_shared<const GuiPresentationSnapshot>();
+		struct ViewportRequest { ObjectId Viewport; float Width; float Height; };
+		struct ViewportSample {
+			Clock::time_point LastSample = Clock::time_point::min();
+			std::shared_ptr<const RenderViewportScene> Scene;
+		};
+		std::vector<ViewportRequest> ViewportRequests;
+		std::unordered_map<ObjectId, ViewportSample> ViewportSamples;
+		std::shared_ptr<const RenderViewportScenes> ViewportScenes;
+		std::vector<ObjectId> VisibleViewportAnimationObjects;
+		std::uint64_t ViewportAssetRevision = 0;
 		std::shared_ptr<const GuiAccessibilitySnapshot> Accessibility = std::make_shared<const GuiAccessibilitySnapshot>();
 		GuiTextureChanges PendingTextures;
 		std::unordered_set<RenderTextureIdentity, RenderTextureIdentityHash> PublishedPreviewTextures;
@@ -472,6 +484,8 @@ namespace gargantuan {
 						Result.ImageAspectRatio = static_cast<float>(Working.Image->Width) /
 							static_cast<float>(Working.Image->Height);
 				}
+			} else if (std::dynamic_pointer_cast<ViewportFrame>(Object)) {
+				Result.Kind = GuiPresentationKind::Viewport;
 			} else if (std::dynamic_pointer_cast<ScrollingFrame>(Object)) {
 				Result.Kind = GuiPresentationKind::ScrollView;
 			} else if (std::dynamic_pointer_cast<Frame>(Object)) {
@@ -1110,7 +1124,8 @@ namespace gargantuan {
 			float Alpha,
 			std::optional<RenderTextureIdentity> Texture,
 			std::optional<GuiRect> LogicalClip,
-			PresentationSpan *Span = nullptr
+			PresentationSpan *Span = nullptr,
+			ObjectId ViewportTarget = {}
 		) {
 			std::optional<RenderUiClipRect> Clip;
 			if (LogicalClip) Clip = RenderUiClipRect{
@@ -1121,11 +1136,12 @@ namespace gargantuan {
 			RenderUiBatch *Batch = nullptr;
 			if (!FrameValue.Batches.empty()) {
 				auto &Candidate = FrameValue.Batches.back();
-				if (Candidate.Texture == Texture && SameClip(Candidate.Clip, Clip) && Candidate.Layer == LayerValue &&
+				if (Candidate.Texture == Texture && Candidate.Viewport == ViewportTarget &&
+					SameClip(Candidate.Clip, Clip) && Candidate.Layer == LayerValue &&
 					Candidate.Opacity == Node.EffectiveOpacity) Batch = &Candidate;
 			}
 			if (!Batch) {
-				FrameValue.Batches.push_back({Texture, Clip, LayerValue, Node.EffectiveOpacity, {}, {}});
+				FrameValue.Batches.push_back({Texture, Clip, LayerValue, Node.EffectiveOpacity, {}, {}, ViewportTarget});
 				Batch = &FrameValue.Batches.back();
 			}
 			if (Profile.DisplayPrimitives >= GuiLimits::MaximumDisplayPrimitives ||
@@ -1165,6 +1181,7 @@ namespace gargantuan {
 			const auto DisplayStart = Clock::now();
 			auto Next = std::make_shared<GuiPresentationSnapshot>();
 			std::unordered_map<ObjectId, PresentationSpan> NextSolidSpans;
+			std::vector<ViewportRequest> NextViewportRequests;
 			Next->Generation = NextPresentationGeneration++;
 			Next->Frame.ViewportWidth = Viewport.PhysicalWidth;
 			Next->Frame.ViewportHeight = Viewport.PhysicalHeight;
@@ -1179,6 +1196,20 @@ namespace gargantuan {
 					!AddQuad(Next->Frame, Node, Node.Bounds, {0, 0, 1, 1}, Resolved.BackgroundColor,
 						Resolved.BackgroundAlpha, std::nullopt, Node.EffectiveClip,
 						Resolved.Kind == GuiPresentationKind::Rectangle ? &NextSolidSpans[Node.Object] : nullptr)) return false;
+				if (Resolved.Kind == GuiPresentationKind::Viewport && !Node.Bounds.IsEmpty()) {
+					const GuiRect ScreenBounds{0.0f, 0.0f, Viewport.LogicalWidth(), Viewport.LogicalHeight()};
+					const auto OnScreen = GuiRect::Intersect(Node.TransformedBounds, ScreenBounds);
+					if (OnScreen && (!Node.EffectiveClip || GuiRect::Intersect(*OnScreen, *Node.EffectiveClip))) {
+						if (NextViewportRequests.size() == MaximumRenderViewports)
+							AddDiagnostic("ViewportCapacity", "Only eight visible ViewportFrames can render per surface", Node.Object);
+						else {
+							NextViewportRequests.push_back({Node.Object,
+								Node.Bounds.Width * Viewport.DpiScale, Node.Bounds.Height * Viewport.DpiScale});
+							if (!AddQuad(Next->Frame, Node, Node.Bounds, {0, 0, 1, 1}, Color3(1.0f, 1.0f, 1.0f),
+								1.0f, std::nullopt, Node.EffectiveClip, nullptr, Node.Object)) return false;
+						}
+					}
+				}
 				if (Resolved.Kind == GuiPresentationKind::Image && Resolved.ImageTexture) {
 					auto Destination = Node.Bounds;
 					if (Resolved.ImageAspectRatio > 0.0f) {
@@ -1246,7 +1277,61 @@ namespace gargantuan {
 			Profile.FrameConstructionNanoseconds += FrameConstruction;
 			Profile.BatchCount = Next->Frame.Batches.size();
 			SolidPresentationSpans = std::move(NextSolidSpans);
+			ViewportRequests = std::move(NextViewportRequests);
 			Presentation = std::shared_ptr<const GuiPresentationSnapshot>(std::move(Next));
+			return true;
+		}
+
+		bool ReconcileViewports(const AnimationRuntime *Animation) {
+			if (ViewportRequests.empty() && ViewportSamples.empty()) return false;
+			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::ViewportExtract);
+			const auto Now = Clock::now();
+			std::erase_if(ViewportSamples, [&](const auto &Entry) {
+				return std::ranges::none_of(ViewportRequests, [&](const auto &Request) {
+					return Request.Viewport == Entry.first;
+				});
+			});
+			std::array<std::shared_ptr<const RenderViewportScene>, MaximumRenderViewports> Next;
+			std::size_t Count = 0;
+			std::shared_ptr<AssetService> ViewportAssets;
+			for (const auto &Request : ViewportRequests) {
+				auto Object = std::dynamic_pointer_cast<ViewportFrame>(ObjectRegistry::Get().Lookup(Request.Viewport));
+				if (!Object || Object->GetDestroyed() || Object->IsDestroying()) continue;
+				if (!std::isfinite(Request.Width) || !std::isfinite(Request.Height) ||
+					Request.Width <= 0.0f || Request.Height <= 0.0f) continue;
+				auto &Sample = ViewportSamples[Request.Viewport];
+				const auto Interval = std::chrono::duration<float>(1.0f / Object->GetMaxUpdateRate());
+				if (Sample.LastSample == Clock::time_point::min() || Now - Sample.LastSample >= Interval) {
+					if (!ViewportAssets) {
+						const auto Service = World->FindService("AssetService");
+						ViewportAssets = Service ? std::dynamic_pointer_cast<AssetService>(*Service) : Assets;
+					}
+					Sample.LastSample = Now;
+					const auto Scale = std::min(Object->GetRenderScale(),
+						static_cast<float>(MaximumRenderViewportDimension) / std::max(Request.Width, Request.Height));
+					const auto Width = static_cast<std::uint32_t>(std::max(1.0f, std::round(Request.Width * Scale)));
+					const auto Height = static_cast<std::uint32_t>(std::max(1.0f, std::round(Request.Height * Scale)));
+					auto Scene = ExtractViewportScene(*Object, *ViewportAssets, Animation, Width, Height);
+					if (Scene) {
+						Scene->AssetRevision = ViewportAssetRevision;
+						if (!Sample.Scene || !SameViewportScene(*Sample.Scene, *Scene))
+							Sample.Scene = std::make_shared<const RenderViewportScene>(std::move(*Scene));
+					} else {
+						if (Object->GetCurrentCamera())
+							AddDiagnostic("ViewportScene", "Viewport scene exceeded a resource bound or has an invalid camera", Request.Viewport);
+						Sample.Scene.reset();
+					}
+				}
+				if (Sample.Scene) Next[Count++] = Sample.Scene;
+			}
+			const auto Candidate = std::span(Next).first(Count);
+			if ((!ViewportScenes && Candidate.empty()) ||
+				(ViewportScenes && std::ranges::equal(*ViewportScenes, Candidate))) return false;
+			ViewportScenes = std::make_shared<const RenderViewportScenes>(Candidate.begin(), Candidate.end());
+			VisibleViewportAnimationObjects.clear();
+			for (const auto &Scene : *ViewportScenes) for (const auto &Item : Scene->Objects)
+				if (Item.Visual.Mesh) VisibleViewportAnimationObjects.push_back(Item.Visual.Item.Object);
+			std::ranges::sort(VisibleViewportAnimationObjects);
 			return true;
 		}
 
@@ -1269,7 +1354,7 @@ namespace gargantuan {
 				};
 				const auto Layer = static_cast<std::int32_t>(std::clamp<std::int64_t>(
 					Node.EffectiveLayer, std::numeric_limits<std::int32_t>::min(), std::numeric_limits<std::int32_t>::max()));
-				if (Batch.Texture || !SameClip(Batch.Clip, Clip) || Batch.Layer != Layer ||
+				if (Batch.Texture || Batch.Viewport.IsValid() || !SameClip(Batch.Clip, Clip) || Batch.Layer != Layer ||
 					Batch.Opacity != Node.EffectiveOpacity || Span->second.FirstVertex > Batch.Vertices.size() ||
 					Batch.Vertices.size() - Span->second.FirstVertex < 4) return false;
 			}
@@ -1819,7 +1904,7 @@ namespace gargantuan {
 		State->PresentationDirty = true;
 	}
 
-	bool GuiRuntime::Reconcile() {
+	bool GuiRuntime::Reconcile(const AnimationRuntime *Animation) {
 		const auto DirtyStart = Clock::now();
 		State->Profile = {};
 		State->Profile.ObservationNanoseconds = std::exchange(State->PendingObservationNanoseconds, 0);
@@ -1832,6 +1917,9 @@ namespace gargantuan {
 		State->PendingVisualObjects.clear();
 		auto AssetChanges = State->Assets->ReadChanges(State->AssetChangeSequence);
 		State->AssetChangeSequence = AssetChanges.NextSequence;
+		if (AssetChanges.RescanRequired || std::ranges::any_of(AssetChanges.Changes, [](const auto &Change) {
+			return Change.Kind == AssetKind::Image || Change.Kind == AssetKind::Mesh || Change.Kind == AssetKind::Material;
+		})) State->ViewportAssetRevision = AssetChanges.NextSequence;
 		if (AssetChanges.RescanRequired || !AssetChanges.Changes.empty()) {
 			for (const auto &[Object, Connections] : State->Observers) {
 				(void)Connections;
@@ -1949,6 +2037,7 @@ namespace gargantuan {
 			}
 		}
 
+		const bool ViewportsChanged = State->ReconcileViewports(Animation);
 		auto TextChanges = State->Text.DrainTextureChanges();
 		auto ImageChanges = State->Assets->DrainTextureChanges();
 		State->PendingTextures.Creates.insert(State->PendingTextures.Creates.end(),
@@ -1974,8 +2063,12 @@ namespace gargantuan {
 		State->Profile.ShapedGlyphs += TextProfile.ShapedGlyphs;
 		State->Profile.TextureUpdates += TextProfile.TextureUpdates + ImageChanges.Creates.size() + ImageChanges.Updates.size();
 		State->Profile.TextureUploadBytes += TextProfile.TextureUploadBytes + ImageChanges.UploadBytes;
-		return SnapshotChanged || VisualChanged || !State->PendingTextures.Creates.empty() ||
+		return SnapshotChanged || VisualChanged || ViewportsChanged || !State->PendingTextures.Creates.empty() ||
 			!State->PendingTextures.Updates.empty() || !State->PendingTextures.Removes.empty();
+	}
+
+	std::span<const ObjectId> GuiRuntime::GetVisibleViewportAnimationObjects() const {
+		return State->VisibleViewportAnimationObjects;
 	}
 
 	void GuiRuntime::Publish(RenderPublisher &Publisher, std::shared_ptr<const RenderUiFrame> PlacedFrame,
@@ -1993,6 +2086,7 @@ namespace gargantuan {
 			);
 			State->Profile.FrameCopyNanoseconds += Nanoseconds(Clock::now() - CopyStart);
 		}
+		Publisher.SetViewportScenes(State->ViewportScenes);
 		std::optional<decltype(State->PublishedPreviewTextures)> PreviewTextures;
 		if (IsPlacedPreview && (!State->PendingTextures.Creates.empty() || !State->PendingTextures.Removes.empty())) {
 			PreviewTextures = State->PublishedPreviewTextures;

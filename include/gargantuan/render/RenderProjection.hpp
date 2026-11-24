@@ -69,6 +69,7 @@ namespace gargantuan {
 	  public:
 		[[nodiscard]] RenderProjectionChanges Apply(const RenderSnapshot &Snapshot);
 		[[nodiscard]] RenderProjectionChanges Apply(const RenderPublication &Publication);
+		void ApplyViewportScene(const RenderViewportScene &Scene, const RenderProjection &Resources);
 		void Clear() noexcept;
 
 		[[nodiscard]] const RenderItem *GetItem(ObjectId Object) const;
@@ -88,6 +89,11 @@ namespace gargantuan {
 		[[nodiscard]] const RenderUiFrame &GetUi() const {
 			static const RenderUiFrame Empty;
 			return Ui ? *Ui : Empty;
+		}
+		[[nodiscard]] RenderPublicationId GetUiPublicationId() const { return UiPublicationId; }
+		[[nodiscard]] const RenderViewportScenes &GetViewports() const {
+			static const RenderViewportScenes Empty;
+			return Viewports ? *Viewports : Empty;
 		}
 		[[nodiscard]] const std::unordered_map<ObjectId, RenderProjectedObject> &GetObjects() const { return Entries; }
 		// Mirrors GetObjects() iteration exactly until a structural publication changes it.
@@ -129,5 +135,7 @@ namespace gargantuan {
 		RenderPublicationId LastPublicationId = InvalidRenderPublicationId;
 		RenderFrameState Frame;
 		std::shared_ptr<const RenderUiFrame> Ui;
+		RenderPublicationId UiPublicationId = InvalidRenderPublicationId;
+		std::shared_ptr<const RenderViewportScenes> Viewports;
 	};
 } // namespace gargantuan
