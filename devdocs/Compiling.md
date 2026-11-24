@@ -111,6 +111,7 @@ successful packaging alone does not qualify a particular GPU.
 | `GARGANTUAN_WITH_GNS` | `OFF` | Pinned GameNetworkingSockets adapter and real-transport tests; enabled in Windows CI |
 | `GARGANTUAN_WITH_NODE_CONTENT` | `OFF` | Trusted Server-only Node content adapter; needs canonical Node proto root, Protobuf and gRPC |
 | `GARGANTUAN_TRACY` | `OFF` | Instrumented client; compare performance under a declared profile |
+| `GARGANTUAN_WORK_TRACE` | `OFF` | Bounded local Engine phase summaries and scoped timing export |
 | `GARGANTUAN_BUILD_RENDERER_BENCHMARKS` | `ON` | Benchmark targets; physical GPU execution remains separate |
 | `GARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS` | `ON` | Serialization comparison target |
 | `GARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE` | `OFF` | Private codec experiment outside production acceptance |
@@ -119,6 +120,87 @@ successful packaging alone does not qualify a particular GPU.
 The Engine VM pins Luau 0.734 with three-component float vectors
 (`LUA_VECTOR_SIZE=3`, `LUA_VECTOR_DOUBLE=0`, compiler `vectorPrecision=0`).
 Studio and Lute have independent runtime pins.
+
+## Local performance traces
+
+Use the usual optimized configuration and add
+`-DGARGANTUAN_WORK_TRACE=ON`. Build `gargantuan` for the development
+Engine loop, `gargantuan_player` and `gargantuan_server` for packaged
+play, or `gargantuan_gameplay_allocation_workload` for the scripted
+possession comparison. The workload needs `BUILD_TESTING=ON` and uses
+`GARGANTUAN_WITH_GNS=ON` for the real loopback transport. Use
+`ctest --test-dir <build> -R ^gargantuan_work_trace$` to check the bounded
+recorder, export, and thread-local scope behavior.
+
+The trace is enabled by `GARGANTUAN_WORK_TRACE_FILE`, a new output path.
+With the variable unset, the instrumented build does not start a trace.
+The compiled-off build excludes the trace-specific scope hook. This option
+is independent of the existing test-owned work samples, the opt-in telemetry
+library and the Tracy build. Leave Tracy disconnected and keep diagnostic
+logging fixed during timing comparisons.
+
+| Runtime setting | Default | Effect |
+| --- | --- | --- |
+| `GARGANTUAN_WORK_TRACE_FILE` | Unset | Export on normal completion to a new file |
+| `GARGANTUAN_WORK_TRACE_MODE` | `summary` | Frame summaries; use `detailed` to include individual scope spans |
+| `GARGANTUAN_WORK_TRACE_STRIDE` | 8 | Sample every nth workload frame, 1 through 6,000 |
+| `GARGANTUAN_WORK_TRACE_FIRST_TICK`, `GARGANTUAN_WORK_TRACE_LAST_TICK` | Full run | Inclusive tick window, useful for an isolated burst |
+| `GARGANTUAN_WORK_TRACE_PHASES` | All | Comma-separated names from [the work phase table](../src/runtime/RuntimeWorkDiagnostics.hpp) |
+| `GARGANTUAN_WORK_TRACE_CAPACITY` | 65,536 | Record limit, 1 through 262,144 |
+
+For example, capture a bounded real-GNS structural crossing from PowerShell
+using the existing deadline-paced workload:
+
+```powershell
+$env:GARGANTUAN_WORK_TRACE_FILE = 'gameplay-crossing.json'
+$env:GARGANTUAN_WORK_TRACE_MODE = 'detailed'
+$env:GARGANTUAN_WORK_TRACE_STRIDE = '1'
+$env:GARGANTUAN_WORK_TRACE_FIRST_TICK = '912'
+$env:GARGANTUAN_WORK_TRACE_LAST_TICK = '930'
+& ./build/gargantuan_gameplay_allocation_workload --generic-possession-scale gns 40 1500 off deadline
+```
+
+Open the JSON in Perfetto or a Chrome Trace Event viewer. Frame markers carry
+the fixture tick, preceding frame interval, and deadline information. A scope
+span represents one measured operation. Phase, queue and work-counter
+summaries are instantaneous samples. Their arguments report inclusive and
+exclusive time, units, sampled allocation deltas where a reader is supplied,
+queue depth, age, and deferrals. Timing export happens after collection; a
+full buffer drops later records and reports the exact count in
+`otherData.dropped`. Check this count before interpreting a timeline.
+
+For packaged play, launch each Player or Server with a distinct trace file.
+Choose a bounded `--max-frames` on Player or `--max-ticks` on Server for
+local diagnostic runs. The host loop captures existing session polling,
+Engine updates and session steps. Render publication and CPU time inside
+`Renderer::Draw` have separate scopes. The draw measurement covers the
+selected backend's submission and blocking time, including any blocking
+inside the renderer. GPU time and input-to-display latency need separate
+measurements. Network-paced hosts also record the existing wait deadline
+and time at the end of the wait. Trace setup and export errors emit one
+`[Runtime:WorkTrace]` line on stderr and the packaged runtime retains its
+ordinary exit status.
+
+Thread tracks have process-local IDs. The gameplay fixture uses lane 0 for
+the server and 1 through 40 for per-client spans. Its aggregate client
+samples use lane 1. A frame or tick can correlate scopes across attached
+threads. Callers supply the tick and lane and attach a separate scoped
+region and work sample on each collecting thread. Automatic worker
+attachment and cross-process clocks are outside this trace contract.
+Use the existing Tracy zones for surrounding Engine stages and native platform
+traces for worker scheduling and thread lifecycle. Exported names come from fixed Engine
+tables. No packet body, player name, file path or credential is exported.
+
+Keep source, build optimizer, machine, fixture arguments and output path
+policy equivalent when comparing revisions. Run matched Release
+measurements with trace support compiled off, compiled on but disabled,
+summary enabled, and detailed enabled. Compare process CPU, peak RSS,
+allocation counters and frame distributions from the benchmark. A wall
+tick average cannot replace the deadline and coalescing counters. Phase
+selection filters export records. The existing inclusive timers still run
+on sampled frames so excluded child durations can be charged correctly.
+Use a narrow tick window to localize expensive phases, then confirm a
+candidate change with capture disabled on the same workload.
 
 ## Documentation-only validation
 

@@ -16,6 +16,7 @@
 #include "gargantuan/render/SDLRenderer.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "platform/sdl/SDLHost.hpp"
+#include "runtime/RuntimeWorkTrace.hpp"
 
 #include <SDL3/SDL.h>
 #include <argparse/argparse.hpp>
@@ -321,8 +322,14 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 				"bytes,frames,operations,copy_ns,semantic_ns,load_ns,load_validate_ns,construct_ns,parent_ns,properties_ns,"
 				"live_apply_ns,apply_total_ns,decode_ns,render_extract_ns,render_publish_ns,published_objects,"
 				"character_messages,remote_messages,character_max_gap_ns,remote_max_gap_ns\n";
+#if defined(GARGANTUAN_WORK_TRACE)
+		runtime_detail::HostWorkTrace WorkTrace;
+#endif
 		while (Runtime->ProcessService->Alive) {
 			const auto FrameStarted = std::chrono::steady_clock::now();
+#if defined(GARGANTUAN_WORK_TRACE)
+			runtime_detail::HostWorkTrace::Frame TraceFrame(WorkTrace, FrameStarted, PreviousFrameStarted, Runtime->GetSimulationTick());
+#endif
 			if (Session) (void)Session->Poll();
 			if (FarmScaleWorkload) {
 				// The existing phase Remote updates this client-owned control state
@@ -716,6 +723,10 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			if (!ClientText.empty()) {
 				NetworkFrameDeadline += std::chrono::microseconds(16'667);
 				const auto Now = std::chrono::steady_clock::now();
+#if defined(GARGANTUAN_WORK_TRACE)
+				TraceFrame.SetDeadline(NetworkFrameDeadline, Now);
+				runtime_detail::WorkScope Pacing(runtime_detail::WorkPhase::HostFramePacing);
+#endif
 				if (NetworkFrameDeadline > Now)
 					std::this_thread::sleep_until(NetworkFrameDeadline);
 				else if (Now - NetworkFrameDeadline > std::chrono::milliseconds(250))
@@ -793,6 +804,9 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		}
 		Runtime.reset();
 		Renderer.reset();
+#if defined(GARGANTUAN_WORK_TRACE)
+		WorkTrace.Write();
+#endif
 		ReportFarmResult(ExitCode, PublicationEvidence && !PublicationEvidence->Valid() ? "publication_evidence_invalid" :
 			FarmScaleWorkload ? (FarmScaleCompleted ? "scale_complete" : "scale_incomplete") :
 			(FarmReady ? "completed" : "not_ready"));

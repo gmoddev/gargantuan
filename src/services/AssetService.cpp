@@ -377,7 +377,7 @@ namespace gargantuan {
 		};
 
 		mutable std::mutex Mutex;
-		JobSystem Jobs{2};
+		JobSystem Jobs{2, JobSystem::StartPolicy::OnFirstSubmission};
 		std::vector<std::unique_ptr<IAssetImporter>> Importers = CreateFoundationAssetImporters();
 		std::unordered_map<std::string, AssetRecord> Records;
 		std::unordered_map<std::string, std::shared_ptr<const std::vector<std::uint8_t>>> Artifacts;

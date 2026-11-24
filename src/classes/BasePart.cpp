@@ -111,7 +111,7 @@ namespace gargantuan {
 	glm::vec3 BasePart::GetLocalInertia() { RequirePhysicsReadCapability(); return PublishedPhysicsState.LocalInertia; }
 	bool BasePart::GetAwake() { RequirePhysicsReadCapability(); return PendingAwake.value_or(PublishedPhysicsState.Awake); }
 
-	void BasePart::SetCharacterSimulationCFrame(const gargantuan::CFrame &Value) {
+	void BasePart::SetSimulationCFrame(const gargantuan::CFrame &Value) {
 		if (CFrame.FuzzyEq(Value)) return;
 		CFrame = Value;
 		RenderDirtyAccumulator::Get().Mark(

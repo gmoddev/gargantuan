@@ -254,15 +254,30 @@ later become valid again.
 ## Step and publication
 
 `WorldRoot` retains the existing 60 Hz fixed step, four substeps, four-step
-per-frame cap, and accumulator reset after the cap. The backend owns direct world
-stepping and copies transient Box3D move/contact/sensor arrays into neutral
-vectors before returning. Each motion/contact collection is capped at 65,536
-entries per step; truncation is explicit in the result and logged by `WorldRoot`.
+per-frame cap, and accumulator reset after the cap. World advancement is a
+native Main-domain operation. Luau observes the Engine's simulation phase
+through `RunService.PreSimulation` and `RunService.PostSimulation` and queues body
+controls for the existing safe point. The native entry point rejects non-finite
+and negative deltas, rejects same-world reentry before applying pending
+changes, and bounds elapsed catch-up to four fixed steps. Native callers can
+still flush pending changes with a zero delta.
+
+The backend owns direct world stepping and copies transient Box3D
+move/contact/sensor arrays into neutral vectors before returning. Each
+motion/contact collection is capped at 65,536 entries per step. Truncation is
+explicit in the result and logged by `WorldRoot`. The clock accounts for each
+completed rigid step before synchronous publication, so a native observer
+exception leaves the next step available without repeating completed work.
 
 Dynamic body motion is resolved from `PhysicsBodyId` to a live tracked Part. The
 result is published through the ordinary authoritative `SetCFrame` path. A
 narrow publication guard prevents that physics-authored write from being queued
 back into the backend. Fuzzy equality suppresses no-op publication.
+
+The soft-body step reuses the fixed-step order. When the WorldRoot has no
+registered deformables, it supplies an empty collider list to the soft-body
+backend. An active deformable receives the same ObjectId-ordered rigid
+collider list on the next fixed step.
 
 The experimental selective readback path retains the ordered Part list and
 authoritative backend state. `WorldRoot` counts tracked bodies from accepted

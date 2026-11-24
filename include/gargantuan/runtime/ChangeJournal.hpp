@@ -123,6 +123,7 @@ namespace gargantuan {
 		[[nodiscard]] ChangeJournalProfile GetProfile() const;
 
 	  private:
+		friend class MutationGateway;
 		friend class PreparedPropertyCommit;
 		friend struct PreparedPropertyTestAccess;
 		// Synchronous Main-only reservation. Its lock protects candidate sequences
@@ -174,6 +175,7 @@ namespace gargantuan {
 		friend class Instance;
 		friend class InProcessReplicationSession;
 		friend class MutationGateway;
+		friend class Project;
 		friend class network::ReplicaApplier;
 		// Only the live receiver scope may retain renderer dirtiness. Validation
 		// worlds and nested default suppression remain completely unpublished.

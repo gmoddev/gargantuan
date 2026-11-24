@@ -85,6 +85,7 @@ set(GARGANTUAN_RUNTIME_LUAU_MODULES
 	"DefaultInteractionRuntime.luau"
 	"DefaultCharacterRuntime.luau"
 	"DefaultCharacterAssembly.luau"
+	"DefaultCharacterAnimation.luau"
 	"DefaultLocomotion.luau"
 	"DefaultNetworkLocomotion.luau"
 	"DefaultNetworkCharacterRuntime.luau"
@@ -266,6 +267,7 @@ configure_file(
 ################################################################################
 
 option(GARGANTUAN_TRACY "Compile in the Tracy client" OFF)
+option(GARGANTUAN_WORK_TRACE "Enable bounded local Engine work traces" OFF)
 option(GARGANTUAN_BUILD_RENDERER_BENCHMARKS "Build the manual renderer feasibility benchmark" ON)
 option(GARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS "Build the serialization baseline benchmark" ON)
 option(GARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE "Build the private Glaze codec evaluation targets" OFF)
@@ -383,6 +385,9 @@ list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/network/Gam
 include(cmake/Manifold.cmake)
 add_library(gargantuan_core OBJECT ${GARGANTUAN_SOURCES})
 target_link_libraries(gargantuan_core PUBLIC GargantuanManifold)
+if(GARGANTUAN_WORK_TRACE)
+	target_compile_definitions(gargantuan_core PUBLIC GARGANTUAN_WORK_TRACE=1)
+endif()
 add_executable(gargantuan "src/Main.cpp" ${GARGANTUAN_TELEMETRY_HOST_SOURCES} ${SHADER_OUTPUTS})
 target_link_libraries(gargantuan PRIVATE gargantuan_core ${CMAKE_DL_LIBS})
 add_library(gargantuan_runtime_host STATIC "src/host/common/PackagedHost.cpp")
@@ -690,6 +695,9 @@ if(GARGANTUAN_WITH_GNS)
 	)
 	target_compile_features(gargantuan_gns_transport PUBLIC cxx_std_23)
 	target_compile_definitions(gargantuan_gns_transport PUBLIC GARGANTUAN_WITH_GNS=1)
+	if(GARGANTUAN_WORK_TRACE)
+		target_compile_definitions(gargantuan_gns_transport PRIVATE GARGANTUAN_WORK_TRACE=1)
+	endif()
 	target_include_directories(gargantuan_gns_transport PUBLIC "include")
 	target_include_directories(gargantuan_gns_transport PRIVATE "cmake/gns")
 	target_link_libraries(gargantuan_gns_transport PUBLIC GameNetworkingSockets::static)
@@ -702,6 +710,22 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+	add_executable(gargantuan_gas_document_tests "tests/GasDocumentTests.cpp")
+	target_link_libraries(gargantuan_gas_document_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_gas_document COMMAND gargantuan_gas_document_tests)
+	set_tests_properties(gargantuan_gas_document PROPERTIES LABELS "persistence;serialization;sanitizer-safety")
+	add_executable(gargantuan_gas_authoring_tests "tests/GasAuthoringTests.cpp")
+	target_link_libraries(gargantuan_gas_authoring_tests PRIVATE gargantuan_core nlohmann_json)
+	add_test(NAME gargantuan_gas_authoring COMMAND gargantuan_gas_authoring_tests)
+	set_tests_properties(gargantuan_gas_authoring PROPERTIES LABELS "persistence;editor;serialization")
+	add_test(NAME gargantuan_gas_animated_model COMMAND gargantuan_gas_authoring_tests --model-fixture
+		"${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame" AnimatedBeacon)
+	set_tests_properties(gargantuan_gas_animated_model PROPERTIES LABELS "persistence;editor;assets")
+	if(GARGANTUAN_WORK_TRACE)
+		add_executable(gargantuan_work_trace_tests "tests/RuntimeWorkTraceTests.cpp")
+		target_link_libraries(gargantuan_work_trace_tests PRIVATE gargantuan_core)
+		add_test(NAME gargantuan_work_trace COMMAND gargantuan_work_trace_tests)
+	endif()
 	add_test(NAME gargantuan_runtime_host_roles
 		COMMAND ${CMAKE_COMMAND}
 			-DGARGANTUAN_PLAYER=$<TARGET_FILE:gargantuan_player>
@@ -1240,6 +1264,50 @@ if(BUILD_TESTING)
 		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
 	)
 	add_test(NAME GameSessionTests COMMAND gargantuan_game_session_tests)
+	# Use an isolated Release executable so allocation instrumentation is absent from the gates.
+	add_executable(gargantuan_gameplay_allocation_workload EXCLUDE_FROM_ALL "tests/GameSessionTests.cpp")
+	target_link_libraries(gargantuan_gameplay_allocation_workload PRIVATE gargantuan_core)
+	target_compile_definitions(gargantuan_gameplay_allocation_workload PRIVATE
+		GARGANTUAN_GAMEPLAY_WORKLOAD_ALLOCATIONS=1
+		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame")
+	add_test(NAME gargantuan_gameplay_possession_session COMMAND gargantuan_game_session_tests --generic-possession)
+	set_tests_properties(gargantuan_gameplay_possession_session PROPERTIES LABELS "networking;runtime;security" TIMEOUT 45)
+	add_executable(gargantuan_gameplay_sample_tests "tests/GameplaySampleTests.cpp")
+	target_link_libraries(gargantuan_gameplay_sample_tests PRIVATE gargantuan_core)
+	target_compile_definitions(gargantuan_gameplay_sample_tests PRIVATE
+		GARGANTUAN_GAMEPLAY_SAMPLE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/GameplayFoundation7")
+	add_test(NAME gargantuan_gameplay_relay_sample COMMAND gargantuan_gameplay_sample_tests)
+	set_tests_properties(gargantuan_gameplay_relay_sample PROPERTIES LABELS "networking;runtime;sample" TIMEOUT 45)
+	add_test(NAME gargantuan_gas_relay_rescue
+		COMMAND ${CMAKE_COMMAND}
+			-DPACKAGER=$<TARGET_FILE:gargantuan_packager>
+			-DMODEL_TEST=$<TARGET_FILE:gargantuan_gas_authoring_tests>
+			-DMISSION=$<TARGET_FILE:gargantuan_gameplay_sample_tests>
+			-DPLAYER_DISTRIBUTION=$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
+			-DSERVER_DISTRIBUTION=$<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution
+			-DSOURCE_PROJECT=${CMAKE_CURRENT_SOURCE_DIR}/samples/GameplayFoundation7
+			-DWORKSPACE_ROOT=${CMAKE_CURRENT_BINARY_DIR}
+			-DGNS=$<BOOL:${GARGANTUAN_WITH_GNS}>
+			-P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GasRelayRescueQualification.cmake)
+	set_tests_properties(gargantuan_gas_relay_rescue PROPERTIES
+		LABELS "persistence;packaging;networking;sample" RUN_SERIAL TRUE TIMEOUT 360)
+	if(GARGANTUAN_WITH_GNS)
+		target_link_libraries(gargantuan_game_session_tests PRIVATE gargantuan_gns_transport)
+		target_link_libraries(gargantuan_gameplay_allocation_workload PRIVATE gargantuan_gns_transport)
+		target_link_libraries(gargantuan_gameplay_sample_tests PRIVATE gargantuan_gns_transport)
+		add_test(NAME gargantuan_gameplay_possession_gns COMMAND gargantuan_game_session_tests --generic-possession-gns)
+		set_tests_properties(gargantuan_gameplay_possession_gns PROPERTIES LABELS "networking;runtime;security;gns" TIMEOUT 45)
+		add_test(NAME gargantuan_gameplay_relay_sample_gns COMMAND gargantuan_gameplay_sample_tests --gns)
+		set_tests_properties(gargantuan_gameplay_relay_sample_gns PROPERTIES LABELS "networking;runtime;sample;gns" TIMEOUT 45)
+	endif()
+	add_executable(gargantuan_gameplay_input_tests "tests/GameplayInputTests.cpp")
+	target_link_libraries(gargantuan_gameplay_input_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_gameplay_input COMMAND gargantuan_gameplay_input_tests)
+	set_tests_properties(gargantuan_gameplay_input PROPERTIES LABELS "networking;runtime;security" TIMEOUT 180)
+	add_executable(gargantuan_gameplay_pose_tests "tests/GameplayPoseTests.cpp")
+	target_link_libraries(gargantuan_gameplay_pose_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_gameplay_pose COMMAND gargantuan_gameplay_pose_tests)
+	set_tests_properties(gargantuan_gameplay_pose PROPERTIES LABELS "networking;runtime;security" TIMEOUT 180)
 	add_executable(gargantuan_frozen_recovery_quote_tests "tests/FrozenRecoveryQuoteTests.cpp")
 	target_link_libraries(gargantuan_frozen_recovery_quote_tests PRIVATE gargantuan_core)
 	add_test(NAME FrozenRecoveryQuoteTests COMMAND gargantuan_frozen_recovery_quote_tests)
@@ -1467,6 +1535,25 @@ if(BUILD_TESTING)
 			target_link_libraries(gargantuan_serialization_benchmark PRIVATE gargantuan_glaze_serialization_prototype)
 		endif()
 		add_test(NAME SerializationBenchmarkSmoke COMMAND gargantuan_serialization_benchmark)
+		add_test(NAME gargantuan_gas_serialization_benchmark COMMAND gargantuan_serialization_benchmark --gas)
+		set_tests_properties(gargantuan_gas_serialization_benchmark PROPERTIES LABELS "serialization;benchmark" TIMEOUT 180)
+		if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+			add_executable(gargantuan_gas_benchmark_profile
+				"tests/SerializationBenchmark.cpp" "tests/GasBenchmarkAllocations.cpp" "tests/BenchmarkAllocationProbe.cpp")
+			target_compile_definitions(gargantuan_gas_benchmark_profile PRIVATE GARGANTUAN_GAS_BENCHMARK_PROFILE=1)
+			target_link_libraries(gargantuan_gas_benchmark_profile PRIVATE gargantuan_core)
+			if(WIN32)
+				target_link_libraries(gargantuan_gas_benchmark_profile PRIVATE Psapi)
+			endif()
+			foreach(GasProfileBackend JSON GAS)
+				foreach(GasProfileObjects 100 1000 5000)
+					set(GasProfileTest "gargantuan_gas_profile_${GasProfileBackend}_${GasProfileObjects}")
+					add_test(NAME "${GasProfileTest}" COMMAND gargantuan_gas_benchmark_profile
+						--gas-profile "${GasProfileBackend}" "${GasProfileObjects}")
+					set_tests_properties("${GasProfileTest}" PROPERTIES LABELS "serialization;benchmark" TIMEOUT 180)
+				endforeach()
+			endforeach()
+		endif()
 	endif()
 	if(GARGANTUAN_WITH_FILAMENT)
 		add_executable(gargantuan_filament_renderer_tests "tests/FilamentRendererTests.cpp")
@@ -1486,6 +1573,8 @@ if(BUILD_TESTING)
 		set(GARGANTUAN_SDL_RUNTIME_TARGETS
 			gargantuan
 			gargantuan_foundation_tests
+			gargantuan_gas_document_tests
+			gargantuan_gas_authoring_tests
 			gargantuan_prepared_property_tests
 			gargantuan_concrete_property_default_tests
 			gargantuan_asset_foundation_tests
@@ -1538,6 +1627,11 @@ if(BUILD_TESTING)
 			gargantuan_remote_luau_tests
 			gargantuan_runtime6_luau_mutation_benchmark
 			gargantuan_character_networking_tests
+			gargantuan_game_session_tests
+			gargantuan_gameplay_allocation_workload
+			gargantuan_gameplay_sample_tests
+			gargantuan_gameplay_input_tests
+			gargantuan_gameplay_pose_tests
 			gargantuan_character_networking_benchmark
 			gargantuan_content_availability_tests
 			gargantuan_content_coarse_policy_tests
@@ -1563,7 +1657,7 @@ if(BUILD_TESTING)
 			gargantuan_remote_benchmark
 		)
 		if(GARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS)
-			list(APPEND GARGANTUAN_SDL_RUNTIME_TARGETS gargantuan_serialization_benchmark)
+			list(APPEND GARGANTUAN_SDL_RUNTIME_TARGETS gargantuan_serialization_benchmark gargantuan_gas_benchmark_profile)
 		endif()
 		if(GARGANTUAN_WITH_GNS)
 			list(APPEND GARGANTUAN_SDL_RUNTIME_TARGETS
@@ -1586,6 +1680,16 @@ if(BUILD_TESTING)
 				endif()
 			endif()
 			foreach(GARGANTUAN_PROTOBUF_RUNTIME IN LISTS GARGANTUAN_PROTOBUF_RUNTIMES)
+				add_custom_command(TARGET gargantuan_gameplay_sample_tests POST_BUILD
+					COMMAND ${CMAKE_COMMAND} -E copy_if_different
+						"${GARGANTUAN_PROTOBUF_RUNTIME}"
+						"$<TARGET_FILE_DIR:gargantuan_gameplay_sample_tests>"
+				)
+				add_custom_command(TARGET gargantuan_game_session_tests POST_BUILD
+					COMMAND ${CMAKE_COMMAND} -E copy_if_different
+						"${GARGANTUAN_PROTOBUF_RUNTIME}"
+						"$<TARGET_FILE_DIR:gargantuan_game_session_tests>"
+				)
 				add_custom_command(TARGET gargantuan_gns_capacity_benchmark POST_BUILD
 					COMMAND ${CMAKE_COMMAND} -E copy_if_different
 						"${GARGANTUAN_PROTOBUF_RUNTIME}"
@@ -1695,6 +1799,16 @@ if(BUILD_TESTING)
 			-DGARGANTUAN_PACKAGE_TEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/package-tests
 			-P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/DedicatedServerPackageTests.cmake
 	)
+	add_test(NAME gargantuan_gas_package_input
+		COMMAND ${CMAKE_COMMAND}
+			-DGARGANTUAN_PACKAGER=$<TARGET_FILE:gargantuan_packager>
+			-DGARGANTUAN_RUNTIME_DISTRIBUTION=$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
+			-DGARGANTUAN_SERVER_RUNTIME_DISTRIBUTION=$<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution
+			-DGARGANTUAN_PROJECT_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame
+			-DGARGANTUAN_PACKAGE_TEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/package-tests
+			-P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GasPackageInputTests.cmake
+	)
+	set_tests_properties(gargantuan_gas_package_input PROPERTIES LABELS "persistence;packaging" TIMEOUT 300)
 	add_test(NAME gargantuan_gui_foundation_benchmark_smoke COMMAND gargantuan_gui_foundation_benchmark --quick)
 	add_test(NAME gargantuan_prerun_bootstrap COMMAND gargantuan_prerun_bootstrap_tests)
 	add_test(NAME gargantuan_networking_contracts COMMAND gargantuan_networking_contract_tests)

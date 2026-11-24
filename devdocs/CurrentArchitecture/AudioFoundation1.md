@@ -194,7 +194,12 @@ never throws through the game loop for device availability.
 ## Persistence, packaging, and Studio
 
 Authored Sound properties serialize through schema version 1; runtime state and
-`TimePosition` do not. Studio Play receives the exact authoring snapshot and
+`TimePosition` do not. The shared JSON and GAS graph loader restores both saved
+rolloff distances through the reflected Sound setters in an order that preserves
+`min < max` even when the saved range lies outside the construction defaults.
+Invalid pairs fail graph admission. Where a file omits either field, the omitted
+distance keeps its construction default and the supplied field is validated against
+it. Studio Play receives the exact authoring snapshot and
 asset snapshot, but creates independent Sound objects and voices. Stop destroys
 the AudioRuntime before the runtime world, so no voice crosses sessions and all
 authoring Sounds/properties remain unchanged.

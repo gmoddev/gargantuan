@@ -8,12 +8,14 @@
 #include "FarmF1EvidenceFixture.hpp"
 #include "FarmOrdinaryEvidenceFixture.hpp"
 #include "FarmServiceTimingEvidenceFixture.hpp"
+#include "GameplayScalingFixture.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/Animator.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
+#include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
 #include "gargantuan/classes/Script.hpp"
@@ -22,6 +24,9 @@
 #include "gargantuan/network/GameSession.hpp"
 #include "gargantuan/network/GameSessionProtocol.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
+#if defined(GARGANTUAN_WITH_GNS)
+#include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
+#endif
 #include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/Renderer.hpp"
@@ -31,9 +36,12 @@
 #include "gargantuan/services/Players.hpp"
 
 #include <array>
+#include <algorithm>
 #include <chrono>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -41,8 +49,28 @@
 #include <iterator>
 #include <memory>
 #include <limits>
+#include <new>
 #include <thread>
 #include <vector>
+
+#if defined(GARGANTUAN_GAMEPLAY_WORKLOAD_ALLOCATIONS)
+namespace {
+	thread_local std::uint64_t GameplayWorkloadAllocatedBytes = 0;
+	thread_local std::uint64_t GameplayWorkloadAllocations = 0;
+}
+
+void *operator new(std::size_t Size) {
+	if (auto *Value = std::malloc(std::max(Size, std::size_t{1}))) {
+		gargantuan::runtime_detail::AddWorkCounter(GameplayWorkloadAllocatedBytes, Size);
+		gargantuan::runtime_detail::AddWorkCounter(GameplayWorkloadAllocations, 1);
+		return Value;
+	}
+	throw std::bad_alloc();
+}
+
+void operator delete(void *Value) noexcept { std::free(Value); }
+void operator delete(void *Value, std::size_t) noexcept { std::free(Value); }
+#endif
 
 namespace {
 	using namespace gargantuan;
@@ -50,6 +78,21 @@ namespace {
 	using namespace std::chrono_literals;
 
 	int Failures = 0;
+
+	std::uint64_t GameplayWorkloadAllocationBytes() noexcept {
+#if defined(GARGANTUAN_GAMEPLAY_WORKLOAD_ALLOCATIONS)
+		return GameplayWorkloadAllocatedBytes;
+#else
+		return 0;
+#endif
+	}
+	std::uint64_t GameplayWorkloadAllocationCount() noexcept {
+#if defined(GARGANTUAN_GAMEPLAY_WORKLOAD_ALLOCATIONS)
+		return GameplayWorkloadAllocations;
+#else
+		return 0;
+#endif
+	}
 
 	void Check(bool Condition, const char *Message) {
 		if (Condition) return;
@@ -2462,11 +2505,518 @@ end)
 		if (ClientRuntime) ClientRuntime->Destroy();
 		ServerRuntime.Destroy();
 	}
+
+	void TestGenericPossessionRuntime(bool NativeTransport = false, std::size_t PeerCount = 2, bool Measure = false,
+		const test_detail::GameplayScalingOptions *Scale = nullptr) {
+		using ScalingCapture = test_detail::GameplayScalingCapture;
+		using Phase = ScalingCapture::Phase;
+		std::optional<ScalingCapture> Scaling;
+		if (Scale) Scaling.emplace(*Scale);
+		auto Network = NativeTransport ? nullptr : SimulatedNetwork::Create({.BaseLatency = 6ms});
+		const auto CreateTransport = [&]() -> std::shared_ptr<IGameTransport> {
+			if (Network) return Network->CreateTransport();
+#if defined(GARGANTUAN_WITH_GNS)
+			return std::make_shared<GameNetworkingSocketsTransport>();
+#else
+			throw std::runtime_error("The native possession suite requires GNS");
+#endif
+		};
+		auto World = std::make_shared<DataModel>();
+		auto PlayersValue = std::dynamic_pointer_cast<Players>(World->GetService("Players"));
+		PlayersValue->SetDefaultControllerEnabled(false);
+		PlayersValue->SetDefaultCameraEnabled(false);
+		HeadlessRenderer Renderer(Vector2(320, 240));
+		Engine Runtime(World, &Renderer, nullptr,
+			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer});
+		Runtime.ProcessService->Alive = true;
+		auto Drone = std::make_shared<Part>();
+		Drone->SetName("PossessionDrone");
+		Drone->SetAnchored(true);
+		Drone->SetParent(Runtime.Workspace);
+		auto Rover = std::make_shared<Part>();
+		Rover->SetName("PossessionRover");
+		Rover->SetAnchored(true);
+		Rover->SetParent(Runtime.Workspace);
+		std::vector<std::shared_ptr<Part>> Targets{Drone, Rover};
+		for (std::size_t Index = Targets.size(); Index < PeerCount; ++Index) {
+			auto Target = std::make_shared<Part>();
+			Target->SetName("PossessionBody" + std::to_string(Index));
+			Target->SetAnchored(true);
+			Target->SetParent(Runtime.Workspace);
+			Targets.push_back(std::move(Target));
+		}
+		const auto AddScript = [](const std::shared_ptr<DataModel> &Target, Enums::RunContext Context,
+								  std::string Source) {
+			auto Value = std::make_shared<Script>();
+			Value->SetRunContext(Context);
+			Value->SetSource(std::move(Source));
+			Value->SetParent(Target);
+			return Value;
+		};
+		auto ServerScript = AddScript(World, Enums::RunContext::Server, R"(
+local Players = game:GetService("Players")
+local Control = game:GetService("CharacterControlService")
+game:GetService("RunService").PreSimulation:Connect(function()
+	for _, Player in Players:GetPlayers() do
+		local Entity = Player.PossessedEntity
+		local Input = Control:GetPossessionInput(Player)
+		if Entity and Input and Input.Fresh then
+			local Move = Input.Movement
+			local Target = CFrame.new(Entity.Position + Vector3.new(Move.X, 0, Move.Y) * 0.25)
+			if Control:MovePossessedPart(Player, Target) then
+				assert(not Control:MovePossessedPart(Player, Target), "movement must be limited to once per tick")
+			end
+		end
+	end
+end)
+)");
+		auto ServerConfiguration = Configuration(
+			GameSessionRole::Server, NativeTransport ? "127.0.0.1" : "generic-possession");
+		std::unique_ptr<GameSession> ServerSession;
+		std::shared_ptr<IGameTransport> ServerTransport;
+		for (std::uint16_t Port = 37910; Port < 37926; ++Port) {
+			if (NativeTransport) ServerConfiguration.Endpoint.Port = Port;
+			ServerTransport = CreateTransport();
+			ServerSession = std::make_unique<GameSession>(ServerTransport, ServerConfiguration, &Runtime);
+			if (ServerSession->Start().Succeeded()) break;
+			ServerSession.reset();
+			if (!NativeTransport) break;
+		}
+		Check(ServerSession != nullptr, "generic possession server starts");
+		if (!ServerSession) return;
+		auto &Server = *ServerSession;
+		struct ClientFixture {
+			std::unique_ptr<HeadlessRenderer> Renderer;
+			std::unique_ptr<Engine> Runtime;
+			std::unique_ptr<GameSession> Session;
+		};
+		std::vector<ClientFixture> Clients(PeerCount);
+		const auto StartClient = [&](std::size_t Index, std::uint64_t NonceOffset) {
+			auto ClientConfiguration = Configuration(
+				GameSessionRole::Client, NativeTransport ? "127.0.0.1" : "generic-possession");
+			ClientConfiguration.Endpoint = ServerConfiguration.Endpoint;
+			ClientConfiguration.ClientNonce += NonceOffset;
+			Clients[Index].Session = std::make_unique<GameSession>(CreateTransport(), ClientConfiguration);
+			Check(Clients[Index].Session->Start().Succeeded(), "generic possession client starts");
+		};
+		for (std::size_t Index = 0; Index < Clients.size(); ++Index) StartClient(Index, Index);
+		std::uint64_t Tick = 0;
+		runtime_detail::WorkSample *FrameWork = nullptr;
+		bool PaceMeasuredFrames = false;
+		std::chrono::steady_clock::time_point Deadline{};
+		std::uint64_t ServerAllocationBytes = 0;
+		const auto SampleServer = [&](auto &&Operation) {
+			if (!FrameWork) {
+				Operation();
+				return;
+			}
+			const auto Before = GameplayWorkloadAllocationBytes();
+			runtime_detail::WorkCapture Capture(FrameWork);
+			Operation();
+			ServerAllocationBytes += GameplayWorkloadAllocationBytes() - Before;
+		};
+		const auto Sample = [&](Phase Work, auto &&Operation) {
+			if (Scaling) Scaling->Measure(Work, Operation, GameplayWorkloadAllocationCount, GameplayWorkloadAllocationBytes);
+			else Operation();
+		};
+		const auto Frame = [&] {
+			if (Network) {
+				Sample(Phase::Pump, [&] {
+					(void)Network->Advance(17ms);
+					Network->Pump();
+				});
+			} else if (PaceMeasuredFrames) {
+				Deadline += 16'667us;
+				const auto BeforeWait = std::chrono::steady_clock::now();
+				Sample(Phase::Wait, [&] { std::this_thread::sleep_until(Deadline); });
+				Scaling->RecordDeadline(Deadline, BeforeWait);
+			} else Sample(Phase::Wait, [] { std::this_thread::sleep_for(16ms); });
+			Sample(Phase::ServerPoll, [&] { SampleServer([&] { (void)Server.Poll(); }); });
+			Sample(Phase::ClientPoll, [&] {
+				for (std::size_t Index = 0; Index < Clients.size(); ++Index) {
+					auto &Client = Clients[Index];
+					if (Scaling) Scaling->SetEndpoint(static_cast<std::uint32_t>(Index + 1));
+					(void)Client.Session->Poll();
+					if (!Client.Runtime && Client.Session->GetClientDataModel()) {
+						Client.Renderer = std::make_unique<HeadlessRenderer>(Vector2(320, 240));
+						Client.Runtime = std::make_unique<Engine>(Client.Session->GetClientDataModel(),
+							Client.Renderer.get(), nullptr,
+							EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient});
+						Client.Runtime->ProcessService->Alive = true;
+						Check(Client.Session->AttachClientRuntime(*Client.Runtime),
+							"generic possession client attaches through the normal bootstrap");
+						(void)AddScript(Client.Runtime->DataModel, Enums::RunContext::Client, R"(
+local Players = game:GetService("Players")
+local Control = game:GetService("CharacterControlService")
+game:GetService("RunService").PreSimulation:Connect(function()
+	local Player = Players.LocalPlayer
+	local Entity = Player and Player.PossessedEntity
+	if Entity then
+		local Intent = Entity.Name == "PossessionDrone" and Vector2.new(1, 0) or Vector2.new(0, 1)
+		Control:SubmitPossessionIntent(Intent, 0, false)
+	end
+end)
+)");
+					}
+				}
+			});
+			Sample(Phase::ServerEngine, [&] { SampleServer([&] { Runtime.Step(); }); });
+			Sample(Phase::ClientEngine, [&] {
+				for (std::size_t Index = 0; Index < Clients.size(); ++Index) {
+					if (Scaling) Scaling->SetEndpoint(static_cast<std::uint32_t>(Index + 1));
+					if (Clients[Index].Runtime) Clients[Index].Runtime->Step();
+				}
+			});
+			Sample(Phase::ServerSession, [&] { SampleServer([&] { Server.Step(++Tick); }); });
+			Sample(Phase::ClientSession, [&] {
+				for (std::size_t Index = 0; Index < Clients.size(); ++Index) {
+					auto &Client = Clients[Index];
+					if (Scaling) Scaling->SetEndpoint(static_cast<std::uint32_t>(Index + 1));
+					Client.Session->Step(Client.Runtime ? Client.Runtime->GetSimulationTick() : Tick);
+				}
+			});
+		};
+		while (Tick < 100 && Server.GetMetrics().ReadyPeers != PeerCount) Frame();
+		auto LivePlayers = PlayersValue->GetPlayers();
+		Check(LivePlayers.size() == PeerCount && Server.GetMetrics().ReadyPeers == PeerCount,
+			"all peers establish distinct server Players");
+		if (LivePlayers.size() == PeerCount && Server.GetMetrics().ReadyPeers == PeerCount) {
+			const auto AssignedAt = Tick;
+			for (std::size_t Index = 0; Index < PeerCount; ++Index)
+				LivePlayers[Index]->SetPossession(Targets[Index]);
+			if (Scale) {
+				bool Rejected = false;
+				try {
+					LivePlayers[1]->SetPossession(Drone);
+				} catch (const std::invalid_argument &) {
+					Rejected = true;
+				}
+				Check(Rejected && LivePlayers[0]->GetPossessedEntity() == Drone && LivePlayers[1]->GetPossessedEntity() == Rover,
+					"a workload peer cannot take another peer's live possession");
+			}
+			std::uint64_t AllBoundAt = 0;
+			for (int Index = 0; Index < 25; ++Index) {
+				Frame();
+				if (Measure && AllBoundAt == 0 && Server.GetMetrics().PossessionInput.Bindings == PeerCount)
+					AllBoundAt = Tick;
+			}
+			Check(Drone->GetPosition().x > 1 && Drone->GetPosition().z == 0 &&
+					Rover->GetPosition().z > 1 && Rover->GetPosition().x == 0,
+				"independent Luau intents move only the matching server-owned bodies");
+			auto Metrics = Server.GetMetrics().PossessionInput;
+			Check(Metrics.Bindings == PeerCount && Metrics.InputsConsumed > PeerCount && Metrics.InputBytesReceived > 0,
+				"server reports bounded generic input admission and consumption");
+			const auto GameplayMetrics = Server.GetMetrics();
+			Check(GameplayMetrics.PossessionMotionAccepted > 2 && GameplayMetrics.PossessionPoseSnapshotsAccepted > 2 &&
+					GameplayMetrics.PossessionPoseBytesAccepted > 0,
+				"authoritative movement used the bounded realtime pose path");
+			for (auto &Client : Clients) {
+				auto ClientPlayer = Client.Runtime ? Client.Runtime->Players->GetLocalPlayer().value_or(nullptr) : nullptr;
+				auto ProjectedEntity = ClientPlayer ? ClientPlayer->GetPossessedEntity().value_or(nullptr) : nullptr;
+				auto ProjectedPart = std::dynamic_pointer_cast<Part>(ProjectedEntity);
+				Check(ProjectedPart && glm::length(ProjectedPart->GetPosition()) > 0.5f &&
+						!ClientPlayer->GetCharacter(),
+					"each ready replica resolves its possessed entity and receives authoritative movement");
+				if (Client.Runtime) {
+					auto Remote = Client.Runtime->Workspace->FindFirstChild(
+						ProjectedPart && ProjectedPart->GetName() == "PossessionDrone"
+							? "PossessionRover" : "PossessionDrone", std::nullopt);
+					auto RemotePart = std::dynamic_pointer_cast<Part>(Remote);
+					Check(RemotePart && glm::length(RemotePart->GetPosition()) > 0.5f,
+						"an interested peer receives the other possessed body's authoritative pose");
+				}
+			}
+			if (!Measure && Network) {
+				for (int Index = 0; Index < 24; ++Index) {
+					(void)Network->Advance(17ms);
+					Network->Pump();
+					for (auto &Client : Clients) {
+						(void)Client.Session->Poll();
+						Client.Runtime->Step();
+						Client.Session->Step(Client.Runtime->GetSimulationTick());
+					}
+				}
+				for (int Index = 0; Index < 12; ++Index) Frame();
+				const auto DroneAfterStall = Drone->GetPosition();
+				const auto RoverAfterStall = Rover->GetPosition();
+				for (int Index = 0; Index < 8; ++Index) Frame();
+				Check(Drone->GetPosition().x > DroneAfterStall.x + 0.5f &&
+						Rover->GetPosition().z > RoverAfterStall.z + 0.5f,
+					"both controllers recover after the server loop stalls while client ticks advance");
+			}
+			if (Scaling) {
+				constexpr std::size_t ExtraWarmupTicks = 155;
+				for (std::size_t Index = 0; Index < ExtraWarmupTicks; ++Index) Frame();
+				const auto Before = Server.GetMetrics();
+				struct PeerSample {
+					ConnectionId Connection;
+					std::uint64_t Index;
+					NetworkStatistics Transport;
+					SchedulerStatistics Scheduler;
+				};
+				const auto BaselineNonce = Configuration(GameSessionRole::Client).ClientNonce;
+				std::vector<PeerSample> PeerBefore;
+				PeerBefore.reserve(PeerCount);
+				for (const auto &Peer : Server.GetPeerIdentities()) {
+					if (!Peer.Ready) continue;
+					const auto Transport = ServerTransport->GetStatistics(Peer.Connection);
+					const auto Scheduler = detail::GameSessionTestAccess::GetSchedulerStatistics(Server, Peer.Connection);
+					Check(Transport && Scheduler && Peer.Nonce >= BaselineNonce && Peer.Nonce < BaselineNonce + PeerCount,
+						"workload transport and scheduler expose the live peer");
+					if (Transport && Scheduler)
+						PeerBefore.push_back({Peer.Connection, Peer.Nonce - BaselineNonce + 1, *Transport, *Scheduler});
+				}
+				Check(PeerBefore.size() == PeerCount, "every workload peer has a counter baseline");
+				std::vector<glm::vec3> PreviousPositions;
+				PreviousPositions.reserve(PeerCount);
+				for (const auto &Target : Targets) PreviousPositions.push_back(Target->GetPosition());
+
+				using ClientCounters = detail::GameSessionTestAccess::GameplayClientCounters;
+				std::vector<ClientCounters> PriorClients;
+				PriorClients.reserve(Clients.size());
+				for (const auto &Client : Clients)
+					PriorClients.push_back(detail::GameSessionTestAccess::GetGameplayClientCounters(*Client.Session));
+				std::uint64_t Produced = 0, Applied = 0;
+				const auto TickBegin = Tick;
+				auto PriorServer = Before;
+				Scaling->Start();
+				PaceMeasuredFrames = Scale->DeadlinePacing;
+				Deadline = std::chrono::steady_clock::now();
+				for (std::size_t Index = 0; Index < Scale->Ticks; ++Index) {
+					Scaling->BeginFrame(Index, Tick + 1);
+					Frame();
+					std::uint64_t FrameProduced = 0, FrameApplied = 0, StructuralApply = 0, MaximumStructuralApply = 0;
+					for (std::size_t Client = 0; Client < Clients.size(); ++Client) {
+						const auto Current = detail::GameSessionTestAccess::GetGameplayClientCounters(*Clients[Client].Session);
+						auto &Prior = PriorClients[Client];
+						FrameProduced += Current.Produced - Prior.Produced;
+						FrameApplied += Current.Applied - Prior.Applied;
+						const auto ApplyCost = Current.StructuralApplyNanoseconds - Prior.StructuralApplyNanoseconds;
+						StructuralApply += ApplyCost;
+						MaximumStructuralApply = std::max(MaximumStructuralApply, ApplyCost);
+						Prior = Current;
+					}
+					Produced += FrameProduced;
+					Applied += FrameApplied;
+					const auto Current = Server.GetMetrics();
+					Scaling->RecordWorkload(Current.PossessionPoseSnapshotsAccepted - PriorServer.PossessionPoseSnapshotsAccepted,
+						Current.PossessionPoseBytesAccepted - PriorServer.PossessionPoseBytesAccepted, FrameProduced,
+						Current.PossessionInput.InputsAccepted - PriorServer.PossessionInput.InputsAccepted,
+						Current.PossessionInput.InputsConsumed - PriorServer.PossessionInput.InputsConsumed,
+						Current.PossessionInput.InputsCoalesced - PriorServer.PossessionInput.InputsCoalesced,
+						FrameApplied, StructuralApply, MaximumStructuralApply);
+					PriorServer = Current;
+				}
+				Scaling->Stop();
+				PaceMeasuredFrames = false;
+				const auto After = Server.GetMetrics();
+				Check(PlayersValue->GetPlayers().size() == PeerCount && After.PlayersRemoved == Before.PlayersRemoved,
+					"every workload peer remains connected");
+				Check(After.ProtocolRejects == Before.ProtocolRejects &&
+					After.PossessionInput.UnauthorizedInputs == Before.PossessionInput.UnauthorizedInputs &&
+					After.PossessionInput.MalformedInputs == Before.PossessionInput.MalformedInputs,
+					"the measured workload emits only authorized, well-formed inputs");
+				for (std::size_t Index = 0; Index < PeerCount; ++Index) {
+					const auto Delta = Targets[Index]->GetPosition() - PreviousPositions[Index];
+					Check(LivePlayers[Index]->GetPossessedEntity() == Targets[Index] &&
+						(Index == 0 ? Delta.x > 0 && Delta.z == 0 : Delta.z > 0 && Delta.x == 0),
+						"every workload peer independently advances its authoritative entity");
+				}
+				for (const auto &Peer : PeerBefore) {
+					const auto Transport = ServerTransport->GetStatistics(Peer.Connection);
+					const auto Scheduler = detail::GameSessionTestAccess::GetSchedulerStatistics(Server, Peer.Connection);
+					Check(Transport && Scheduler, "every workload peer still exposes its final counters");
+					if (!Transport || !Scheduler) continue;
+					const auto Delta = [](auto Start, auto End) -> std::optional<std::uint64_t> {
+						if (!Start || !End || *End < *Start) return {};
+						return *End - *Start;
+					};
+					const auto PrintOptional = [](auto Value) {
+						if (Value) std::cout << *Value;
+						else std::cout << "NA";
+					};
+					std::cout << "[Gameplay:Peer] " << Peer.Index << ',' << Peer.Connection.Slot << ',' << Peer.Connection.Generation << ',';
+					PrintOptional(Delta(Peer.Transport.BytesSent, Transport->BytesSent));
+					std::cout << ',';
+					PrintOptional(Delta(Peer.Transport.BytesReceived, Transport->BytesReceived));
+					std::cout << ',';
+					PrintOptional(Delta(Peer.Transport.DroppedUnreliableMessages, Transport->DroppedUnreliableMessages));
+					std::cout << ',';
+					PrintOptional(Delta(Peer.Transport.DuplicatedUnreliableMessages, Transport->DuplicatedUnreliableMessages));
+					std::cout << ',';
+					PrintOptional(Transport->QueuedReliableBytes);
+					std::cout << ',';
+					if (Transport->EstimatedRoundTripTime) std::cout << Transport->EstimatedRoundTripTime->count();
+					else std::cout << "NA";
+					std::cout << ',' << Scheduler->QueuedMessages << ',' << Scheduler->QueuedUnreliableBytes
+						<< ',' << Scheduler->IntentsRejected - Peer.Scheduler.IntentsRejected
+						<< ',' << Scheduler->UnreliableMessagesDroppedBeforeTransport - Peer.Scheduler.UnreliableMessagesDroppedBeforeTransport
+						<< ',' << Scheduler->SequencedStatesSuperseded - Peer.Scheduler.SequencedStatesSuperseded
+						<< ',' << Scheduler->TransportBackpressureEvents - Peer.Scheduler.TransportBackpressureEvents << '\n';
+				}
+				std::cout << "[Gameplay:Scale] peers=" << PeerCount << " ticks=" << Scale->Ticks
+					<< " intended_ticks=" << Scale->Ticks << " executed_ticks=" << Tick - TickBegin
+					<< " warmup_ticks=" << 25 + ExtraWarmupTicks << " profile=" << Scale->Profile
+					<< " transport=" << (NativeTransport ? "gns-loopback" : "simulated")
+					<< " pacing=" << (Scale->DeadlinePacing ? "deadline" : "relative")
+					<< " inputs_produced=" << Produced << " client_poses_applied=" << Applied
+					<< " poses=" << After.PossessionPoseSnapshotsAccepted - Before.PossessionPoseSnapshotsAccepted
+					<< " pose_bytes=" << After.PossessionPoseBytesAccepted - Before.PossessionPoseBytesAccepted
+					<< " inputs=" << After.PossessionInput.InputsAccepted - Before.PossessionInput.InputsAccepted
+					<< " inputs_consumed=" << After.PossessionInput.InputsConsumed - Before.PossessionInput.InputsConsumed
+					<< " inputs_coalesced=" << After.PossessionInput.InputsCoalesced - Before.PossessionInput.InputsCoalesced
+					<< " input_bytes=" << After.PossessionInput.InputBytesReceived - Before.PossessionInput.InputBytesReceived
+					<< " stale_inputs=" << After.PossessionInput.StaleInputs - Before.PossessionInput.StaleInputs
+					<< " expired_inputs=" << After.PossessionInput.InputsExpired - Before.PossessionInput.InputsExpired
+					<< " rate_limited_inputs=" << After.PossessionInput.RateLimitedInputs - Before.PossessionInput.RateLimitedInputs
+					<< " protocol_rejects=" << After.ProtocolRejects - Before.ProtocolRejects
+					<< " unauthorized_inputs=" << After.PossessionInput.UnauthorizedInputs - Before.PossessionInput.UnauthorizedInputs
+					<< " malformed_inputs=" << After.PossessionInput.MalformedInputs - Before.PossessionInput.MalformedInputs
+					<< " motion_commits=" << After.PossessionMotionAccepted - Before.PossessionMotionAccepted
+					<< " input_admission_ns=" << After.PossessionInput.AdmissionNanoseconds - Before.PossessionInput.AdmissionNanoseconds
+					<< " motion_ns=" << After.PossessionMotionNanoseconds - Before.PossessionMotionNanoseconds
+					<< " maximum_input_age_ticks=" << After.PossessionInput.MaximumConsumedInputAgeTicks << '\n';
+				Scaling->Print(std::cout);
+			} else if (Measure) {
+				const auto Before = Server.GetMetrics();
+				std::array<std::uint64_t, 120> SimulationCosts{};
+				std::array<std::uint64_t, 120> SessionCosts{};
+				std::uint64_t PhysicsTime = 0;
+				for (std::size_t Index = 0; Index < SimulationCosts.size(); ++Index) {
+					runtime_detail::WorkSample Work{};
+					FrameWork = &Work;
+					Frame();
+					FrameWork = nullptr;
+					const auto &EngineWork = Work[static_cast<std::size_t>(runtime_detail::WorkPhase::EngineStep)];
+					const auto &SessionWork = Work[static_cast<std::size_t>(runtime_detail::WorkPhase::SessionStep)];
+					SimulationCosts[Index] = EngineWork.Nanoseconds;
+					SessionCosts[Index] = SessionWork.Nanoseconds;
+					PhysicsTime += Work[static_cast<std::size_t>(runtime_detail::WorkPhase::Physics)].Nanoseconds;
+				}
+				std::ranges::sort(SimulationCosts);
+				std::ranges::sort(SessionCosts);
+				const auto After = Server.GetMetrics();
+				std::cout << "[Gameplay:Qualification] peers=" << PeerCount << " ticks=" << SimulationCosts.size()
+					<< " engine_p50_ns=" << SimulationCosts[59] << " engine_p95_ns=" << SimulationCosts[113]
+					<< " engine_p99_ns=" << SimulationCosts[118] << " session_p99_ns=" << SessionCosts[118]
+					<< " physics_total_ns=" << PhysicsTime
+					<< " input_ns=" << After.PossessionInput.AdmissionNanoseconds - Before.PossessionInput.AdmissionNanoseconds
+					<< " controller_ns=" << After.PossessionMotionNanoseconds - Before.PossessionMotionNanoseconds
+					<< " pose_bytes=" << After.PossessionPoseBytesAccepted - Before.PossessionPoseBytesAccepted
+					<< " poses=" << After.PossessionPoseSnapshotsAccepted - Before.PossessionPoseSnapshotsAccepted
+					<< " maximum_input_age_ticks=" << After.PossessionInput.MaximumConsumedInputAgeTicks
+					<< " possession_bind_ticks=" << (AllBoundAt == 0 ? 0 : AllBoundAt - AssignedAt);
+#if defined(GARGANTUAN_GAMEPLAY_WORKLOAD_ALLOCATIONS)
+				std::cout << " server_scalar_new_bytes=" << ServerAllocationBytes;
+#endif
+				std::cout << '\n';
+			}
+			LivePlayers[0]->SetPossession(std::nullopt);
+			LivePlayers[1]->SetPossession(Drone);
+			for (int Index = 0; Index < 15; ++Index) Frame();
+			Metrics = Server.GetMetrics().PossessionInput;
+			Check(Metrics.Bindings == PeerCount + 1 && Metrics.Revocations == 2 &&
+					!LivePlayers[0]->GetPossessedEntity() && LivePlayers[1]->GetPossessedEntity() == Drone,
+				"same-tick transfer retires both old leases and binds the new owner");
+			Drone->Destroy();
+			for (int Index = 0; Index < 8; ++Index) Frame();
+			Check(!LivePlayers[1]->GetPossessedEntity() && Server.GetMetrics().PossessionInput.Revocations == 3,
+				"entity destruction retires its input lease");
+			if (!Measure) {
+				for (const auto &Client : Clients)
+					Check(Client.Runtime && !Client.Runtime->Workspace->FindFirstChild("PossessionDrone", std::nullopt),
+						"structural removal retires every presented replica of the old identity");
+			}
+			if (!Measure && Clients.front().Runtime) {
+				auto &Departing = Clients.front();
+				const auto LocalBefore = Departing.Runtime->Players->GetLocalPlayer().value_or(nullptr);
+				const auto PreviousPlayerId = LocalBefore ? LocalBefore->GetPlayerId() : 0;
+				Departing.Session->Stop();
+				Departing.Runtime->Destroy();
+				Departing.Runtime.reset();
+				Departing.Renderer.reset();
+				for (int Index = 0; Index < 60 && PlayersValue->GetPlayers().size() == PeerCount; ++Index) Frame();
+				Check(PlayersValue->GetPlayers().size() == PeerCount - 1, "disconnect retires the server Player");
+				StartClient(0, PeerCount + 1);
+				std::shared_ptr<Player> Reconnected;
+				for (int Index = 0; Index < 60 && !Reconnected; ++Index) {
+					Frame();
+					for (const auto &PeerValue : Server.GetPeerIdentities()) {
+						if (!PeerValue.Ready || PeerValue.Nonce !=
+								Configuration(GameSessionRole::Client).ClientNonce + PeerCount + 1) continue;
+						for (const auto &ServerPlayer : PlayersValue->GetPlayers())
+							if (ServerPlayer->GetPlayerId() == static_cast<int>(PeerValue.PlayerId))
+								Reconnected = ServerPlayer;
+					}
+				}
+				Check(PreviousPlayerId > 0 && Reconnected && Reconnected->GetPlayerId() != PreviousPlayerId &&
+						!Reconnected->GetPossessedEntity(),
+					"reconnect creates a different server identity with no inherited possession");
+				if (Reconnected) {
+					const auto PreviousRoverPose = Rover->GetPosition();
+					Reconnected->SetPossession(Rover);
+					for (int Index = 0; Index < 25; ++Index) Frame();
+					Check(Server.GetMetrics().PossessionInput.Bindings == PeerCount + 2 &&
+							Rover->GetPosition().z > PreviousRoverPose.z,
+						"reconnected Player moves through a fresh generic lease");
+				}
+			}
+		}
+		for (auto &Client : Clients) Client.Session->Stop();
+		if (Scale) {
+			for (std::size_t Index = 0; Index < 120 && !PlayersValue->GetPlayers().empty(); ++Index) Frame();
+			Check(PlayersValue->GetPlayers().empty() && Server.GetPeerIdentities().empty(),
+				"all workload peers complete disconnect cleanup");
+		}
+		Server.Stop();
+		for (auto &Client : Clients)
+			if (Client.Runtime) Client.Runtime->Destroy();
+		Runtime.Destroy();
+	}
 }
 
 int main(int ArgumentCount, char **Arguments) {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--generic-possession") {
+			TestGenericPossessionRuntime();
+			return Failures == 0 ? 0 : 1;
+		}
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--generic-possession-workload") {
+			TestGenericPossessionRuntime(false, 2, true);
+			TestGenericPossessionRuntime(false, 8, true);
+			return Failures == 0 ? 0 : 1;
+		}
+		if (ArgumentCount >= 2 && std::string_view(Arguments[1]) == "--generic-possession-scale") {
+			if (ArgumentCount != 6 && ArgumentCount != 7)
+				throw std::invalid_argument("expected --generic-possession-scale <sim|gns> <2|8|16|24|32|40> <1..6000> <off|on> [relative|deadline]");
+			const auto Parse = [](std::string_view Text) {
+				std::size_t Value = 0;
+				const auto [End, Error] = std::from_chars(Text.data(), Text.data() + Text.size(), Value);
+				if (Error != std::errc{} || End != Text.data() + Text.size())
+					throw std::invalid_argument("invalid workload integer");
+				return Value;
+			};
+			const std::string_view Transport = Arguments[2];
+			const auto Peers = Parse(Arguments[3]);
+			const auto Ticks = Parse(Arguments[4]);
+			const std::string_view Profile = Arguments[5];
+			const std::string_view Pacing = ArgumentCount == 7 ? Arguments[6] : "relative";
+			constexpr std::array Cohorts{2u, 8u, 16u, 24u, 32u, 40u};
+			if ((Transport != "sim" && Transport != "gns") || std::ranges::find(Cohorts, Peers) == Cohorts.end() ||
+				Ticks == 0 || Ticks > 6000 || (Profile != "off" && Profile != "on") ||
+				(Pacing != "relative" && (Pacing != "deadline" || Transport != "gns")))
+				throw std::invalid_argument("unsupported workload configuration");
+			const gargantuan::test_detail::GameplayScalingOptions Options{Ticks, Profile == "on", Pacing == "deadline"};
+			TestGenericPossessionRuntime(Transport == "gns", Peers, true, &Options);
+			return Failures == 0 ? 0 : 1;
+		}
+#if defined(GARGANTUAN_WITH_GNS)
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--generic-possession-gns") {
+			TestGenericPossessionRuntime(true);
+			return Failures == 0 ? 0 : 1;
+		}
+#endif
 		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--relevance-materialization") {
 			TestSpeculativeRelevanceMaterialization();
 			return Failures == 0 ? 0 : 1;
@@ -2595,6 +3145,7 @@ int main(int ArgumentCount, char **Arguments) {
 		TestProductionLifecycleComposition(false, false, true);
 		TestCharacterRetirementAcrossStructuralFrames();
 		TestServerCharacterAutoLoadsPolicy();
+		TestGenericPossessionRuntime();
 		TestSpeculativeRelevanceMaterialization();
 	} catch (const std::exception &Error) {
 		std::cerr << "Unexpected game-session test exception: " << Error.what() << '\n';

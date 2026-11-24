@@ -56,7 +56,9 @@ These `WorldRoot` methods are available on `Workspace` and require `ReadDataMode
 
 A hit contains `Instance: BasePart`, `Position: Vector3`, `Normal: Vector3`, and `Distance: number`. `MaxResults` for overlaps is 1–256; test `Truncated` before treating the returned set as complete. Parts are returned in stable identity order. `MoveKinematicCapsule(Position, Radius, Height, Translation, Velocity)` returns a bounded collision-resolution table with `Position`, `AppliedTranslation`, `Velocity`, `ContactNormal`, `FloorNormal`, `Collided`, `HasFloor`, and `PlanesTruncated`. It is the primitive used by replaceable character movement policy, not a full character controller. See [the query example](https://github.com/gmoddev/Gargantuan/blob/main/docs/examples/world-query.luau).
 
-`WorldRoot:StepPhysics(DeltaTime: number, Instances: {Instance}?) -> ()` is a generated Luau binding for advancing physics. It requires `MutateDataModel` and Main-domain mutation authority; a read-only script call raises an error. The current implementation ignores `Instances` and steps the world. Normal engine frames already step world physics, so gameplay code should avoid adding an unintended extra step. Deformable inspection methods `GetDeformableInfo(Body)`, `GetDeformableVertex(Body, VertexIndex)`, and `GetSoftBodyStepInfo()` return bounded read-only snapshots or nil. `VertexIndex` is zero based; inspection does not mutate a cloth or rubber body.
+The Engine advances world physics during its simulation phase. Luau controllers can queue body controls in `RunService.PreSimulation` and inspect completed simulation in `RunService.PostSimulation`.
+
+Deformable inspection methods `GetDeformableInfo(Body)`, `GetDeformableVertex(Body, VertexIndex)`, and `GetSoftBodyStepInfo()` return bounded read-only snapshots or nil. `VertexIndex` is zero based.
 
 ## Frame timing and visible state
 

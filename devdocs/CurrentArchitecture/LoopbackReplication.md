@@ -84,6 +84,10 @@ live setters still apply the authoritative values (local prediction may differ).
 Any changed value, absent property, custom property or non-property operation
 requires complete candidate preflight. Reset invalidates the semantic snapshot;
 there is no cross-generation validation cache or additional retained world.
+The live publication pass indexes existing replica addresses when it encounters
+its first publish. This preserves the native alias check and avoids a full
+receiver-map visit for frames without publication. Lifecycle operations still
+retire destroyed mappings and defer observer delivery until commit.
 
 Scope matching and sequences are strict. A record for another scope is rejected.
 A record below the expected cursor is rejected as a

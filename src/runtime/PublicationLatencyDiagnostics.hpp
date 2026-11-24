@@ -36,6 +36,7 @@ struct PublicationLatencySink {
 	// complete ordered message, not at UDP arrival or sender native execution.
 	void (*NativeReceive)(void *, network::ConnectionId, std::span<const std::byte>,
 		std::uint64_t, std::uint64_t, std::int64_t, std::size_t, std::int64_t) noexcept = nullptr;
+	bool CapturePossession = false;
 };
 inline thread_local PublicationLatencySink *ActivePublicationLatency = nullptr;
 inline thread_local OrdinaryDemandTag ActiveOrdinaryDemand;

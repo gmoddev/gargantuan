@@ -41,10 +41,14 @@ function Template.Clone(Self)
 	return NewCharacter("Playable" .. tostring(Self.Clones))
 end
 
-local function NewPlayer(Initial)
+local function NewPlayer(PlayerId, Initial)
 	local Current = Initial
-	local Player = {CharacterAdded = NewSignal(), CharacterRemoving = NewSignal()}
-	return setmetatable(Player, {
+	local CharacterAdded = NewSignal()
+	local CharacterRemoving = NewSignal()
+	local Metatable = {
+		__eq = function(Left, Right)
+			return Left.PlayerId == Right.PlayerId
+		end,
 		__index = function(_, Key)
 			if Key == "Character" then return Current end
 			return nil
@@ -60,11 +64,19 @@ local function NewPlayer(Initial)
 			Current = Value
 			if Current then Self.CharacterAdded:Fire(Current) end
 		end,
-	})
+	}
+	local function WrapPlayer()
+		return setmetatable({
+			PlayerId = PlayerId,
+			CharacterAdded = CharacterAdded,
+			CharacterRemoving = CharacterRemoving,
+		}, Metatable)
+	end
+	return WrapPlayer(), WrapPlayer()
 end
 
 local FirstDefault = NewCharacter("DefaultPartActor")
-local FirstPlayer = NewPlayer(FirstDefault)
+local FirstPlayer, FirstWrapper = NewPlayer(1, FirstDefault)
 local Players = {PlayerAdded = NewSignal(), PlayerRemoving = NewSignal(), Values = {FirstPlayer}}
 function Players.GetPlayers(Self) return Self.Values end
 local Workspace = {}
@@ -76,6 +88,11 @@ assert(FirstDefault.Destroyed and FirstPlayable ~= FirstDefault and FirstPlayabl
 FirstPlayer.CharacterAdded:Fire(FirstPlayable)
 assert(FirstPlayer.Character == FirstPlayable and Template.Clones == 1,
 	"The policy does not recurse when its own replacement is published")
+assert(FirstWrapper == FirstPlayer and not rawequal(FirstWrapper, FirstPlayer),
+	"The fixture models distinct equal Player wrappers")
+Players.PlayerAdded:Fire(FirstWrapper)
+assert(FirstPlayer.Character == FirstPlayable and Template.Clones == 1,
+	"A second wrapper for the same Player retains the existing controller")
 
 local SecondDefault = NewCharacter("RespawnedPartActor")
 FirstPlayer.Character = SecondDefault
@@ -85,15 +102,15 @@ assert(SecondDefault.Destroyed and FirstPlayable.Destroyed and SecondPlayable ~=
 	"A respawn receives a fresh playable clone and the previous Character is retired")
 
 local LateDefault = NewCharacter("LatePartActor")
-local LatePlayer = NewPlayer(LateDefault)
+local LatePlayer, LateWrapper = NewPlayer(2, LateDefault)
 Players.PlayerAdded:Fire(LatePlayer)
 assert(LateDefault.Destroyed and LatePlayer.Character.Parent == Workspace and Template.Clones == 3,
 	"New players receive the same template policy")
-Players.PlayerRemoving:Fire(LatePlayer)
+Players.PlayerRemoving:Fire(LateWrapper)
 local AfterRemoval = NewCharacter("AfterRemoval")
 LatePlayer.Character = AfterRemoval
 assert(LatePlayer.Character == AfterRemoval and not AfterRemoval.Destroyed and Template.Clones == 3,
-	"Player removal disconnects its replacement listener")
+	"Player removal through another wrapper disconnects its replacement listener")
 Controller:Close()
 Controller:Close()
 local AfterClose = NewCharacter("AfterClose")
@@ -104,7 +121,7 @@ assert(FirstPlayer.Character == AfterClose and not AfterClose.Destroyed and Temp
 local BrokenTemplate = NewCharacter("BrokenTemplate")
 function BrokenTemplate.Clone() error("clone unavailable") end
 local Fallback = NewCharacter("FallbackPartActor")
-local FallbackPlayer = NewPlayer(Fallback)
+local FallbackPlayer = NewPlayer(3, Fallback)
 local FallbackPlayers = {PlayerAdded = NewSignal(), PlayerRemoving = NewSignal()}
 function FallbackPlayers.GetPlayers() return {FallbackPlayer} end
 local FailedPolicy = Assignment.New(FallbackPlayers, Workspace, BrokenTemplate)
@@ -119,7 +136,7 @@ function BadRemapTemplate.Clone(Self)
 	return BadClone
 end
 local Unchanged = NewCharacter("UnchangedPartActor")
-local UnchangedPlayer = NewPlayer(Unchanged)
+local UnchangedPlayer = NewPlayer(4, Unchanged)
 local UnchangedPlayers = {PlayerAdded = NewSignal(), PlayerRemoving = NewSignal()}
 function UnchangedPlayers.GetPlayers() return {UnchangedPlayer} end
 local BadRemapPolicy = Assignment.New(UnchangedPlayers, Workspace, BadRemapTemplate)

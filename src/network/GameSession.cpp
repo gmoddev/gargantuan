@@ -22,6 +22,7 @@
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/network/CharacterNetwork.hpp"
 #include "gargantuan/network/GameSessionProtocol.hpp"
+#include "gargantuan/network/GameplayPose.hpp"
 #include "gargantuan/network/RemoteManager.hpp"
 #include "gargantuan/network/ReplicaApplier.hpp"
 #include "gargantuan/network/ReplicationCoordinator.hpp"
@@ -48,6 +49,8 @@ namespace gargantuan::network {
 		constexpr std::uint32_t CharacterMagic = 0x52484347;
 		constexpr std::uint32_t RemoteMagic = 0x544d5247;
 		constexpr std::size_t MaximumGameSessionPollEventsPerCall = 128;
+		constexpr std::size_t MaximumPossessionPosesPerPeer = 16;
+		constexpr std::uint64_t PossessionPoseIntervalTicks = 3;
 
 		enum class PeerPhase : std::uint8_t { TransportConnected, BootstrapPending, Accepted, Ready };
 
@@ -68,6 +71,28 @@ namespace gargantuan::network {
 
 		StateChannelId CharacterStateChannel(ObjectId Object) {
 			return StateChannelId((static_cast<std::uint64_t>(Object.Generation) << 32) | Object.Slot);
+		}
+
+		std::shared_ptr<Instance> GenericPossession(const Player &PlayerValue) {
+			auto Entity = PlayerValue.GetPossessedEntity().value_or(nullptr);
+			return Entity && Entity != PlayerValue.GetCharacter().value_or(nullptr) ? Entity : nullptr;
+		}
+
+		std::shared_ptr<KinematicCharacter> LegacyCharacter(const std::shared_ptr<Player> &PlayerValue) {
+			if (!PlayerValue || GenericPossession(*PlayerValue)) return nullptr;
+			return std::dynamic_pointer_cast<KinematicCharacter>(PlayerValue->GetCharacter().value_or(nullptr));
+		}
+
+		bool IsIndependentPosePart(const std::shared_ptr<BasePart> &Part) {
+			return Part && !Part->GetDestroyed() && !Part->IsDestroying() && Part->GetAnchored() &&
+				!Part->FindFirstAncestorWhichIsA("Character");
+		}
+
+		ObjectId OwnerSpatialRoot(const std::shared_ptr<Player> &PlayerValue, const ReplicationRelevance &Relevance) {
+			if (!PlayerValue) return {};
+			if (auto Entity = GenericPossession(*PlayerValue)) return Relevance.GetSpatialRoot(Entity->GetObjectId());
+			if (auto CharacterValue = LegacyCharacter(PlayerValue)) return CharacterValue->GetObjectId();
+			return {};
 		}
 
 		ObjectId ReplicationObject(const ReplicationIntent &Intent) {
@@ -122,6 +147,11 @@ namespace gargantuan::network {
 		};
 
 		struct Peer {
+			struct PoseBinding {
+				std::uint64_t Epoch = 0;
+				std::uint64_t LastSentTick = 0;
+				std::uint64_t FirstDueTick = 0;
+			};
 			PeerPhase Phase = PeerPhase::TransportConnected;
 			std::uint64_t ConnectedTick = 0;
 			std::uint64_t Nonce = 0;
@@ -132,6 +162,10 @@ namespace gargantuan::network {
 			std::uint32_t PlayerId = 0;
 			std::shared_ptr<Player> PlayerValue;
 			ObjectId ControlledCharacter;
+			ObjectId ControlledPossession;
+			std::uint64_t ControlledPossessionRevision = 0;
+			std::uint64_t AcceptedStructuralSequence = 0;
+			std::map<ObjectId, PoseBinding> PossessionPoses;
 			std::set<ObjectId> MaterializedCharacters;
 			std::set<ObjectId> MaterializedRemotes;
 			std::set<ObjectId> RemoteMaterializedObjects;
@@ -155,6 +189,24 @@ namespace gargantuan::network {
 		std::shared_ptr<IGameTransport> Transport;
 		GameSessionConfiguration Configuration;
 		NetworkScheduler Scheduler;
+		GameplayInputServer ServerPossessionInput{Scheduler};
+		GameplayInputClient ClientPossessionInput{Scheduler};
+		GameplayPosePresentation ClientPosePresentation;
+		struct ActivePose {
+			ObjectId Player;
+			std::uint64_t Revision;
+			std::uint64_t MovementTick;
+		};
+		struct ClientPoseBinding {
+			std::uint64_t RequiredStructuralSequence;
+			std::weak_ptr<BasePart> ReplicaPart;
+			std::uint64_t AppliedTick = 0;
+			std::uint64_t ResolvedAtSequence = 0;
+			ReplicationEpoch ResolvedAtEpoch;
+		};
+		std::map<ObjectId, ActivePose> ActivePossessionPoses;
+		std::map<ObjectId, ClientPoseBinding> ClientPossessionPoses;
+		std::uint64_t NextGameplayPoseEpoch = 1;
 		std::optional<detail::ReliableByteAdmission> ByteAdmission;
 		Engine *Runtime = nullptr;
 		GameSessionStatus Status = GameSessionStatus::Created;
@@ -164,6 +216,7 @@ namespace gargantuan::network {
 		std::uint64_t NextSessionEpoch = 1;
 		std::uint64_t NextReplicationEpoch = 1;
 		std::map<ConnectionId, Peer> Peers;
+		std::map<ObjectId, ConnectionId> ConnectionsByPlayer;
 		std::optional<ConnectionId> PrimaryConnection;
 		std::optional<ConnectionId> StructuralFairnessCursor;
 		std::optional<ConnectionId> StructuralJournalFairnessCursor;
@@ -369,7 +422,14 @@ namespace gargantuan::network {
 				[this](const CharacterActionDefinition &Definition, bool) {
 					return Authority->RegisterAction(Definition);
 				},
-				{}
+				{},
+				{},
+				[this](const Player &PlayerValue, std::uint64_t Tick) {
+					return ReadPossessionInput(PlayerValue, Tick);
+				},
+				[this](const Player &PlayerValue, std::uint64_t Tick, const CFrame &Transform) {
+					return MovePossessedPart(PlayerValue, Tick, Transform);
+				}
 			);
 			if (!ControlAttachment)
 				throw std::runtime_error("[Network:Session] Server Character-control attachment failed");
@@ -421,17 +481,31 @@ namespace gargantuan::network {
 					throw std::runtime_error("[Network:Session] Client Remote materialization failed");
 			ControlAttachment = Runtime->CharacterControl->AttachRuntime(
 				[this, Connection](std::uint64_t Tick, float DeltaSeconds, glm::vec2 Move, float Facing, bool Jump) {
+					const auto PlayerValue = Runtime->Players->GetLocalPlayer().value_or(nullptr);
+					if (PlayerValue && GenericPossession(*PlayerValue)) return false;
 					return Prediction->SubmitInput(
 						Connection, *Runtime->WorldRoot, Tick, DeltaSeconds, Move, Facing, Jump
 					);
 				},
 				[this, Connection](std::uint32_t Action, std::uint64_t Tick) {
+					const auto PlayerValue = Runtime->Players->GetLocalPlayer().value_or(nullptr);
+					if (PlayerValue && GenericPossession(*PlayerValue)) return false;
 					return Prediction->RequestAction(Connection, Action, Tick);
 				},
 				[this](const CharacterActionDefinition &Definition, bool Predictable) {
 					return Prediction->RegisterAction(Definition, Predictable);
 				},
-				[this](bool Enabled) { Prediction->SetPredictionEnabled(Enabled); }
+				[this](bool Enabled) { Prediction->SetPredictionEnabled(Enabled); },
+				[this, Connection](std::uint64_t Tick, glm::vec2 Move, float Facing, bool Jump) {
+					const auto PeerIterator = Peers.find(Connection);
+					const auto PlayerValue = Runtime->Players->GetLocalPlayer().value_or(nullptr);
+					const auto Entity = PlayerValue ? GenericPossession(*PlayerValue) : nullptr;
+					const auto Source = ClientPossessionInput.GetPossessedEntity();
+					return PeerIterator != Peers.end() && PeerIterator->second.Phase == PeerPhase::Ready &&
+						Entity && Source.IsValid() && Replica.Resolve(Source) == Entity &&
+						ClientPossessionInput.Submit(Connection, Source, Tick, Move, Facing, Jump,
+							PeerIterator->second.Limits);
+				}
 			);
 			if (!ControlAttachment)
 				throw std::runtime_error("[Network:Session] Client Character-control attachment failed");
@@ -547,6 +621,11 @@ namespace gargantuan::network {
 			ClientMaterializedCharacters.clear();
 			ClientKnownObjects.clear();
 			PrimaryConnection.reset();
+			ConnectionsByPlayer.clear();
+			ClientPossessionInput.Reset();
+			ClientPosePresentation.Clear();
+			ActivePossessionPoses.clear();
+			ClientPossessionPoses.clear();
 			PendingPeerFailures.clear();
 			PendingSessionFailure.reset();
 			BaselineApplied = false;
@@ -721,6 +800,8 @@ namespace gargantuan::network {
 					"session-development",
 					"peer-" + std::to_string(PeerValue.SessionEpoch),
 				});
+				PeerValue.PlayerObject = PeerValue.PlayerValue->GetObjectId();
+				ConnectionsByPlayer.emplace(PeerValue.PlayerObject, Connection);
 			} catch (const std::exception &) {
 				++Metrics.RejectedHandshakes;
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Server Player creation failed");
@@ -732,16 +813,10 @@ namespace gargantuan::network {
 				)
 					.count()
 			);
-			PeerValue.PlayerObject = PeerValue.PlayerValue->GetObjectId();
 			PeerValue.PlayerId = static_cast<std::uint32_t>(PeerValue.PlayerValue->GetPlayerId());
 			++Metrics.PlayersCreated;
-			auto CharacterValue = PeerValue.PlayerValue->GetCharacter() ? std::dynamic_pointer_cast<KinematicCharacter>(
-																			  *PeerValue.PlayerValue->GetCharacter()
-																		  )
-																		: nullptr;
-			const auto OwnerCharacter = CharacterValue ? CharacterValue->GetObjectId() : ObjectId{};
 			const auto RelevanceStarted = std::chrono::steady_clock::now();
-			if (!Relevance->AddPeer(Connection, PeerValue.PlayerObject, OwnerCharacter)) {
+			if (!Relevance->AddPeer(Connection, PeerValue.PlayerObject, OwnerSpatialRoot(PeerValue.PlayerValue, *Relevance))) {
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Server relevance registration failed");
 				return;
 			}
@@ -850,6 +925,11 @@ namespace gargantuan::network {
 					if (std::dynamic_pointer_cast<RemoteBase>(ReplicaObject)) ClientRemoteObjects.insert(Object);
 				} else if (std::holds_alternative<UnpublishReplication>(Operation.Intent) ||
 						   std::holds_alternative<DestroyReplication>(Operation.Intent)) {
+					if (auto Found = ClientPossessionPoses.find(Object); Found != ClientPossessionPoses.end() &&
+						Found->second.RequiredStructuralSequence <= Frame->Sequence.Value()) {
+						ClientPosePresentation.Forget(Object);
+						ClientPossessionPoses.erase(Found);
+					}
 					// A validated property write (for example Player.Character = nil)
 					// can destroy a subtree before its later bounded Leave frames arrive.
 					// The post-apply sweep already retires those local registrations.
@@ -1060,6 +1140,17 @@ namespace gargantuan::network {
 				);
 				return;
 			}
+			if (IsGameplayInputFrame(Received.Payload)) {
+				if (Configuration.Role == GameSessionRole::Server)
+					(void)ServerPossessionInput.HandleReceived(Received, std::max(CurrentTick, std::uint64_t{1}));
+				else if (!ClientPossessionInput.HandleReceived(Received))
+					Reject(Received.Connection, DisconnectReason::ProtocolViolation, "Invalid possession control frame");
+				return;
+			}
+			if (Configuration.Role == GameSessionRole::Client && IsGameplayPoseFrame(Received.Payload)) {
+				HandlePossessionPose(Received);
+				return;
+			}
 			TransportEvent Event = Received;
 			if (Magic == CharacterMagic) {
 				if (Configuration.Role == GameSessionRole::Server)
@@ -1079,7 +1170,9 @@ namespace gargantuan::network {
 		std::size_t Poll() {
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::SessionPoll);
 			std::array<TransportEvent, MaximumGameSessionPollEventsPerCall> Buffer;
-			const auto Count = Transport->PollEvents(Buffer);
+			const auto Count = runtime_detail::MeasureWork(runtime_detail::WorkPhase::TransportPoll,
+				[&] { return Transport->PollEvents(Buffer); });
+			runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::TransportPoll, Count);
 			for (std::size_t Index = 0; Index < Count; ++Index) {
 				auto Event = std::move(Buffer[Index]);
 				if (const auto *Changed = std::get_if<ConnectionStateEvent>(&Event)) {
@@ -1198,11 +1291,7 @@ namespace gargantuan::network {
 				}
 				PeerValue.MaterializedCharacters = std::move(DesiredCharacters);
 
-				auto CharacterValue = PeerValue.PlayerValue && PeerValue.PlayerValue->GetCharacter()
-										  ? std::dynamic_pointer_cast<KinematicCharacter>(
-												*PeerValue.PlayerValue->GetCharacter()
-											)
-										  : nullptr;
+				auto CharacterValue = LegacyCharacter(PeerValue.PlayerValue);
 				const auto Desired = CharacterValue ? CharacterValue->GetObjectId() : ObjectId{};
 				if (Desired == PeerValue.ControlledCharacter) continue;
 				if (PeerValue.ControlledCharacter.IsValid()) {
@@ -1236,9 +1325,264 @@ namespace gargantuan::network {
 					}
 				}
 			}
+			SynchronizePossessionInput();
 			Metrics.ServerGraphSynchronizationCpuNanoseconds += static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - Started).count()
 			);
+		}
+
+		std::optional<GameplayInputSample> ReadPossessionInput(const Player &PlayerValue, std::uint64_t Tick) {
+			if (PlayerValue.GetDestroyed() || PlayerValue.IsDestroying()) return std::nullopt;
+			const auto Connection = ConnectionsByPlayer.find(PlayerValue.GetObjectId());
+			if (Connection == ConnectionsByPlayer.end() || PendingPeerFailures.contains(Connection->second))
+				return std::nullopt;
+			const auto PeerIterator = Peers.find(Connection->second);
+			const auto Entity = GenericPossession(PlayerValue);
+			if (PeerIterator == Peers.end() || PeerIterator->second.Phase != PeerPhase::Ready ||
+				PeerIterator->second.PlayerValue.get() != &PlayerValue || !Entity)
+				return std::nullopt;
+			const auto Sample = ServerPossessionInput.Consume(Connection->second, Entity->GetObjectId(),
+				Tick, PlayerValue.GetPossessionRevision());
+			if (Sample && Sample->Fresh && runtime_detail::ActivePublicationLatency &&
+				runtime_detail::ActivePublicationLatency->CapturePossession)
+				runtime_detail::RecordPublicationLatency({.Stage = "PossessionConsumed", .Connection = Connection->second,
+					.Object = Entity->GetObjectId(), .Tick = Tick, .Sequence = Sample->AcknowledgedInput.Value()});
+			return Sample;
+		}
+
+		void SynchronizePossessionInput() {
+			const auto Tick = std::max(CurrentTick, std::uint64_t{1});
+			const auto Fail = [this](ConnectionId Connection) {
+				PendingPeerFailures.try_emplace(Connection, DisconnectInfo{
+					DisconnectReason::ResourceExhaustion, "[Gameplay:Possession] Control lease admission failed"});
+			};
+			const auto Target = [this](ConnectionId Connection, const Peer &PeerValue) -> ObjectId {
+				if (PeerValue.Phase != PeerPhase::Ready || !PeerValue.PlayerValue ||
+					PendingPeerFailures.contains(Connection)) return {};
+				const auto Entity = GenericPossession(*PeerValue.PlayerValue);
+				const auto *View = Replication->GetView(Connection);
+				const auto Object = Entity ? Entity->GetObjectId() : ObjectId{};
+				return Object.IsValid() && View && View->Knows(Object) ? Object : ObjectId{};
+			};
+			// Retire old leases first so a transfer is independent of connection order.
+			for (auto &[Connection, PeerValue] : Peers) {
+				if (!PeerValue.ControlledPossession.IsValid()) continue;
+				if (PeerValue.ControlledPossession == Target(Connection, PeerValue) &&
+					PeerValue.ControlledPossessionRevision == PeerValue.PlayerValue->GetPossessionRevision())
+					continue;
+				if (!ServerPossessionInput.SetPossession(Connection, {}, Tick, PeerValue.Limits))
+					Fail(Connection);
+				PeerValue.ControlledPossession = {};
+				PeerValue.ControlledPossessionRevision = 0;
+			}
+			for (auto &[Connection, PeerValue] : Peers) {
+				if (PeerValue.ControlledPossession.IsValid()) continue;
+				const auto Object = Target(Connection, PeerValue);
+				if (!Object.IsValid()) continue;
+				const auto Revision = PeerValue.PlayerValue->GetPossessionRevision();
+				if (!ServerPossessionInput.SetPossession(Connection, Object, Tick, PeerValue.Limits, Revision)) {
+					Fail(Connection);
+					continue;
+				}
+				PeerValue.ControlledPossession = Object;
+				PeerValue.ControlledPossessionRevision = Revision;
+			}
+		}
+
+		bool MovePossessedPart(const Player &PlayerValue, std::uint64_t Tick, const CFrame &Transform) {
+			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::GameplayMotion);
+			const auto Started = std::chrono::steady_clock::now();
+			if (PlayerValue.GetDestroyed() || PlayerValue.IsDestroying() || !IsValidGameplayPoseTransform(Transform))
+				return false;
+			const auto Owner = PlayerValue.GetObjectId();
+			const auto Connection = ConnectionsByPlayer.find(Owner);
+			if (Connection == ConnectionsByPlayer.end() || PendingPeerFailures.contains(Connection->second))
+				return false;
+			const auto PeerIterator = Peers.find(Connection->second);
+			if (PeerIterator == Peers.end() || PeerIterator->second.Phase != PeerPhase::Ready ||
+				PeerIterator->second.PlayerValue.get() != &PlayerValue)
+				return false;
+			const auto Part = std::dynamic_pointer_cast<BasePart>(GenericPossession(PlayerValue));
+			if (!IsIndependentPosePart(Part)) return false;
+			const auto Object = Part->GetObjectId();
+			const auto Revision = PlayerValue.GetPossessionRevision();
+			const auto &PeerValue = PeerIterator->second;
+			if (PeerValue.ControlledPossession != Object || PeerValue.ControlledPossessionRevision != Revision ||
+				glm::distance(Part->GetCFrame().Position, Transform.Position) > Character::MaximumMotionTranslation)
+				return false;
+			const auto Existing = ActivePossessionPoses.find(Object);
+			if (Existing != ActivePossessionPoses.end() && Existing->second.MovementTick >= Tick) return false;
+			if (Existing == ActivePossessionPoses.end() && ActivePossessionPoses.size() >= MaximumGameSessionPeers)
+				return false;
+			ActivePossessionPoses.insert_or_assign(Object, ActivePose{Owner, Revision, Tick});
+			runtime_detail::MeasureWork(runtime_detail::WorkPhase::GameplayPoseCommit,
+				[&] { Part->SetSimulationCFrame(Transform); });
+			SaturatingAdd(Metrics.PossessionMotionAccepted, 1);
+			SaturatingAdd(Metrics.PossessionMotionNanoseconds, static_cast<std::uint64_t>(
+				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - Started).count()));
+			return true;
+		}
+
+		bool QueuePossessionPose(ConnectionId Connection, const Peer &PeerValue, const GameplayPoseMessage &Message) {
+			auto Intent = runtime_detail::MeasureWork(runtime_detail::WorkPhase::GameplayPoseEncode,
+				[&] { return MakeGameplayPoseIntent(Connection, Message, PeerValue.Limits); });
+			if (!Intent) return false;
+			const auto Bytes = Intent->Payload().size();
+			const auto Accepted = runtime_detail::MeasureWork(runtime_detail::WorkPhase::GameplayPoseEnqueue,
+				[&] { return Scheduler.Submit(std::move(*Intent)).Accepted(); });
+			runtime_detail::RecordWorkDisposition(runtime_detail::WorkPhase::GameplayPoseEnqueue, Accepted);
+			if (!Accepted) return false;
+			SaturatingAdd(Metrics.PossessionPoseBytesAccepted, Bytes);
+			if (std::holds_alternative<GameplayPoseSnapshot>(Message))
+				SaturatingAdd(Metrics.PossessionPoseSnapshotsAccepted, 1);
+			return true;
+		}
+
+		void RetirePossessionPoseBinding(ConnectionId Connection, Peer &PeerValue, ObjectId Object) {
+			auto Found = PeerValue.PossessionPoses.find(Object);
+			if (Found == PeerValue.PossessionPoses.end()) return;
+			if (!QueuePossessionPose(Connection, PeerValue, GameplayPoseControl{
+				.Part = Object, .MaterializationEpoch = Found->second.Epoch, .Published = false})) {
+				PendingPeerFailures.try_emplace(Connection, DisconnectInfo{
+					DisconnectReason::ResourceExhaustion, "[Gameplay:Pose] Control retirement failed"});
+			}
+			PeerValue.PossessionPoses.erase(Found);
+		}
+
+		void PublishPossessionPoses(std::uint64_t Tick) {
+			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::GameplayPosePublish);
+			if (ActivePossessionPoses.empty()) {
+				const auto HasBindings = std::ranges::any_of(Peers, [](const auto &Entry) {
+					return !Entry.second.PossessionPoses.empty();
+				});
+				if (!HasBindings) return;
+			}
+			for (auto Iterator = ActivePossessionPoses.begin(); Iterator != ActivePossessionPoses.end();) {
+				const auto Part = std::dynamic_pointer_cast<BasePart>(ObjectRegistry::Get().Lookup(Iterator->first));
+				const auto Owner = std::dynamic_pointer_cast<Player>(ObjectRegistry::Get().Lookup(Iterator->second.Player));
+				if (IsIndependentPosePart(Part) && Owner && Owner->GetPossessionRevision() == Iterator->second.Revision &&
+					GenericPossession(*Owner) == Part) {
+					++Iterator;
+					continue;
+				}
+				Iterator = ActivePossessionPoses.erase(Iterator);
+				if (Part && !Part->GetDestroyed() && Part->GetDataModel() == Runtime->DataModel)
+					Part->NotifyPropertyCommitted("CFrame");
+			}
+			for (auto &[Connection, PeerValue] : Peers) {
+				if (PeerValue.Phase != PeerPhase::Ready || PendingPeerFailures.contains(Connection)) continue;
+				const auto *View = Replication->GetView(Connection);
+				if (!View) continue;
+				const auto Owned = PeerValue.ControlledPossession;
+				std::array<ObjectId, MaximumPossessionPosesPerPeer> Desired{};
+				std::size_t Count = 0;
+				{
+					runtime_detail::WorkScope Selection(runtime_detail::WorkPhase::GameplayPoseRelevance);
+					std::size_t Visited = 0;
+					if (Owned.IsValid() && ActivePossessionPoses.contains(Owned) && View->Knows(Owned))
+						Desired[Count++] = Owned;
+					for (const auto &[Object, Pose] : ActivePossessionPoses) {
+						(void)Pose;
+						if (Count == Desired.size()) break;
+						++Visited;
+						if (Object != Owned && View->Knows(Object)) Desired[Count++] = Object;
+					}
+					runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::GameplayPoseRelevance, Visited);
+				}
+				const auto Selected = std::span(Desired).first(Count);
+				for (auto Iterator = PeerValue.PossessionPoses.begin(); Iterator != PeerValue.PossessionPoses.end();) {
+					const auto Object = (Iterator++)->first;
+					if (std::ranges::find(Selected, Object) == Selected.end())
+						RetirePossessionPoseBinding(Connection, PeerValue, Object);
+				}
+				if (PendingPeerFailures.contains(Connection)) continue;
+				for (const auto Object : Selected) {
+					auto Found = PeerValue.PossessionPoses.find(Object);
+					if (Found == PeerValue.PossessionPoses.end()) {
+						if (NextGameplayPoseEpoch == 0 || PeerValue.AcceptedStructuralSequence == 0 ||
+							!QueuePossessionPose(Connection, PeerValue, GameplayPoseControl{
+								.Part = Object, .MaterializationEpoch = NextGameplayPoseEpoch,
+								.Published = true, .RequiredStructuralSequence = PeerValue.AcceptedStructuralSequence})) {
+							PendingPeerFailures.try_emplace(Connection, DisconnectInfo{
+								DisconnectReason::ResourceExhaustion, "[Gameplay:Pose] Control publication failed"});
+							break;
+						}
+						// Publish control immediately. Align only the initial snapshot
+						// so a peer has a stable phase without extra snapshots.
+						const auto Phase = Connection.Slot % PossessionPoseIntervalTicks;
+						const auto Delay = (Phase + PossessionPoseIntervalTicks - Tick % PossessionPoseIntervalTicks) %
+							PossessionPoseIntervalTicks;
+						const auto FirstDueTick = Tick + std::min(Delay, std::numeric_limits<std::uint64_t>::max() - Tick);
+						Found = PeerValue.PossessionPoses.emplace(Object,
+							Peer::PoseBinding{.Epoch = NextGameplayPoseEpoch++, .FirstDueTick = FirstDueTick}).first;
+					}
+					auto &Binding = Found->second;
+					if (Binding.LastSentTick == 0) {
+						if (Tick < Binding.FirstDueTick) continue;
+					} else if (Tick <= Binding.LastSentTick || Tick - Binding.LastSentTick < PossessionPoseIntervalTicks)
+						continue;
+					const auto Part = std::dynamic_pointer_cast<BasePart>(ObjectRegistry::Get().Lookup(Object));
+					if (Part && QueuePossessionPose(Connection, PeerValue, GameplayPoseSnapshot{
+						.Part = Object, .MaterializationEpoch = Binding.Epoch, .ServerTick = Tick,
+						.Transform = Part->GetCFrame(), .Teleport = Binding.LastSentTick == 0}))
+						Binding.LastSentTick = Tick;
+				}
+			}
+		}
+
+		void HandlePossessionPose(const ReceivedMessageEvent &Received) {
+			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::GameplayPoseReceive);
+			auto Message = runtime_detail::MeasureWork(runtime_detail::WorkPhase::GameplayPoseDecode,
+				[&] { return DecodeGameplayPose(Received); });
+			if (!Message) return;
+			if (const auto *Control = std::get_if<GameplayPoseControl>(&*Message)) {
+				if (!ClientPosePresentation.ApplyControl(*Control)) return;
+				if (auto Found = ClientPossessionPoses.find(Control->Part); Found != ClientPossessionPoses.end()) {
+					if (const auto Part = Found->second.ReplicaPart.lock(); Part && !Part->GetDestroyed())
+						Part->SetCharacterPresentationOffset(std::nullopt);
+					ClientPossessionPoses.erase(Found);
+				}
+				if (Control->Published)
+					ClientPossessionPoses.emplace(Control->Part, ClientPoseBinding{Control->RequiredStructuralSequence});
+			} else {
+				const auto Accepted = ClientPosePresentation.Accept(std::get<GameplayPoseSnapshot>(*Message),
+					std::max(CurrentTick, std::uint64_t{1}));
+				runtime_detail::RecordWorkDisposition(runtime_detail::WorkPhase::GameplayPoseReceive, Accepted);
+			}
+		}
+
+		void UpdatePossessionPresentation(std::uint64_t Tick) {
+			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::GameplayPosePresentation);
+			runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::GameplayPosePresentation, ClientPossessionPoses.size());
+			for (auto &[Object, Binding] : ClientPossessionPoses) {
+				const auto StructuralSequence = Replica.GetNextSequence().Value();
+				if (StructuralSequence <= Binding.RequiredStructuralSequence) continue;
+				const auto StructuralEpoch = Replica.GetEpoch();
+				auto Part = Binding.ResolvedAtSequence == StructuralSequence && Binding.ResolvedAtEpoch == StructuralEpoch
+					? Binding.ReplicaPart.lock() : nullptr;
+				if (!Part) Part = std::dynamic_pointer_cast<BasePart>(Replica.Resolve(Object));
+				if (!IsIndependentPosePart(Part)) {
+					if (const auto Previous = Binding.ReplicaPart.lock(); Previous && !Previous->GetDestroyed())
+						Previous->SetCharacterPresentationOffset(std::nullopt);
+					Binding.ReplicaPart.reset();
+					continue;
+				}
+				Binding.ReplicaPart = Part;
+				Binding.ResolvedAtSequence = StructuralSequence;
+				Binding.ResolvedAtEpoch = StructuralEpoch;
+				if (const auto Latest = ClientPosePresentation.GetLatest(Object); Latest && Latest->ServerTick > Binding.AppliedTick) {
+					Part->SetSimulationCFrame(Latest->Transform);
+					Binding.AppliedTick = Latest->ServerTick;
+					SaturatingAdd(Metrics.ClientPossessionPoseSnapshotsApplied, 1);
+					if (PrimaryConnection && runtime_detail::ActivePublicationLatency &&
+						runtime_detail::ActivePublicationLatency->CapturePossession)
+						runtime_detail::RecordPublicationLatency({.Stage = "PoseApplied", .Connection = *PrimaryConnection,
+							.Object = Object, .Tick = Latest->ServerTick, .Sequence = Latest->ServerTick,
+							.Epoch = Latest->MaterializationEpoch});
+				}
+				if (const auto RenderPose = ClientPosePresentation.Sample(Object, Tick))
+					Part->SetCharacterPresentationOffset(Part->GetCFrame().ToObjectSpace(*RenderPose));
+			}
 		}
 
 		bool SynchronizeClientGraph() {
@@ -1465,6 +1809,8 @@ namespace gargantuan::network {
 			if (Iterator == Peers.end()) return;
 			auto PeerValue = std::move(Iterator->second);
 			Peers.erase(Iterator);
+			ConnectionsByPlayer.erase(PeerValue.PlayerObject);
+			ServerPossessionInput.RemovePeer(Connection);
 			if (ByteAdmission) ByteAdmission->Remove(Connection);
 			if (Peers.empty()) {
 				StructuralFairnessCursor.reset();
@@ -1484,6 +1830,14 @@ namespace gargantuan::network {
 				}
 				if (Runtime->Players->RemoveSessionPlayer(PeerValue.PlayerValue)) ++Metrics.PlayersRemoved;
 			} else if (Configuration.Role == GameSessionRole::Client) {
+				ClientPossessionInput.Reset();
+				ClientPosePresentation.Clear();
+				for (const auto &[Object, Binding] : ClientPossessionPoses) {
+					(void)Object;
+					if (const auto Part = Binding.ReplicaPart.lock(); Part && !Part->GetDestroyed())
+						Part->SetCharacterPresentationOffset(std::nullopt);
+				}
+				ClientPossessionPoses.clear();
 				if (Runtime) Runtime->Players->ClearTrustedLocalPlayer();
 				Replica.Reset();
 				BaselineApplied = false;
@@ -1598,14 +1952,7 @@ namespace gargantuan::network {
 			if (Configuration.Role == GameSessionRole::Server) {
 				for (auto &[Connection, PeerValue] : Peers) {
 					if (PeerValue.Phase == PeerPhase::TransportConnected) continue;
-					auto CharacterValue = PeerValue.PlayerValue && PeerValue.PlayerValue->GetCharacter()
-											  ? std::dynamic_pointer_cast<KinematicCharacter>(
-													*PeerValue.PlayerValue->GetCharacter()
-												)
-											  : nullptr;
-					if (!Relevance->SetOwnerCharacter(
-							Connection, CharacterValue ? CharacterValue->GetObjectId() : ObjectId{}
-						))
+					if (!Relevance->SetOwnerCharacter(Connection, OwnerSpatialRoot(PeerValue.PlayerValue, *Relevance)))
 						PendingPeerFailures.try_emplace(
 							Connection,
 							DisconnectInfo{
@@ -1906,6 +2253,12 @@ namespace gargantuan::network {
 							);
 							return false;
 						}
+						PeerValue.AcceptedStructuralSequence = Produced.Frame->Sequence.Value();
+						if (!PeerValue.PossessionPoses.empty())
+							for (const auto &Operation : Produced.Frame->Operations)
+								if (std::holds_alternative<UnpublishReplication>(Operation.Intent) ||
+									std::holds_alternative<DestroyReplication>(Operation.Intent))
+									RetirePossessionPoseBinding(Connection, PeerValue, ReplicationObject(Operation.Intent));
 						if (CaptureCausalIdentity) {
 							PeerValue.CausalGrantToken = Receipt ? Receipt->Token : 0;
 							PeerValue.CausalGrantSequence = Produced.Frame->Sequence.Value();
@@ -2290,8 +2643,10 @@ namespace gargantuan::network {
 				SynchronizeServerGraph();
 				if (!DrainFailures()) return;
 				Authority->Step(*Runtime->WorldRoot, std::max(SimulationTick, std::uint64_t{1}));
+				PublishPossessionPoses(std::max(SimulationTick, std::uint64_t{1}));
 				if (!DrainFailures()) return;
 			} else if (ClientRuntimeAttached && Prediction) {
+				UpdatePossessionPresentation(SimulationTick);
 				Prediction->Reconcile(*Runtime->WorldRoot);
 				Prediction->UpdatePresentation(SimulationTick);
 				SynchronizeActionPresentation();
@@ -2428,6 +2783,7 @@ namespace gargantuan::network {
 	GameSessionMetrics GameSession::GetMetrics() const {
 		// Bounded aggregates only; no peer labels or retained per-message history.
 		auto Result = State->Metrics;
+		Result.PossessionInput = State->ServerPossessionInput.GetMetrics();
 		if (State->ByteAdmission) {
 			Result.ReliableAdmission = State->ByteAdmission->GetMetrics();
 			Result.ReliableAdmissionPeerStates = State->ByteAdmission->PeerCount();
@@ -2777,6 +3133,16 @@ namespace gargantuan::network {
 	}
 	ReplicationMetrics detail::GameSessionTestAccess::GetReplicationMetrics(const GameSession &Session) {
 		return Session.State->Replication ? Session.State->Replication->GetMetrics() : ReplicationMetrics{};
+	}
+	std::optional<SchedulerStatistics> detail::GameSessionTestAccess::GetSchedulerStatistics(
+		const GameSession &Session, ConnectionId Connection) {
+		return Session.State->Scheduler.GetStatistics(Connection);
+	}
+	detail::GameSessionTestAccess::GameplayClientCounters detail::GameSessionTestAccess::GetGameplayClientCounters(
+		const GameSession &Session) {
+		const auto &State = *Session.State;
+		return {State.ClientPossessionInput.GetInputsProduced(), State.Metrics.ClientPossessionPoseSnapshotsApplied,
+			State.Metrics.ClientStructuralApplyNanoseconds};
 	}
 	std::optional<std::vector<detail::StructuralCausalSnapshot>>
 	detail::GameSessionTestAccess::CaptureStructuralCausalSnapshot(const GameSession &Session, std::string &Error,

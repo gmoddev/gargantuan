@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gargantuan/network/Limits.hpp"
+#include "gargantuan/network/GameplayInput.hpp"
 #include "gargantuan/network/Outcome.hpp"
 #include "gargantuan/network/ReplicaApplier.hpp"
 #include "gargantuan/network/ReplicationCoordinator.hpp"
@@ -74,6 +75,12 @@ namespace gargantuan::network {
 	};
 
 	struct GameSessionMetrics {
+		GameplayInputMetrics PossessionInput;
+		std::uint64_t PossessionMotionAccepted = 0;
+		std::uint64_t PossessionMotionNanoseconds = 0;
+		std::uint64_t PossessionPoseSnapshotsAccepted = 0;
+		std::uint64_t PossessionPoseBytesAccepted = 0;
+		std::uint64_t ClientPossessionPoseSnapshotsApplied = 0;
 		ReliableByteAdmissionMetrics ReliableAdmission;
 		std::uint64_t ReliableAdmissionPeerStates = 0;
 		std::uint64_t ReliableAdmissionLogicalBytes = 0;

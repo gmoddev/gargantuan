@@ -126,6 +126,9 @@ acknowledgement, state batch, prediction-history index, authoritative velocity,
 transform, or root displacement. Server and prediction policy install the same
 bounded command-to-motion callback with `SetMovementPolicy`; server game policy
 may install action admission with `SetActionPolicy`.
+The movement callback returns a translation vector, velocity vector, and yaw.
+Missing, incorrectly typed, or non-finite results fail motion evaluation and
+leave the Luau stack available for subsequent commands.
 
 The default path is:
 

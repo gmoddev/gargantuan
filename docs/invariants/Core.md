@@ -141,7 +141,7 @@ Tests should enforce them where practical.
 
 ## Character and gameplay actors
 
-1. `Character` is Gargantuan's permanent canonical gameplay-actor type.
+1. `Character` is Gargantuan's canonical type for its Character runtime.
    `KinematicCharacter : Character` is the current native movement
    specialization, `Player.Character` is an optional `Character` reference,
    and an NPC never requires a fake `Player`.
@@ -164,6 +164,12 @@ Tests should enforce them where practical.
    They never alter semantic Character/RootPart transforms, physics, collision,
    gameplay queries, Attachment/Sound/Prompt anchors, action admission, or
    server authority, and remote presentation never reapplies root motion.
+7. Generic possession is a separate server-assigned, non-owning relationship
+   between a live Player and a live Instance in its Workspace. Each target
+   has at most one possessing Player. Entity invalidation, exit from Workspace
+   or Player teardown revokes the relationship. Its local revision changes
+   across release and reacquisition, even when the entity generation stays
+   the same. Client projection is limited to materialized entity references.
 
 ## EditorHost and Studio
 

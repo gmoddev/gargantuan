@@ -8,6 +8,7 @@
 #include "gargantuan/network/CharacterNetwork.hpp"
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/network/RemoteManager.hpp"
+#include "gargantuan/network/Scheduler.hpp"
 #include "gargantuan/runtime/SpatialRegionIndex.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "PooledServiceDiagnostics.hpp"
@@ -122,6 +123,10 @@ namespace gargantuan::network::detail {
 
 	class GameSessionTestAccess final {
 	  public:
+		struct GameplayClientCounters {
+			std::uint64_t Produced, Applied, StructuralApplyNanoseconds;
+		};
+		[[nodiscard]] static GameplayClientCounters GetGameplayClientCounters(const GameSession &Session);
 		// Main-owned qualification observation only. Source and local identity
 		// domains stay distinct; no lookup by Name/path or persistent reverse map.
 		[[nodiscard]] static std::optional<std::vector<ClientReplicaIdentity>> ReadClientReplicaIdentities(
@@ -153,6 +158,8 @@ namespace gargantuan::network::detail {
 		[[nodiscard]] static std::uint64_t GetReliableEventsAccepted(const GameSession &Session);
 		[[nodiscard]] static RemoteMetrics GetRemoteMetrics(const GameSession &Session);
 		[[nodiscard]] static std::vector<ConnectionId> GetConnections(const GameSession &Session);
+		[[nodiscard]] static std::optional<SchedulerStatistics> GetSchedulerStatistics(
+			const GameSession &Session, ConnectionId Connection);
 		// Actual raw-history readers, not dependency/publication revision stamps.
 		[[nodiscard]] static std::vector<JournalRequirement> GetJournalRequirements(const GameSession &Session);
 		[[nodiscard]] static ReplicationMetrics GetReplicationMetrics(const GameSession &Session);

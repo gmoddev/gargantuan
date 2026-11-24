@@ -124,6 +124,7 @@ foreach(GARGANTUAN_RUNTIME_MODULE
 	DefaultCamera.luau
 	DefaultCharacterRuntime.luau
 	DefaultCharacterAssembly.luau
+	DefaultCharacterAnimation.luau
 	DefaultLocomotion.luau
 	DefaultNetworkLocomotion.luau
 	DefaultNetworkCharacterRuntime.luau

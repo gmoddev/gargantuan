@@ -8,7 +8,9 @@ return function(LocalPlayer, ActionMap, Workspace, RunService, CharacterControl)
 
 	local SimulationConnection = RunService.PreSimulation:Connect(function()
 		local Character = LocalPlayer.Character
-		if Character == nil or not Character:IsA("KinematicCharacter") then
+		local Possession = LocalPlayer.PossessedEntity
+		if Character == nil or not Character:IsA("KinematicCharacter")
+			or (Possession and Possession ~= Character) then
 			JumpRequested = false
 			return
 		end
