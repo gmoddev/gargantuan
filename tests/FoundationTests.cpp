@@ -7773,6 +7773,50 @@ namespace {
 
 		lua_settop(L, 0);
 		Check(Load(L, R"(
+			local Root = Instance.new("Folder")
+			local Child = Instance.new("Folder")
+			local Seen = { [Child] = "inventory" }
+			local FromEvent
+			Root.ChildAdded:Connect(function(Added) FromEvent = Added end)
+			Child.Name = "Item"
+			Child.Parent = Root
+			assert(Seen[FromEvent] == "inventory")
+			assert(rawequal(Root:GetChildren()[1], Root:FindFirstChild("Item")))
+			assert(Seen[Root.Item] == "inventory" and rawequal(Root.Item.Parent, Root))
+			Child:Destroy()
+			local New = Instance.new("Folder")
+			New.Name = "Item"
+			New.Parent = Root
+			assert(Seen[Root.Item] == nil and Seen[Child] == "inventory")
+			Root:Destroy()
+		)", "instance-table-keys") == LUA_OK && lua_pcall(L, 0, 0, 0) == LUA_OK,
+			"Instance keys agree across Luau construction, signals, properties and hierarchy");
+		{
+			auto Detached = std::make_shared<Folder>();
+			std::weak_ptr<Instance> Lifetime = Detached;
+			StackValue<std::shared_ptr<Folder>>::Push(L, Detached);
+			const void *FirstWrapper = lua_topointer(L, -1);
+			{
+				ScriptEngine OtherVm(std::make_shared<DataModel>());
+				StackValue<std::shared_ptr<Instance>>::Push(OtherVm.L, Detached);
+				Check(lua_topointer(OtherVm.L, -1) != FirstWrapper && !Detached->Id.IsValid(),
+					"separate VMs wrap independently without publishing detached identity");
+			}
+			const auto OldId = Detached->GetObjectId();
+			Detached->Destroy();
+			auto Replacement = std::make_shared<Folder>();
+			const auto NewId = Replacement->GetObjectId();
+			StackValue<std::shared_ptr<Folder>>::Push(L, Replacement);
+			Check(NewId.Slot == OldId.Slot && NewId.Generation != OldId.Generation &&
+				!lua_rawequal(L, -1, -2) && !ObjectRegistry::Get().Lookup(OldId),
+				"slot reuse never aliases a retained destroyed wrapper");
+			lua_pop(L, 2);
+			Detached.reset();
+			lua_gc(L, LUA_GCCOLLECT, 0);
+			Check(Lifetime.expired(), "weak identity cache releases the native object after GC");
+		}
+		lua_settop(L, 0);
+		Check(Load(L, R"(
 			local Hostile = setmetatable({}, { __tostring = function() error("must not run") end })
 			print("hello")
 			print("value", 123, true, nil, game.Workspace, Vector3.new(1, 2, 3), Hostile)

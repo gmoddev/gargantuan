@@ -6,6 +6,32 @@
 #include <lualib.h>
 
 namespace gargantuan {
+	namespace {
+		char InstanceCacheKey;
+	}
+
+	int StackValue<std::shared_ptr<Instance>>::Push(lua_State *L, std::shared_ptr<Instance> Value) {
+		if (!Value) {
+			lua_pushnil(L);
+			return 1;
+		}
+		// A live wrapper owns this exact allocation. Its address cannot be reused
+		// until the wrapper is unreachable. This private lookup must not publish
+		// an ObjectId just to expose a detached Instance to Luau.
+		Instance *Lookup = Value.get();
+		luaL_checkstack(L, 3, "Instance wrapper");
+		lua_rawgetp(L, LUA_REGISTRYINDEX, &InstanceCacheKey);
+		lua_rawgetp(L, -1, Lookup);
+		if (lua_isnil(L, -1)) {
+			lua_pop(L, 1);
+			StackValue<Instance::Self>::Push(L, std::move(Value));
+			lua_pushvalue(L, -1);
+			lua_rawsetp(L, -3, Lookup);
+		}
+		lua_remove(L, -2);
+		return 1;
+	}
+
 	int LibInstance_new(lua_State *L) {
 		auto className = luaL_checkstring(L, 1);
 
@@ -38,6 +64,12 @@ namespace gargantuan {
 	};
 
 	int OpenLibInstance(lua_State *L) {
+		lua_newtable(L);
+		lua_newtable(L);
+		lua_pushliteral(L, "vs");
+		lua_setfield(L, -2, "__mode");
+		lua_setmetatable(L, -2);
+		lua_rawsetp(L, LUA_REGISTRYINDEX, &InstanceCacheKey);
 		luaL_register(L, "Instance", LibInstance);
 		return 0;
 	}

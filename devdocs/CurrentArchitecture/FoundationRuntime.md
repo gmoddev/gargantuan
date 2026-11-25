@@ -183,6 +183,15 @@ rollback, and network transport are not implemented. Consumers must not treat th
 
 ## Luau and checked type boundaries
 
+Each ordinary VM interns Instance wrappers in a registry-owned weak-value
+table that Luau may shrink during collection. Coroutines share this table.
+An entry uses the native address solely for allocation-local memoization.
+The userdata owns a shared reference, so that allocation survives every
+reachable wrapper. Pushing a detached Instance does not publish an ObjectId.
+Destruction invalidates its registry identity through the normal lifecycle.
+A retained key still denotes the destroyed object, including after slot
+reuse. VM shutdown releases the table and its userdata.
+
 Module resolution uses checked dynamic type handling. Standalone Instance roots
 use an explicit helper: a `DataModel` root is preserved, while another root is
 parented under a new DataModel's Workspace. Retained deserialization paths own

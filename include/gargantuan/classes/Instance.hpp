@@ -25,8 +25,11 @@ namespace gargantuan {
 		std::uint32_t definitionVersion,
 		const SchemaClassProperty &property
 	);
-	G_SHARED_USERDATA_DECL(
-		Instance, I_Instance;
+	class Instance : public std::enable_shared_from_this<Instance>,
+					 public Userdata<Instance, std::shared_ptr<Instance>> {
+	  public:
+		static const Definition DEFINITION;
+		I_Instance;
 
 		Instance();
 		virtual ~Instance();
@@ -150,7 +153,11 @@ namespace gargantuan {
 		[[nodiscard]] ObjectId GetObjectId() const;
 		[[nodiscard]] bool IsDestroying() const { return DestroyingState; }
 		[[nodiscard]] bool IsReplicaMaterialization() const { return ReplicaMaterialization; }
-	);
+	};
+
+	template <> struct StackValue<std::shared_ptr<Instance>> : StackValue<Instance::Self> {
+		static int Push(lua_State *L, std::shared_ptr<Instance> Value);
+	};
 
 	template <typename Subclass>
 		requires std::is_base_of_v<Instance, Subclass> && (!std::is_same_v<Instance, Subclass>)
