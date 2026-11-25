@@ -11,8 +11,8 @@ The development branch builds on Foundation 9 merge `bf50b0987`. Acceptance
 requires consistent Instance table keys, Player-targeted delivery over the
 session mapping, bounded structured messages and buffers, tweened properties
 and ordinary script deadline diagnostics. Relay Rescue exercises the
-integrated APIs with two clients. Review the resulting native, sanitizer,
-real-GNS, documentation and workload receipts before promotion.
+integrated APIs with two clients. The [qualification record](../Validation/Foundation10BDeveloperRuntime.md)
+identifies the source, affected subsystem gates and measured runtime costs.
 
 Provider-neutral persistence follows the [Engine handoff](GameplayPersistenceHandoff.md).
 The distributed Player package and the existing lifecycle assignments retain

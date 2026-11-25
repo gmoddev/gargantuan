@@ -79,8 +79,10 @@ Client runtime profiles have it; network-only inbound contexts do not.
 
 The ancestry, child, descendant, and destroying signals declared on `Instance`
 are exposed. Nullable lookups and nullable object-reference properties return
-Luau `nil`. Separate userdata wrappers for the same live Instance compare equal
-through generation-safe `ObjectId` identity; clones compare unequal to sources.
+Luau `nil`. References to the same live Instance in one VM reuse its
+userdata, including for dictionary lookups and `rawequal`. Clones receive
+distinct keys. A retained wrapper for a destroyed Instance keeps its identity
+as an existing table key after the native slot is reused.
 
 `Clone()` requires every node in the source subtree to be live, `Archivable`,
 constructible, and non-protected. It returns a complete detached subtree:

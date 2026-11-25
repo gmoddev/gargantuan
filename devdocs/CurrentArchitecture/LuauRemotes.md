@@ -186,6 +186,11 @@ RemoteManager publication and admission path. Player addressing supplies no
 exception to peer visibility, publication, or admission. Sender identity comes
 from the transport delivery context and the current server association.
 
+A handler may construct a codec-valid result that exceeds its peer's negotiated
+reliable frame size. If its response cannot be submitted, the caller can settle
+at its deadline. Keep replies inside the negotiated transport envelope and
+handle the timeout outcome in the caller.
+
 ## Event semantics
 
 Reliable events use `ReliableOrdered` delivery and `ReliableApplication`
