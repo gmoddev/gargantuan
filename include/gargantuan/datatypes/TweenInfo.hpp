@@ -17,6 +17,8 @@ namespace gargantuan {
 		Enums::EasingDirection EasingDirection = Enums::EasingDirection::Out;
 		Enums::EasingStyle EasingStyle = Enums::EasingStyle::Quad;
 
+		void Validate() const;
+
 		TweenInfo(
 			float time = 1.0f,
 			Enums::EasingStyle easingStyle = Enums::EasingStyle::Quad,

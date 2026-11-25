@@ -2,7 +2,11 @@
 #include "gargantuan/scripting/Userdata.hpp"
 #include "gargantuan/scripting/UserdataTag.hpp"
 #include <common.hpp>
+#include <algorithm>
+#include <cmath>
+#include <limits>
 #include <sstream>
+#include <stdexcept>
 
 namespace gargantuan {
 	G_USERDATA_IMPL(
@@ -27,7 +31,11 @@ namespace gargantuan {
 	UDim::UDim(float scale, int offset) : Scale(scale), Offset(offset) {};
 
 	UDim UDim::Lerp(const UDim &goal, float alpha) const {
-		return UDim(Scale + (goal.Scale - Scale) * alpha, (int)glm::round(Offset + (goal.Offset - Offset) * alpha));
+		if (!std::isfinite(alpha)) throw std::invalid_argument("UDim:Lerp alpha must be finite");
+		const double Rounded = std::round(std::lerp(static_cast<double>(Offset), static_cast<double>(goal.Offset), alpha));
+		const double Bounded = std::clamp(Rounded, static_cast<double>(std::numeric_limits<int>::min()),
+			static_cast<double>(std::numeric_limits<int>::max()));
+		return UDim(std::lerp(Scale, goal.Scale, alpha), static_cast<int>(Bounded));
 	}
 
 	UDim UDim::Add(const UDim &other) const {

@@ -1,0 +1,37 @@
+{
+  "Version": 5,
+  "Name": "RelayCharacterTemplate",
+  "ClassName": "KinematicCharacter",
+  "ClassSchemaId": "ec381b4b9d9eca29d42ae7459b7f31dd",
+  "ClassDefinitionVersion": 1,
+  "Properties": {
+    "RootPart": { "InstanceReference": 2 }
+  },
+  "Attributes": {},
+  "Extensions": [],
+  "CustomProperties": [],
+  "Tags": [],
+  "NodeId": 1,
+  "Children": [
+    {
+      "Name": "SurveySuitBody",
+      "ClassName": "Part",
+      "ClassSchemaId": "5eab0d5368149cacdcc9dcd4130cd3c8",
+      "ClassDefinitionVersion": 1,
+      "Properties": {
+        "Anchored": { "Bool": true },
+        "CanCollide": { "Bool": false },
+        "CanTouch": { "Bool": false },
+        "CFrame": { "CFrame": [0, 6, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1] },
+        "Size": { "Vector3": [1.75, 3.8, 1.75] },
+        "Color": { "Color3": [0.49, 0.35, 0.84] }
+      },
+      "Attributes": {},
+      "Extensions": [],
+      "CustomProperties": [],
+      "Tags": [],
+      "NodeId": 2,
+      "Children": []
+    }
+  ]
+}

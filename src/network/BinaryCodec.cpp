@@ -72,6 +72,19 @@ namespace gargantuan::network {
 		return true;
 	}
 
+	bool GameBinaryReader::Take(std::size_t Count, std::span<const std::byte> &Value) {
+		if (Count > Remaining()) return Fail(Context + " is truncated");
+		Value = Input.subspan(Position, Count);
+		Position += Count;
+		return true;
+	}
+
+	bool GameBinaryReader::Peek(std::uint8_t &Value) {
+		if (Remaining() == 0) return Fail(Context + " is truncated");
+		Value = std::to_integer<std::uint8_t>(Input[Position]);
+		return true;
+	}
+
 	bool GameBinaryReader::Fail(std::string Message) {
 		if (Error.empty()) Error = std::move(Message);
 		return false;

@@ -43,6 +43,7 @@ enum class WorkPhase : std::size_t {
 	RenderDraw, HostFramePacing,
 	AudioReconcile, AudioMix,
 	ViewportExtract, ViewportDraw,
+	TweenStep, RemoteEncode, RemoteDecode, InstanceWrap,
 	Count
 };
 
@@ -73,7 +74,8 @@ inline constexpr std::array<std::string_view, static_cast<std::size_t>(WorkPhase
 	"SnapshotValidation", "SnapshotConstruction", "SnapshotParenting", "SnapshotProperties",
 	"RenderDraw", "HostFramePacing",
 	"AudioReconcile", "AudioMix",
-	"ViewportExtract", "ViewportDraw"
+	"ViewportExtract", "ViewportDraw",
+	"TweenStep", "RemoteEncode", "RemoteDecode", "InstanceWrap"
 };
 
 struct WorkDuration {

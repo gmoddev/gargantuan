@@ -12,7 +12,8 @@
 #include <vector>
 
 namespace gargantuan::network {
-	inline constexpr std::uint16_t GameSessionProtocolVersion = 1;
+	// Version 2 requires GRMT v3 at both endpoints.
+	inline constexpr std::uint16_t GameSessionProtocolVersion = 2;
 	inline constexpr std::size_t MaximumGameSessionFrameBytes = 256;
 
 	enum class GameSessionMessageKind : std::uint8_t {

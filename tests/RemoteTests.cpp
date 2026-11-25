@@ -248,8 +248,10 @@ namespace {
 		Check(Reliable.has_value(), "valid Remote corpus seed encodes");
 		if (!Reliable) return;
 		auto InvalidVersion = *Reliable;
-		InvalidVersion[4] = std::byte{3};
-		Check(!DecodeRemoteMessage(InvalidVersion), "unknown Remote protocol versions fail closed");
+		InvalidVersion[4] = std::byte{2};
+		const auto Legacy = DecodeRemoteMessage(InvalidVersion);
+		Check(!Legacy && Legacy.error().Code == SerializationErrorCode::UnsupportedVersion,
+			"previous Remote protocol version fails closed");
 		auto InvalidOpcode = *Reliable;
 		InvalidOpcode[6] = std::byte{0xff};
 		Check(!DecodeRemoteMessage(InvalidOpcode), "unknown Remote opcodes fail closed");
@@ -304,6 +306,200 @@ namespace {
 		auto OversizedError = Message(RemoteMessageKind::RequestError, Remote);
 		OversizedError.Error->Message.assign(MaximumRemoteErrorMessageBytes + 1, 'x');
 		Check(!EncodeRemoteMessage(OversizedError), "oversized untrusted error responses are rejected");
+	}
+
+	void TestStructuredCodec() {
+		const ObjectId Event{92, 7};
+		auto Original = Message(RemoteMessageKind::ReliableEvent, Event);
+		Original.Arguments = {
+			RemoteDictionary{{
+				{"empty", RemoteArray{}},
+				{"items", RemoteArray{{WireVector2{1, 2}, RemoteBuffer{{std::byte{0}, std::byte{0xff}}}}}},
+				{"ready", true},
+			}},
+			std::monostate{},
+			RemoteBuffer{},
+		};
+		const auto Encoded = EncodeRemoteMessage(Original);
+		Check(Encoded.has_value(), "compound frame encodes");
+		if (!Encoded) return;
+		std::size_t DecodedStorage = 0;
+		const auto Decoded = DecodeRemoteMessage(*Encoded, &DecodedStorage);
+		Check(Decoded && Decoded->Arguments == Original.Arguments &&
+			GetRemoteArgumentStorageBytes(Original.Arguments) == DecodedStorage,
+			"structured values preserve mixed scalar types, binary bytes, empty containers and positional nil");
+		if (Decoded) {
+			const auto Reencoded = EncodeRemoteMessage(*Decoded);
+			Check(Reencoded && *Reencoded == *Encoded, "canonical structured wire round-trips byte for byte");
+		}
+		for (std::size_t Boundary = 52; Boundary < Encoded->size(); ++Boundary)
+			Check(!DecodeRemoteMessage(std::span(*Encoded).first(Boundary)), "truncated compound frame is rejected");
+
+		auto Candidate = Message(RemoteMessageKind::ReliableEvent, Event);
+		Candidate.Arguments = {RemoteDictionary{{{"a", true}, {"b", false}}}};
+		if (auto Bytes = EncodeRemoteMessage(Candidate)) {
+			(*Bytes)[66] = std::byte{'a'};
+			Check(!DecodeRemoteMessage(*Bytes), "duplicate dictionary keys are rejected on decode");
+		}
+		Candidate.Arguments = {RemoteDictionary{{{"z", true}, {"a", false}}}};
+		Check(!EncodeRemoteMessage(Candidate), "native dictionaries require deterministic byte-sorted keys");
+		Candidate.Arguments = {std::string("a\0b", 3)};
+		Check(!EncodeRemoteMessage(Candidate), "existing scalar text rules reject embedded nulls");
+		Candidate.Arguments = {RemoteDictionary{{{std::string("a\0b", 3), true}}}};
+		Check(!EncodeRemoteMessage(Candidate), "native dictionary keys use the same text rules as Luau");
+		Candidate.Arguments = {RemoteArray{{std::monostate{}}}};
+		Check(!EncodeRemoteMessage(Candidate), "nil entries are rejected in compound values");
+
+		RemoteValue Tree = true;
+		for (std::size_t Depth = 0; Depth < MaximumRemoteContainerDepth; ++Depth)
+			Tree = RemoteArray{{std::move(Tree)}};
+		Candidate.Arguments = {Tree};
+		Check(EncodeRemoteMessage(Candidate).has_value(), "exact container-depth ceiling is accepted");
+		Candidate.Arguments = {RemoteArray{{std::move(Tree)}}};
+		Check(!EncodeRemoteMessage(Candidate), "one extra container level is rejected");
+
+		Candidate.Arguments = {RemoteArray{std::vector<RemoteValue>(MaximumRemoteValueCount - 1, true)}};
+		auto FullArray = EncodeRemoteMessage(Candidate);
+		Check(FullArray && DecodeRemoteMessage(*FullArray).has_value(), "exact aggregate value ceiling round-trips");
+		if (FullArray) {
+			(*FullArray)[53] = std::byte{0};
+			(*FullArray)[54] = std::byte{4};
+			Check(!DecodeRemoteMessage(*FullArray), "over-limit array count is rejected before reserving entries");
+		}
+		Candidate.Arguments = {RemoteArray{std::vector<RemoteValue>(MaximumRemoteValueCount, true)}};
+		Check(!EncodeRemoteMessage(Candidate), "one extra aggregate value is rejected");
+		Candidate.Arguments = {RemoteArray{std::vector<RemoteValue>(MaximumRemoteReferenceCount,
+			WireObjectReference{{2, 3}})}};
+		Check(EncodeRemoteMessage(Candidate).has_value(), "reference occurrence limit permits the exact boundary");
+		std::get<RemoteArray>(Candidate.Arguments.front()).Values.push_back(WireObjectReference{{2, 3}});
+		Check(!EncodeRemoteMessage(Candidate), "repeated references cannot bypass the occurrence limit");
+
+		Candidate.Arguments.assign(4, RemoteBuffer{std::vector<std::byte>(MaximumRemoteBufferBytes)});
+		auto &LastBuffer = std::get<RemoteBuffer>(Candidate.Arguments.back()).Bytes;
+		LastBuffer.resize(MaximumRemoteBufferBytes - 52 - 4 * 5);
+		const auto Boundary = EncodeRemoteMessage(Candidate);
+		Check(Boundary && Boundary->size() == MaximumRemoteFrameBytes && DecodeRemoteMessage(*Boundary).has_value(),
+			"the aggregate frame limit counts every buffer tag and length");
+		LastBuffer.push_back(std::byte{0});
+		Check(!EncodeRemoteMessage(Candidate), "compound aggregate payload cannot exceed the Remote frame ceiling");
+		Candidate.Arguments = {RemoteBuffer{std::vector<std::byte>(MaximumRemoteBufferBytes + 1)}};
+		Check(!EncodeRemoteMessage(Candidate), "one byte over the individual buffer limit is rejected");
+		Candidate.Arguments = {RemoteBuffer{}};
+		if (auto Bytes = EncodeRemoteMessage(Candidate)) {
+			(*Bytes)[53] = std::byte{1};
+			Check(!DecodeRemoteMessage(*Bytes), "malformed buffer length cannot expose a partial value");
+		}
+	}
+
+	void TestStructuredDelivery() {
+		RemoteFixture Fixture;
+		const auto Detached = std::make_shared<Folder>();
+		Check(!Fixture.Server->MapOutgoingReference(*Detached) && !Detached->Id.IsValid(),
+			"looking up an unpublished remote argument does not allocate its ObjectId");
+		const ObjectId Reliable{94, 1}, Unreliable{95, 1}, Sequenced{96, 1}, Function{97, 1};
+		Fixture.Register(Reliable, RemoteInstanceKind::ReliableEvent);
+		Fixture.Register(Unreliable, RemoteInstanceKind::UnreliableEvent);
+		Fixture.Register(Sequenced, RemoteInstanceKind::UnreliableSequencedEvent);
+		Fixture.Register(Function, RemoteInstanceKind::Function);
+		const std::vector<RemoteValue> Payload{RemoteDictionary{{
+			{"count", 4}, {"labels", RemoteArray{{std::string("inventory"), RemoteBuffer{}}}},
+		}}};
+		int Deliveries = 0;
+		const auto Observe = [&](const RemoteInvocation &Message) {
+			if (Message.Arguments == Payload) ++Deliveries;
+		};
+		Fixture.Client->SetEventHandler(Reliable, Observe);
+		Fixture.Server->SetEventHandler(Unreliable, Observe);
+		Fixture.Server->SetEventHandler(Sequenced, Observe);
+		Fixture.Server->SetRequestHandler(Function, [](const RemoteInvocation &Message, RemoteManager::RequestReply Reply) {
+			(void)Reply(Message.Arguments, std::nullopt);
+		});
+		auto Broadcast = Fixture.Server->Broadcast(Reliable, Payload);
+		Check(Broadcast.size() == 1 && Broadcast.front().Accepted(), "structured reliable broadcast is admitted");
+		auto InvalidBroadcast = Fixture.Server->Broadcast(Reliable,
+			{RemoteBuffer{std::vector<std::byte>(MaximumRemoteBufferBytes + 1)}});
+		Check(InvalidBroadcast.size() == 1 && InvalidBroadcast.front().Status == RemoteSendStatus::InvalidArguments,
+			"an oversized native broadcast is rejected before recipient submissions");
+		Check(Fixture.Client->SendEvent(Fixture.ClientConnection, Unreliable, Payload).Accepted() &&
+			Fixture.Client->SendEvent(Fixture.ClientConnection, Sequenced, Payload).Accepted(),
+			"small structured values fit the negotiated unreliable message budget");
+		Check(!Fixture.Client->SendEvent(Fixture.ClientConnection, Unreliable,
+			{RemoteBuffer{std::vector<std::byte>(1200)}}).Accepted(),
+			"the full structured frame is charged to the unreliable datagram limit");
+		bool Completed = false;
+		const auto Request = Fixture.Client->StartRequest(
+			Fixture.ClientConnection, Function, Payload, [&](RemoteRequestResult Result) {
+				Completed = Result.Outcome.IsTerminal() && Result.Outcome.Status == RemoteRequestTerminalStatus::Success &&
+					Result.Results == Payload;
+			}
+		);
+		Check(Request.Accepted(), "structured function request is admitted");
+		for (int Step = 0; Step < 10 && (!Completed || Deliveries != 3); ++Step)
+			Fixture.Cycle();
+		Check(Completed && Deliveries == 3, "all simulated delivery modes and RPC response preserve structured values");
+
+		Fixture.SetReferenceVisible(false);
+		const auto Target = Fixture.ReferencedObject->GetObjectId();
+		const RemoteArray Reference{{WireObjectReference{WireObjectId::FromObjectId(Target)}}};
+		Check(Fixture.Server->SendEvent(Fixture.ServerConnection, Reliable, {Reference}).Status ==
+			RemoteSendStatus::DeferredForMaterialization &&
+			Fixture.Server->GetMetrics().DeferredReliableArgumentBytes != 0,
+			"nested reference consumes dependency queue bytes before materialization");
+		Fixture.ReferencedObject->Destroy();
+		(void)Fixture.Server->MarkMaterialized(Fixture.ServerConnection, Target);
+		(void)Fixture.Server->Pump();
+		Check(Fixture.Server->GetMetrics().DeferredReliableArgumentBytes == 0 && Deliveries == 3,
+			"nested stale reference leaves the queue without partial gameplay dispatch");
+
+		std::optional<RemoteRequestTerminalStatus> InvalidResultStatus;
+		const auto Pending = Fixture.Client->StartRequest(
+			Fixture.ClientConnection, Function, Payload, [&](RemoteRequestResult Result) {
+				InvalidResultStatus = Result.Outcome.Status;
+			}
+		);
+		Check(Pending.Accepted() && Pending.Request.has_value(), "structured response test registers a current invocation");
+		if (Pending.Request) {
+			auto Response = Message(RemoteMessageKind::Response, Function);
+			Response.Request = *Pending.Request;
+			Response.Arguments = {Reference};
+			Check(Fixture.Client->HandleTransportEvent(Incoming(Fixture.ClientConnection, Response)) &&
+				Fixture.Client->Pump() == 1 && InvalidResultStatus == RemoteRequestTerminalStatus::ProtocolRejected,
+				"correlated response with a stale nested reference completes as protocol rejected");
+		}
+	}
+
+	void TestStructuredDispatchStorage() {
+		auto PeerLimits = TestLimits();
+		PeerLimits.MaximumReliableMessageBytes = 4096;
+		PeerLimits.MaximumDecodedMessageBytes = 4096;
+		PeerLimits.MaximumReceiveBytesPerTick = 16 * 1024;
+		RemoteFixture Fixture({}, PeerLimits);
+		const ObjectId Event{98, 1};
+		Fixture.Register(Event, RemoteInstanceKind::ReliableEvent);
+		auto Expanded = Message(RemoteMessageKind::ReliableEvent, Event);
+		// One tree must occupy three quarters of this peer's 4x retained-byte
+		// allowance on each supported standard library's RemoteValue layout.
+		const auto EntryCount = 3 * PeerLimits.MaximumReceiveBytesPerTick / sizeof(RemoteValue) - 1;
+		Expanded.Arguments = {RemoteArray{std::vector<RemoteValue>(EntryCount, true)}};
+		const auto Enqueue = [&] {
+			return Fixture.Server->HandleTransportEvent(Incoming(Fixture.ServerConnection, Expanded));
+		};
+		Check(Enqueue(), "compact structured payload fits the peer wire and argument limits once");
+		const auto Before = Fixture.Server->GetMetrics();
+		Check(Before.QueuedDispatchBytes * 2 < PeerLimits.MaximumReceiveBytesPerTick &&
+			Before.QueuedDispatchArgumentBytes > 2 * PeerLimits.MaximumReceiveBytesPerTick && !Enqueue(),
+			"expanded representation hits the retained per-peer budget before its byte or message ceilings");
+		Check(Fixture.Server->Pump() == 1 && Fixture.Server->GetMetrics().QueuedDispatchArgumentBytes == 0 &&
+			Enqueue(), "dispatch releases the expanded queue charge for reuse");
+		Fixture.SetReferenceVisible(false);
+		const auto Reference = WireObjectReference{WireObjectId::FromObjectId(Fixture.ReferencedObject->GetObjectId())};
+		const RemoteArray TooLarge{{Reference, RemoteBuffer{std::vector<std::byte>(4096)}}};
+		Check(!Fixture.Client->SendEvent(Fixture.ClientConnection, Event, {TooLarge}).Accepted() &&
+			Fixture.Client->GetMetrics().DeferredReliableArgumentBytes == 0,
+			"a reference-dependent reliable frame must fit the negotiated message limit even before deferral");
+		Check(Fixture.Server->RemovePeer(Fixture.ServerConnection) &&
+			Fixture.Server->GetMetrics().QueuedDispatchArgumentBytes == 0,
+			"disconnect retires all queued native argument bytes");
 	}
 
 	void TestReliableAndRequests() {
@@ -1098,6 +1294,260 @@ namespace {
 			"shutdown conservation includes discarded dispatch and cancelled deferred ownership");
 	}
 
+	void TestReliableDispatchAcrossPumpBoundaries() {
+		RemoteFixture Fixture;
+		const auto Busy = Fixture.ServerConnection;
+		const ConnectionId Quiet{Busy.Slot + 1, 1};
+		const ObjectId Event{714, 1};
+		const ObjectId FirstFunction{715, 1};
+		const ObjectId SecondFunction{716, 1};
+		Fixture.Register(Event, RemoteInstanceKind::ReliableEvent);
+		Fixture.Register(FirstFunction, RemoteInstanceKind::Function);
+		Fixture.Register(SecondFunction, RemoteInstanceKind::Function);
+		Check(Fixture.Server->AddPeer(Quiet, ReplicationEpoch(1), Fixture.Limits) &&
+			Fixture.Server->PublishRemote(Quiet, Event), "a second peer shares the dispatch budget");
+
+		const RemoteBuffer Buffer{{std::byte{0}, std::byte{0xff}}};
+		const auto Payload = [&](int Value) { return std::vector<RemoteValue>{RemoteArray{{Value, Buffer}}}; };
+		std::vector<int> Observed;
+		int QuietDeliveries = 0;
+		const auto EnqueueEvent = [&](ConnectionId Peer, int Value) {
+			auto Frame = Message(RemoteMessageKind::ReliableEvent, Event);
+			Frame.Arguments = Payload(Value);
+			Check(Fixture.Server->HandleTransportEvent(Incoming(Peer, Frame)), "ordinary reliable event queues");
+		};
+		Fixture.Server->SetEventHandler(Event, [&](const RemoteInvocation &Invocation) {
+			if (Invocation.Peer.Connection == Quiet) {
+				++QuietDeliveries;
+				return;
+			}
+			const auto *Array = std::get_if<RemoteArray>(&Invocation.Arguments.front());
+			const auto Value = Array && Array->Values.size() == 2 ? std::get<int>(Array->Values[0]) : -1;
+			Check(Array && Invocation.Arguments == Payload(Value), "structured event and buffer survive dispatch");
+			Observed.push_back(Value);
+		});
+		for (const int Value : {1, 2, 3}) EnqueueEvent(Busy, Value);
+		EnqueueEvent(Quiet, 1);
+		EnqueueEvent(Quiet, 2);
+		EnqueueEvent(Busy, 4);
+		Check(Fixture.Server->Pump(4) == 4 && Observed == std::vector<int>{1, 2} && QuietDeliveries == 2,
+			"both peers receive their original per-pump share");
+		EnqueueEvent(Busy, 5);
+		EnqueueEvent(Quiet, 3);
+		Check(Fixture.Server->Pump(1) == 1 && Fixture.Server->Pump(1) == 1 && QuietDeliveries == 3,
+			"a quiet peer progresses when the global budget serves one lane per pump");
+		Check(Fixture.Server->Pump(1) == 1 && Fixture.Server->Pump(1) == 1 &&
+			Observed == std::vector<int>{1, 2, 3, 4, 5},
+			"repeated exhaustion preserves older work ahead of newer admissions");
+
+		Observed.clear();
+		const auto RegisterHandler = [&](ObjectId Function, int Value) {
+			Fixture.Server->SetRequestHandler(Function, [&, Value](const RemoteInvocation &Invocation, auto Reply) {
+				Check(Invocation.Arguments == Payload(Value), "structured request remains intact");
+				Observed.push_back(Value);
+				Check(Reply(Payload(Value), std::nullopt), "request handler submits a correlated reply");
+			});
+		};
+		RegisterHandler(FirstFunction, 11);
+		RegisterHandler(SecondFunction, 13);
+		const auto Outgoing = Fixture.Server->StartRequest(Busy, FirstFunction, {}, [&](RemoteRequestResult Result) {
+			Check(Result.Outcome.Status == RemoteRequestTerminalStatus::Success && Result.Results == Payload(12),
+				"received response completes exactly one matching request with its structured results");
+			Observed.push_back(12);
+		});
+		if (!Outgoing.Request) {
+			Check(false, "outgoing request owns a response slot");
+			return;
+		}
+		const auto EnqueueRequest = [&](ObjectId Function, std::uint64_t Id, int Value) {
+			auto Frame = Message(RemoteMessageKind::Request, Function);
+			Frame.Request = RemoteRequestId(Id);
+			Frame.Arguments = Payload(Value);
+			Check(Fixture.Server->HandleTransportEvent(Incoming(Busy, Frame)), "ordered request queues");
+		};
+		EnqueueEvent(Busy, 10);
+		EnqueueRequest(FirstFunction, 1, 11);
+		auto Response = Message(RemoteMessageKind::Response, FirstFunction);
+		Response.Request = *Outgoing.Request;
+		Response.Arguments = Payload(12);
+		Check(Fixture.Server->HandleTransportEvent(Incoming(Busy, Response)), "correlated response queues alongside calls");
+		EnqueueEvent(Quiet, 4);
+		EnqueueEvent(Quiet, 5);
+		EnqueueRequest(SecondFunction, 2, 13);
+		Check(Fixture.Server->Pump(4) == 4 && Fixture.Server->Pump(4) == 2 &&
+			Observed == std::vector<int>{10, 11, 12, 13},
+			"mixed reliable receive work preserves ingress order across the exhausted budget");
+		const auto Metrics = Fixture.Server->GetMetrics();
+		Check(!Metrics.QueuedDispatchMessages && !Metrics.QueuedDispatchBytes && !Metrics.QueuedDispatchArgumentBytes &&
+			Metrics.Ownership.DispatchAccepted == Metrics.Ownership.DispatchReleased &&
+			!Metrics.Ownership.BoundViolations, "draining both lanes conserves queue charges");
+		Fixture.Server.reset();
+	}
+
+	void TestDispatchReentrantRetirement() {
+		RemoteFixture Fixture;
+		const auto Peer = Fixture.ServerConnection;
+		const ObjectId Event{721, 1};
+		const ObjectId Retired{722, 1};
+		Fixture.Register(Event, RemoteInstanceKind::ReliableEvent);
+		Fixture.Register(Retired, RemoteInstanceKind::ReliableEvent);
+		const auto Submit = [&](ObjectId Remote, int Value) {
+			auto Frame = Message(RemoteMessageKind::ReliableEvent, Remote);
+			Frame.Arguments = {Value};
+			Check(Fixture.Server->HandleTransportEvent(Incoming(Peer, Frame)), "lifecycle fixture admits event");
+		};
+		std::vector<int> Observed;
+		Fixture.Server->SetEventHandler(Retired, [&](const RemoteInvocation &) {
+			Check(false, "unpublished entry must never dispatch");
+		});
+		Fixture.Server->SetEventHandler(Event, [&](const RemoteInvocation &Invocation) {
+			const int Value = std::get<int>(Invocation.Arguments.front());
+			Observed.push_back(Value);
+			if (Value == 1) {
+				Submit(Event, 4);
+				Check(Fixture.Server->Pump(8) == 0, "a callback cannot open a nested dispatch budget");
+				Check(Fixture.Server->UnpublishRemote(Peer, Retired), "callback removes an eligible queued entry");
+			}
+			if (Value == 4) Check(Fixture.Server->RemovePeer(Peer), "callback retires the remainder of its own lane");
+		});
+		Submit(Event, 1);
+		Submit(Retired, 2);
+		Submit(Event, 3);
+		Check(Fixture.Server->Pump(8) == 2 && Observed == std::vector<int>{1, 3},
+			"retiring an eligible entry cannot make a reentrant append eligible");
+		Submit(Event, 5);
+		Check(Fixture.Server->Pump(8) == 1 && Observed == std::vector<int>{1, 3, 4} &&
+			Fixture.Server->Pump(8) == 0, "peer retirement removes queued work before the next callback");
+		const auto Metrics = Fixture.Server->GetMetrics();
+		Check(!Metrics.QueuedDispatchMessages && Metrics.Ownership.DispatchAccepted == Metrics.Ownership.DispatchReleased,
+			"reentrant unpublication and retirement release every receive charge once");
+	}
+
+	void TestDeferredOrderingStreams() {
+		RemoteFixture Fixture;
+		const ObjectId Event{731, 1};
+		const ObjectId Independent{732, 1};
+		const ObjectId FirstFunction{733, 1};
+		const ObjectId SecondFunction{734, 1};
+		Fixture.Register(Event, RemoteInstanceKind::ReliableEvent);
+		Fixture.Register(Independent, RemoteInstanceKind::ReliableEvent);
+		Fixture.Register(FirstFunction, RemoteInstanceKind::Function);
+		Fixture.Register(SecondFunction, RemoteInstanceKind::Function);
+		Fixture.SetReferenceVisible(false);
+		const auto Object = Fixture.ReferencedObject->GetObjectId();
+		const RemoteArray Reference{{WireObjectReference{WireObjectId::FromObjectId(Object)}}};
+		const auto Peer = Fixture.ServerConnection;
+		std::vector<int> Observed;
+		Fixture.Client->SetEventHandler(Event, [&](const RemoteInvocation &Invocation) {
+			Observed.push_back(std::get<int>(Invocation.Arguments.back()));
+		});
+		Fixture.Client->SetEventHandler(Independent, [&](const RemoteInvocation &) { Observed.push_back(9); });
+		const auto RegisterHandler = [&](ObjectId Function) {
+			Fixture.Client->SetRequestHandler(Function, [&](const RemoteInvocation &Invocation, auto Reply) {
+				Observed.push_back(std::get<int>(Invocation.Arguments.back()));
+				Check(Reply({}, std::nullopt), "received request replies once");
+			});
+		};
+		RegisterHandler(FirstFunction);
+		RegisterHandler(SecondFunction);
+		int Completions = 0;
+		const auto Completed = [&](RemoteRequestResult Result) {
+			Check(Result.Outcome.Status == RemoteRequestTerminalStatus::Success, "a deferred request completes successfully");
+			++Completions;
+		};
+		Check(Fixture.Server->SendEvent(Peer, Event, {Reference, 1}).Status ==
+			RemoteSendStatus::DeferredForMaterialization &&
+			Fixture.Server->SendEvent(Peer, Event, {2}).Status == RemoteSendStatus::DeferredForMaterialization,
+			"newer reliable event waits behind its channel predecessor");
+		Check(Fixture.Server->StartRequest(Peer, FirstFunction, {Reference, 3}, Completed).Status ==
+			RemoteSendStatus::DeferredForMaterialization &&
+			Fixture.Server->StartRequest(Peer, SecondFunction, {4}, Completed).Status ==
+				RemoteSendStatus::DeferredForMaterialization,
+			"new request waits across function identities in the shared request-ID stream");
+		Check(Fixture.Server->SendEvent(Peer, Independent, {}).Status == RemoteSendStatus::Accepted,
+			"an independent event can pass both waiting streams");
+		Fixture.Cycle();
+		Check(Observed == std::vector<int>{9} && Fixture.Server->GetMetrics().DeferredReliableMessages == 4,
+			"waiting streams stay bounded and independent traffic makes progress");
+		Check(Fixture.Server->MarkMaterialized(Peer, Object) &&
+			Fixture.Client->MarkMaterialized(Fixture.ClientConnection, Object), "make deferred reference ready");
+		Check(Fixture.Server->SendEvent(Peer, Event, {5}).Status == RemoteSendStatus::DeferredForMaterialization,
+			"materialization before the next pump preserves earlier event admission order");
+		for (int Index = 0; Index < 5; ++Index) Fixture.Cycle();
+		Check(Observed == std::vector<int>{9, 1, 2, 3, 4, 5} && Completions == 2,
+			"simulated transport preserves promoted stream order and completes both RPCs");
+
+		Check(Fixture.Server->MarkUnmaterialized(Peer, Object), "retire availability for the cancellation case");
+		int Cancelled = 0;
+		const auto Cancel = Fixture.Server->StartRequest(Peer, FirstFunction, {Reference, 6},
+			[&](RemoteRequestResult Result) {
+				Check(Result.Outcome.Status == RemoteRequestTerminalStatus::Cancelled, "cancelled head completes locally");
+				++Cancelled;
+			});
+		Check(Cancel.Request &&
+			Fixture.Server->StartRequest(Peer, SecondFunction, {7}, Completed).Status ==
+				RemoteSendStatus::DeferredForMaterialization &&
+			Fixture.Server->CancelRequest({Peer, *Cancel.Request}), "cancellation removes the unsent request head");
+		for (int Index = 0; Index < 5; ++Index) Fixture.Cycle();
+		const auto Metrics = Fixture.Server->GetMetrics();
+		Check(Observed == std::vector<int>{9, 1, 2, 3, 4, 5, 7} && Cancelled == 1 && Completions == 3 &&
+			!Metrics.DeferredReliableMessages && !Metrics.DeferredReliableBytes && !Metrics.DeferredReliableArgumentBytes &&
+			Metrics.Ownership.DeferredAccepted == Metrics.Ownership.DeferredReleased,
+			"cancelled predecessor cannot leak its queue charge or block the successor");
+		Fixture.Server.reset();
+	}
+
+	void TestDispatchSaturationRotatesService() {
+		RecordingScheduler Scheduler;
+		const ObjectId Event{741, 1};
+		RemoteManager Manager(RemoteManagerRole::Server, Scheduler,
+			[&](ConnectionId, ObjectId Object) { return Object == Event; }, {});
+		auto Limits = TestLimits();
+		Limits.MaximumMessagesPerTick = 8;
+		Check(Manager.RegisterRemote(Event, RemoteInstanceKind::ReliableEvent), "saturation event registers");
+		constexpr std::size_t PeerCount = 5;
+		std::array<ConnectionId, PeerCount> Peers{};
+		std::array<int, PeerCount> Received{};
+		std::array<int, PeerCount> Submitted{};
+		for (std::size_t Index = 0; Index < Peers.size(); ++Index) {
+			Peers[Index] = {static_cast<std::uint32_t>(Index + 1), 1};
+			Check(Manager.AddPeer(Peers[Index], ReplicationEpoch(1), Limits) && Manager.PublishRemote(Peers[Index], Event),
+				"saturation peer publishes on its own lane");
+		}
+		const auto Enqueue = [&](std::size_t Index) {
+			auto Frame = Message(RemoteMessageKind::ReliableEvent, Event);
+			Frame.Arguments = {Submitted[Index] + 1};
+			if (!Manager.HandleTransportEvent(Incoming(Peers[Index], Frame))) return false;
+			++Submitted[Index];
+			return true;
+		};
+		Manager.SetEventHandler(Event, [&](const RemoteInvocation &Invocation) {
+			const auto Index = Invocation.Peer.Connection.Slot - 1;
+			Check(std::get<int>(Invocation.Arguments.front()) == ++Received[Index],
+				"each saturated lane dispatches its accepted successor exactly once");
+		});
+		for (std::size_t Index = 0; Index < Peers.size(); ++Index) {
+			for (std::size_t Item = 0; Item < Limits.MaximumMessagesPerTick; ++Item)
+				Check(Enqueue(Index), "fill each lane to its negotiated message ceiling");
+			Check(!Enqueue(Index), "saturated admission remains bounded per peer");
+		}
+		for (int Wave = 1; Wave <= 8; ++Wave) {
+			for (std::size_t Turn = 0; Turn < Peers.size(); ++Turn) {
+				Check(Manager.Pump(1) == 1, "single-message budget admits exactly one callback");
+				for (std::size_t Index = 0; Index < Peers.size(); ++Index)
+					if (Received[Index] + static_cast<int>(Limits.MaximumMessagesPerTick) > Submitted[Index])
+						Check(Enqueue(Index), "replenish the lane that just received service");
+			}
+			Check(std::ranges::all_of(Received, [&](int Count) { return Count == Wave; }),
+				"every continuously backlogged peer progresses once per budget rotation");
+		}
+		while (Manager.Pump(2) != 0) {}
+		const auto Metrics = Manager.GetMetrics();
+		Check(Received == Submitted && Metrics.Ownership.DispatchAccepted == Metrics.Ownership.DispatchReleased &&
+			!Metrics.QueuedDispatchMessages && !Metrics.Ownership.BoundViolations,
+			"repeated saturation drains and reconciles all queue ownership");
+	}
+
 	void TestDispatchFairnessAndBroadcastBudget() {
 		RecordingScheduler Scheduler;
 		const ConnectionId Noisy{81, 1};
@@ -1163,7 +1613,7 @@ namespace {
 				"broadcast budget peer registers"
 			);
 		}
-		std::vector<WireValue> LargeArguments;
+		std::vector<RemoteValue> LargeArguments;
 		for (int Index = 0; Index < 15; ++Index)
 			LargeArguments.emplace_back(std::string(MaximumRemoteStringBytes, 'b'));
 		auto Results = BroadcastManager.Broadcast(Event, std::move(LargeArguments));
@@ -1365,6 +1815,9 @@ int main() {
 		return 1;
 	}
 	TestCodec();
+	TestStructuredCodec();
+	TestStructuredDelivery();
+	TestStructuredDispatchStorage();
 	TestReliableAndRequests();
 	TestUnreliableSequencedVisibilityAndLimits();
 	TestLifecycleAndEpochIsolation();
@@ -1372,6 +1825,10 @@ int main() {
 	TestTerminalDeferralAndHandlerAdmission();
 	TestOwnershipEvidenceBetweenObservations();
 	TestDispatchFairnessAndBroadcastBudget();
+	TestReliableDispatchAcrossPumpBoundaries();
+	TestDispatchReentrantRetirement();
+	TestDeferredOrderingStreams();
+	TestDispatchSaturationRotatesService();
 	TestRejectionBudgetAndReentrantLifecycle();
 	TestHostileDispatch();
 	if (Failures != 0) {

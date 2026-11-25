@@ -44,6 +44,7 @@
 #include "gargantuan/scripting/ModuleResolution.hpp"
 #include "gargantuan/scripting/NativeCallback.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
+#include "gargantuan/scripting/ExecutionBudget.hpp"
 #include "gargantuan/services/ProcessService.hpp"
 #include "gargantuan/services/Tags.hpp"
 #include "gargantuan/services/Workspace.hpp"
@@ -7772,6 +7773,125 @@ namespace {
 		};
 
 		lua_settop(L, 0);
+		const auto KeyScriptLoaded = Load(L, R"(
+			local Root = Instance.new("Folder")
+			local Child = Instance.new("Folder")
+			local Seen = { [Child] = "inventory" }
+			local FromEvent
+			Root.ChildAdded:Connect(function(Added) FromEvent = Added end)
+			Child.Name = "Item"
+			Child.Parent = Root
+			assert(Seen[FromEvent] == "inventory")
+			assert(rawequal(Root:GetChildren()[1], Root:FindFirstChild("Item")))
+			assert(Seen[Root.Item] == "inventory" and rawequal(Root.Item.Parent, Root))
+			local Ancestors = Child:GetAncestors()
+			assert(#Ancestors == 1 and Ancestors[1] == Root)
+			assert(Child:IsDescendantOf(Root) and Root:IsAncestorOf(Child))
+			assert(not Child:IsAncestorOf(Child) and not Root:IsDescendantOf(Child))
+			Child:Destroy()
+			assert(not pcall(function() return Child:GetAncestors() end))
+			assert(not Root:IsAncestorOf(Child))
+			local New = Instance.new("Folder")
+			New.Name = "Item"
+			New.Parent = Root
+			assert(Seen[Root.Item] == nil and Seen[Child] == "inventory")
+			Root:ClearAllChildren()
+			assert(New.Destroyed and #Root:GetChildren() == 0)
+			Root:Destroy()
+		)", "instance-table-keys");
+		const bool KeyScriptPassed = KeyScriptLoaded == LUA_OK && lua_pcall(L, 0, 0, 0) == LUA_OK;
+		if (!KeyScriptPassed) std::cerr << "[Runtime:IdentityTest] " << lua_tostring(L, -1) << '\n';
+		Check(KeyScriptPassed, "Instance keys agree across Luau construction, signals, properties and hierarchy");
+		{
+			auto Detached = std::make_shared<Folder>();
+			std::weak_ptr<Instance> Lifetime = Detached;
+			const auto Scope = game->GetObjectId();
+			const auto BeforeExposure = ChangeJournal::Get().CreateCursor(Scope);
+			{
+				ExecutionDomainScope ReadOnly(ExecutionDomain::Worker);
+				StackValue<std::shared_ptr<Folder>>::Push(L, Detached);
+			}
+			const void *FirstWrapper = lua_topointer(L, -1);
+			{
+				auto Different = std::make_shared<Folder>();
+				Check(Load(L, "local A, B = ...; return A == B", "detached-instance-equality") == LUA_OK,
+					"detached equality probe compiles");
+				ExecutionDomainScope ReadOnly(ExecutionDomain::Worker);
+				lua_pushvalue(L, -2);
+				StackValue<std::shared_ptr<Folder>>::Push(L, Different);
+				const int Status = lua_pcall(L, 2, 1, 0);
+				Check(Status == LUA_OK && lua_isboolean(L, -1) && !lua_toboolean(L, -1) &&
+					!Detached->Id.IsValid() && !Different->Id.IsValid(),
+					"equality distinguishes detached objects without publishing either identity");
+				lua_pop(L, 1);
+			}
+			{
+				ScriptEngine OtherVm(std::make_shared<DataModel>(), {}, RuntimeMode::NetworkClient);
+				StackValue<std::shared_ptr<Instance>>::Push(OtherVm.L, Detached);
+				Check(lua_topointer(OtherVm.L, -1) != FirstWrapper && !Detached->Id.IsValid() &&
+					ChangeJournal::Get().Read(BeforeExposure).Records.empty(),
+					"first exposure in separate VMs needs no mutation authority, identity publication or journal commit");
+			}
+			{
+				auto Adopted = std::make_shared<Folder>();
+				StackValue<std::shared_ptr<Folder>>::Push(L, Adopted);
+				const void *Wrapper = lua_topointer(L, -1);
+				const auto BeforeAdoption = ChangeJournal::Get().CreateCursor(Scope);
+				Adopted->SetParent(game);
+				StackValue<std::shared_ptr<Instance>>::Push(L, Adopted);
+				const auto Records = ChangeJournal::Get().Read(BeforeAdoption).Records;
+				Check(Adopted->Id.IsValid() && ObjectRegistry::Get().Lookup(Adopted->Id) == Adopted &&
+					lua_topointer(L, -1) == Wrapper && std::ranges::any_of(Records, [&](const auto &Record) {
+						return Record.Object == Adopted->Id && std::holds_alternative<ObjectCreatedChange>(Record.Payload);
+					}), "first adoption publishes the object while preserving its pre-adoption Luau key");
+				lua_pop(L, 2);
+				Adopted->Destroy();
+			}
+			const auto OldId = Detached->GetObjectId();
+			Detached->Destroy();
+			auto Replacement = std::make_shared<Folder>();
+			const auto NewId = Replacement->GetObjectId();
+			StackValue<std::shared_ptr<Folder>>::Push(L, Replacement);
+			Check(NewId.Slot == OldId.Slot && NewId.Generation != OldId.Generation &&
+				!lua_rawequal(L, -1, -2) && !ObjectRegistry::Get().Lookup(OldId),
+				"slot reuse never aliases a retained destroyed wrapper");
+			lua_pop(L, 2);
+			Detached.reset();
+			lua_gc(L, LUA_GCCOLLECT, 0);
+			Check(Lifetime.expired(), "weak identity cache releases the native object after GC");
+		}
+		{
+			using namespace gargantuan::runtime_detail;
+			std::array<std::weak_ptr<Instance>, 1024> TransientObjects;
+			lua_gc(L, LUA_GCCOLLECT, 0);
+			const auto Before = lua_totalbytes(L, -1);
+			auto Peak = Before;
+			lua_gc(L, LUA_GCSTOP, 0);
+			WorkSample Churn{};
+			{
+				WorkCapture Capture(&Churn);
+				for (auto &Observed : TransientObjects) {
+					auto Value = std::make_shared<Folder>();
+					Observed = Value;
+					StackValue<std::shared_ptr<Folder>>::Push(L, Value);
+					StackValue<std::shared_ptr<Folder>>::Push(L, Value);
+					lua_pop(L, 2);
+					Peak = std::max(Peak, lua_totalbytes(L, -1));
+				}
+			}
+			lua_gc(L, LUA_GCRESTART, 0);
+			lua_gc(L, LUA_GCCOLLECT, 0);
+			const auto After = lua_totalbytes(L, -1);
+			const auto Expired = static_cast<std::size_t>(std::ranges::count_if(TransientObjects,
+				[](const auto &Value) { return Value.expired(); }));
+			const auto &Wraps = Churn[static_cast<std::size_t>(WorkPhase::InstanceWrap)];
+			Check(Wraps.Calls == TransientObjects.size() * 2 && Wraps.Units == TransientObjects.size() &&
+				Expired == TransientObjects.size(), "identity churn creates one wrapper per native object and collects each");
+			std::cout << "[Runtime:InstanceGc] transient_objects=" << TransientObjects.size()
+				<< " wrapper_misses=" << Wraps.Units << " expired_native=" << Expired
+				<< " vm_before_bytes=" << Before << " vm_peak_bytes=" << Peak << " vm_after_bytes=" << After << '\n';
+		}
+		lua_settop(L, 0);
 		Check(Load(L, R"(
 			local Hostile = setmetatable({}, { __tostring = function() error("must not run") end })
 			print("hello")
@@ -7800,6 +7920,99 @@ namespace {
 			RuntimeDiagnostics[5].second == "<invalid utf-8>" &&
 			RuntimeDiagnostics[6].second.ends_with("<arguments truncated>"),
 			"runtime diagnostics preserve multiline UTF-8 and bound or sanitize unsafe strings");
+
+		engine.GameplayExecutionBudget = std::chrono::milliseconds(1);
+		Check(Load(L, "task.defer(function() error(string.char(255)) end)", "task-diagnostic") == LUA_OK &&
+			CallGameplay(L, 0, 0) == LUA_OK, "schedule a failed task with an invalid UTF-8 error");
+		engine.Threads.Step();
+		Check(RuntimeDiagnostics.back() == std::pair(std::string("Error"), std::string("[Runtime:Task] <invalid utf-8>")),
+			"a deferred error remains printable and encodable by the EditorHost diagnostic channel");
+		Check(Load(L, "local Sum=0 for I=1,100000000 do Sum+=I end return Sum", "finite-over-budget") ==
+			LUA_OK && CallGameplay(L, 0, 1) == LUA_ERRRUN &&
+			std::string_view(lua_tostring(L, -1)).find("[Runtime:ExecutionBudget]") != std::string_view::npos,
+			"ordinary finite long-running code returns a contextual execution-budget error");
+		Check(RuntimeDiagnostics.back().second.find("[Runtime:ExecutionBudget]") == 0 &&
+			lua_callbacks(L)->interrupt == nullptr, "the VM restores its interrupt hook and reports the deadline");
+		lua_settop(L, 0);
+		const auto DiagnosticsBeforeProtectedCall = RuntimeDiagnostics.size();
+		Check(Load(L, R"(
+			return pcall(function()
+				local Sum = 0
+				for Index = 1, 100000000 do Sum += Index end
+				return Sum
+			end)
+		)", "deadline-in-protected-call") == LUA_OK &&
+			CallGameplay(L, 0, LUA_MULTRET) == LUA_ERRRUN &&
+			RuntimeDiagnostics.size() == DiagnosticsBeforeProtectedCall + 1 &&
+			lua_callbacks(L)->interrupt == nullptr,
+			"expiry ends the outer gameplay entry even when a protected call catches the first error");
+		lua_settop(L, 0);
+		engine.GameplayExecutionBudget = std::chrono::milliseconds(250);
+		Check(Load(L, "return 5", "after-budget") == LUA_OK && CallGameplay(L, 0, 1) == LUA_OK &&
+			lua_tonumber(L, -1) == 5, "subsequent gameplay receives a fresh deadline");
+
+		{
+			using namespace gargantuan::runtime_detail;
+			auto Item = std::make_shared<Folder>();
+			constexpr int Iterations = 4096;
+			StackValue<std::shared_ptr<Folder>>::Push(L, Item);
+			const auto Wrap = [&] {
+				const auto Start = std::chrono::steady_clock::now();
+				for (int Index = 0; Index < Iterations; ++Index) {
+					StackValue<std::shared_ptr<Folder>>::Push(L, Item);
+					lua_pop(L, 1);
+				}
+				return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-Start).count();
+			};
+			const auto Plain = Wrap();
+			WorkSample Sample{};
+			std::int64_t Measured;
+			{
+				WorkCapture Capture(&Sample);
+				Measured = Wrap();
+			}
+			const auto &Hits = Sample[static_cast<std::size_t>(WorkPhase::InstanceWrap)];
+			Check(Hits.Calls == Iterations && Hits.Units == 0, "repeated pushes allocate no additional wrappers");
+			std::cout << "[Runtime:InstanceWrap] calls=" << Hits.Calls << " cache_misses=" << Hits.Units
+				<< " plain_ns=" << Plain << " captured_ns=" << Measured << '\n';
+			lua_pop(L, 1);
+			enum class DeadlineMode { Cooperative, EmptyHook, Deadline };
+			const auto Cost = [&](const char *Source, double Expected, DeadlineMode Mode) {
+				using namespace std::chrono_literals;
+				engine.GameplayExecutionBudget = Mode == DeadlineMode::Deadline ? 250ms : 0ms;
+				Check(Load(L, Source, "budget-cost") == LUA_OK, "budget workload compiles");
+				if (Mode == DeadlineMode::EmptyHook) lua_callbacks(L)->interrupt = [](lua_State *, int) {};
+				const auto Start = std::chrono::steady_clock::now();
+				const auto Status = CallGameplay(L, 0, 1);
+				const auto Elapsed = std::chrono::steady_clock::now()-Start;
+				lua_callbacks(L)->interrupt = nullptr;
+				Check(Status == LUA_OK && lua_tonumber(L, -1) == Expected, "budget measurements run identical work");
+				lua_pop(L, 1);
+				return std::chrono::duration_cast<std::chrono::nanoseconds>(Elapsed).count();
+			};
+			const auto Compare = [&](std::string_view Name, const char *Source, double Expected) {
+				constexpr std::size_t Modes = 3;
+				constexpr std::size_t Repeats = 15;
+				std::array<std::array<std::int64_t, Repeats>, Modes> Samples{};
+				for (std::size_t Repeat = 0; Repeat < Repeats; ++Repeat) {
+					for (std::size_t Offset = 0; Offset < Modes; ++Offset) {
+						const auto Mode = (Repeat + Offset) % Modes;
+						Samples[Mode][Repeat] = Cost(Source, Expected, static_cast<DeadlineMode>(Mode));
+					}
+				}
+				for (auto &Set : Samples) std::ranges::sort(Set);
+				std::cout << "[Runtime:ExecutionBudget] workload=" << Name << " repeats=" << Repeats
+					<< " cooperative_median_ns=" << Samples[0][Repeats / 2]
+					<< " empty_hook_median_ns=" << Samples[1][Repeats / 2]
+					<< " budgeted_median_ns=" << Samples[2][Repeats / 2] << '\n';
+			};
+			Compare("tight_loop", "local N=0 for I=1,100000 do N+=I end return N", 5000050000.0);
+			Compare("instance_reads",
+				"local W=game.Workspace local N=0 for I=1,10000 do N+=#W.Name end return N", 90000);
+			Compare("native_calls",
+				"local N=0 for I=1,10000 do if game:FindFirstChild('Workspace') then N+=1 end end return N", 10000);
+			Compare("short_callback", "return #game.Workspace.Name", 9);
+		}
 
 		lua_settop(L, 0);
 		Check(Load(L, "return Vector3.new(1, 0, 0):Cross(Vector3.new(0, 1, 0)), type(Vector3.zero)",

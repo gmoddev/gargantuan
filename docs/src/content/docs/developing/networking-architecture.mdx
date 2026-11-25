@@ -25,7 +25,7 @@ failure, teardown, and basic-replication behavior. Reliable basic client
 replication now provides a per-peer coordinator, versioned bounded binary codec,
 schema-compatible baseline, incremental application, and replica applicator.
 Bounded Luau remotes now provide four schema-backed application primitives, a
-versioned binary codec, visibility-checked Object references, finite requests,
+versioned binary codec, bounded structured values and buffers, visibility-checked Object references, finite requests,
 Luau coroutine suspension, deterministic simulator coverage, and real localhost
 GNS coverage. Realtime Character replication, adaptive cadence, bounded fair
 publication, and canonical server-private SpatialCellAddress/region candidates are
@@ -78,6 +78,12 @@ update, and one operation can be encoded differently as protocols evolve.
 Engine replication and Luau remotes share connection management, codecs,
 scheduling, congestion budgets, authentication, and transport primitives. They
 do not share semantics.
+
+Foundation 10B extends only the Remote application payload with arrays,
+dictionaries, and buffers. The `GRMT` v3 frame keeps the scalar tag layouts.
+`GSES` v2 requires both game endpoints to understand the new Remote contract
+before the session becomes ready. Structured values are charged to the existing
+wire budgets and explicit decoded-argument budgets before gameplay dispatch.
 
 ```text
 DataModel
@@ -165,9 +171,10 @@ unsafe or underspecified behavior. The required semantic primitives are:
 
 `RemoteEvent`, `UnreliableRemoteEvent`,
 `UnreliableSequencedRemoteEvent`, and `RemoteFunction` are the implemented
-public class names. Peer slot/generation arguments and RemoteFunction handler
-setter spelling remain provisional until the complete `Players` service exists;
-the delivery and boundedness contracts are implemented.
+public class names. Ordinary server callbacks and targeting can address a current
+Player through the ready GameSession association. The explicit peer
+slot/generation targeting and original peer callback signatures remain available.
+The delivery and boundedness contracts apply to both API forms.
 
 A remote request suspends only its calling Luau coroutine. Every request has a
 finite deadline and terminates with a response, timeout, cancellation,

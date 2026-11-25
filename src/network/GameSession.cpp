@@ -370,6 +370,34 @@ namespace gargantuan::network {
 			}
 		}
 
+		std::shared_ptr<Player> ResolveRemotePlayer(const RemotePeerContext &Identity) const {
+			if (Configuration.Role != GameSessionRole::Server || Status != GameSessionStatus::Listening ||
+				!Runtime || PendingSessionFailure || PendingPeerFailures.contains(Identity.Connection))
+				return nullptr;
+			const auto Found = Peers.find(Identity.Connection);
+			if (Found == Peers.end() || Found->second.Phase != PeerPhase::Ready ||
+				Found->second.Replication != Identity.Epoch)
+				return nullptr;
+			const auto &PlayerValue = Found->second.PlayerValue;
+			if (!PlayerValue || PlayerValue->GetDestroyed() || PlayerValue->IsDestroying() ||
+				PlayerValue->GetObjectId() != Found->second.PlayerObject ||
+				PlayerValue->GetParent().value_or(nullptr) != Runtime->Players)
+				return nullptr;
+			const auto Reverse = ConnectionsByPlayer.find(Found->second.PlayerObject);
+			return Reverse != ConnectionsByPlayer.end() && Reverse->second == Identity.Connection ? PlayerValue : nullptr;
+		}
+
+		std::optional<RemotePeerContext> ResolveRemotePeer(const Player &PlayerValue) const {
+			if (!Runtime || PlayerValue.GetDestroyed() || PlayerValue.IsDestroying() ||
+				PlayerValue.GetParent().value_or(nullptr) != Runtime->Players) return std::nullopt;
+			const auto Binding = ConnectionsByPlayer.find(PlayerValue.GetObjectId());
+			if (Binding == ConnectionsByPlayer.end()) return std::nullopt;
+			const auto Found = Peers.find(Binding->second);
+			if (Found == Peers.end() || Found->second.PlayerValue.get() != &PlayerValue) return std::nullopt;
+			const RemotePeerContext Identity{Binding->second, Found->second.Replication};
+			return ResolveRemotePlayer(Identity) ? std::optional{Identity} : std::nullopt;
+		}
+
 		void InitializeServerManagers() {
 			Replication = std::make_unique<ReplicationCoordinator>(
 				Runtime->DataModel,
@@ -390,6 +418,10 @@ namespace gargantuan::network {
 					return View && View->Knows(Object);
 				},
 				[](ObjectId Object) { return ObjectRegistry::Get().Lookup(Object); }
+			);
+			Remotes->SetPlayerResolvers(
+				[this](const RemotePeerContext &Identity) { return ResolveRemotePlayer(Identity); },
+				[this](const Player &PlayerValue) { return ResolveRemotePeer(PlayerValue); }
 			);
 			Remotes->SetTerminalHandler([this](ConnectionId Connection, const DisconnectInfo &Information) {
 				PendingPeerFailures.try_emplace(Connection, Information);
@@ -463,6 +495,7 @@ namespace gargantuan::network {
 				[this](ConnectionId, ObjectId Object) { return Replica.Resolve(Object) != nullptr; },
 				[this](ObjectId Object) { return Replica.Resolve(Object); }
 			);
+			Remotes->SetOutgoingReferenceMapper([this](const Instance &Value) { return Replica.GetSourceObject(Value); });
 			Remotes->SetTerminalHandler([this](ConnectionId FailedConnection, const DisconnectInfo &Information) {
 				PendingPeerFailures.try_emplace(FailedConnection, Information);
 			});
@@ -3048,6 +3081,12 @@ namespace gargantuan::network {
 					   (Iterator->second.Phase == PeerPhase::Accepted || Iterator->second.Phase == PeerPhase::Ready)
 				   ? Iterator->second.PlayerValue
 				   : nullptr;
+	}
+	std::shared_ptr<Player> GameSession::ResolveRemotePlayer(const RemotePeerContext &Peer) const {
+		return State->ResolveRemotePlayer(Peer);
+	}
+	std::optional<RemotePeerContext> GameSession::ResolveRemotePeer(const Player &PlayerValue) const {
+		return State->ResolveRemotePeer(PlayerValue);
 	}
 	std::vector<GameSessionPeerIdentity> GameSession::GetPeerIdentities() const {
 		std::vector<GameSessionPeerIdentity> Result;

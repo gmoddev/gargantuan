@@ -3,6 +3,7 @@
 #include "gargantuan/scripting/UserdataTag.hpp"
 
 #include <common.hpp>
+#include <cmath>
 
 namespace gargantuan {
 	G_USERDATA_IMPL(
@@ -56,9 +57,9 @@ namespace gargantuan {
 
 	Color3 Color3::Lerp(const Color3 &goal, const float &alpha) const {
 		return {
-			R + (goal.R - R) * alpha,
-			G + (goal.R - G) * alpha,
-			B + (goal.R - B) * alpha,
+			std::lerp(R, goal.R, alpha),
+			std::lerp(G, goal.G, alpha),
+			std::lerp(B, goal.B, alpha),
 		};
 	}
 } // namespace gargantuan

@@ -20,6 +20,7 @@ description: Native Luau constructors, returned value types, task, require, and 
 | `Signal` | `Signal.new()` | `LibSignal.cpp`, `src/datatypes/Signal.cpp`; user-created signal |
 | `SignalConnection` | Returned by `Signal:Connect` / `:Once`; no constructor global | `src/datatypes/Signal.cpp` |
 | `TweenInfo` | `TweenInfo.new(...)` | `LibTweenInfo.cpp`, `src/datatypes/TweenInfo.cpp` |
+| `Tween` | Returned by `TweenService:Create` | `src/classes/Tween.cpp`; [property tweens](../input-gui-and-media/#property-tweens) |
 | `Vector2`, `Vector3` | `Vector2.new(X?, Y?)`, `Vector3.new(X?, Y?, Z?)` | `LibVector2.cpp`, `LibVector3.cpp`, vector bindings |
 | `AnimationTrack` | Returned by `Animator:LoadAnimation`; no constructor global | `src/animation/AnimationTrack.cpp` |
 | Base globals | `game`, `print(...)`, `warn(...)`, `_RUNTIME` | `LibBase.cpp` |
@@ -47,5 +48,18 @@ description: Native Luau constructors, returned value types, task, require, and 
 `task.cancel(Thread)` returns `true` when it removes a suspended coroutine's pending scheduler entries, including a later deferred callback in the current step. The scheduler releases its references immediately. The call returns `false` for a running, finished, already canceled, or otherwise unowned coroutine. A pending signal wait or RemoteFunction continuation keeps its independent lifetime. Canceling scheduled work leaves the coroutine's Luau state intact.
 
 `task.synchronize` and `task.desynchronize` are unimplemented. Native type errors, invalid values, permission denials, and resource limits are Luau errors. Use `pcall` when an error is expected.
+
+Ordinary gameplay gets a default 250 ms wall-clock budget each time the
+Engine enters Luau. Nested calls inherit the remaining time. A long loop can
+raise a catchable `[Runtime:ExecutionBudget]` error at a VM safepoint. Split
+long-running script work across frames. A native binding must return before
+the VM can sample the clock again. Trusted offline hosts can configure the
+interval or disable it with zero. Hostile-code isolation, memory limits and
+a total frame budget require additional controls.
+
+An error in a scheduled task reaches the runtime diagnostic sink with the
+`[Runtime:Task]` prefix and up to 1,024 bytes of error detail. Play can show
+the Luau chunk name and line number carried in that error. A failed task
+retires its own scheduler reference.
 
 The VM's per-Script `script` global remains bound to its originating Script through a yield. Finishing the initial Script releases that coroutine's root after its active `lua_resume` returns, while separately scheduled tasks, signal callbacks, and Remote requests keep their own roots. Engine shutdown stops new callback admission and cleans tracked Scripts; an active native Lua call keeps its VM alive only through its return or error boundary. These lifetime rules do not add capabilities or make a retained Instance valid after its DataModel is destroyed.

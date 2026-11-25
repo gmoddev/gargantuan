@@ -11,6 +11,25 @@ Common registered services include `Workspace`, `RunService`, `Players`, `UserIn
 
 ## Construct and traverse
 
+Use Instances directly as dictionary keys. Within a VM, a signal argument and
+an independent lookup of the same Player address the same entry. A reconnect
+creates a new Player, so release any state for the old one on departure.
+
+```luau
+local Players = game:GetService("Players")
+local Inventory = {}
+local function Joined(Player)
+    Inventory[Player] = {}
+end
+Players.PlayerAdded:Connect(Joined)
+Players.PlayerRemoving:Connect(function(Player) Inventory[Player] = nil end)
+for _, Player in Players:GetPlayers() do Joined(Player) end
+```
+
+`Child:IsDescendantOf(Root)` and `Root:IsAncestorOf(Child)` test strict
+ancestry. `Child:GetAncestors()` returns a snapshot starting at its direct
+parent. `ClearAllChildren()` destroys the direct children and their subtrees.
+
 | API | Parameters and result | Behavior |
 | --- | --- | --- |
 | `Instance.new(ClassName)` | constructible class name → detached `Instance` | Protected, abstract, and unknown classes fail. Set `Parent` to adopt a subtree. |

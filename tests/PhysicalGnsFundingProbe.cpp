@@ -88,7 +88,7 @@ struct Probe {
 	std::map<ConnectionId, Participant> Participants;
 	std::optional<Clock::time_point> RpcStart, EventStart;
 	std::vector<double> RpcTimes, EventTimes;
-	std::vector<WireValue> Echo;
+	std::vector<RemoteValue> Echo;
 	std::string FailureClass;
 	bool Registered = false, RegisterPending = false, GameplayDoneSent = false, MaterializationCheckPending = false;
 	Clock::time_point Started = Clock::now(), LastStep = Started, NextSend = Started, WaveStarted = Started;
@@ -202,7 +202,7 @@ struct Probe {
 		const auto Id = Session->GetPrimaryConnection(); Require(bool(Id), "client connection missing");
 		if (!Registered && !RegisterPending) {
 			RegisterPending = true;
-			const std::vector<WireValue> Args{std::string("register"), std::to_string(Nonce), Producer};
+			const std::vector<RemoteValue> Args{std::string("register"), std::to_string(Nonce), Producer};
 			Require(Manager->StartRequest(*Id, Function->GetNetworkObjectId(), Args, [this, Args](RemoteRequestResult R) {
 				RegisterPending = false; Registered = R.Outcome.Status == RemoteRequestTerminalStatus::Success && R.Results == Args;
 				if (!Registered) ++Errors;
@@ -232,7 +232,7 @@ struct Probe {
 		if (Producer && !Finished && RpcTimes.size() < 80 && Now >= NextSend && !RpcStart && !EventStart) {
 			Require(RpcTimes.size() < 512 && EventTimes.size() < 512, "gameplay sample bound exceeded");
 			const int N = int(++Sequence); RpcStart = EventStart = Now; NextSend = Now + 100ms;
-			const std::vector<WireValue> Args{std::string("rpc"), N}; Echo = {std::string("event"), N};
+			const std::vector<RemoteValue> Args{std::string("rpc"), N}; Echo = {std::string("event"), N};
 			Require(Manager->StartRequest(*Id, Function->GetNetworkObjectId(), Args, [this, Args](RemoteRequestResult R) {
 				if (!RpcStart) { ++Errors; return; }
 				const auto Ms = Milliseconds(Clock::now() - *RpcStart); RpcTimes.push_back(Ms); RpcStart.reset();

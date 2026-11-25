@@ -8,10 +8,8 @@ else
 	Ping.OnClientEvent:Connect(function(Message)
 		print("[Docs:Remote] Server replied:", Message)
 	end)
-	local Ok, ErrorMessage = pcall(function()
-		Ping:FireServer("hello")
-	end)
+	local Ok, Code = Ping:TryFireServer("hello")
 	if not Ok then
-		warn("[Docs:Remote] Send rejected:", ErrorMessage)
+		warn("[Docs:Remote] Send rejected:", Code)
 	end
 end

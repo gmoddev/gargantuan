@@ -61,7 +61,11 @@ Available properties are `Archivable`, `ClassName`, `Destroyed`, `Name`, and
 nullable `Parent`. Available lifecycle/query methods are:
 
 - `Instance:Clone()` and `Instance:Destroy()`;
-- `IsA`, `GetFullName`, `GetChildren`, `GetDescendants`, and `ClearAllChildren`;
+- `IsA`, `GetFullName`, `GetChildren`, and `GetDescendants`;
+- `GetAncestors` returns a nearest-parent-first snapshot. `IsAncestorOf`
+  and `IsDescendantOf` test strict ancestry against the current parent chain.
+  None of these queries includes the receiver. `ClearAllChildren` destroys
+  the snapshotted direct children and their subtrees.
 - child, descendant, and ancestor `FindFirst...` name/class/`WhichIsA` families;
 - `GetPropertyChangedSignal`, `GetAttributeChangedSignal`, `IsPropertyModified`,
   and `ResetPropertyToDefault`.
@@ -75,8 +79,10 @@ Client runtime profiles have it; network-only inbound contexts do not.
 
 The ancestry, child, descendant, and destroying signals declared on `Instance`
 are exposed. Nullable lookups and nullable object-reference properties return
-Luau `nil`. Separate userdata wrappers for the same live Instance compare equal
-through generation-safe `ObjectId` identity; clones compare unequal to sources.
+Luau `nil`. References to the same live Instance in one VM reuse its
+userdata, including for dictionary lookups and `rawequal`. Clones receive
+distinct keys. A retained wrapper for a destroyed Instance keeps its identity
+as an existing table key after the native slot is reused.
 
 `Clone()` requires every node in the source subtree to be live, `Archivable`,
 constructible, and non-protected. It returns a complete detached subtree:
@@ -179,14 +185,17 @@ requiring Instance from its live full path and supports the `@game` alias used
 by shipped modules. Filesystem configuration, additional aliases,
 duplicate-name disambiguation, and a broader module system are not complete.
 
-Remote event/function classes and bounded bindings exist for explicitly
-configured replication sessions. Local Studio Play has no peer topology, and
-this inventory makes no general gameplay networking guarantee.
+Configured network sessions expose structured events, bounded invocations,
+Player targets, and explicit peer addresses. The server resolves the sending
+Player from its live session. Local Studio Play has no peer topology.
+[Remote contracts and compatibility](LuauRemotes.md)
+
+[Property tweening](TweenRuntime.md) schedules bounded reflected property writes
+on Main and uses the caller's gameplay property capabilities.
 
 ## Major intentional gaps
 
-Final multiplayer Players behavior, a broader RunService API,
-TweenService service semantics, gamepad action sources,
+Final multiplayer Players behavior, a broader RunService API, gamepad action sources,
 DataStore/HTTP services, debugger/profiler/LSP, full module
 configuration, edit-mode orbit/pan/zoom/focus, and broad gameplay service
 compatibility remain outside the current surface. Humanoid compatibility is

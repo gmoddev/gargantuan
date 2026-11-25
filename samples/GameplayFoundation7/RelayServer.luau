@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local CharacterControl = game:GetService("CharacterControlService")
+local TweenService = game:GetService("TweenService")
 local Course = Workspace:FindFirstChild("RelayCourse")
 if not Course then
 	warn("[Gameplay:Relay] RelayCourse is missing")
@@ -13,6 +14,7 @@ local GroundSwitch = Course:FindFirstChild("GroundSwitch")
 local Hazard = Course:FindFirstChild("Hazard")
 local Relay = Course:FindFirstChild("RelayBeacon")
 local CargoMarker = Course:FindFirstChild("CargoMarker")
+local CellCollected = Course.CellCollected
 if not LaunchPad or not GroundSwitch or not Hazard or not Relay then
 	warn("[Gameplay:Relay] A course station is missing")
 	return
@@ -52,8 +54,7 @@ local function SetHealth(Player, State, Health)
 end
 
 local function AddPlayer(Player)
-	local PlayerId = Player.PlayerId
-	if States[PlayerId] then
+	if States[Player] then
 		return
 	end
 	local Inventory = Instance.new("Folder")
@@ -67,7 +68,7 @@ local function AddPlayer(Player)
 		NextDroneStep = 0,
 		HasCharged = false,
 	}
-	States[PlayerId] = State
+	States[Player] = State
 	Player:SetAttribute("Team", "RelayCrew")
 	Player:SetAttribute("RelayCharges", 0)
 	SetHealth(Player, State, HealthMaximum)
@@ -91,10 +92,10 @@ local function RetireDrone(State)
 	end
 end
 
-local function RemovePlayer(PlayerId)
-	local State = States[PlayerId]
+local function RemovePlayer(Player)
+	local State = States[Player]
 	if State then
-		States[PlayerId] = nil
+		States[Player] = nil
 		State.CharacterConnection:Disconnect()
 		RetireDrone(State)
 	end
@@ -161,15 +162,13 @@ for _, Player in Players:GetPlayers() do
 	AddPlayer(Player)
 end
 local AddedConnection = Players.PlayerAdded:Connect(AddPlayer)
-local RemovingConnection = Players.PlayerRemoving:Connect(function(Player)
-	RemovePlayer(Player.PlayerId)
-end)
+local RemovingConnection = Players.PlayerRemoving:Connect(RemovePlayer)
 local StepConnection = RunService.PreSimulation:Connect(function(DeltaTime)
 	Elapsed += math.clamp(DeltaTime, 0, 0.1)
 	local CurrentPlayers = Players:GetPlayers()
 	local SwitchHeld = false
 	for _, Player in CurrentPlayers do
-		local State = States[Player.PlayerId]
+		local State = States[Player]
 		local Character = Player.Character
 		if State and State.Health > 0 and Character and not State.Drone
 			and IsStandingOn(Character.Position, GroundSwitch) then
@@ -179,11 +178,12 @@ local StepConnection = RunService.PreSimulation:Connect(function(DeltaTime)
 	end
 	if SwitchHeld ~= Course:GetAttribute("RelayEnabled") then
 		Course:SetAttribute("RelayEnabled", SwitchHeld)
-		GroundSwitch.Color = if SwitchHeld then Color3.new(0.55, 1, 0.24) else Color3.new(0.34, 0.52, 0.12)
+		local Color = if SwitchHeld then Color3.new(0.55, 1, 0.24) else Color3.new(0.34, 0.52, 0.12)
+		TweenService:Create(GroundSwitch, TweenInfo.new(0.18), { Color = Color }):Play()
 	end
 
 	for _, Player in CurrentPlayers do
-		local State = States[Player.PlayerId]
+		local State = States[Player]
 		if not State then
 			continue
 		end
@@ -215,6 +215,13 @@ local StepConnection = RunService.PreSimulation:Connect(function(DeltaTime)
 				Cell.Parent = State.Inventory
 				Course:SetAttribute("RelayCharges", Charges)
 				Player:SetAttribute("RelayCharges", (Player:GetAttribute("RelayCharges") or 0) + 1)
+				local Accepted, Reason = CellCollected:TryFireClient(Player, {
+					Item = { Name = Cell.Name, SwatchRGB = buffer.fromstring(string.char(99, 235, 255)) },
+					Count = #State.Inventory:GetChildren(),
+				})
+				if not Accepted then
+					warn("[Gameplay:Relay] Cell notification declined", Reason)
+				end
 				if Charges == TargetCharges and CargoMarker and CargoMarker:IsA("BasePart") then
 					CargoMarker.Anchored = false
 					CargoMarker:SetLinearVelocity(Vector3.new(2, 0, 0))
@@ -251,7 +258,7 @@ script.Destroying:Connect(function()
 	StepConnection:Disconnect()
 	RemovingConnection:Disconnect()
 	AddedConnection:Disconnect()
-	for PlayerId in States do
-		RemovePlayer(PlayerId)
+	for Player in States do
+		RemovePlayer(Player)
 	end
 end)

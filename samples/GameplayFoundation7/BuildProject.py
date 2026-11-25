@@ -11,6 +11,8 @@ Project = Root / ".gargantuan" / "project.instance.json"
 ClassIds = {
     "DataModel": "5ed5470f622082d244a9379d906bbd16",
     "Workspace": "9ae26e41e446cbfed61d91dfcab22b12",
+    "RemoteEvent": "321dbe4047c7b7b9ee6d5f1f6d7ee785",
+    "ReplicatedStorage": "7745170febb05579b922f6c3d35a14fd",
     "Folder": "dfa3ba4ea6909035cee5b32930b48871",
     "Part": "5eab0d5368149cacdcc9dcd4130cd3c8",
     "MeshPart": "6ae6d9714ca7c7d16cff97f58d855f1d",
@@ -74,8 +76,9 @@ def Nodes(Node):
         yield from Nodes(Child)
 
 
-def BuildProject():
+def BuildProject(CustomCharacter=False):
     Course = Instance("Folder", "RelayCourse", Children=[
+        Instance("RemoteEvent", "CellCollected"),
         Part("Ground", [0, -0.5, 0], [64, 1, 50], [0.12, 0.17, 0.22]),
         Part("LaunchPad", [-9, 0.1, -5], [5, 0.2, 5], [0.08, 0.82, 0.79], False),
         Part("GroundSwitch", [9, 0.1, -6], [5, 0.2, 5], [0.34, 0.52, 0.12], False),
@@ -136,25 +139,36 @@ def BuildProject():
             "TextColor3": {"Color3": [0.60, 0.86, 0.90]},
         }),
     ])
+    GameScripts = Instance("Folder", "GameScripts", Children=[
+        Script("RelayServer", "Server", "3fc0efec12504cc983789da661cb2817"),
+        Script("RelayClient", "Client", "a3af72783f3147098ab0a0f72c610eb5"),
+    ])
     World = Instance("DataModel", "Relay Rescue", Children=[
         Instance("Workspace", "Workspace", Children=[Course]),
         Instance("StarterGui", "StarterGui", Children=[Hud, Briefing]),
-        Instance("Folder", "GameScripts", Children=[
-            Script("RelayServer", "Server", "3fc0efec12504cc983789da661cb2817"),
-            Script("RelayClient", "Client", "a3af72783f3147098ab0a0f72c610eb5"),
-        ]),
+        GameScripts,
     ])
+    if CustomCharacter:
+        Template = json.loads((Root / "RelayCharacterTemplate.instance.json").read_text(encoding="utf-8"))
+        Template.pop("Version")
+        RootPartId = Template["Properties"]["RootPart"]["InstanceReference"]
+        TemplateRoot = next(Node for Node in Nodes(Template) if Node["NodeId"] == RootPartId)
+        World["Children"].append(Instance("ReplicatedStorage", "ReplicatedStorage", Children=[Template]))
+        GameScripts["Children"].append(Script("RelayCharacterPolicy", "Server", "e154ff6ab1f041428025d4677a4aa90c"))
     for Id, Node in enumerate(Nodes(World), start=1):
         Node["NodeId"] = Id
     Equipment["Properties"]["CurrentCamera"] = {"InstanceReference": EquipmentCamera["NodeId"]}
+    if CustomCharacter:
+        Template["Properties"]["RootPart"] = {"InstanceReference": TemplateRoot["NodeId"]}
     return {"Version": 5, **World}
 
 
 if __name__ == "__main__":
     Parser = argparse.ArgumentParser(description=__doc__)
     Parser.add_argument("--check", action="store_true", help="Check the snapshot without writing")
+    Parser.add_argument("--custom-character", action="store_true", help="Include the authored Character template and server policy")
     Arguments = Parser.parse_args()
-    Encoded = json.dumps(BuildProject(), indent=2, ensure_ascii=False) + "\n"
+    Encoded = json.dumps(BuildProject(Arguments.custom_character), indent=2, ensure_ascii=False) + "\n"
     if Arguments.check:
         if not Project.exists() or Project.read_text(encoding="utf-8") != Encoded:
             Parser.exit(1, "Project snapshot differs from the Luau sources. Run BuildProject.py.\n")

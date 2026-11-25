@@ -1,5 +1,6 @@
 #include "gargantuan/classes/RemoteBase.hpp"
 
+#include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/RemoteEventBase.hpp"
 #include "gargantuan/classes/RemoteFunction.hpp"
 #include "gargantuan/network/RemoteManager.hpp"
@@ -50,5 +51,17 @@ namespace gargantuan {
 	}
 	ObjectId RemoteBase::GetNetworkObjectId() const {
 		return NetworkObject.IsValid() ? NetworkObject : Id;
+	}
+
+	std::pair<network::ConnectionId, int> RemoteBase::ReadClientTarget(lua_State *L) const {
+		if (StackValue<std::shared_ptr<Instance>>::Is(L, 2)) {
+			const auto PlayerValue = StackValue<std::shared_ptr<Player>>::From(L, 2);
+			if (!PlayerValue) throw std::invalid_argument("Remote client target must be a Player or peer slot and generation");
+			auto *BoundManager = GetRemoteManager();
+			const auto Peer = BoundManager ? BoundManager->ResolvePeer(*PlayerValue) : std::nullopt;
+			return {Peer ? Peer->Connection : network::ConnectionId{}, 3};
+		}
+		return {{static_cast<std::uint32_t>(luaL_checkunsigned(L, 2)),
+				 static_cast<std::uint32_t>(luaL_checkunsigned(L, 3))}, 4};
 	}
 }

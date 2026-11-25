@@ -163,6 +163,99 @@ namespace {
 			return Done();
 		}
 	};
+
+	void TestReliablePumpOrder(Fixture &Test, ObjectId Event, ObjectId Function) {
+		GameNetworkingSocketsTransport QuietTransport;
+		if (!QuietTransport.Start({TransportRole::Client, {"127.0.0.1", Test.Port}, Test.Negotiated, {}}).Succeeded()) {
+			Check(false, "second localhost GNS peer starts");
+			return;
+		}
+		ConnectionId ServerQuiet, ClientQuiet;
+		const auto Deadline = std::chrono::steady_clock::now() + 5s;
+		while (std::chrono::steady_clock::now() < Deadline && (!ServerQuiet.IsValid() || !ClientQuiet.IsValid())) {
+			for (const auto &Incoming : Drain(Test.ServerTransport)) {
+				const auto *Changed = std::get_if<ConnectionStateEvent>(&Incoming);
+				if (Changed && Changed->Connection != Test.ServerConnection && Changed->Current == ConnectionState::Connected)
+					ServerQuiet = Changed->Connection;
+				(void)Test.Server->HandleTransportEvent(Incoming);
+			}
+			const auto Local = ConnectedId(Drain(QuietTransport));
+			if (Local.IsValid()) ClientQuiet = Local;
+			std::this_thread::sleep_for(1ms);
+		}
+		if (!ServerQuiet.IsValid() || !ClientQuiet.IsValid()) {
+			Check(false, "second localhost GNS peer connects");
+			return;
+		}
+		NetworkScheduler QuietScheduler(QuietTransport);
+		Check(QuietScheduler.RegisterConnection(ClientQuiet, Test.Negotiated) &&
+			Test.Server->AddPeer(ServerQuiet, ReplicationEpoch(1), Test.Negotiated) &&
+			Test.Server->PublishRemote(ServerQuiet, Event), "second peer joins the real receive pump");
+		RemoteManager Quiet(RemoteManagerRole::Client, QuietScheduler,
+			[](ConnectionId, ObjectId) { return true; }, {});
+		Check(Quiet.AddPeer(ClientQuiet, ReplicationEpoch(1), Test.Negotiated) &&
+			Quiet.RegisterRemote(Event, RemoteInstanceKind::ReliableEvent) &&
+			Quiet.PublishRemote(ClientQuiet, Event), "quiet peer publishes its event channel");
+
+		const auto Fill = [&](std::size_t Expected) {
+			const auto End = std::chrono::steady_clock::now() + 3s;
+			const auto Budget = SchedulerTickBudget::FromNetworkLimits(Test.Negotiated);
+			while (std::chrono::steady_clock::now() < End) {
+				(void)Test.ClientScheduler->Flush(Test.ClientConnection, Budget);
+				(void)QuietScheduler.Flush(ClientQuiet, Budget);
+				for (const auto &Incoming : Drain(Test.ServerTransport)) (void)Test.Server->HandleTransportEvent(Incoming);
+				if (Test.Server->GetMetrics().QueuedDispatchMessages == Expected) return true;
+				std::this_thread::sleep_for(1ms);
+			}
+			return false;
+		};
+		const RemoteBuffer Buffer{{std::byte{0xff}, std::byte{0}}};
+		const auto Payload = [&](int Value) { return std::vector<RemoteValue>{RemoteArray{{Value, Buffer}}}; };
+		std::vector<int> BusyObserved, QuietObserved, Replies;
+		std::vector<RemoteRequestHandle> Pending;
+		const auto Record = [&](const RemoteInvocation &Invocation) {
+			const auto &Array = std::get<RemoteArray>(Invocation.Arguments.front()).Values;
+			const auto Value = std::get<int>(Array.front());
+			Check(Invocation.Arguments == Payload(Value), "real GNS retains the exact structured payload");
+			(Invocation.Peer.Connection == ServerQuiet ? QuietObserved : BusyObserved).push_back(Value);
+		};
+		Test.Server->SetEventHandler(Event, Record);
+		Test.Server->SetRequestHandler(Function, [&](const RemoteInvocation &Invocation, auto Reply) {
+			Record(Invocation);
+			Check(Reply(Invocation.Arguments, std::nullopt), "real GNS request handler submits an ordered reply");
+		});
+		const auto SendEvent = [&](RemoteManager &Manager, ConnectionId Peer, int Value) {
+			Check(Manager.SendEvent(Peer, Event, Payload(Value)).Accepted(), "queue reliable real-GNS event");
+		};
+		const auto SendRequest = [&](int Value) {
+			const auto Started = Test.Client->StartRequest(Test.ClientConnection, Function, Payload(Value), [&, Value](auto Result) {
+				Check(Result.Outcome.Status == RemoteRequestTerminalStatus::Success && Result.Results == Payload(Value),
+					"real GNS correlated reply retains its buffer");
+				Replies.push_back(Value);
+			}, 2s);
+			Check(Started.Accepted() && Started.Request, "queue reliable real-GNS request");
+			if (Started.Accepted() && Started.Request) Pending.push_back({Test.ClientConnection, *Started.Request});
+		};
+		SendEvent(*Test.Client, Test.ClientConnection, 1);
+		SendRequest(2);
+		SendRequest(3);
+		Check(Fill(3), "transport admits the first three busy messages before dispatch");
+		SendEvent(Quiet, ClientQuiet, 10);
+		SendEvent(Quiet, ClientQuiet, 11);
+		Check(Fill(5), "transport admits the quiet peer between busy batches");
+		SendRequest(4);
+		Check(Fill(6), "transport admits final busy request before the pump");
+		Check(Test.Server->Pump(4) == 4 && Test.Server->Pump(1) == 1 && Test.Server->Pump(1) == 1 &&
+			BusyObserved == std::vector<int>{1, 2, 3, 4} && QuietObserved == std::vector<int>{10, 11},
+			"real GNS preserves ordered events and requests across repeated pump exhaustion");
+		Check(Test.PumpUntil(3s, [&] { return Replies.size() == 3; }) && Replies == std::vector<int>{2, 3, 4},
+			"real GNS delivers all three correlated responses once");
+		for (const auto Request : Pending) (void)Test.Client->CancelRequest(Request);
+		Test.Server->SetEventHandler(Event, {});
+		Test.Server->SetRequestHandler(Function, {});
+		(void)Test.Server->RemovePeer(ServerQuiet);
+		(void)QuietTransport.Stop({DisconnectReason::LocalShutdown, "ordered receive fixture shutdown"});
+	}
 }
 
 int main() {
@@ -265,6 +358,31 @@ int main() {
 		"localhost GNS correlates bounded request/response in both directions"
 	);
 
+	const std::vector<RemoteValue> Structured{RemoteDictionary{{
+		{"inventory", RemoteArray{{std::string("coil"), std::string("battery")}}},
+		{"state", RemoteBuffer{{std::byte{0}, std::byte{0xff}, std::byte{4}}}},
+	}}};
+	int StructuredEvents = 0;
+	const auto ReceiveStructured = [&](const RemoteInvocation &Invocation) {
+		if (Invocation.Arguments == Structured) ++StructuredEvents;
+	};
+	Test.Server->SetEventHandler(ClientToServer, ReceiveStructured);
+	Test.Server->SetEventHandler(Unreliable, ReceiveStructured);
+	Test.Server->SetEventHandler(Sequenced, ReceiveStructured);
+	for (const auto Remote : {ClientToServer, Unreliable, Sequenced})
+		Check(Test.Client->SendEvent(Test.ClientConnection, Remote, Structured).Accepted(),
+			"localhost GNS admits a structured value for each RemoteEvent delivery mode");
+	Test.Server->SetRequestHandler(Function, [](const RemoteInvocation &Message, RemoteManager::RequestReply Reply) {
+		(void)Reply(Message.Arguments, std::nullopt);
+	});
+	ClientResult.reset();
+	Check(Test.Client->StartRequest(Test.ClientConnection, Function, Structured,
+		[&](RemoteRequestResult Result) { ClientResult = std::move(Result); }, 2s).Accepted(),
+		"localhost GNS admits a structured function request");
+	Check(Test.PumpUntil(5s, [&] { return StructuredEvents >= 3 && ClientResult.has_value(); }) &&
+		ClientResult->Outcome.Status == RemoteRequestTerminalStatus::Success && ClientResult->Results == Structured,
+		"real GNS preserves nested tables and buffers across all delivery modes and RPC reply");
+
 	int StressDelivered = 0;
 	Test.Server->SetEventHandler(ClientToServer, [&](const RemoteInvocation &) { ++StressDelivered; });
 	for (int Index = 0; Index < 200; ++Index)
@@ -276,6 +394,7 @@ int main() {
 		Test.PumpUntil(5s, [&] { return StressDelivered == 200; }),
 		"localhost GNS drains a bounded 200-event reliable workload"
 	);
+	TestReliablePumpOrder(Test, ClientToServer, Function);
 
 	RemoteManager::RequestReply HeldReply;
 	Test.Server->SetRequestHandler(Function, [&](const RemoteInvocation &, RemoteManager::RequestReply Reply) {

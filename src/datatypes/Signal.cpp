@@ -2,6 +2,7 @@
 // AI claude slop
 
 #include "gargantuan/datatypes/Signal.hpp"
+#include "gargantuan/scripting/ExecutionBudget.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/scripting/StackGuard.hpp"
@@ -23,7 +24,12 @@ namespace gargantuan {
 		using SignalClock = std::chrono::steady_clock;
 		thread_local std::size_t SignalDeferralDepth = 0;
 		thread_local bool SignalDeferralCanceled = false;
-		thread_local std::vector<std::pair<std::shared_ptr<BaseSignal>, BaseSignal::CallbackArgument>> DeferredSignals;
+		struct DeferredSignal {
+			std::shared_ptr<BaseSignal> Signal;
+			BaseSignal::CallbackArgument Value;
+			std::function<bool()> CanDispatch;
+		};
+		thread_local std::vector<DeferredSignal> DeferredSignals;
 		thread_local bool SignalDispatchProfilingEnabled = false;
 		thread_local SignalDispatchProfile CurrentSignalDispatchProfile;
 
@@ -70,8 +76,8 @@ namespace gargantuan {
 		}
 		auto Pending = std::move(DeferredSignals);
 		DeferredSignals.clear();
-		for (auto &[Signal, Value] : Pending)
-			if (Signal) Signal->Fire(std::move(Value));
+		for (auto &[Signal, Value, CanDispatch] : Pending)
+			if (Signal) Signal->Fire(std::move(Value), std::move(CanDispatch));
 	}
 
 	G_USERDATA_IMPL(
@@ -150,12 +156,12 @@ namespace gargantuan {
 		return connection;
 	};
 
-	void BaseSignal::Fire(CallbackArgument value) {
+	void BaseSignal::Fire(CallbackArgument value, std::function<bool()> CanDispatch) {
 		const bool Profile = SignalDispatchProfilingEnabled;
 		const auto FireStart = Profile ? SignalClock::now() : SignalClock::time_point{};
 		if (Profile) ++CurrentSignalDispatchProfile.Calls;
 		if (SignalDeferralDepth != 0) {
-			DeferredSignals.emplace_back(shared_from_this(), std::move(value));
+			DeferredSignals.push_back({shared_from_this(), std::move(value), std::move(CanDispatch)});
 			if (Profile) {
 				++CurrentSignalDispatchProfile.DeferredCalls;
 				CurrentSignalDispatchProfile.TotalNanoseconds += ElapsedNanoseconds(FireStart);
@@ -183,6 +189,7 @@ namespace gargantuan {
 			for (auto &connection : *ConnectionsToFire) {
 				if (Profile) ++CurrentSignalDispatchProfile.ConnectionVisits;
 				if (connection && connection->Connected && connection->Callback) {
+					if (CanDispatch && !CanDispatch()) break;
 					if (Profile) {
 						if (connection->L) ++CurrentSignalDispatchProfile.ScriptCallbacks;
 						else ++CurrentSignalDispatchProfile.NativeCallbacks;
@@ -289,7 +296,7 @@ namespace gargantuan {
 				try {
 					int argumentCount = signal->LPushArgument(L, value);
 					const int PreResumeStatus = lua_costatus(mainState, L);
-					int status = lua_resume(L, mainState, argumentCount);
+					int status = ResumeGameplay(L, mainState, argumentCount);
 					ScriptEngine::Get(mainState)->CompleteManagedScriptThreadResume(L, status, PreResumeStatus);
 					if (status != LUA_OK && status != LUA_YIELD) {
 						SDL_Log("Failed to resume thread after signal: %s", lua_tostring(L, -1));
@@ -413,7 +420,7 @@ namespace gargantuan {
 
 		try {
 			int arguments = signal->LPushArgument(thread, value);
-			int status = lua_resume(thread, mainState, arguments);
+			int status = ResumeGameplay(thread, mainState, arguments);
 
 			if (status != LUA_OK && status != LUA_YIELD) SDL_Log("Signal error: %s", lua_tostring(thread, -1));
 		} catch (const std::exception &Error) {

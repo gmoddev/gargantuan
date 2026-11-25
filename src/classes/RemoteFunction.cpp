@@ -1,12 +1,15 @@
 #include "gargantuan/classes/RemoteFunction.hpp"
 
 #include "gargantuan/Log.hpp"
+#include "gargantuan/classes/Player.hpp"
 #include "gargantuan/network/RemoteLuau.hpp"
 #include "gargantuan/network/RemoteManager.hpp"
+#include "gargantuan/scripting/ExecutionBudget.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 
 #include <cmath>
+#include <algorithm>
 #include <lualib.h>
 #include <unordered_map>
 
@@ -32,7 +35,7 @@ namespace gargantuan {
 			SuspendedHandlers().erase(Handler);
 			if (Status == LUA_OK) {
 				try {
-					State.Reply(network::ReadRemoteLuauArguments(Thread, 1), std::nullopt);
+					State.Reply(network::ReadRemoteLuauArguments(Thread, 1, State.Owner->GetRemoteManager()), std::nullopt);
 				} catch (const std::exception &Error) {
 					LOG_ERROR(Lua, "[Networking:Remote] nested handler result error: %s", Error.what());
 					State.Reply(
@@ -70,7 +73,7 @@ namespace gargantuan {
 			const auto Seconds = static_cast<double>(luaL_checknumber(L, Index));
 			if (!std::isfinite(Seconds) || Seconds <= 0 || Seconds > 30)
 				throw std::invalid_argument("Remote request timeout must be finite and in (0, 30] seconds");
-			return std::chrono::milliseconds(static_cast<std::int64_t>(Seconds * 1000));
+			return std::chrono::milliseconds(std::max<std::int64_t>(1, static_cast<std::int64_t>(Seconds * 1000)));
 		}
 
 		std::string_view TerminalStatusName(network::RemoteRequestTerminalStatus Status) {
@@ -93,26 +96,45 @@ namespace gargantuan {
 			return "protocol_rejected";
 		}
 
+		int PushFailure(lua_State *L, bool ReturnStatus, std::string_view Code, std::string_view Message) {
+			if (ReturnStatus) lua_pushboolean(L, false);
+			else lua_pushnil(L);
+			lua_pushlstring(L, Code.data(), Code.size());
+			lua_pushlstring(L, Message.data(), Message.size());
+			return 3;
+		}
+
+		int RejectSubmission(lua_State *L, bool ReturnStatus, network::RemoteSendStatus Status) {
+			if (ReturnStatus)
+				return PushFailure(L, true, network::GetRemoteSendStatusCode(Status), network::GetRemoteSendStatusName(Status));
+			throw std::runtime_error(
+				"RemoteFunction request rejected: " + std::string(network::GetRemoteSendStatusName(Status))
+			);
+		}
+
 		int Invoke(
 			lua_State *L,
 			RemoteFunction *Function,
 			network::ConnectionId Connection,
 			int FirstArgument,
-			std::chrono::milliseconds Deadline
+			std::chrono::milliseconds Deadline,
+			bool ReturnStatus
 		) {
 			lua_State *Main = lua_mainthread(L);
-			if (L == Main) throw std::runtime_error("RemoteFunction invocation requires a yieldable Luau coroutine");
+			if (L == Main || !lua_isyieldable(L))
+				throw std::runtime_error("RemoteFunction invocation requires a yieldable Luau coroutine");
 			if (ScriptEngine::Get(Main)->IsStopping())
 				throw std::runtime_error("RemoteFunction runtime is stopping");
+			auto *Manager = Function->GetRemoteManager();
+			auto Arguments = network::ReadRemoteLuauArguments(L, FirstArgument, Manager);
 			lua_pushthread(L);
 			lua_xmove(L, Main, 1);
 			const int ThreadReference = lua_ref(Main, -1);
 			lua_pop(Main, 1);
 			auto RuntimeWeak = ScriptEngine::Get(Main)->weak_from_this();
 			const bool ManagedRuntime = !RuntimeWeak.expired();
-			auto *Manager = Function->GetRemoteManager();
 			const auto SecurityContext = GetCurrentScriptSecurityContext();
-			auto Completion = [L, Main, ThreadReference, Manager, SecurityContext, RuntimeWeak, ManagedRuntime](
+			auto Completion = [L, Main, ThreadReference, Manager, SecurityContext, RuntimeWeak, ManagedRuntime, ReturnStatus](
 								  network::RemoteRequestResult Result
 							  ) {
 				auto Runtime = RuntimeWeak.lock();
@@ -127,48 +149,43 @@ namespace gargantuan {
 						network::ValidateRemoteLuauArguments(Result.Results, [Manager](ObjectId Object) {
 							return Manager ? Manager->ResolveObject(Object) : nullptr;
 						});
-						ArgumentCount = network::PushRemoteLuauArguments(L, Result.Results, [Manager](ObjectId Object) {
+						if (ReturnStatus) lua_pushboolean(L, true);
+						ArgumentCount = (ReturnStatus ? 1 : 0) + network::PushRemoteLuauArguments(L, Result.Results, [Manager](ObjectId Object) {
 							return Manager ? Manager->ResolveObject(Object) : nullptr;
 						});
 					} else {
-						lua_pushnil(L);
-						lua_pushstring(L, TerminalStatusName(Result.Outcome.Status).data());
-						if (Result.Outcome.Error)
-							lua_pushlstring(
-								L, Result.Outcome.Error->Message.data(), Result.Outcome.Error->Message.size()
-							);
-						else
-							lua_pushstring(L, "Remote request terminated");
-						ArgumentCount = 3;
+						ArgumentCount = PushFailure(L, ReturnStatus, TerminalStatusName(Result.Outcome.Status),
+							Result.Outcome.Error ? std::string_view(Result.Outcome.Error->Message) : "Remote request terminated");
+						if (ReturnStatus && Result.Outcome.Error) {
+							const auto &Code = Result.Outcome.Error->Code;
+							lua_pushlstring(L, Code.data(), Code.size());
+							++ArgumentCount;
+						}
 					}
 				} catch (const std::exception &Error) {
 					LOG_ERROR(Lua, "[Networking:Remote] request completion error: %s", Error.what());
 					lua_settop(L, 0);
-					lua_pushnil(L);
-					lua_pushstring(L, "protocol_rejected");
-					lua_pushstring(L, "Remote response contained unsupported values");
-					ArgumentCount = 3;
+					ArgumentCount = PushFailure(L, ReturnStatus, "protocol_rejected", "Remote response contained unsupported values");
 				}
 				ScriptSecurityScope SecurityScope(SecurityContext);
 				const int PreResumeStatus = lua_costatus(Main, L);
-				const int Status = lua_resume(L, Main, ArgumentCount);
+				const int Status = ResumeGameplay(L, Main, ArgumentCount);
 				ScriptEngine::Get(Main)->CompleteManagedScriptThreadResume(L, Status, PreResumeStatus);
 				if (!CompleteSuspendedHandler(L, Status) && Status != LUA_OK && Status != LUA_YIELD)
 					LOG_ERROR(Lua, "[Networking:Remote] request coroutine error: %s", lua_tostring(L, -1));
 				lua_unref(Main, ThreadReference);
 			};
-			auto Result = Manager->StartRequest(
-				Connection,
-				Function->GetNetworkObjectId(),
-				network::ReadRemoteLuauArguments(L, FirstArgument),
-				std::move(Completion),
-				Deadline
-			);
+			network::RemoteSendResult Result;
+			try {
+				Result = Manager->StartRequest(Connection, Function->GetNetworkObjectId(), std::move(Arguments),
+					std::move(Completion), Deadline);
+			} catch (...) {
+				lua_unref(Main, ThreadReference);
+				throw;
+			}
 			if (!Result.Accepted()) {
 				lua_unref(Main, ThreadReference);
-				throw std::runtime_error(
-					"RemoteFunction request rejected: " + std::string(network::GetRemoteSendStatusName(Result.Status))
-				);
+				return RejectSubmission(L, ReturnStatus, Result.Status);
 			}
 			return lua_yield(L, 0);
 		}
@@ -214,6 +231,12 @@ namespace gargantuan {
 				}
 				const auto BoundManagerLifetime = Function->ManagerLifetime;
 				const bool Server = BoundManager->GetRole() == network::RemoteManagerRole::Server;
+				const auto Sender = Server && Function->IncludePlayerInServerHandler
+					? BoundManager->ResolvePlayer(Invocation.Peer) : nullptr;
+				if (Server && Function->IncludePlayerInServerHandler && !Sender) {
+					Reply({}, network::StructuredRemoteError{"player_unavailable", "Sending Player is unavailable"});
+					return;
+				}
 				const int Reference = Server ? Function->ServerHandlerReference : Function->ClientHandlerReference;
 				lua_State *HandlerState = Function->HandlerState;
 				if (!HandlerState || Reference == LUA_NOREF) {
@@ -240,7 +263,9 @@ namespace gargantuan {
 				lua_getref(HandlerState, Reference);
 				lua_xmove(HandlerState, Thread, 1);
 				int ArgumentCount = 0;
-				if (Server) {
+				if (Sender) {
+					ArgumentCount = StackValue<std::shared_ptr<Player>>::Push(Thread, Sender);
+				} else if (Server) {
 					network::PushRemotePeerContext(Thread, Invocation.Peer);
 					++ArgumentCount;
 				}
@@ -263,10 +288,12 @@ namespace gargantuan {
 				Context.AllowsTaskSchedulerYield = false;
 				ScriptSecurityScope Scope(Context);
 				const auto PendingBefore = BoundManager->GetMetrics().InFlightRequests;
-				const int Status = lua_resume(Thread, HandlerState, ArgumentCount);
+				const int Status = ResumeGameplay(Thread, HandlerState, ArgumentCount);
 				if (Status == LUA_OK) {
 					try {
-						Reply(network::ReadRemoteLuauArguments(Thread, 1), std::nullopt);
+						const auto *ReplyManager = !BoundManagerLifetime.expired() &&
+							Function->GetRemoteManager() == BoundManager ? BoundManager : nullptr;
+						Reply(network::ReadRemoteLuauArguments(Thread, 1, ReplyManager), std::nullopt);
 					} catch (const std::exception &Error) {
 						LOG_ERROR(Lua, "[Networking:Remote] handler result error: %s", Error.what());
 						Reply(
@@ -294,13 +321,21 @@ namespace gargantuan {
 	}
 
 	int RemoteFunction::SetServerHandler(lua_State *L, Instance *InstanceValue) {
+		return InstallServerHandler(L, InstanceValue, false);
+	}
+
+	int RemoteFunction::SetPlayerHandler(lua_State *L, Instance *InstanceValue) {
+		return InstallServerHandler(L, InstanceValue, true);
+	}
+
+	int RemoteFunction::InstallServerHandler(lua_State *L, Instance *InstanceValue, bool IncludePlayer) {
 		auto *Function = CheckedFunction(InstanceValue);
 		RequireDirection(
 			Function->Manager->GetRole(),
 			GetCurrentScriptSecurityContext().Domain,
 			network::RemoteManagerRole::Server,
 			ScriptExecutionDomain::Server,
-			"SetServerHandler"
+			IncludePlayer ? "SetPlayerHandler" : "SetServerHandler"
 		);
 		luaL_checktype(L, 2, LUA_TFUNCTION);
 		auto *MainState = lua_mainthread(L);
@@ -310,6 +345,7 @@ namespace gargantuan {
 		if (Function->ServerHandlerReference != LUA_NOREF)
 			lua_unref(Function->HandlerState, Function->ServerHandlerReference);
 		Function->ServerHandlerReference = lua_ref(L, 2);
+		Function->IncludePlayerInServerHandler = IncludePlayer;
 		ScriptEngine::Get(MainState)->TrackRemoteFunction(
 			std::dynamic_pointer_cast<RemoteFunction>(Function->shared_from_this())
 		);
@@ -342,68 +378,47 @@ namespace gargantuan {
 	}
 
 	int RemoteFunction::InvokeServer(lua_State *L, Instance *InstanceValue) {
-		auto *Function = CheckedFunction(InstanceValue);
-		RequireDirection(
-			Function->Manager->GetRole(),
-			GetCurrentScriptSecurityContext().Domain,
-			network::RemoteManagerRole::Client,
-			ScriptExecutionDomain::Client,
-			"InvokeServer"
-		);
-		const auto Connection = Function->GetDefaultServerConnection();
-		if (!Connection) throw std::runtime_error("InvokeServer has no active server connection");
-		return Invoke(L, Function, *Connection, 2, network::DefaultRemoteRequestDeadline);
+		return Submit(L, InstanceValue, network::RemoteManagerRole::Client, false, false, "InvokeServer");
 	}
 
 	int RemoteFunction::InvokeServerWithTimeout(lua_State *L, Instance *InstanceValue) {
-		auto *Function = CheckedFunction(InstanceValue);
-		RequireDirection(
-			Function->Manager->GetRole(),
-			GetCurrentScriptSecurityContext().Domain,
-			network::RemoteManagerRole::Client,
-			ScriptExecutionDomain::Client,
-			"InvokeServerWithTimeout"
-		);
-		const auto Connection = Function->GetDefaultServerConnection();
-		if (!Connection) throw std::runtime_error("InvokeServerWithTimeout has no active server connection");
-		return Invoke(L, Function, *Connection, 3, ReadDeadline(L, 2));
+		return Submit(L, InstanceValue, network::RemoteManagerRole::Client, true, false, "InvokeServerWithTimeout");
 	}
 
 	int RemoteFunction::InvokeClient(lua_State *L, Instance *InstanceValue) {
-		auto *Function = CheckedFunction(InstanceValue);
-		RequireDirection(
-			Function->Manager->GetRole(),
-			GetCurrentScriptSecurityContext().Domain,
-			network::RemoteManagerRole::Server,
-			ScriptExecutionDomain::Server,
-			"InvokeClient"
-		);
-		return Invoke(
-			L,
-			Function,
-			{static_cast<std::uint32_t>(luaL_checkunsigned(L, 2)),
-			 static_cast<std::uint32_t>(luaL_checkunsigned(L, 3))},
-			4,
-			network::DefaultRemoteRequestDeadline
-		);
+		return Submit(L, InstanceValue, network::RemoteManagerRole::Server, false, false, "InvokeClient");
 	}
 
 	int RemoteFunction::InvokeClientWithTimeout(lua_State *L, Instance *InstanceValue) {
-		auto *Function = CheckedFunction(InstanceValue);
+		return Submit(L, InstanceValue, network::RemoteManagerRole::Server, true, false, "InvokeClientWithTimeout");
+	}
+
+	int RemoteFunction::TryInvokeServer(lua_State *L, Instance *InstanceValue) {
+		return Submit(L, InstanceValue, network::RemoteManagerRole::Client, true, true, "TryInvokeServer");
+	}
+
+	int RemoteFunction::TryInvokeClient(lua_State *L, Instance *InstanceValue) {
+		return Submit(L, InstanceValue, network::RemoteManagerRole::Server, true, true, "TryInvokeClient");
+	}
+
+	int RemoteFunction::Submit(lua_State *L, Instance *InstanceValue, network::RemoteManagerRole Role,
+		bool ExplicitDeadline, bool ReturnStatus, std::string_view Method) {
+		auto *Function = dynamic_cast<RemoteFunction *>(InstanceValue);
+		auto *BoundManager = Function ? Function->GetRemoteManager() : nullptr;
+		const bool Server = Role == network::RemoteManagerRole::Server;
 		RequireDirection(
-			Function->Manager->GetRole(),
+			BoundManager ? BoundManager->GetRole() : Role,
 			GetCurrentScriptSecurityContext().Domain,
-			network::RemoteManagerRole::Server,
-			ScriptExecutionDomain::Server,
-			"InvokeClientWithTimeout"
+			Role,
+			Server ? ScriptExecutionDomain::Server : ScriptExecutionDomain::Client,
+			Method
 		);
-		return Invoke(
-			L,
-			Function,
-			{static_cast<std::uint32_t>(luaL_checkunsigned(L, 2)),
-			 static_cast<std::uint32_t>(luaL_checkunsigned(L, 3))},
-			5,
-			ReadDeadline(L, 4)
-		);
+		if (!BoundManager) return RejectSubmission(L, ReturnStatus, network::RemoteSendStatus::UnknownRemote);
+		const auto [Connection, FirstArgument] = Server
+			? Function->ReadClientTarget(L)
+			: std::pair{Function->GetDefaultServerConnection().value_or(network::ConnectionId{}), 2};
+		if (!Connection.IsValid()) return RejectSubmission(L, ReturnStatus, network::RemoteSendStatus::InvalidPeer);
+		const auto Deadline = ExplicitDeadline ? ReadDeadline(L, FirstArgument) : network::DefaultRemoteRequestDeadline;
+		return Invoke(L, Function, Connection, FirstArgument + (ExplicitDeadline ? 1 : 0), Deadline, ReturnStatus);
 	}
 }

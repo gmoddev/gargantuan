@@ -16,10 +16,18 @@ return c({
 			writeLevel = "Never",
 		},
 		OnServerEvent = {
-			description = "Fires for a validated client event with provisional peer context",
+			description = "Fires on the server with the sender's peer context followed by the arguments",
 			type = t.RemoteSignal,
 			unmodified = "std::shared_ptr<BaseSignal>{}",
 			overrideRead = "GetOnServerEvent",
+			writable = false,
+			writeLevel = "Never",
+		},
+		OnPlayerEvent = {
+			description = "Fires on the server with the current sending Player followed by the arguments",
+			type = t.RemoteSignal,
+			unmodified = "std::shared_ptr<BaseSignal>{}",
+			overrideRead = "GetOnPlayerEvent",
 			writable = false,
 			writeLevel = "Never",
 		},
@@ -31,14 +39,29 @@ return c({
 			luauSignature = "(self: RemoteEventBase, ...RemoteValue) -> ()",
 		},
 		FireClient = {
-			description = "Sends bounded arguments from a server to one provisional peer identity",
+			description = "Submits to one current Player or to an explicit peer slot and generation",
 			asLuau = true,
-			luauSignature = "(self: RemoteEventBase, peerSlot: number, peerGeneration: number, ...RemoteValue) -> ()",
+			luauSignature = "((self: RemoteEventBase, Target: Player, ...RemoteValue) -> ()) & ((self: RemoteEventBase, PeerSlot: number, PeerGeneration: number, ...RemoteValue) -> ())",
 		},
 		FireAllClients = {
 			description = "Sends bounded arguments independently to every eligible peer",
 			asLuau = true,
 			luauSignature = "(self: RemoteEventBase, ...RemoteValue) -> ()",
+		},
+		TryFireServer = {
+			description = "Returns local admission and a reason code for submission to the current server",
+			asLuau = true,
+			luauSignature = "(self: RemoteEventBase, ...RemoteValue) -> (boolean, string)",
+		},
+		TryFireClient = {
+			description = "Returns local admission and a reason code for submission to one Player or explicit peer",
+			asLuau = true,
+			luauSignature = "((self: RemoteEventBase, Target: Player, ...RemoteValue) -> (boolean, string)) & ((self: RemoteEventBase, PeerSlot: number, PeerGeneration: number, ...RemoteValue) -> (boolean, string))",
+		},
+		TryFireAllClients = {
+			description = "Returns accepted and rejected counts plus rejected counts by reason code",
+			asLuau = true,
+			luauSignature = "(self: RemoteEventBase, ...RemoteValue) -> (number, number, {[string]: number})",
 		},
 	},
 })

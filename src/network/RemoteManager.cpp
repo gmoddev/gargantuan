@@ -1,13 +1,15 @@
 #include "gargantuan/network/RemoteManager.hpp"
+#include "RemoteValueBudget.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 #include "../runtime/PublicationLatencyDiagnostics.hpp"
 
 #include "gargantuan/classes/Instance.hpp"
-#include "gargantuan/runtime/ProtocolInput.hpp"
 
 #include <algorithm>
+#include <array>
 #include <deque>
 #include <limits>
+#include <list>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -46,6 +48,25 @@ namespace gargantuan::network {
 		return "unknown Remote rejection";
 	}
 
+	std::string_view GetRemoteSendStatusCode(RemoteSendStatus Status) {
+		switch (Status) {
+			case RemoteSendStatus::Accepted: return "accepted";
+			case RemoteSendStatus::DeferredForMaterialization: return "waiting_for_publication";
+			case RemoteSendStatus::DroppedUnreliable: return "dropped_unreliable";
+			case RemoteSendStatus::InvalidPeer: return "invalid_peer";
+			case RemoteSendStatus::UnknownRemote: return "unknown_remote";
+			case RemoteSendStatus::UnpublishedRemote: return "unpublished_remote";
+			case RemoteSendStatus::WrongRemoteKind: return "wrong_remote_kind";
+			case RemoteSendStatus::InvalidArguments: return "invalid_arguments";
+			case RemoteSendStatus::InvisibleReference: return "invisible_reference";
+			case RemoteSendStatus::ReferenceNotMaterialized: return "reference_not_materialized";
+			case RemoteSendStatus::RateLimited: return "rate_limited";
+			case RemoteSendStatus::RequestLimitExceeded: return "request_limit_exceeded";
+			case RemoteSendStatus::SchedulerRejected: return "scheduler_rejected";
+		}
+		return "scheduler_rejected";
+	}
+
 	namespace {
 		template <typename Value> void SaturatingIncrement(Value &Counter) {
 			if (Counter != std::numeric_limits<Value>::max()) ++Counter;
@@ -58,6 +79,13 @@ namespace gargantuan::network {
 		bool IsCall(RemoteMessageKind Kind) {
 			return Kind == RemoteMessageKind::ReliableEvent || Kind == RemoteMessageKind::UnreliableEvent ||
 				   Kind == RemoteMessageKind::SequencedEvent || Kind == RemoteMessageKind::Request;
+		}
+
+		std::optional<ObjectId> DeferredOrderingStream(const RemoteMessage &Message) {
+			// Request IDs are shared across all functions in one peer session.
+			if (Message.Kind == RemoteMessageKind::Request) return ObjectId{};
+			if (Message.Kind == RemoteMessageKind::ReliableEvent) return Message.Remote;
+			return std::nullopt;
 		}
 
 		DeliveryMode DeliveryFor(RemoteMessageKind Kind) {
@@ -80,7 +108,7 @@ namespace gargantuan::network {
 		RemoteRequestResult TerminalResult(
 			RemoteRequestId Request,
 			RemoteRequestTerminalStatus Status,
-			std::vector<WireValue> Results = {},
+			std::vector<RemoteValue> Results = {},
 			std::optional<StructuredRemoteError> Error = std::nullopt
 		) {
 			return {
@@ -91,6 +119,14 @@ namespace gargantuan::network {
 	}
 
 	struct RemoteManager::Implementation : std::enable_shared_from_this<Implementation> {
+		struct QueuedMessage {
+			ConnectionId Connection;
+			RemoteMessage Message;
+			std::size_t EncodedBytes = 0;
+			std::size_t ArgumentBytes = 0;
+			std::chrono::steady_clock::time_point StartedAt;
+		};
+
 		struct PeerState {
 			ReplicationEpoch Epoch;
 			NetworkLimits Limits;
@@ -107,9 +143,14 @@ namespace gargantuan::network {
 			std::unordered_map<ObjectId, std::uint32_t> CallsByRemote;
 			std::uint32_t ConcurrentHandlers = 0;
 			std::uint32_t PendingOutgoingRequests = 0;
-			std::size_t QueuedDispatchMessages = 0;
+			std::deque<QueuedMessage> DispatchQueue;
+			std::optional<std::list<ConnectionId>::iterator> ReadyPosition;
+			std::size_t EligibleDispatchMessages = 0;
 			std::size_t QueuedDispatchBytes = 0;
+			std::size_t QueuedDispatchArgumentBytes = 0;
 			std::size_t DeferredReliableBytes = 0;
+			std::size_t DeferredReliableArgumentBytes = 0;
+			std::unordered_map<ObjectId, std::size_t> DeferredStreams;
 		};
 
 		struct PendingKey {
@@ -133,39 +174,33 @@ namespace gargantuan::network {
 			std::chrono::steady_clock::time_point StartedAt;
 		};
 
-		struct QueuedMessage {
-			ConnectionId Connection;
-			RemoteMessage Message;
-			std::size_t EncodedBytes = 0;
-			std::chrono::steady_clock::time_point StartedAt;
-		};
-
 		struct DeferredMessage {
 			ConnectionId Connection;
 			RemoteMessage Message;
 			std::vector<std::byte> Encoded;
 			std::vector<ObjectId> Dependencies;
+			std::size_t ArgumentBytes = 0;
 			std::chrono::steady_clock::time_point Deadline;
 			std::chrono::steady_clock::time_point StartedAt;
 		};
 
 		void ObserveOwnership(const PeerState &Peer) {
 			auto &M = Metrics.Ownership;
-			M.DispatchMessagesHigh = std::max<std::uint64_t>(M.DispatchMessagesHigh, DispatchQueue.size());
+			M.DispatchMessagesHigh = std::max<std::uint64_t>(M.DispatchMessagesHigh, Metrics.QueuedDispatchMessages);
 			M.DispatchBytesHigh = std::max<std::uint64_t>(M.DispatchBytesHigh, Metrics.QueuedDispatchBytes);
 			M.DeferredMessagesHigh = std::max<std::uint64_t>(M.DeferredMessagesHigh, Deferred.size());
 			M.DeferredBytesHigh = std::max<std::uint64_t>(M.DeferredBytesHigh, Metrics.DeferredReliableBytes);
 			M.OutgoingRequestsHigh = std::max<std::uint64_t>(M.OutgoingRequestsHigh, PendingRequests.size());
 			M.IncomingHandlersHigh = std::max<std::uint64_t>(M.IncomingHandlersHigh, IncomingRequests.size());
-			M.PeerDispatchMessagesHigh = std::max<std::uint64_t>(M.PeerDispatchMessagesHigh, Peer.QueuedDispatchMessages);
+			M.PeerDispatchMessagesHigh = std::max<std::uint64_t>(M.PeerDispatchMessagesHigh, Peer.DispatchQueue.size());
 			M.PeerDispatchBytesHigh = std::max<std::uint64_t>(M.PeerDispatchBytesHigh, Peer.QueuedDispatchBytes);
 			M.PeerDeferredBytesHigh = std::max<std::uint64_t>(M.PeerDeferredBytesHigh, Peer.DeferredReliableBytes);
 			M.PeerOutgoingRequestsHigh = std::max<std::uint64_t>(M.PeerOutgoingRequestsHigh, Peer.PendingOutgoingRequests);
 			M.PeerIncomingHandlersHigh = std::max<std::uint64_t>(M.PeerIncomingHandlersHigh, Peer.ConcurrentHandlers);
-			if (DispatchQueue.size() > MaximumQueuedRemoteDispatchMessages || Metrics.QueuedDispatchBytes > MaximumQueuedRemoteDispatchBytes ||
+			if (Metrics.QueuedDispatchMessages > MaximumQueuedRemoteDispatchMessages || Metrics.QueuedDispatchBytes > MaximumQueuedRemoteDispatchBytes ||
 				Deferred.size() > MaximumQueuedRemoteDispatchMessages || Metrics.DeferredReliableBytes > MaximumQueuedRemoteDispatchBytes ||
 				PendingRequests.size() > MaximumRemoteInFlightRequestsPerManager || IncomingRequests.size() > MaximumConcurrentRemoteHandlersPerManager ||
-				Peer.QueuedDispatchMessages > Peer.Limits.MaximumMessagesPerTick || Peer.QueuedDispatchBytes > Peer.Limits.MaximumReceiveBytesPerTick ||
+				Peer.DispatchQueue.size() > Peer.Limits.MaximumMessagesPerTick || Peer.QueuedDispatchBytes > Peer.Limits.MaximumReceiveBytesPerTick ||
 				Peer.DeferredReliableBytes > Peer.Limits.MaximumQueuedReliableBytes || Peer.PendingOutgoingRequests > Peer.Limits.MaximumInFlightRemoteRequests ||
 				Peer.ConcurrentHandlers > MaximumConcurrentRemoteHandlersPerPeer || Peer.ConcurrentHandlers > Peer.Limits.MaximumInFlightRemoteRequests)
 				SaturatingIncrement(M.BoundViolations);
@@ -178,11 +213,63 @@ namespace gargantuan::network {
 			if (Now >= Started) Maximum = std::max(Maximum, static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::microseconds>(Now - Started).count()));
 		}
-		void ReleaseDispatchEvidence(const QueuedMessage &Message) {
+		void QueueDispatch(PeerState &Peer, QueuedMessage Message) {
+			const bool WasEmpty = Peer.DispatchQueue.empty();
+			if (WasEmpty) Peer.ReadyPosition = ReadyPeers.insert(ReadyPeers.end(), Message.Connection);
+			try {
+				Peer.DispatchQueue.push_back(std::move(Message));
+			} catch (...) {
+				if (WasEmpty) ClearReadyPosition(Peer);
+				throw;
+			}
+			const auto &Queued = Peer.DispatchQueue.back();
+			++Metrics.QueuedDispatchMessages;
+			Metrics.QueuedDispatchBytes += Queued.EncodedBytes;
+			Metrics.QueuedDispatchArgumentBytes += Queued.ArgumentBytes;
+			Peer.QueuedDispatchBytes += Queued.EncodedBytes;
+			Peer.QueuedDispatchArgumentBytes += Queued.ArgumentBytes;
+			SaturatingIncrement(Metrics.Ownership.DispatchAccepted);
+			ObserveOwnership(Peer);
+		}
+		void ClearReadyPosition(PeerState &Peer) {
+			if (!Peer.ReadyPosition) return;
+			ReadyPeers.erase(*Peer.ReadyPosition);
+			Peer.ReadyPosition.reset();
+		}
+		void ReleaseDispatch(PeerState &Peer, const QueuedMessage &Message) {
+			--Metrics.QueuedDispatchMessages;
+			Metrics.QueuedDispatchBytes -= Message.EncodedBytes;
+			Metrics.QueuedDispatchArgumentBytes -= Message.ArgumentBytes;
+			Peer.QueuedDispatchBytes -= Message.EncodedBytes;
+			Peer.QueuedDispatchArgumentBytes -= Message.ArgumentBytes;
 			SaturatingIncrement(Metrics.Ownership.DispatchReleased);
 			ObserveResidence(Message.StartedAt, Metrics.Ownership.DispatchResidenceMaximumMicroseconds);
 		}
-		void ReleaseDeferredEvidence(const DeferredMessage &Message) {
+		void RetireDispatch(PeerState &Peer, std::optional<ObjectId> Remote = std::nullopt) {
+			std::size_t Index = 0;
+			std::size_t RemovedEligible = 0;
+			std::erase_if(Peer.DispatchQueue, [&](const QueuedMessage &Message) {
+				const bool Eligible = Index++ < Peer.EligibleDispatchMessages;
+				if (Remote && Message.Message.Remote != *Remote) return false;
+				RemovedEligible += Eligible;
+				ReleaseDispatch(Peer, Message);
+				return true;
+			});
+			Peer.EligibleDispatchMessages -= RemovedEligible;
+			if (Peer.DispatchQueue.empty()) ClearReadyPosition(Peer);
+		}
+		void ReleaseDeferred(const DeferredMessage &Message) {
+			--Metrics.DeferredReliableMessages;
+			Metrics.DeferredReliableBytes -= Message.Encoded.size();
+			Metrics.DeferredReliableArgumentBytes -= Message.ArgumentBytes;
+			if (auto Peer = Peers.find(Message.Connection); Peer != Peers.end()) {
+				Peer->second.DeferredReliableBytes -= Message.Encoded.size();
+				Peer->second.DeferredReliableArgumentBytes -= Message.ArgumentBytes;
+				if (const auto Stream = DeferredOrderingStream(Message.Message)) {
+					auto Count = Peer->second.DeferredStreams.find(*Stream);
+					if (--Count->second == 0) Peer->second.DeferredStreams.erase(Count);
+				}
+			}
 			SaturatingIncrement(Metrics.Ownership.DeferredReleased);
 			ObserveResidence(Message.StartedAt, Metrics.Ownership.DeferredResidenceMaximumMicroseconds);
 			if (Active && GetTime() >= Message.Deadline) {
@@ -217,27 +304,19 @@ namespace gargantuan::network {
 
 		bool ArgumentsValid(
 			ConnectionId Connection,
-			std::span<const WireValue> Arguments,
+			std::span<const RemoteValue> Arguments,
 			bool RequireMaterialized,
 			std::vector<ObjectId> *Missing = nullptr
 		) {
-			if (Arguments.size() > MaximumRemoteArguments) return false;
 			auto Peer = Peers.find(Connection);
 			if (Peer == Peers.end()) return false;
-			for (const auto &Argument : Arguments) {
-				try {
-					ValidateProtocolWireValue(Argument);
-				} catch (...) {
-					return false;
-				}
-				if (const auto *String = std::get_if<std::string>(&Argument);
-					String && String->size() > MaximumRemoteStringBytes)
-					return false;
+			const auto CheckReference = [&](const RemoteValue &Argument) {
 				const auto *Reference = std::get_if<WireObjectReference>(&Argument);
-				if (!Reference) continue;
+				if (!Reference) return true;
 				const auto Object = Reference->Object.ToObjectId();
-				if (!Object.IsValid() || !IsVisible || !IsVisible(Connection, Object) || !ResolveObject ||
-					!ResolveObject(Object)) {
+				const auto InstanceValue = Object.IsValid() && IsVisible && IsVisible(Connection, Object) &&
+					ResolveObject ? ResolveObject(Object) : nullptr;
+				if (!InstanceValue || InstanceValue->IsDestroying() || InstanceValue->GetDestroyed()) {
 					SaturatingIncrement(Metrics.VisibilityRejections);
 					return false;
 				}
@@ -247,7 +326,10 @@ namespace gargantuan::network {
 					else
 						return false;
 				}
-			}
+				return true;
+			};
+			for (const auto &Argument : Arguments)
+				if (!detail::VisitRemoteValues(Argument, CheckReference)) return false;
 			return true;
 		}
 
@@ -348,27 +430,43 @@ namespace gargantuan::network {
 			std::vector<ObjectId> Missing;
 			if (!ArgumentsValid(Connection, Message.Arguments, true, &Missing))
 				return {RemoteSendStatus::InvisibleReference};
-			if (!Missing.empty()) {
+			const auto Stream = DeferredOrderingStream(Message);
+			const bool WaitingForPredecessor = AllowDependencyDeferral && Stream &&
+				Peer->second.DeferredStreams.contains(*Stream);
+			if (!Missing.empty() || WaitingForPredecessor) {
 				if (!AllowDependencyDeferral || DeliveryFor(Message.Kind) != DeliveryMode::ReliableOrdered)
 					return {RemoteSendStatus::ReferenceNotMaterialized};
-				if (Deferred.size() >= MaximumQueuedRemoteDispatchMessages ||
+				const auto ArgumentBytes = GetRemoteArgumentStorageBytes(Message.Arguments);
+				if (!ArgumentBytes || Deferred.size() >= MaximumQueuedRemoteDispatchMessages ||
+					Encoded.size() > Peer->second.Limits.MaximumReliableMessageBytes ||
 					Encoded.size() > MaximumQueuedRemoteDispatchBytes ||
 					Metrics.DeferredReliableBytes > MaximumQueuedRemoteDispatchBytes - Encoded.size() ||
 					Encoded.size() > Peer->second.Limits.MaximumQueuedReliableBytes ||
 					Peer->second.DeferredReliableBytes >
-						Peer->second.Limits.MaximumQueuedReliableBytes - Encoded.size())
+						Peer->second.Limits.MaximumQueuedReliableBytes - Encoded.size() ||
+					*ArgumentBytes > MaximumRetainedRemoteArgumentBytes - Metrics.DeferredReliableArgumentBytes ||
+					*ArgumentBytes > Peer->second.Limits.MaximumQueuedReliableBytes * 4 -
+						Peer->second.DeferredReliableArgumentBytes)
 					return {RemoteSendStatus::SchedulerRejected};
 				const auto Started = GetTime();
-				Deferred.push_back(
-					{Connection,
-					 Message,
-					 std::move(Encoded),
-					 std::move(Missing),
-					 Started + (Message.Kind == RemoteMessageKind::Request ? Message.Deadline : MaximumRemoteRequestDeadline), Started}
-				);
-				Metrics.DeferredReliableMessages = Deferred.size();
+				auto &Streams = Peer->second.DeferredStreams;
+				auto Entry = Stream ? Streams.try_emplace(*Stream).first : Streams.end();
+				try {
+					Deferred.push_back({
+						Connection, Message, std::move(Encoded), std::move(Missing), *ArgumentBytes,
+						Started + (Message.Kind == RemoteMessageKind::Request ? Message.Deadline : MaximumRemoteRequestDeadline),
+						Started
+					});
+				} catch (...) {
+					if (Entry != Streams.end() && Entry->second == 0) Streams.erase(Entry);
+					throw;
+				}
+				if (Entry != Streams.end()) ++Entry->second;
+				++Metrics.DeferredReliableMessages;
 				Metrics.DeferredReliableBytes += Deferred.back().Encoded.size();
 				Peer->second.DeferredReliableBytes += Deferred.back().Encoded.size();
+				Metrics.DeferredReliableArgumentBytes += *ArgumentBytes;
+				Peer->second.DeferredReliableArgumentBytes += *ArgumentBytes;
 				SaturatingIncrement(Metrics.Ownership.DeferredAccepted);
 				ObserveOwnership(Peer->second);
 				return {RemoteSendStatus::DeferredForMaterialization};
@@ -431,14 +529,9 @@ namespace gargantuan::network {
 					++Iterator;
 					continue;
 				}
-				const auto Bytes = Iterator->Encoded.size();
-				if (auto Peer = Peers.find(Key.Connection); Peer != Peers.end())
-					Peer->second.DeferredReliableBytes -= Bytes;
-				Metrics.DeferredReliableBytes -= Bytes;
-				ReleaseDeferredEvidence(*Iterator);
+				ReleaseDeferred(*Iterator);
 				Iterator = Deferred.erase(Iterator);
 			}
-			Metrics.DeferredReliableMessages = Deferred.size();
 			if (auto Peer = Peers.find(Key.Connection);
 				Peer != Peers.end() && Peer->second.PendingOutgoingRequests != 0)
 				--Peer->second.PendingOutgoingRequests;
@@ -482,26 +575,15 @@ namespace gargantuan::network {
 				if (Entry.first.Connection != Connection) return false;
 				ReleaseHandlerEvidence(Entry.second); return true;
 			});
-			for (auto Iterator = DispatchQueue.begin(); Iterator != DispatchQueue.end();) {
-				if (Iterator->Connection != Connection) {
-					++Iterator;
-					continue;
-				}
-				Metrics.QueuedDispatchBytes -= Iterator->EncodedBytes;
-				ReleaseDispatchEvidence(*Iterator);
-				Iterator = DispatchQueue.erase(Iterator);
-			}
+			RetireDispatch(Peer->second);
 			for (auto Iterator = Deferred.begin(); Iterator != Deferred.end();) {
 				if (Iterator->Connection != Connection) {
 					++Iterator;
 					continue;
 				}
-				Metrics.DeferredReliableBytes -= Iterator->Encoded.size();
-				ReleaseDeferredEvidence(*Iterator);
+				ReleaseDeferred(*Iterator);
 				Iterator = Deferred.erase(Iterator);
 			}
-			Metrics.DeferredReliableMessages = Deferred.size();
-			Metrics.QueuedDispatchMessages = DispatchQueue.size();
 			Peers.erase(Peer);
 			RunCompletions(std::move(Completions));
 			return true;
@@ -519,7 +601,7 @@ namespace gargantuan::network {
 		}
 
 		bool SendReply(
-			PendingKey Key, ObjectId Remote, std::vector<WireValue> Results, std::optional<StructuredRemoteError> Error
+			PendingKey Key, ObjectId Remote, std::vector<RemoteValue> Results, std::optional<StructuredRemoteError> Error
 		) {
 			auto Incoming = IncomingRequests.find(Key);
 			if (Incoming == IncomingRequests.end() || Incoming->second.Remote != Remote) return false;
@@ -535,7 +617,7 @@ namespace gargantuan::network {
 				.Kind = Error ? RemoteMessageKind::RequestError : RemoteMessageKind::Response,
 				.Remote = Remote,
 				.Request = Key.Request,
-				.Arguments = Error ? std::vector<WireValue>{} : std::move(Results),
+				.Arguments = Error ? std::vector<RemoteValue>{} : std::move(Results),
 				.Error = std::move(Error),
 			};
 			if (!Message.IsValid() || !ArgumentsValid(Key.Connection, Message.Arguments, false)) {
@@ -588,6 +670,12 @@ namespace gargantuan::network {
 					RejectRequest(
 						Queued.Connection, Queued.Message, "invalid_arguments", "Remote arguments were rejected"
 					);
+				else if (Queued.Message.Kind == RemoteMessageKind::Response) {
+					const PendingKey Key{Queued.Connection, Queued.Message.Request};
+					const auto Pending = PendingRequests.find(Key);
+					if (Pending != PendingRequests.end() && Pending->second.Remote == Queued.Message.Remote)
+						CompletePending(Key, TerminalResult(Queued.Message.Request, RemoteRequestTerminalStatus::ProtocolRejected));
+				}
 				return;
 			}
 			if (IsCall(Queued.Message.Kind) && !AdmitPeerCall(Peer->second, Queued.Message.Remote)) {
@@ -613,7 +701,8 @@ namespace gargantuan::network {
 					Callback(
 						{{Queued.Connection, Peer->second.Epoch},
 						 Queued.Message.Remote,
-						 std::move(Queued.Message.Arguments)}
+						 std::move(Queued.Message.Arguments),
+						 Publication}
 					);
 				} catch (...) {
 					SaturatingIncrement(Metrics.HandlerErrors);
@@ -693,7 +782,7 @@ namespace gargantuan::network {
 			ObserveOwnership(Peer->second);
 			auto Weak = weak_from_this();
 			RequestReply Reply = [Weak, Key, Remote = Queued.Message.Remote](
-									 std::vector<WireValue> Results, std::optional<StructuredRemoteError> Error
+									 std::vector<RemoteValue> Results, std::optional<StructuredRemoteError> Error
 								 ) mutable {
 				auto Self = Weak.lock();
 				return Self && Self->Active && Self->SendReply(Key, Remote, std::move(Results), std::move(Error));
@@ -705,7 +794,8 @@ namespace gargantuan::network {
 				Callback(
 					{{Queued.Connection, Peer->second.Epoch},
 					 Queued.Message.Remote,
-					 std::move(Queued.Message.Arguments)},
+					 std::move(Queued.Message.Arguments),
+					 Publication},
 					std::move(Reply)
 				);
 			} catch (...) {
@@ -720,6 +810,7 @@ namespace gargantuan::network {
 		INetworkScheduler &Scheduler;
 		VisibilityCheck IsVisible;
 		ObjectResolver ResolveObject;
+		OutgoingReferenceMapper MapOutgoingReference;
 		Clock GetTime;
 		bool Active = true;
 		std::map<ConnectionId, PeerState> Peers;
@@ -729,8 +820,9 @@ namespace gargantuan::network {
 		std::unordered_map<ObjectId, RequestHandler> RequestHandlers;
 		std::map<PendingKey, PendingRequest> PendingRequests;
 		std::map<PendingKey, IncomingRequest> IncomingRequests;
-		std::deque<QueuedMessage> DispatchQueue;
-		std::deque<DeferredMessage> Deferred;
+		std::list<ConnectionId> ReadyPeers;
+		bool Pumping = false;
+		std::list<DeferredMessage> Deferred;
 		std::chrono::steady_clock::time_point BroadcastRateWindow{};
 		bool BroadcastRateWindowInitialized = false;
 		std::size_t BroadcastBytes = 0;
@@ -774,12 +866,11 @@ namespace gargantuan::network {
 			);
 			if (Pending) Completions.push_back(std::move(*Pending));
 		}
-		State->Peers.clear();
 		for (const auto &[Key, Request] : State->IncomingRequests) { (void)Key; State->ReleaseHandlerEvidence(Request); }
-		for (const auto &Message : State->DispatchQueue) State->ReleaseDispatchEvidence(Message);
-		for (const auto &Message : State->Deferred) State->ReleaseDeferredEvidence(Message);
+		for (auto &[Connection, Peer] : State->Peers) State->RetireDispatch(Peer);
+		for (const auto &Message : State->Deferred) State->ReleaseDeferred(Message);
+		State->Peers.clear();
 		State->IncomingRequests.clear();
-		State->DispatchQueue.clear();
 		State->Deferred.clear();
 		Implementation::RunCompletions(std::move(Completions));
 	}
@@ -850,35 +941,18 @@ namespace gargantuan::network {
 			State->ReleaseHandlerEvidence(Iterator->second);
 			Iterator = State->IncomingRequests.erase(Iterator);
 		}
-		for (auto &[Connection, Peer] : State->Peers)
+		for (auto &[Connection, Peer] : State->Peers) {
 			Peer.Publications.erase(Remote);
-		for (auto Iterator = State->DispatchQueue.begin(); Iterator != State->DispatchQueue.end();) {
-			if (Iterator->Message.Remote != Remote) {
-				++Iterator;
-				continue;
-			}
-			auto Peer = State->Peers.find(Iterator->Connection);
-			if (Peer != State->Peers.end()) {
-				--Peer->second.QueuedDispatchMessages;
-				Peer->second.QueuedDispatchBytes -= Iterator->EncodedBytes;
-			}
-			State->Metrics.QueuedDispatchBytes -= Iterator->EncodedBytes;
-			State->ReleaseDispatchEvidence(*Iterator);
-			Iterator = State->DispatchQueue.erase(Iterator);
+			State->RetireDispatch(Peer, Remote);
 		}
 		for (auto Iterator = State->Deferred.begin(); Iterator != State->Deferred.end();) {
 			if (Iterator->Message.Remote != Remote) {
 				++Iterator;
 				continue;
 			}
-			auto Peer = State->Peers.find(Iterator->Connection);
-			if (Peer != State->Peers.end()) Peer->second.DeferredReliableBytes -= Iterator->Encoded.size();
-			State->Metrics.DeferredReliableBytes -= Iterator->Encoded.size();
-			State->ReleaseDeferredEvidence(*Iterator);
+			State->ReleaseDeferred(*Iterator);
 			Iterator = State->Deferred.erase(Iterator);
 		}
-		State->Metrics.QueuedDispatchMessages = State->DispatchQueue.size();
-		State->Metrics.DeferredReliableMessages = State->Deferred.size();
 		auto StateValue = State;
 		StateValue->DrainTerminals();
 		Implementation::RunCompletions(std::move(Completions));
@@ -944,29 +1018,15 @@ namespace gargantuan::network {
 			State->ReleaseHandlerEvidence(Iterator->second);
 			Iterator = State->IncomingRequests.erase(Iterator);
 		}
-		for (auto Iterator = State->DispatchQueue.begin(); Iterator != State->DispatchQueue.end();) {
-			if (Iterator->Connection != Connection || Iterator->Message.Remote != Remote) {
-				++Iterator;
-				continue;
-			}
-			--Peer->second.QueuedDispatchMessages;
-			Peer->second.QueuedDispatchBytes -= Iterator->EncodedBytes;
-			State->Metrics.QueuedDispatchBytes -= Iterator->EncodedBytes;
-			State->ReleaseDispatchEvidence(*Iterator);
-			Iterator = State->DispatchQueue.erase(Iterator);
-		}
+		State->RetireDispatch(Peer->second, Remote);
 		for (auto Iterator = State->Deferred.begin(); Iterator != State->Deferred.end();) {
 			if (Iterator->Connection != Connection || Iterator->Message.Remote != Remote) {
 				++Iterator;
 				continue;
 			}
-			Peer->second.DeferredReliableBytes -= Iterator->Encoded.size();
-			State->Metrics.DeferredReliableBytes -= Iterator->Encoded.size();
-			State->ReleaseDeferredEvidence(*Iterator);
+			State->ReleaseDeferred(*Iterator);
 			Iterator = State->Deferred.erase(Iterator);
 		}
-		State->Metrics.QueuedDispatchMessages = State->DispatchQueue.size();
-		State->Metrics.DeferredReliableMessages = State->Deferred.size();
 		auto StateValue = State;
 		StateValue->DrainTerminals();
 		Implementation::RunCompletions(std::move(Completions));
@@ -1014,7 +1074,7 @@ namespace gargantuan::network {
 	}
 
 	RemoteSendResult
-	RemoteManager::SendEvent(ConnectionId Connection, ObjectId Remote, std::vector<WireValue> Arguments) {
+	RemoteManager::SendEvent(ConnectionId Connection, ObjectId Remote, std::vector<RemoteValue> Arguments) {
 		if (!State->Active) return {RemoteSendStatus::InvalidPeer};
 		auto Peer = State->Peers.find(Connection);
 		if (Peer == State->Peers.end()) return {RemoteSendStatus::InvalidPeer};
@@ -1062,7 +1122,7 @@ namespace gargantuan::network {
 		return Result;
 	}
 
-	std::vector<RemoteSendResult> RemoteManager::Broadcast(ObjectId Remote, std::vector<WireValue> Arguments) {
+	std::vector<RemoteSendResult> RemoteManager::Broadcast(ObjectId Remote, std::vector<RemoteValue> Arguments) {
 		if (!State->Active) return {};
 		SaturatingIncrement(State->Metrics.BroadcastInvocations);
 		std::vector<RemoteSendResult> Results;
@@ -1073,9 +1133,9 @@ namespace gargantuan::network {
 			Connections.push_back(Connection);
 		if (Connections.empty()) return Results;
 		auto Registered = State->Remotes.find(Remote);
-		RemoteMessage Estimate{.Remote = Remote, .Arguments = Arguments};
 		if (Registered == State->Remotes.end() || Registered->second == RemoteInstanceKind::Function)
 			return std::vector<RemoteSendResult>(Connections.size(), {RemoteSendStatus::WrongRemoteKind});
+		RemoteMessage Estimate{.Remote = Remote, .Arguments = std::move(Arguments)};
 		if (Registered->second == RemoteInstanceKind::ReliableEvent)
 			Estimate.Kind = RemoteMessageKind::ReliableEvent;
 		else if (Registered->second == RemoteInstanceKind::UnreliableEvent)
@@ -1106,7 +1166,7 @@ namespace gargantuan::network {
 		State->BroadcastSubmissions += Fanout;
 		State->BroadcastBytes += Fanout * EncodedBytes;
 		for (const auto Connection : Connections) {
-			auto Result = SendEvent(Connection, Remote, Arguments);
+			auto Result = SendEvent(Connection, Remote, Estimate.Arguments);
 			if (Result.Accepted()) SaturatingIncrement(State->Metrics.BroadcastPeerSubmissions);
 			Results.push_back(Result);
 		}
@@ -1116,7 +1176,7 @@ namespace gargantuan::network {
 	RemoteSendResult RemoteManager::StartRequest(
 		ConnectionId Connection,
 		ObjectId Remote,
-		std::vector<WireValue> Arguments,
+		std::vector<RemoteValue> Arguments,
 		RequestCompletion Completion,
 		std::chrono::milliseconds Deadline
 	) {
@@ -1169,15 +1229,17 @@ namespace gargantuan::network {
 	}
 
 	bool RemoteManager::CancelRequest(RemoteRequestHandle Handle) {
-		if (!State->Active) return false;
+		const auto Runtime = State;
+		if (!Runtime->Active) return false;
 		Implementation::PendingKey Key{Handle.Connection, Handle.Request};
-		auto Pending = State->PendingRequests.find(Key);
-		if (Pending == State->PendingRequests.end()) return false;
+		auto Pending = Runtime->PendingRequests.find(Key);
+		if (Pending == Runtime->PendingRequests.end()) return false;
 		const auto Remote = Pending->second.Remote;
-		State->CompletePending(Key, TerminalResult(Handle.Request, RemoteRequestTerminalStatus::Cancelled));
+		Runtime->CompletePending(Key, TerminalResult(Handle.Request, RemoteRequestTerminalStatus::Cancelled));
+		if (!Runtime->Active) return true;
 		RemoteMessage Message{.Kind = RemoteMessageKind::Cancellation, .Remote = Remote, .Request = Handle.Request};
-		(void)State->SendMessage(Handle.Connection, std::move(Message), false);
-		DrainSchedulerTerminals();
+		(void)Runtime->SendMessage(Handle.Connection, std::move(Message), false);
+		Runtime->DrainTerminals();
 		return true;
 	}
 
@@ -1192,20 +1254,29 @@ namespace gargantuan::network {
 		if (!Received) return false;
 		auto Peer = State->Peers.find(Received->Connection);
 		if (Peer == State->Peers.end()) return false;
-		if (Received->Payload.size() > Peer->second.Limits.MaximumDecodedMessageBytes ||
-			Peer->second.QueuedDispatchMessages >= Peer->second.Limits.MaximumMessagesPerTick ||
+		const auto DeliveryBytes = Received->Delivery == DeliveryMode::ReliableOrdered ?
+			Peer->second.Limits.MaximumReliableMessageBytes : Peer->second.Limits.MaximumUnreliableMessageBytes;
+		if (Received->Payload.size() > DeliveryBytes ||
+			Received->Payload.size() > Peer->second.Limits.MaximumDecodedMessageBytes ||
+			Peer->second.DispatchQueue.size() >= Peer->second.Limits.MaximumMessagesPerTick ||
 			Received->Payload.size() > Peer->second.Limits.MaximumReceiveBytesPerTick ||
 			Peer->second.QueuedDispatchBytes >
 				Peer->second.Limits.MaximumReceiveBytesPerTick - Received->Payload.size() ||
-			State->DispatchQueue.size() >= MaximumQueuedRemoteDispatchMessages ||
+			State->Metrics.QueuedDispatchMessages >= MaximumQueuedRemoteDispatchMessages ||
 			Received->Payload.size() > MaximumQueuedRemoteDispatchBytes ||
 			State->Metrics.QueuedDispatchBytes > MaximumQueuedRemoteDispatchBytes - Received->Payload.size()) {
 			SaturatingIncrement(State->Metrics.ResourceRejections);
 			return false;
 		}
-		auto Decoded = DecodeRemoteMessage(Received->Payload);
+		std::size_t ArgumentBytes;
+		auto Decoded = DecodeRemoteMessage(Received->Payload, &ArgumentBytes);
 		if (!Decoded) {
 			SaturatingIncrement(State->Metrics.ProtocolRejections);
+			return false;
+		}
+		if (ArgumentBytes > MaximumRetainedRemoteArgumentBytes - State->Metrics.QueuedDispatchArgumentBytes ||
+			ArgumentBytes > Peer->second.Limits.MaximumReceiveBytesPerTick * 4 - Peer->second.QueuedDispatchArgumentBytes) {
+			SaturatingIncrement(State->Metrics.ResourceRejections);
 			return false;
 		}
 		if (Received->Delivery != DeliveryFor(Decoded->Kind) || Received->Traffic != TrafficFor(Decoded->Kind)) {
@@ -1230,43 +1301,57 @@ namespace gargantuan::network {
 				.Connection = Received->Connection, .Object = Decoded->Remote,
 				.Sequence = Decoded->Request.Value(),
 				.Bytes = static_cast<std::uint32_t>(Received->Payload.size())});
-		State->Metrics.QueuedDispatchBytes += Received->Payload.size();
-		Peer->second.QueuedDispatchBytes += Received->Payload.size();
-		++Peer->second.QueuedDispatchMessages;
-		State->DispatchQueue.push_back({Received->Connection, std::move(*Decoded), Received->Payload.size(), State->GetTime()});
-		State->Metrics.QueuedDispatchMessages = State->DispatchQueue.size();
-		SaturatingIncrement(State->Metrics.Ownership.DispatchAccepted);
-		State->ObserveOwnership(Peer->second);
+		State->QueueDispatch(Peer->second, {
+			Received->Connection, std::move(*Decoded), Received->Payload.size(), ArgumentBytes, State->GetTime()
+		});
 		return true;
 	}
 
 	std::size_t RemoteManager::Pump(std::size_t MaximumMessages) {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::RemotePump);
-		if (!State->Active || MaximumMessages == 0 || MaximumMessages > NativeMaximumNetworkMessagesPerTick) return 0;
-		const auto Now = State->GetTime();
+		const auto Runtime = State;
+		if (!Runtime->Active || Runtime->Pumping || MaximumMessages == 0 ||
+			MaximumMessages > NativeMaximumNetworkMessagesPerTick) return 0;
+		struct PumpGuard {
+			bool &Pumping;
+			~PumpGuard() { Pumping = false; }
+		} Guard{Runtime->Pumping};
+		Runtime->Pumping = true;
+
+		// Freeze the eligible prefix before callbacks can append work or retire a
+		// lane. Only identifiers survive across dispatch; callbacks can erase peers.
+		std::array<ConnectionId, MaximumRemotePeers> EligiblePeers;
+		std::size_t PeerCount = 0;
+		for (const auto Connection : Runtime->ReadyPeers) {
+			EligiblePeers[PeerCount++] = Connection;
+			auto &Peer = Runtime->Peers.at(Connection);
+			Peer.EligibleDispatchMessages = Peer.DispatchQueue.size();
+		}
+		const auto Now = Runtime->GetTime();
 		std::vector<Implementation::PendingKey> TimedOut;
-		for (const auto &[Key, Pending] : State->PendingRequests)
+		for (const auto &[Key, Pending] : Runtime->PendingRequests)
 			if (Now >= Pending.Deadline) TimedOut.push_back(Key);
 		for (const auto &Key : TimedOut) {
-			auto Pending = State->PendingRequests.find(Key);
-			if (Pending == State->PendingRequests.end()) continue;
+			auto Pending = Runtime->PendingRequests.find(Key);
+			if (Pending == Runtime->PendingRequests.end()) continue;
 			const auto Remote = Pending->second.Remote;
-			State->CompletePending(Key, TerminalResult(Key.Request, RemoteRequestTerminalStatus::Timeout));
+			Runtime->CompletePending(Key, TerminalResult(Key.Request, RemoteRequestTerminalStatus::Timeout));
+			if (!Runtime->Active) return 0;
 			RemoteMessage Cancellation{
 				.Kind = RemoteMessageKind::Cancellation, .Remote = Remote, .Request = Key.Request
 			};
-			(void)State->SendMessage(Key.Connection, std::move(Cancellation), false);
+			(void)Runtime->SendMessage(Key.Connection, std::move(Cancellation), false);
 		}
 
 		std::vector<Implementation::PendingKey> IncomingReplyTimedOut;
 		std::vector<Implementation::PendingKey> IncomingWorkExpired;
-		for (const auto &[Key, Incoming] : State->IncomingRequests) {
+		for (const auto &[Key, Incoming] : Runtime->IncomingRequests) {
 			if (Incoming.AcceptReply && Now >= Incoming.ReplyDeadline) IncomingReplyTimedOut.push_back(Key);
 			if (Now >= Incoming.WorkDeadline) IncomingWorkExpired.push_back(Key);
 		}
 		for (const auto &Key : IncomingReplyTimedOut) {
-			auto Incoming = State->IncomingRequests.find(Key);
-			if (Incoming == State->IncomingRequests.end()) continue;
+			auto Incoming = Runtime->IncomingRequests.find(Key);
+			if (Incoming == Runtime->IncomingRequests.end()) continue;
 			Incoming->second.AcceptReply = false;
 			const auto Remote = Incoming->second.Remote;
 			RemoteMessage Error{
@@ -1275,76 +1360,82 @@ namespace gargantuan::network {
 				.Request = Key.Request,
 				.Error = StructuredRemoteError{"handler_timeout", "Remote handler deadline expired"}
 			};
-			(void)State->SendMessage(Key.Connection, std::move(Error), false);
+			(void)Runtime->SendMessage(Key.Connection, std::move(Error), false);
 		}
 		for (const auto &Key : IncomingWorkExpired) {
-			auto Incoming = State->IncomingRequests.find(Key);
-			if (Incoming == State->IncomingRequests.end()) continue;
-			State->ReleaseHandlerEvidence(Incoming->second);
-			State->IncomingRequests.erase(Incoming);
-			auto Peer = State->Peers.find(Key.Connection);
-			if (Peer != State->Peers.end() && Peer->second.ConcurrentHandlers != 0) --Peer->second.ConcurrentHandlers;
+			auto Incoming = Runtime->IncomingRequests.find(Key);
+			if (Incoming == Runtime->IncomingRequests.end()) continue;
+			Runtime->ReleaseHandlerEvidence(Incoming->second);
+			Runtime->IncomingRequests.erase(Incoming);
+			auto Peer = Runtime->Peers.find(Key.Connection);
+			if (Peer != Runtime->Peers.end() && Peer->second.ConcurrentHandlers != 0) --Peer->second.ConcurrentHandlers;
 		}
 
-		for (auto Iterator = State->Deferred.begin(); Iterator != State->Deferred.end();) {
-			auto Peer = State->Peers.find(Iterator->Connection);
-			const Implementation::PendingKey RequestKey{Iterator->Connection, Iterator->Message.Request};
-			const bool LiveRequest = Iterator->Message.Kind != RemoteMessageKind::Request ||
-									 (State->PendingRequests.contains(RequestKey) &&
-									  State->PendingRequests.find(RequestKey)->second.Remote ==
-										  Iterator->Message.Remote);
-			const bool Ready = LiveRequest && Peer != State->Peers.end() &&
-							   State->RemoteAvailable(Iterator->Connection, Iterator->Message.Remote) &&
-							   std::ranges::all_of(Iterator->Dependencies, [&](ObjectId Object) {
-								   return Peer->second.MaterializedObjects.contains(Object);
-							   });
-			if (LiveRequest && !Ready && Now < Iterator->Deadline) {
+		std::set<std::pair<ConnectionId, ObjectId>> BlockedStreams;
+		for (auto Iterator = Runtime->Deferred.begin(); Iterator != Runtime->Deferred.end();) {
+			const auto Connection = Iterator->Connection;
+			const auto Peer = Runtime->Peers.find(Connection);
+			bool LiveRequest = true;
+			if (Iterator->Message.Kind == RemoteMessageKind::Request) {
+				const auto Pending = Runtime->PendingRequests.find({Connection, Iterator->Message.Request});
+				LiveRequest = Pending != Runtime->PendingRequests.end() && Pending->second.Remote == Iterator->Message.Remote;
+			}
+			RemotePublicationId Publication;
+			const bool Live = Now < Iterator->Deadline && LiveRequest && Peer != Runtime->Peers.end() &&
+				!Runtime->TerminalConnections.contains(Connection) &&
+				Runtime->RemoteAvailable(Connection, Iterator->Message.Remote, nullptr, &Publication) &&
+				Publication == Iterator->Message.Publication;
+			const auto Stream = DeferredOrderingStream(Iterator->Message);
+			const auto Key = std::pair{Connection, Stream.value_or(ObjectId{})};
+			bool Ready = Live && (!Stream || !BlockedStreams.contains(Key));
+			bool InvalidDependency = false;
+			if (Live) {
+				for (const auto Object : Iterator->Dependencies) {
+					if (Peer->second.MaterializedObjects.contains(Object)) continue;
+					Ready = false;
+					if (!Runtime->IsVisible(Connection, Object)) {
+						InvalidDependency = true;
+						break;
+					}
+				}
+			}
+			if (Live && !Ready && !InvalidDependency) {
+				if (Stream) BlockedStreams.insert(Key);
 				++Iterator;
 				continue;
 			}
-			const auto Bytes = Iterator->Encoded.size();
+			auto Message = std::move(*Iterator);
+			Iterator = Runtime->Deferred.erase(Iterator);
+			Runtime->ReleaseDeferred(Message);
 			if (Ready)
-				(void)State->SubmitEncoded(
-					Iterator->Connection, Iterator->Message, std::move(Iterator->Encoded), false
-				);
+				(void)Runtime->SubmitEncoded(Connection, Message.Message, std::move(Message.Encoded), false);
 			else
-				SaturatingIncrement(State->Metrics.ResourceRejections);
-			if (Peer != State->Peers.end()) Peer->second.DeferredReliableBytes -= Bytes;
-			State->Metrics.DeferredReliableBytes -= Bytes;
-			State->ReleaseDeferredEvidence(*Iterator);
-			Iterator = State->Deferred.erase(Iterator);
+				SaturatingIncrement(Runtime->Metrics.ResourceRejections);
 		}
-		State->Metrics.DeferredReliableMessages = State->Deferred.size();
 
-		std::unordered_set<ConnectionId> ActivePeers;
-		for (const auto &Queued : State->DispatchQueue)
-			ActivePeers.insert(Queued.Connection);
 		const auto PerPeerLimit = std::max<std::size_t>(
-			1, MaximumMessages / std::max<std::size_t>(1, ActivePeers.size())
+			1, MaximumMessages / std::max<std::size_t>(1, PeerCount)
 		);
-		std::unordered_map<ConnectionId, std::size_t> ProcessedByPeer;
 		std::size_t Processed = 0;
-		std::size_t Candidates = State->DispatchQueue.size();
-		while (Processed < MaximumMessages && Candidates-- != 0 && !State->DispatchQueue.empty()) {
-			auto Queued = std::move(State->DispatchQueue.front());
-			State->DispatchQueue.pop_front();
-			if (ProcessedByPeer[Queued.Connection] >= PerPeerLimit) {
-				State->DispatchQueue.push_back(std::move(Queued));
-				continue;
+		for (std::size_t Index = 0; Index < PeerCount && Processed < MaximumMessages && Runtime->Active; ++Index) {
+			const auto Connection = EligiblePeers[Index];
+			const auto Limit = std::min(PerPeerLimit, MaximumMessages - Processed);
+			for (std::size_t Turn = 0; Turn < Limit && Runtime->Active; ++Turn) {
+				auto Found = Runtime->Peers.find(Connection);
+				if (Found == Runtime->Peers.end() || Found->second.EligibleDispatchMessages == 0) break;
+				auto &Peer = Found->second;
+				if (Turn == 0)
+					Runtime->ReadyPeers.splice(Runtime->ReadyPeers.end(), Runtime->ReadyPeers, *Peer.ReadyPosition);
+				auto Queued = std::move(Peer.DispatchQueue.front());
+				Peer.DispatchQueue.pop_front();
+				--Peer.EligibleDispatchMessages;
+				if (Peer.DispatchQueue.empty()) Runtime->ClearReadyPosition(Peer);
+				Runtime->ReleaseDispatch(Peer, Queued);
+				++Processed;
+				Runtime->Dispatch(std::move(Queued));
 			}
-			const auto QueuedConnection = Queued.Connection;
-			State->ReleaseDispatchEvidence(Queued);
-			State->Metrics.QueuedDispatchBytes -= Queued.EncodedBytes;
-			if (auto Peer = State->Peers.find(Queued.Connection); Peer != State->Peers.end()) {
-				--Peer->second.QueuedDispatchMessages;
-				Peer->second.QueuedDispatchBytes -= Queued.EncodedBytes;
-			}
-			State->Dispatch(std::move(Queued));
-			++ProcessedByPeer[QueuedConnection];
-			++Processed;
 		}
-		State->Metrics.QueuedDispatchMessages = State->DispatchQueue.size();
-		DrainSchedulerTerminals();
+		if (Runtime->Active) Runtime->DrainTerminals();
 		return Processed;
 	}
 
@@ -1359,6 +1450,46 @@ namespace gargantuan::network {
 	}
 	std::shared_ptr<Instance> RemoteManager::ResolveObject(ObjectId Object) const {
 		return State->ResolveObject ? State->ResolveObject(Object) : nullptr;
+	}
+
+	void RemoteManager::SetOutgoingReferenceMapper(OutgoingReferenceMapper Mapper) {
+		if (State->Active) State->MapOutgoingReference = std::move(Mapper);
+	}
+
+	std::optional<ObjectId> RemoteManager::MapOutgoingReference(const Instance &Object) const {
+		if (!State->Active || Object.IsDestroying() || Object.GetDestroyed())
+			return std::nullopt;
+		if (State->MapOutgoingReference) return State->MapOutgoingReference(Object);
+		std::scoped_lock Lock(Object.IdentityMutex);
+		return Object.Id.IsValid() ? std::optional{Object.Id} : std::nullopt;
+	}
+	void RemoteManager::SetPlayerResolvers(PlayerLookup ResolvePlayer, PeerLookup ResolvePeer) {
+		if (State->Role != RemoteManagerRole::Server) return;
+		FindPlayer = std::move(ResolvePlayer);
+		FindPeer = std::move(ResolvePeer);
+	}
+	std::shared_ptr<Player> RemoteManager::ResolvePlayer(const RemotePeerContext &Peer) const {
+		if (!State->Active || !FindPlayer) return nullptr;
+		const auto Found = State->Peers.find(Peer.Connection);
+		if (Found == State->Peers.end() || Found->second.Epoch != Peer.Epoch) return nullptr;
+		return FindPlayer(Peer);
+	}
+	std::optional<RemotePeerContext> RemoteManager::ResolvePeer(const Player &PlayerValue) const {
+		if (!State->Active || !FindPeer) return std::nullopt;
+		const auto Peer = FindPeer(PlayerValue);
+		if (!Peer) return std::nullopt;
+		const auto Found = State->Peers.find(Peer->Connection);
+		if (Found == State->Peers.end() || Found->second.Epoch != Peer->Epoch) return std::nullopt;
+		return Peer;
+	}
+	bool RemoteManager::IsCurrentPublication(
+		const RemotePeerContext &Peer, ObjectId Remote, RemotePublicationId Publication
+	) const {
+		if (!State->Active) return false;
+		const auto Found = State->Peers.find(Peer.Connection);
+		RemotePublicationId Current;
+		return Found != State->Peers.end() && Found->second.Epoch == Peer.Epoch &&
+			State->RemoteAvailable(Peer.Connection, Remote, nullptr, &Current) && Current == Publication;
 	}
 	std::weak_ptr<void> RemoteManager::GetLifetimeToken() const {
 		return State;

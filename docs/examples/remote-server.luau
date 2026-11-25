@@ -5,15 +5,13 @@ local Ping = ReplicatedStorage:FindFirstChild("Ping")
 if not Ping or not Ping:IsA("RemoteEvent") then
 	warn("[Docs:Remote] Missing ReplicatedStorage.Ping RemoteEvent")
 else
-	Ping.OnServerEvent:Connect(function(Peer, Message)
+	Ping.OnPlayerEvent:Connect(function(Player, Message)
 		if Message ~= "hello" then
 			return
 		end
-		local Ok, ErrorMessage = pcall(function()
-			Ping:FireClient(Peer.Slot, Peer.Generation, "hello from server")
-		end)
+		local Ok, Code = Ping:TryFireClient(Player, "hello from server")
 		if not Ok then
-			warn("[Docs:Remote] Reply rejected:", ErrorMessage)
+			warn("[Docs:Remote] Reply rejected:", Code)
 		end
 	end)
 end

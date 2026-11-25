@@ -3,6 +3,7 @@
 #include "gargantuan/scripting/NativeCallback.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/scripting/UserdataTag.hpp"
+#include "DiagnosticText.hpp"
 
 #include <algorithm>
 #include <format>
@@ -17,19 +18,6 @@ namespace gargantuan {
 		constexpr int MaximumDiagnosticArguments = 64;
 		constexpr std::size_t MaximumDiagnosticArgumentBytes = 512;
 		constexpr std::size_t MaximumDiagnosticMessageBytes = 2048;
-		constexpr std::string_view TruncationMarker = "...<truncated>";
-
-		std::string BoundedText(std::string_view Value, std::size_t MaximumBytes) {
-			if (!IsValidProtocolUtf8(Value)) return "<invalid utf-8>";
-			if (Value.size() <= MaximumBytes) return std::string(Value);
-			const auto PayloadLimit = MaximumBytes > TruncationMarker.size()
-				? MaximumBytes - TruncationMarker.size() : std::size_t{0};
-			std::size_t End = PayloadLimit;
-			while (End > 0 && (static_cast<unsigned char>(Value[End]) & 0xc0u) == 0x80u) --End;
-			std::string Result(Value.substr(0, End));
-			Result.append(TruncationMarker.substr(0, MaximumBytes - Result.size()));
-			return Result;
-		}
 
 		std::string FormatDiagnosticArgument(lua_State *L, int Index) {
 			switch (lua_type(L, Index)) {
@@ -39,7 +27,7 @@ namespace gargantuan {
 			case LUA_TSTRING: {
 				std::size_t Length = 0;
 				const auto *Value = lua_tolstring(L, Index, &Length);
-				return BoundedText(std::string_view(Value, Length), MaximumDiagnosticArgumentBytes);
+				return BoundedDiagnosticText(std::string_view(Value, Length), MaximumDiagnosticArgumentBytes);
 			}
 			case LUA_TVECTOR: {
 				const auto *Value = lua_tovector(L, Index);
@@ -67,12 +55,12 @@ namespace gargantuan {
 				if (Index > 1) Result.push_back('\t');
 				auto Argument = FormatDiagnosticArgument(L, Index);
 				if (Result.size() + Argument.size() > MaximumDiagnosticMessageBytes)
-					return BoundedText(Result + Argument, MaximumDiagnosticMessageBytes);
+					return BoundedDiagnosticText(Result + Argument, MaximumDiagnosticMessageBytes);
 				Result += Argument;
 			}
 			if (ArgumentCount > FormattedCount) {
 				constexpr std::string_view Marker = "\t<arguments truncated>";
-				return BoundedText(Result + std::string(Marker), MaximumDiagnosticMessageBytes);
+				return BoundedDiagnosticText(Result + std::string(Marker), MaximumDiagnosticMessageBytes);
 			}
 			return Result;
 		}

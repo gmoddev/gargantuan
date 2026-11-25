@@ -3840,6 +3840,22 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "devdocs/CurrentArchitecture/TweenRuntime.md",
+      "Purpose": "Property tween runtime",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "assets/services/TweenService.luau",
+        "src/classes/Tween.cpp",
+        "src/scripting/ScriptEngine.cpp",
+        "src/services/TweenService.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "devdocs/CurrentArchitecture/ViewportFrameFoundation9.md",
       "Purpose": "ViewportFrame in Foundation 9",
       "LastMeaningfulUpdate": null,
@@ -4124,6 +4140,19 @@
         "src/network/GameSession.cpp",
         "src/network/ReliableByteAdmission.hpp",
         "src/network/ReliableServiceProfile.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain as non-current design input; accepted decisions constrain design, not implementation proof",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/FutureArchitecture/GameplayPersistenceHandoff.md",
+      "Purpose": "Provider-neutral gameplay persistence",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
       ],
       "Status": "Unverified",
       "StatusLabel": "Unverified",
@@ -4550,6 +4579,32 @@
         "assets/Roboto-Regular.ttf",
         "assets/collection-beacon.gltf",
         "assets/collection-tone.wav"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/Foundation10BDeveloperRuntime.md",
+      "Purpose": "Foundation 10B developer runtime qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/Foundation10BIndependentReview.md",
+      "Purpose": "Foundation 10B independent promotion review",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
       ],
       "Status": "Historical",
       "StatusLabel": "Historical evidence requiring preservation",
@@ -5195,6 +5250,7 @@
       "LastPathCommit": null,
       "RelevantSourceSubsystem": [
         "src/animation/AnimationTrack.cpp",
+        "src/classes/Tween.cpp",
         "src/datatypes/Axes.cpp",
         "src/datatypes/CFrame.cpp",
         "src/datatypes/Color3.cpp",

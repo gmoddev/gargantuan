@@ -22,6 +22,10 @@ namespace gargantuan {
 		lua_State *HandlerState = nullptr;
 		int ServerHandlerReference = LUA_NOREF;
 		int ClientHandlerReference = LUA_NOREF;
+		bool IncludePlayerInServerHandler = false;
 		void ClearHandlers();
+		static int InstallServerHandler(lua_State *L, Instance *InstanceValue, bool IncludePlayer);
+		static int Submit(lua_State *L, Instance *InstanceValue, network::RemoteManagerRole Role,
+			bool ExplicitDeadline, bool ReturnStatus, std::string_view Method);
 	};
 }

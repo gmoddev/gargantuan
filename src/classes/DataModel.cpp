@@ -170,6 +170,7 @@ namespace gargantuan {
 			{"RunService", SchemaId::FromNativeName("Engine", "RunService")},
 			{"StarterGui", SchemaId::FromNativeName("Engine", "StarterGui")},
 			{"Tags", SchemaId::FromNativeName("Engine", "Tags")},
+			{"TweenService", SchemaId::FromNativeName("Engine", "TweenService")},
 			{"UserInputService", SchemaId::FromNativeName("Engine", "UserInputService")},
 			{"Workspace", SchemaId::FromNativeName("Engine", "Workspace")},
 		};

@@ -4,6 +4,22 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+## Foundation 10B development entries
+
+The November 24 strategic reconciliation at `0195d658d` records the original
+observations. These dispositions apply to the 10B development branch.
+[Qualification record](devdocs/Validation/Foundation10BDeveloperRuntime.md)
+[Independent promotion review](devdocs/Validation/Foundation10BIndependentReview.md)
+
+| Review issue | Implementation and qualification |
+| --- | --- |
+| KI-LUAU-001, Instance keys | The development branch interns wrappers. The independent review candidate also makes detached equality side-effect free. Windows Foundation tests cover both, and GameSession tests at `0ea0b4a04` verified the replicated Player as a dictionary key across callbacks. |
+| KI-NET-001, Player addressing | Implemented and covered on the development branch. Player targeting and explicit submission outcomes use the server's current session mapping. The two-client session and real-GNS Relay cases passed at `0ea0b4a04`. |
+| KI-LUAU-002, execution budget | The independent candidate latches expiry through the outer gameplay entry. The configurable deadline still applies at VM execution safepoints. Per-frame aggregate work, native call interruption, VM allocation limits and general continuation retirement remain open. |
+| Reliable remote callback order | Resolved on the independent 10B candidate at `39b747402`. Per-peer FIFOs keep their ordering across pump exhaustion and the outbound dependency queue preserves same-stream event and request order. Permanent regressions cover reentry, retirement, sustained saturation, simulated delivery and two-client GNS. |
+
+Public multiplayer package confidentiality remains a separate release gate.
+
 ## KI-ANIM-001: Preview capture can reject a resized frame
 
 - Status: Resolved on the Advanced Creator branch; headless, native GPU and Studio resize-stage verification passed 2026-11-16.

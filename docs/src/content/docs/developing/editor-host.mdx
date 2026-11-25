@@ -86,6 +86,15 @@ The initial protocol supports:
 - bounded runtime diagnostics and focused key, pointer, wheel, touch, committed
   text, and preedit forwarding.
 
+Studio should drain `PollPlayDiagnostics` for the active `PlaySessionId`
+into its output panel. Display `[Runtime:Task]` and
+`[Runtime:ExecutionBudget]` records as ordinary Luau errors, with any chunk
+and line information supplied in the message. Sequence gaps can occur if
+the bounded 256-record queue fills. Discard records from a retired session.
+Correlation to an authoring Script requires a verified document binding.
+Remote argument values and native coroutine pointers have no place in these
+records.
+
 The optional `PlayInputInspection` capability adds `GetPlayInputSnapshot` for an
 exact running `PlaySessionId`, requiring `ReadDataModel`. Its bounded version-1
 owning snapshot exposes local contexts/actions/bindings, pressed keys, modifier

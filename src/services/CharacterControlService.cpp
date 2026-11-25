@@ -1,4 +1,5 @@
 #include "gargantuan/services/CharacterControlService.hpp"
+#include "gargantuan/scripting/ExecutionBudget.hpp"
 
 #include "gargantuan/Log.hpp"
 #include "gargantuan/classes/Character.hpp"
@@ -184,7 +185,7 @@ namespace gargantuan {
 		StackValue<Vector2>::Push(L, Vector2(Command.MoveIntent));
 		lua_pushnumber(L, Command.FacingYawRadians);
 		lua_pushboolean(L, Command.JumpRequested());
-		const auto Status = lua_pcall(L, 5, 3, 0);
+		const auto Status = CallGameplay(L, 5, 3);
 		if (Status != LUA_OK) {
 			const auto *Message = lua_tostring(L, -1);
 			LOG_ERROR(Lua, "[Character:Control] movement policy failed: %s", Message ? Message : "unknown error");
@@ -229,7 +230,7 @@ namespace gargantuan {
 		StackValue<std::shared_ptr<Player>>::Push(L, PlayerValue);
 		StackValue<std::shared_ptr<KinematicCharacter>>::Push(L, CharacterValue);
 		StackValue<std::string>::Push(L, *Name);
-		const auto Status = lua_pcall(L, 3, 1, 0);
+		const auto Status = CallGameplay(L, 3, 1);
 		if (Status != LUA_OK || !lua_isboolean(L, -1)) {
 			const auto *Message = lua_tostring(L, -1);
 			LOG_ERROR(Lua, "[Character:Control] action policy failed: %s", Message ? Message : "invalid result");

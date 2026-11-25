@@ -4,8 +4,11 @@
 #include "gargantuan/network/Connection.hpp"
 #include "gargantuan/network/RemoteProtocol.hpp"
 
+#include <utility>
+
 namespace gargantuan::network {
 	class RemoteManager;
+	enum class RemoteManagerRole : std::uint8_t;
 }
 
 namespace gargantuan {
@@ -26,6 +29,8 @@ namespace gargantuan {
 		[[nodiscard]] virtual network::RemoteInstanceKind GetRemoteKind() const = 0;
 
 	  protected:
+		// Returns the native connection and the first argument after the target.
+		[[nodiscard]] std::pair<network::ConnectionId, int> ReadClientTarget(lua_State *L) const;
 		network::RemoteManager *Manager = nullptr;
 		std::weak_ptr<void> ManagerLifetime;
 		std::optional<network::ConnectionId> DefaultServerConnection;

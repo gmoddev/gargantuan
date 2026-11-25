@@ -1,6 +1,7 @@
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
 #include "gargantuan/classes/RemoteFunction.hpp"
 #include "gargantuan/network/RemoteManager.hpp"
@@ -11,6 +12,7 @@
 #include "gargantuan/scripting/StackValue.hpp"
 
 #include <Luau/Compiler.h>
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
@@ -76,6 +78,19 @@ namespace {
 		std::free(Bytecode);
 		if (Loaded != LUA_OK) return Loaded;
 		return lua_pcall(Engine.L, 0, Results, 0);
+	}
+
+	void CheckLuau(ScriptEngine &Engine, std::string_view Source, const char *Message) {
+		const int Base = lua_gettop(Engine.L);
+		const int Status = Run(Engine, Source);
+		if (Status != LUA_OK) {
+			std::size_t Length = 0;
+			const char *Error = lua_gettop(Engine.L) > Base ? lua_tolstring(Engine.L, -1, &Length) : nullptr;
+			std::cerr << "[Networking:RemoteLuauTest] Luau status " << Status << ", "
+				<< (Error ? std::string_view(Error, std::min<std::size_t>(Length, 512)) : "no error string") << '\n';
+			lua_settop(Engine.L, Base);
+		}
+		Check(Status == LUA_OK, Message);
 	}
 
 	void PushGlobal(lua_State *L, const char *Name, const std::shared_ptr<Instance> &Value) {
@@ -152,11 +167,16 @@ int main() {
 	const ConnectionId Connection{7, 3};
 	std::set<ObjectId> Visible;
 	auto Time = std::chrono::steady_clock::time_point{};
+	const auto ReplicaReference = std::make_shared<Folder>();
+	const ObjectId ReferenceSource{505050, 11};
 	RemoteManager Client(
 		RemoteManagerRole::Client,
 		Scheduler,
 		[&](ConnectionId, ObjectId Object) { return Visible.contains(Object); },
-		[](ObjectId Object) { return ObjectRegistry::Get().Lookup(Object); },
+		[&](ObjectId Object) -> std::shared_ptr<Instance> {
+			if (Object == ReferenceSource) return ReplicaReference;
+			return ObjectRegistry::Get().Lookup(Object);
+		},
 		[&] { return Time; }
 	);
 	Check(Client.AddPeer(Connection, ReplicationEpoch(9), Limits()), "Luau client RemoteManager adds its server peer");
@@ -186,6 +206,72 @@ int main() {
 	}
 
 	{
+		ScriptSecurityScope Scope(ScriptSecurityContext::ClientRuntime());
+		Visible.insert(ReferenceSource);
+		Check(Client.MarkMaterialized(Connection, ReferenceSource), "client reference fixture is published");
+		Client.SetOutgoingReferenceMapper([&](const Instance &Object) -> std::optional<ObjectId> {
+			if (&Object == ReplicaReference.get()) return ReferenceSource;
+			return std::nullopt;
+		});
+		PushGlobal(Engine.L, "ReplicaReference", ReplicaReference);
+		const auto Before = Scheduler.Messages.size();
+		Check(Run(Engine, R"luau(
+			local Blob = buffer.create(3)
+			buffer.writeu8(Blob, 1, 255)
+			local Item = {Reference = ReplicaReference, Text = "007"}
+			local Packet = {Other = Item, Item = Item, Blob = Blob, Empty = {}}
+			Remote:FireServer(Packet, "007", nil, buffer.create(0))
+			buffer.writeu8(Blob, 1, 42)
+			Item.Text = "changed"
+		)luau") == LUA_OK && Scheduler.Messages.size() == Before + 1,
+			"client snapshots nested values, a mapped Instance and buffers at submission");
+
+		const std::vector<RemoteValue> Expected{
+			RemoteDictionary{{
+				{"Blob", RemoteBuffer{{std::byte{0}, std::byte{255}, std::byte{0}}}},
+				{"Empty", RemoteArray{}},
+				{"Item", RemoteDictionary{{
+					{"Reference", WireObjectReference{WireObjectId::FromObjectId(ReferenceSource)}},
+					{"Text", std::string("007")},
+				}}},
+				{"Other", RemoteDictionary{{
+					{"Reference", WireObjectReference{WireObjectId::FromObjectId(ReferenceSource)}},
+					{"Text", std::string("007")},
+				}}},
+			}},
+			7, std::monostate{}, RemoteBuffer{},
+		};
+		if (Scheduler.Messages.size() == Before + 1) {
+			const auto Decoded = DecodeRemoteMessage(Scheduler.Messages.back().Payload());
+			Check(Decoded && Decoded->Arguments == Expected,
+				"compound encoding preserves exact nested strings and snapshot values with legacy positional conversion");
+		}
+		Check(Run(Engine, R"luau(
+			StructuredEvents = 0
+			Remote.OnClientEvent:Connect(function(Packet, LegacyNumber, Absent, EmptyBuffer)
+				assert(Packet.Item.Reference == ReplicaReference)
+				assert(Packet.Other.Reference == ReplicaReference and Packet.Other ~= Packet.Item)
+				assert(Packet.Item.Text == "007" and #Packet.Empty == 0)
+				assert(LegacyNumber == 7 and Absent == nil and buffer.len(EmptyBuffer) == 0)
+				assert(buffer.readu8(Packet.Blob, 1) == 255)
+				buffer.writeu8(Packet.Blob, 1, 77)
+				StructuredEvents += 1
+			end)
+			Remote.OnClientEvent:Connect(function(Packet)
+				if buffer.readu8(Packet.Blob, 1) == 255 then StructuredEvents += 1 end
+			end)
+		)luau") == LUA_OK, "client connects two independent structured payload consumers");
+		Check(Client.HandleTransportEvent(Incoming(Connection, {
+			.Kind = RemoteMessageKind::ReliableEvent, .Remote = Event->GetObjectId(), .Arguments = Expected
+		})) && Client.Pump() == 1,
+			"nested references resolve by wire source identity on signal delivery");
+		Check(Run(Engine, "return StructuredEvents", 1) == LUA_OK && lua_tointeger(Engine.L, -1) == 2,
+			"receiver tables and native buffers are independent for each callback");
+		lua_settop(Engine.L, 0);
+		Client.SetOutgoingReferenceMapper({});
+	}
+
+	{
 		ScriptSecurityScope Scope(
 			{ScriptExecutionDomain::Server,
 			 {ScriptCapability::ReadDataModel, ScriptCapability::NetworkSend, ScriptCapability::NetworkReceive}}
@@ -209,8 +295,19 @@ int main() {
 			{ScriptExecutionDomain::Client, {ScriptCapability::NetworkSend, ScriptCapability::NetworkReceive}}
 		);
 		Check(
-			Run(Engine, "Remote:FireServer({unsafe = true})") != LUA_OK,
-			"Luau tables and arbitrary container payloads are rejected"
+			Run(Engine, R"luau(
+				local Cycle = {}
+				Cycle.Child = Cycle
+				local Bad = {
+					Cycle, {[1] = 1, [3] = 3}, {1, Key = true}, {[true] = 1},
+					setmetatable({}, {}), {buffer.create(65537)}, table.create(8193),
+					{[string.rep("x", 257)] = true}, {{function() end}},
+				}
+				for _, Value in Bad do
+					assert(not pcall(function() Remote:FireServer(Value) end))
+				end
+			)luau") == LUA_OK,
+			"cycle, sparse/mixed/key rules, metatables, excessive storage and oversized buffers reject cleanly"
 		);
 		lua_settop(Engine.L, 0);
 		Check(
@@ -610,6 +707,57 @@ int main() {
 			"timeout retires the outstanding request after its VM has closed");
 	}
 
+	{
+		auto Sender = std::make_shared<Player>();
+		const RemotePeerContext SenderPeer{Connection, ReplicationEpoch(9)};
+		Server.SetPlayerResolvers(
+			[&](const RemotePeerContext &) { return Sender->GetDestroyed() ? nullptr : Sender; },
+			[&](const Player &Value) -> std::optional<RemotePeerContext> {
+				return &Value == Sender.get() && !Value.GetDestroyed() ? std::optional{SenderPeer} : std::nullopt;
+			}
+		);
+		PushGlobal(Engine.L, "Sender", Sender);
+		Check(Server.AddPeer({8, 2}, ReplicationEpoch(10), Limits()),
+			"Player submission fixture includes an unpublished peer");
+		{
+			ScriptSecurityScope Scope(ScriptSecurityContext::ServerRuntime());
+			CheckLuau(Engine, R"(
+				local Accepted, Code = ServerRemote:TryFireClient(Sender, "direct")
+				assert(Accepted and Code == "accepted", "direct submission returned " .. tostring(Code))
+				assert(not pcall(function() ServerRemote:TryFireClient(ServerRemote, "wrong class") end))
+				local Count, Rejected, Reasons = ServerRemote:TryFireAllClients("partial")
+				assert(Count == 1 and Rejected == 1 and Reasons.unpublished_remote == 1,
+					string.format("broadcast accepted=%s rejected=%s unpublished=%s",
+						tostring(Count), tostring(Rejected), tostring(Reasons.unpublished_remote)))
+			)", "Luau event API exposes successful target and partial fanout feedback");
+		}
+		const auto DestroySender = ServerEvent->GetOnPlayerEvent()->Connect([&](std::any) { Sender->Destroy(); });
+		{
+			ScriptSecurityScope Scope(ScriptSecurityContext::ServerRuntime());
+			CheckLuau(Engine, R"(
+				PlayerHandlerRan = false
+				ServerRemote.OnPlayerEvent:Once(function(Player) PlayerHandlerRan = true end)
+			)", "Luau Player event accepts ordinary signal connections");
+		}
+		Check(Server.HandleTransportEvent(Incoming(Connection, EventMessage)) && Server.Pump() == 1,
+			"Player event enters its normal dispatch safe point");
+		lua_getglobal(Engine.L, "PlayerHandlerRan");
+		Check(Sender->GetDestroyed() && !lua_toboolean(Engine.L, -1),
+			"retiring Player in an earlier callback prevents later Player callbacks");
+		lua_pop(Engine.L, 1);
+		DestroySender->Disconnect();
+		{
+			ScriptSecurityScope Scope(ScriptSecurityContext::ServerRuntime());
+			CheckLuau(Engine, R"(
+				local Sent, Status = ServerRemote:TryFireClient(Sender)
+				assert(not Sent and Status == "invalid_peer", "stale event target returned " .. tostring(Status))
+				local Invoked, InvokeStatus, Message = ServerFunction:TryInvokeClient(Sender, 1)
+				assert(not Invoked and InvokeStatus == "invalid_peer" and type(Message) == "string",
+					"stale invocation target returned " .. tostring(InvokeStatus))
+			)", "destroyed Player returns a stable invalid-peer outcome without submission");
+		}
+		Server.SetPlayerResolvers({}, {});
+	}
 	ServerEvent->Destroy();
 	Check(
 		Server.SendEvent(Connection, ServerEvent->GetObjectId(), {}).Status == RemoteSendStatus::UnknownRemote,

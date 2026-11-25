@@ -1,4 +1,5 @@
 #include "gargantuan/services/EntitlementService.hpp"
+#include "gargantuan/scripting/ExecutionBudget.hpp"
 
 #include "gargantuan/Log.hpp"
 #include "gargantuan/classes/Player.hpp"
@@ -814,7 +815,7 @@ namespace gargantuan {
 					PushDecisions(Request.Thread, std::get<std::vector<EntitlementDecision>>(Result));
 				ScriptSecurityScope SecurityScope(std::move(Request.SecurityContext));
 				const int PreResumeStatus = lua_costatus(Request.Main, Request.Thread);
-				const auto Status = lua_resume(Request.Thread, Request.Main, 1);
+				const auto Status = ResumeGameplay(Request.Thread, Request.Main, 1);
 				ScriptEngine::Get(Request.Main)->CompleteManagedScriptThreadResume(
 					Request.Thread, Status, PreResumeStatus
 				);

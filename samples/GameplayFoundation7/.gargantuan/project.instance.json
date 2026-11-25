@@ -33,6 +33,19 @@
           "Tags": [],
           "Children": [
             {
+              "Name": "CellCollected",
+              "ClassName": "RemoteEvent",
+              "ClassSchemaId": "321dbe4047c7b7b9ee6d5f1f6d7ee785",
+              "ClassDefinitionVersion": 1,
+              "Properties": {},
+              "Attributes": {},
+              "Extensions": [],
+              "CustomProperties": [],
+              "Tags": [],
+              "Children": [],
+              "NodeId": 4
+            },
+            {
               "Name": "Ground",
               "ClassName": "Part",
               "ClassSchemaId": "5eab0d5368149cacdcc9dcd4130cd3c8",
@@ -83,7 +96,7 @@
               "CustomProperties": [],
               "Tags": [],
               "Children": [],
-              "NodeId": 4
+              "NodeId": 5
             },
             {
               "Name": "LaunchPad",
@@ -136,7 +149,7 @@
               "CustomProperties": [],
               "Tags": [],
               "Children": [],
-              "NodeId": 5
+              "NodeId": 6
             },
             {
               "Name": "GroundSwitch",
@@ -189,7 +202,7 @@
               "CustomProperties": [],
               "Tags": [],
               "Children": [],
-              "NodeId": 6
+              "NodeId": 7
             },
             {
               "Name": "Hazard",
@@ -242,7 +255,7 @@
               "CustomProperties": [],
               "Tags": [],
               "Children": [],
-              "NodeId": 7
+              "NodeId": 8
             },
             {
               "Name": "AirspaceDivider",
@@ -295,7 +308,7 @@
               "CustomProperties": [],
               "Tags": [],
               "Children": [],
-              "NodeId": 8
+              "NodeId": 9
             },
             {
               "Name": "RelayPlatform",
@@ -348,7 +361,7 @@
               "CustomProperties": [],
               "Tags": [],
               "Children": [],
-              "NodeId": 9
+              "NodeId": 10
             },
             {
               "Name": "RelayBeacon",
@@ -415,10 +428,10 @@
                   "CustomProperties": [],
                   "Tags": [],
                   "Children": [],
-                  "NodeId": 11
+                  "NodeId": 12
                 }
               ],
-              "NodeId": 10
+              "NodeId": 11
             },
             {
               "Name": "NorthWall",
@@ -471,7 +484,7 @@
               "CustomProperties": [],
               "Tags": [],
               "Children": [],
-              "NodeId": 12
+              "NodeId": 13
             },
             {
               "Name": "CargoDock",
@@ -530,7 +543,7 @@
               "CustomProperties": [],
               "Tags": [],
               "Children": [],
-              "NodeId": 13
+              "NodeId": 14
             },
             {
               "Name": "CargoMarker",
@@ -589,7 +602,7 @@
               "CustomProperties": [],
               "Tags": [],
               "Children": [],
-              "NodeId": 14
+              "NodeId": 15
             }
           ],
           "NodeId": 3
@@ -677,7 +690,7 @@
               "CustomProperties": [],
               "Tags": [],
               "Children": [],
-              "NodeId": 17
+              "NodeId": 18
             },
             {
               "Name": "RelayMixToggle",
@@ -726,7 +739,7 @@
               "CustomProperties": [],
               "Tags": [],
               "Children": [],
-              "NodeId": 18
+              "NodeId": 19
             },
             {
               "Name": "EquipmentToggle",
@@ -775,7 +788,7 @@
               "CustomProperties": [],
               "Tags": [],
               "Children": [],
-              "NodeId": 19
+              "NodeId": 20
             },
             {
               "Name": "EquipmentPreview",
@@ -813,7 +826,7 @@
                   "Bool": true
                 },
                 "CurrentCamera": {
-                  "InstanceReference": 21
+                  "InstanceReference": 22
                 }
               },
               "Attributes": {},
@@ -852,7 +865,7 @@
                   "CustomProperties": [],
                   "Tags": [],
                   "Children": [],
-                  "NodeId": 21
+                  "NodeId": 22
                 },
                 {
                   "Name": "Crystal",
@@ -919,13 +932,13 @@
                       "CustomProperties": [],
                       "Tags": [],
                       "Children": [],
-                      "NodeId": 23
+                      "NodeId": 24
                     }
                   ],
-                  "NodeId": 22
+                  "NodeId": 23
                 }
               ],
-              "NodeId": 20
+              "NodeId": 21
             },
             {
               "Name": "RelayEquipment",
@@ -954,10 +967,10 @@
               "CustomProperties": [],
               "Tags": [],
               "Children": [],
-              "NodeId": 24
+              "NodeId": 25
             }
           ],
-          "NodeId": 16
+          "NodeId": 17
         },
         {
           "Name": "RelayBriefing",
@@ -1015,13 +1028,13 @@
               "CustomProperties": [],
               "Tags": [],
               "Children": [],
-              "NodeId": 26
+              "NodeId": 27
             }
           ],
-          "NodeId": 25
+          "NodeId": 26
         }
       ],
-      "NodeId": 15
+      "NodeId": 16
     },
     {
       "Name": "GameScripts",
@@ -1053,7 +1066,7 @@
               "String": "3fc0efec12504cc983789da661cb2817"
             },
             "Source": {
-              "String": "local Players = game:GetService(\"Players\")\nlocal RunService = game:GetService(\"RunService\")\nlocal Workspace = game:GetService(\"Workspace\")\nlocal CharacterControl = game:GetService(\"CharacterControlService\")\nlocal Course = Workspace:FindFirstChild(\"RelayCourse\")\nif not Course then\n\twarn(\"[Gameplay:Relay] RelayCourse is missing\")\n\treturn\nend\n\nlocal LaunchPad = Course:FindFirstChild(\"LaunchPad\")\nlocal GroundSwitch = Course:FindFirstChild(\"GroundSwitch\")\nlocal Hazard = Course:FindFirstChild(\"Hazard\")\nlocal Relay = Course:FindFirstChild(\"RelayBeacon\")\nlocal CargoMarker = Course:FindFirstChild(\"CargoMarker\")\nif not LaunchPad or not GroundSwitch or not Hazard or not Relay then\n\twarn(\"[Gameplay:Relay] A course station is missing\")\n\treturn\nend\n\nlocal IsMultiplayer = Players.LocalPlayer == nil\nlocal TargetCharges = 3\nlocal DroneRadius = 0.8\nlocal DroneSpeed = 12\nlocal RespawnSeconds = 1.5\nlocal HealthMaximum = 100\nlocal UpdateInterval = 1 / 20\nlocal Elapsed = 0\nlocal Charges = 0\nlocal States = {}\n\nCourse:SetAttribute(\"RelayMultiplayer\", IsMultiplayer)\nCourse:SetAttribute(\"RelayEnabled\", false)\nCourse:SetAttribute(\"RelayCharges\", Charges)\n\nlocal function IsStandingOn(Position, Pad)\n\tlocal Offset = Position - Pad.Position\n\treturn math.abs(Offset.X) <= Pad.Size.X * 0.5\n\t\tand math.abs(Offset.Z) <= Pad.Size.Z * 0.5\n\t\tand Offset.Y > 0\n\t\tand Offset.Y <= 3.5\nend\n\nlocal function SpawnPosition(Player)\n\t-- Stagger the first few joins without binding a spawn to transport identity.\n\treturn Vector3.new(((Player.PlayerId - 1) % 5 - 2) * 3, 4, 8)\nend\n\nlocal function SetHealth(Player, State, Health)\n\tState.Health = math.clamp(Health, 0, HealthMaximum)\n\tPlayer:SetAttribute(\"Health\", State.Health)\nend\n\nlocal function AddPlayer(Player)\n\tlocal PlayerId = Player.PlayerId\n\tif States[PlayerId] then\n\t\treturn\n\tend\n\tlocal Inventory = Instance.new(\"Folder\")\n\tInventory.Name = \"RelayInventory\"\n\tInventory.Parent = Player\n\tlocal State = {\n\t\tInventory = Inventory,\n\t\tHealth = HealthMaximum,\n\t\tNextDamage = 0,\n\t\tNextLaunch = 0,\n\t\tNextDroneStep = 0,\n\t\tHasCharged = false,\n\t}\n\tStates[PlayerId] = State\n\tPlayer:SetAttribute(\"Team\", \"RelayCrew\")\n\tPlayer:SetAttribute(\"RelayCharges\", 0)\n\tSetHealth(Player, State, HealthMaximum)\n\tPlayer:SetAttribute(\"RelayMode\", \"OnFoot\")\n\n\tlocal function PlaceCharacter(Character)\n\t\tCharacter.CFrame = CFrame.new(SpawnPosition(Player))\n\tend\n\tState.CharacterConnection = Player.CharacterAdded:Connect(PlaceCharacter)\n\tif Player.Character then\n\t\tPlaceCharacter(Player.Character)\n\tend\nend\n\nlocal function RetireDrone(State)\n\tlocal Drone = State.Drone\n\tState.Drone = nil\n\tState.HasCharged = false\n\tif Drone and not Drone.Destroyed then\n\t\tDrone:Destroy()\n\tend\nend\n\nlocal function RemovePlayer(PlayerId)\n\tlocal State = States[PlayerId]\n\tif State then\n\t\tStates[PlayerId] = nil\n\t\tState.CharacterConnection:Disconnect()\n\t\tRetireDrone(State)\n\tend\nend\n\nlocal function LaunchDrone(Player, State)\n\tlocal Drone = Instance.new(\"Part\")\n\tDrone.Name = \"SurveyDrone_\" .. Player.PlayerId\n\tDrone.Shape = Enum.PartType.Ball\n\tDrone.Size = Vector3.one * (DroneRadius * 2)\n\tDrone.Color = Color3.new(0.08, 0.96, 0.76)\n\tDrone.Anchored = true\n\tDrone.CanCollide = false\n\tDrone.CanTouch = false\n\tDrone.CFrame = CFrame.new(LaunchPad.Position + Vector3.new(0, 7, 0))\n\tDrone:SetAttribute(\"RelayDrone\", true)\n\tDrone.Parent = Course\n\n\tlocal Ok = pcall(function()\n\t\tPlayer:SetPossession(Drone)\n\tend)\n\tif not Ok then\n\t\tDrone:Destroy()\n\t\tState.NextLaunch = Elapsed + 1\n\t\treturn\n\tend\n\tState.Drone = Drone\n\tState.NextDroneStep = Elapsed\n\tPlayer:SetAttribute(\"RelayMode\", \"Drone\")\n\tPlayer:RemoveCharacter()\nend\n\nlocal function LandDrone(Player, State)\n\tif Player.PossessedEntity == State.Drone then\n\t\tPlayer:SetPossession(nil)\n\tend\n\tRetireDrone(State)\n\tState.NextLaunch = Elapsed + 1\n\tPlayer:SetAttribute(\"RelayMode\", \"OnFoot\")\n\tPlayer:LoadCharacter()\nend\n\nlocal function StepDrone(Player, Drone, Input)\n\tlocal Origin = Drone.Position\n\tlocal Requested = Vector3.new(Input.Movement.X, 0, Input.Movement.Y) * (DroneSpeed * UpdateInterval)\n\tlocal Destination = Origin + Requested\n\tlocal Translation = Vector3.new(\n\t\tmath.clamp(Destination.X, -29, 29),\n\t\tDestination.Y,\n\t\tmath.clamp(Destination.Z, -22, 22)\n\t) - Origin\n\tif Translation.Magnitude < 0.001 then\n\t\treturn\n\tend\n\tlocal Hit = Workspace:SphereCast(Origin, DroneRadius, Translation)\n\tif Hit then\n\t\tTranslation = Translation.Unit * math.max(0, Hit.Distance - 0.05)\n\tend\n\tlocal Transform = CFrame.new(Origin + Translation) * CFrame.Angles(0, Input.FacingYawRadians, 0)\n\tCharacterControl:MovePossessedPart(Player, Transform)\nend\n\nfor _, Player in Players:GetPlayers() do\n\tAddPlayer(Player)\nend\nlocal AddedConnection = Players.PlayerAdded:Connect(AddPlayer)\nlocal RemovingConnection = Players.PlayerRemoving:Connect(function(Player)\n\tRemovePlayer(Player.PlayerId)\nend)\nlocal StepConnection = RunService.PreSimulation:Connect(function(DeltaTime)\n\tElapsed += math.clamp(DeltaTime, 0, 0.1)\n\tlocal CurrentPlayers = Players:GetPlayers()\n\tlocal SwitchHeld = false\n\tfor _, Player in CurrentPlayers do\n\t\tlocal State = States[Player.PlayerId]\n\t\tlocal Character = Player.Character\n\t\tif State and State.Health > 0 and Character and not State.Drone\n\t\t\tand IsStandingOn(Character.Position, GroundSwitch) then\n\t\t\tSwitchHeld = true\n\t\t\tbreak\n\t\tend\n\tend\n\tif SwitchHeld ~= Course:GetAttribute(\"RelayEnabled\") then\n\t\tCourse:SetAttribute(\"RelayEnabled\", SwitchHeld)\n\t\tGroundSwitch.Color = if SwitchHeld then Color3.new(0.55, 1, 0.24) else Color3.new(0.34, 0.52, 0.12)\n\tend\n\n\tfor _, Player in CurrentPlayers do\n\t\tlocal State = States[Player.PlayerId]\n\t\tif not State then\n\t\t\tcontinue\n\t\tend\n\t\tlocal Character = Player.Character\n\t\tlocal Drone = State.Drone\n\t\tif Drone then\n\t\t\tif Drone.Destroyed or Player.PossessedEntity ~= Drone then\n\t\t\t\tLandDrone(Player, State)\n\t\t\t\tcontinue\n\t\t\tend\n\t\t\tlocal Input = CharacterControl:GetPossessionInput(Player)\n\t\t\tif Input and Input.Fresh and Input.JumpRequested then\n\t\t\t\tLandDrone(Player, State)\n\t\t\t\tcontinue\n\t\t\tend\n\t\t\tif Elapsed >= State.NextDroneStep then\n\t\t\t\tState.NextDroneStep = Elapsed + UpdateInterval\n\t\t\t\tif Input and Input.Fresh then\n\t\t\t\t\tStepDrone(Player, Drone, Input)\n\t\t\t\tend\n\t\t\tend\n\t\t\tlocal AtRelay = (Drone.Position - Relay.Position).Magnitude <= 2.2\n\t\t\tif SwitchHeld and AtRelay and not State.HasCharged and Charges < TargetCharges then\n\t\t\t\tState.HasCharged = true\n\t\t\t\tCharges += 1\n\t\t\t\tlocal Cell = Instance.new(\"Folder\")\n\t\t\t\tCell.Name = \"RelayCell\" .. Charges\n\t\t\t\tCell:SetAttribute(\"Kind\", \"RelayCell\")\n\t\t\t\tCell.Parent = State.Inventory\n\t\t\t\tCourse:SetAttribute(\"RelayCharges\", Charges)\n\t\t\t\tPlayer:SetAttribute(\"RelayCharges\", (Player:GetAttribute(\"RelayCharges\") or 0) + 1)\n\t\t\t\tif Charges == TargetCharges and CargoMarker and CargoMarker:IsA(\"BasePart\") then\n\t\t\t\t\tCargoMarker.Anchored = false\n\t\t\t\t\tCargoMarker:SetLinearVelocity(Vector3.new(2, 0, 0))\n\t\t\t\tend\n\t\t\telseif not AtRelay then\n\t\t\t\tState.HasCharged = false\n\t\t\tend\n\t\telseif State.RespawnAt then\n\t\t\tif Elapsed >= State.RespawnAt then\n\t\t\t\tState.RespawnAt = nil\n\t\t\t\tSetHealth(Player, State, HealthMaximum)\n\t\t\t\tPlayer:SetAttribute(\"RelayMode\", \"OnFoot\")\n\t\t\t\tPlayer:LoadCharacter()\n\t\t\tend\n\t\telseif Character then\n\t\t\tif Character.Position.Y < -12 then\n\t\t\t\tSetHealth(Player, State, 0)\n\t\t\telseif Elapsed >= State.NextDamage and IsStandingOn(Character.Position, Hazard) then\n\t\t\t\tState.NextDamage = Elapsed + 0.25\n\t\t\t\tSetHealth(Player, State, State.Health - 25)\n\t\t\tend\n\t\t\tif State.Health == 0 then\n\t\t\t\tState.RespawnAt = Elapsed + RespawnSeconds\n\t\t\t\tPlayer:SetAttribute(\"RelayMode\", \"Respawning\")\n\t\t\t\tPlayer:RemoveCharacter()\n\t\t\telseif IsMultiplayer and Elapsed >= State.NextLaunch and IsStandingOn(Character.Position, LaunchPad) then\n\t\t\t\tLaunchDrone(Player, State)\n\t\t\tend\n\t\tend\n\tend\nend)\n\nscript.Destroying:Connect(function()\n\tStepConnection:Disconnect()\n\tRemovingConnection:Disconnect()\n\tAddedConnection:Disconnect()\n\tfor PlayerId in States do\n\t\tRemovePlayer(PlayerId)\n\tend\nend)\n"
+              "String": "local Players = game:GetService(\"Players\")\nlocal RunService = game:GetService(\"RunService\")\nlocal Workspace = game:GetService(\"Workspace\")\nlocal CharacterControl = game:GetService(\"CharacterControlService\")\nlocal TweenService = game:GetService(\"TweenService\")\nlocal Course = Workspace:FindFirstChild(\"RelayCourse\")\nif not Course then\n\twarn(\"[Gameplay:Relay] RelayCourse is missing\")\n\treturn\nend\n\nlocal LaunchPad = Course:FindFirstChild(\"LaunchPad\")\nlocal GroundSwitch = Course:FindFirstChild(\"GroundSwitch\")\nlocal Hazard = Course:FindFirstChild(\"Hazard\")\nlocal Relay = Course:FindFirstChild(\"RelayBeacon\")\nlocal CargoMarker = Course:FindFirstChild(\"CargoMarker\")\nlocal CellCollected = Course.CellCollected\nif not LaunchPad or not GroundSwitch or not Hazard or not Relay then\n\twarn(\"[Gameplay:Relay] A course station is missing\")\n\treturn\nend\n\nlocal IsMultiplayer = Players.LocalPlayer == nil\nlocal TargetCharges = 3\nlocal DroneRadius = 0.8\nlocal DroneSpeed = 12\nlocal RespawnSeconds = 1.5\nlocal HealthMaximum = 100\nlocal UpdateInterval = 1 / 20\nlocal Elapsed = 0\nlocal Charges = 0\nlocal States = {}\n\nCourse:SetAttribute(\"RelayMultiplayer\", IsMultiplayer)\nCourse:SetAttribute(\"RelayEnabled\", false)\nCourse:SetAttribute(\"RelayCharges\", Charges)\n\nlocal function IsStandingOn(Position, Pad)\n\tlocal Offset = Position - Pad.Position\n\treturn math.abs(Offset.X) <= Pad.Size.X * 0.5\n\t\tand math.abs(Offset.Z) <= Pad.Size.Z * 0.5\n\t\tand Offset.Y > 0\n\t\tand Offset.Y <= 3.5\nend\n\nlocal function SpawnPosition(Player)\n\t-- Stagger the first few joins without binding a spawn to transport identity.\n\treturn Vector3.new(((Player.PlayerId - 1) % 5 - 2) * 3, 4, 8)\nend\n\nlocal function SetHealth(Player, State, Health)\n\tState.Health = math.clamp(Health, 0, HealthMaximum)\n\tPlayer:SetAttribute(\"Health\", State.Health)\nend\n\nlocal function AddPlayer(Player)\n\tif States[Player] then\n\t\treturn\n\tend\n\tlocal Inventory = Instance.new(\"Folder\")\n\tInventory.Name = \"RelayInventory\"\n\tInventory.Parent = Player\n\tlocal State = {\n\t\tInventory = Inventory,\n\t\tHealth = HealthMaximum,\n\t\tNextDamage = 0,\n\t\tNextLaunch = 0,\n\t\tNextDroneStep = 0,\n\t\tHasCharged = false,\n\t}\n\tStates[Player] = State\n\tPlayer:SetAttribute(\"Team\", \"RelayCrew\")\n\tPlayer:SetAttribute(\"RelayCharges\", 0)\n\tSetHealth(Player, State, HealthMaximum)\n\tPlayer:SetAttribute(\"RelayMode\", \"OnFoot\")\n\n\tlocal function PlaceCharacter(Character)\n\t\tCharacter.CFrame = CFrame.new(SpawnPosition(Player))\n\tend\n\tState.CharacterConnection = Player.CharacterAdded:Connect(PlaceCharacter)\n\tif Player.Character then\n\t\tPlaceCharacter(Player.Character)\n\tend\nend\n\nlocal function RetireDrone(State)\n\tlocal Drone = State.Drone\n\tState.Drone = nil\n\tState.HasCharged = false\n\tif Drone and not Drone.Destroyed then\n\t\tDrone:Destroy()\n\tend\nend\n\nlocal function RemovePlayer(Player)\n\tlocal State = States[Player]\n\tif State then\n\t\tStates[Player] = nil\n\t\tState.CharacterConnection:Disconnect()\n\t\tRetireDrone(State)\n\tend\nend\n\nlocal function LaunchDrone(Player, State)\n\tlocal Drone = Instance.new(\"Part\")\n\tDrone.Name = \"SurveyDrone_\" .. Player.PlayerId\n\tDrone.Shape = Enum.PartType.Ball\n\tDrone.Size = Vector3.one * (DroneRadius * 2)\n\tDrone.Color = Color3.new(0.08, 0.96, 0.76)\n\tDrone.Anchored = true\n\tDrone.CanCollide = false\n\tDrone.CanTouch = false\n\tDrone.CFrame = CFrame.new(LaunchPad.Position + Vector3.new(0, 7, 0))\n\tDrone:SetAttribute(\"RelayDrone\", true)\n\tDrone.Parent = Course\n\n\tlocal Ok = pcall(function()\n\t\tPlayer:SetPossession(Drone)\n\tend)\n\tif not Ok then\n\t\tDrone:Destroy()\n\t\tState.NextLaunch = Elapsed + 1\n\t\treturn\n\tend\n\tState.Drone = Drone\n\tState.NextDroneStep = Elapsed\n\tPlayer:SetAttribute(\"RelayMode\", \"Drone\")\n\tPlayer:RemoveCharacter()\nend\n\nlocal function LandDrone(Player, State)\n\tif Player.PossessedEntity == State.Drone then\n\t\tPlayer:SetPossession(nil)\n\tend\n\tRetireDrone(State)\n\tState.NextLaunch = Elapsed + 1\n\tPlayer:SetAttribute(\"RelayMode\", \"OnFoot\")\n\tPlayer:LoadCharacter()\nend\n\nlocal function StepDrone(Player, Drone, Input)\n\tlocal Origin = Drone.Position\n\tlocal Requested = Vector3.new(Input.Movement.X, 0, Input.Movement.Y) * (DroneSpeed * UpdateInterval)\n\tlocal Destination = Origin + Requested\n\tlocal Translation = Vector3.new(\n\t\tmath.clamp(Destination.X, -29, 29),\n\t\tDestination.Y,\n\t\tmath.clamp(Destination.Z, -22, 22)\n\t) - Origin\n\tif Translation.Magnitude < 0.001 then\n\t\treturn\n\tend\n\tlocal Hit = Workspace:SphereCast(Origin, DroneRadius, Translation)\n\tif Hit then\n\t\tTranslation = Translation.Unit * math.max(0, Hit.Distance - 0.05)\n\tend\n\tlocal Transform = CFrame.new(Origin + Translation) * CFrame.Angles(0, Input.FacingYawRadians, 0)\n\tCharacterControl:MovePossessedPart(Player, Transform)\nend\n\nfor _, Player in Players:GetPlayers() do\n\tAddPlayer(Player)\nend\nlocal AddedConnection = Players.PlayerAdded:Connect(AddPlayer)\nlocal RemovingConnection = Players.PlayerRemoving:Connect(RemovePlayer)\nlocal StepConnection = RunService.PreSimulation:Connect(function(DeltaTime)\n\tElapsed += math.clamp(DeltaTime, 0, 0.1)\n\tlocal CurrentPlayers = Players:GetPlayers()\n\tlocal SwitchHeld = false\n\tfor _, Player in CurrentPlayers do\n\t\tlocal State = States[Player]\n\t\tlocal Character = Player.Character\n\t\tif State and State.Health > 0 and Character and not State.Drone\n\t\t\tand IsStandingOn(Character.Position, GroundSwitch) then\n\t\t\tSwitchHeld = true\n\t\t\tbreak\n\t\tend\n\tend\n\tif SwitchHeld ~= Course:GetAttribute(\"RelayEnabled\") then\n\t\tCourse:SetAttribute(\"RelayEnabled\", SwitchHeld)\n\t\tlocal Color = if SwitchHeld then Color3.new(0.55, 1, 0.24) else Color3.new(0.34, 0.52, 0.12)\n\t\tTweenService:Create(GroundSwitch, TweenInfo.new(0.18), { Color = Color }):Play()\n\tend\n\n\tfor _, Player in CurrentPlayers do\n\t\tlocal State = States[Player]\n\t\tif not State then\n\t\t\tcontinue\n\t\tend\n\t\tlocal Character = Player.Character\n\t\tlocal Drone = State.Drone\n\t\tif Drone then\n\t\t\tif Drone.Destroyed or Player.PossessedEntity ~= Drone then\n\t\t\t\tLandDrone(Player, State)\n\t\t\t\tcontinue\n\t\t\tend\n\t\t\tlocal Input = CharacterControl:GetPossessionInput(Player)\n\t\t\tif Input and Input.Fresh and Input.JumpRequested then\n\t\t\t\tLandDrone(Player, State)\n\t\t\t\tcontinue\n\t\t\tend\n\t\t\tif Elapsed >= State.NextDroneStep then\n\t\t\t\tState.NextDroneStep = Elapsed + UpdateInterval\n\t\t\t\tif Input and Input.Fresh then\n\t\t\t\t\tStepDrone(Player, Drone, Input)\n\t\t\t\tend\n\t\t\tend\n\t\t\tlocal AtRelay = (Drone.Position - Relay.Position).Magnitude <= 2.2\n\t\t\tif SwitchHeld and AtRelay and not State.HasCharged and Charges < TargetCharges then\n\t\t\t\tState.HasCharged = true\n\t\t\t\tCharges += 1\n\t\t\t\tlocal Cell = Instance.new(\"Folder\")\n\t\t\t\tCell.Name = \"RelayCell\" .. Charges\n\t\t\t\tCell:SetAttribute(\"Kind\", \"RelayCell\")\n\t\t\t\tCell.Parent = State.Inventory\n\t\t\t\tCourse:SetAttribute(\"RelayCharges\", Charges)\n\t\t\t\tPlayer:SetAttribute(\"RelayCharges\", (Player:GetAttribute(\"RelayCharges\") or 0) + 1)\n\t\t\t\tlocal Accepted, Reason = CellCollected:TryFireClient(Player, {\n\t\t\t\t\tItem = { Name = Cell.Name, SwatchRGB = buffer.fromstring(string.char(99, 235, 255)) },\n\t\t\t\t\tCount = #State.Inventory:GetChildren(),\n\t\t\t\t})\n\t\t\t\tif not Accepted then\n\t\t\t\t\twarn(\"[Gameplay:Relay] Cell notification declined\", Reason)\n\t\t\t\tend\n\t\t\t\tif Charges == TargetCharges and CargoMarker and CargoMarker:IsA(\"BasePart\") then\n\t\t\t\t\tCargoMarker.Anchored = false\n\t\t\t\t\tCargoMarker:SetLinearVelocity(Vector3.new(2, 0, 0))\n\t\t\t\tend\n\t\t\telseif not AtRelay then\n\t\t\t\tState.HasCharged = false\n\t\t\tend\n\t\telseif State.RespawnAt then\n\t\t\tif Elapsed >= State.RespawnAt then\n\t\t\t\tState.RespawnAt = nil\n\t\t\t\tSetHealth(Player, State, HealthMaximum)\n\t\t\t\tPlayer:SetAttribute(\"RelayMode\", \"OnFoot\")\n\t\t\t\tPlayer:LoadCharacter()\n\t\t\tend\n\t\telseif Character then\n\t\t\tif Character.Position.Y < -12 then\n\t\t\t\tSetHealth(Player, State, 0)\n\t\t\telseif Elapsed >= State.NextDamage and IsStandingOn(Character.Position, Hazard) then\n\t\t\t\tState.NextDamage = Elapsed + 0.25\n\t\t\t\tSetHealth(Player, State, State.Health - 25)\n\t\t\tend\n\t\t\tif State.Health == 0 then\n\t\t\t\tState.RespawnAt = Elapsed + RespawnSeconds\n\t\t\t\tPlayer:SetAttribute(\"RelayMode\", \"Respawning\")\n\t\t\t\tPlayer:RemoveCharacter()\n\t\t\telseif IsMultiplayer and Elapsed >= State.NextLaunch and IsStandingOn(Character.Position, LaunchPad) then\n\t\t\t\tLaunchDrone(Player, State)\n\t\t\tend\n\t\tend\n\tend\nend)\n\nscript.Destroying:Connect(function()\n\tStepConnection:Disconnect()\n\tRemovingConnection:Disconnect()\n\tAddedConnection:Disconnect()\n\tfor Player in States do\n\t\tRemovePlayer(Player)\n\tend\nend)\n"
             }
           },
           "Attributes": {},
@@ -1061,7 +1074,7 @@
           "CustomProperties": [],
           "Tags": [],
           "Children": [],
-          "NodeId": 28
+          "NodeId": 29
         },
         {
           "Name": "RelayClient",
@@ -1082,7 +1095,7 @@
               "String": "a3af72783f3147098ab0a0f72c610eb5"
             },
             "Source": {
-              "String": "local Players = game:GetService(\"Players\")\nlocal ActionMap = game:GetService(\"ActionMap\")\nlocal CharacterControl = game:GetService(\"CharacterControlService\")\nlocal RunService = game:GetService(\"RunService\")\nlocal Workspace = game:GetService(\"Workspace\")\nlocal Mix = game:GetService(\"AudioMixService\")\nlocal Player = Players.LocalPlayer\nif not Player then\n\twarn(\"[Gameplay:Relay] Local player is unavailable\")\n\treturn\nend\n\nlocal Status\nlocal MixToggle\nfor Attempt = 1, 300 do\n\tlocal PlayerGui = Player.PlayerGui\n\tlocal Hud = PlayerGui and PlayerGui:FindFirstChild(\"RelayHud\")\n\tif Hud then\n\t\tStatus = Hud:FindFirstChild(\"RelayStatus\")\n\t\tMixToggle = Hud:FindFirstChild(\"RelayMixToggle\")\n\t\tif Status and MixToggle then\n\t\t\tbreak\n\t\tend\n\tend\n\ttask.wait()\nend\nif not (Status and MixToggle) then\n\twarn(\"[Gameplay:Relay] PlayerGui did not receive the complete HUD\")\n\treturn\nend\nMixToggle.Interactable = Mix ~= nil\n\nlocal MixFeedback\nlocal function ShowMixState(Muted)\n\tMixToggle.AccessibilitySelected = Muted\n\tMixToggle.AccessibleName = if Muted then \"Unmute game audio\" else \"Mute game audio\"\n\tMixToggle.ImageColor3 = if Muted then Color3.new(0.50, 0.58, 0.62) else Color3.new(1, 1, 1)\nend\nShowMixState(Mix ~= nil and Mix:GetMasterMuted())\n\nlocal MixConnection = MixToggle.Activated:Connect(function()\n\tif not Mix then\n\t\treturn\n\tend\n\tlocal Muted = not Mix:GetMasterMuted()\n\tMix:SetMasterMuted(Muted)\n\tShowMixState(Muted)\n\tMixToggle:ReleaseFocus()\n\tif MixFeedback then\n\t\ttask.cancel(MixFeedback)\n\tend\n\tMixToggle.BackgroundColor3 = Color3.new(0.25, 0.49, 0.53)\n\tMixFeedback = task.delay(0.25, function()\n\t\tMixFeedback = nil\n\t\tMixToggle.BackgroundColor3 = Color3.new(0.12, 0.22, 0.26)\n\tend)\nend)\n\nlocal PulseReference = \"asset://ca34ffb8742655186db2cfb54124a5ff\"\nlocal ToneReference = \"asset://a0d10f78c368437daac002a4e59fdd64\"\nlocal BeaconAnimator\nlocal TriedAnimator\nlocal Pulse\nlocal CueBeacon\nlocal ChargeTone\nlocal PreviousCharges\nlocal PreviousRelayEnabled\nlocal LandRequested = false\nlocal LastFacing = 0\nlocal LastDrone\n\nlocal function GetDrone()\n\tlocal Entity = Player.PossessedEntity\n\tif Entity and Entity:IsA(\"BasePart\") and Entity:GetAttribute(\"RelayDrone\") == true then\n\t\treturn Entity\n\tend\n\treturn nil\nend\n\nlocal ActionConnection = ActionMap.ActionBegan:Connect(function(ActionName)\n\tif ActionName == \"Jump\" and GetDrone() then\n\t\tLandRequested = true\n\tend\nend)\n\nlocal SimulationConnection = RunService.PreSimulation:Connect(function()\n\tif not GetDrone() then\n\t\tLandRequested = false\n\t\treturn\n\tend\n\tlocal Horizontal = ActionMap:GetValue(\"MoveRight\") - ActionMap:GetValue(\"MoveLeft\")\n\tlocal Forward = ActionMap:GetValue(\"MoveForward\") - ActionMap:GetValue(\"MoveBackward\")\n\tlocal Direction = Vector2.new(Horizontal, -Forward)\n\tif Direction.Magnitude > 1 then\n\t\tDirection = Direction.Unit\n\tend\n\tif Direction.Magnitude > 0.001 then\n\t\tLastFacing = math.atan2(-Direction.X, -Direction.Y)\n\tend\n\tif CharacterControl:SubmitPossessionIntent(Direction, LastFacing, LandRequested) then\n\t\tLandRequested = false\n\tend\nend)\n\nlocal RenderConnection = RunService.PreRender:Connect(function(DeltaTime)\n\tlocal Drone = GetDrone()\n\tif Drone then\n\t\tlocal Camera = Workspace.CurrentCamera\n\t\tlocal Focus = Drone.Position\n\t\tlocal View = CFrame.new(Focus + Vector3.new(0, 6, 12), Focus)\n\t\tCamera.CFrame = if Drone == LastDrone then Camera.CFrame:Lerp(View, math.clamp(DeltaTime * 14, 0, 1)) else View\n\tend\n\tLastDrone = Drone\n\n\tlocal Course = Workspace:FindFirstChild(\"RelayCourse\")\n\tlocal Beacon = Course and Course:FindFirstChild(\"RelayBeacon\")\n\tBeaconAnimator = Beacon and Beacon:FindFirstChildOfClass(\"Animator\")\n\tif BeaconAnimator ~= TriedAnimator then\n\t\tif Pulse then\n\t\t\tPulse:Stop()\n\t\t\tPulse = nil\n\t\tend\n\t\tTriedAnimator = BeaconAnimator\n\t\tPreviousRelayEnabled = nil\n\t\tif BeaconAnimator then\n\t\t\tlocal Loaded, Track = pcall(function()\n\t\t\t\treturn BeaconAnimator:LoadAnimation(PulseReference)\n\t\t\tend)\n\t\t\tif Loaded then\n\t\t\t\tPulse = Track\n\t\t\t\tPulse.Looped = true\n\t\t\t\tPulse:Play()\n\t\t\telse\n\t\t\t\twarn(\"[Gameplay:Relay] Relay beacon animation failed to load\")\n\t\t\tend\n\t\tend\n\tend\n\n\tlocal Enabled = Course and Course:GetAttribute(\"RelayEnabled\") == true\n\tif Pulse and Enabled ~= PreviousRelayEnabled then\n\t\tPulse.Speed = if Enabled then 2 else 0.35\n\t\tPreviousRelayEnabled = Enabled\n\tend\n\n\tlocal Health = Player:GetAttribute(\"Health\") or 100\n\tlocal Charges = if Course then Course:GetAttribute(\"RelayCharges\") or 0 else 0\n\tif CueBeacon ~= Beacon then\n\t\tCueBeacon = Beacon\n\t\tPreviousCharges = nil\n\t\tif ChargeTone and not ChargeTone.Destroyed then\n\t\t\tChargeTone:Destroy()\n\t\tend\n\t\tChargeTone = nil\n\t\tif Beacon then\n\t\t\tlocal Cue = Instance.new(\"Sound\")\n\t\t\tCue.Name = \"RelayChargeTone\"\n\t\t\tCue.SoundId = ToneReference\n\t\t\tCue.MixCategory = Enum.SoundMixCategory.Effects\n\t\t\tCue.Volume = 0.4\n\t\t\tCue.Parent = Beacon\n\t\t\tChargeTone = Cue\n\t\tend\n\tend\n\tif ChargeTone and PreviousCharges and Charges > PreviousCharges then\n\t\tChargeTone:Play()\n\tend\n\tPreviousCharges = Charges\n\n\tlocal Mode = Player:GetAttribute(\"RelayMode\")\n\tlocal Help\n\tif Charges == 3 then\n\t\tHelp = \"Relay restored\"\n\telseif Mode == \"Respawning\" then\n\t\tHelp = \"Respawning at the start\"\n\telseif Drone then\n\t\tHelp = if Enabled then \"Fly to the elevated relay. Space to land.\" else \"Ask a teammate to hold the green switch. Space to land.\"\n\telseif Course and Course:GetAttribute(\"RelayMultiplayer\") == false then\n\t\tHelp = \"Local preview. Walk with WASD and jump with Space.\"\n\telse\n\t\tHelp = \"Walk onto the cyan launch pad or hold the green switch.\"\n\tend\n\tlocal Text = string.format(\"Health %d   |   Relay %d / 3\\n%s\", Health, Charges, Help)\n\tif Status.Text ~= Text then\n\t\tStatus.Text = Text\n\tend\nend)\n\nscript.Destroying:Connect(function()\n\tRenderConnection:Disconnect()\n\tSimulationConnection:Disconnect()\n\tActionConnection:Disconnect()\n\tMixConnection:Disconnect()\n\tif MixFeedback then\n\t\ttask.cancel(MixFeedback)\n\tend\n\tif ChargeTone and not ChargeTone.Destroyed then\n\t\tChargeTone:Destroy()\n\tend\n\tif Pulse then\n\t\tPulse:Stop()\n\tend\nend)\n"
+              "String": "local Players = game:GetService(\"Players\")\nlocal ActionMap = game:GetService(\"ActionMap\")\nlocal CharacterControl = game:GetService(\"CharacterControlService\")\nlocal RunService = game:GetService(\"RunService\")\nlocal Workspace = game:GetService(\"Workspace\")\nlocal Mix = game:GetService(\"AudioMixService\")\nlocal TweenService = game:GetService(\"TweenService\")\nlocal Player = Players.LocalPlayer\nif not Player then\n\twarn(\"[Gameplay:Relay] Local player is unavailable\")\n\treturn\nend\n\nlocal Status\nlocal MixToggle\nfor Attempt = 1, 300 do\n\tlocal PlayerGui = Player.PlayerGui\n\tlocal Hud = PlayerGui and PlayerGui:FindFirstChild(\"RelayHud\")\n\tif Hud then\n\t\tStatus = Hud:FindFirstChild(\"RelayStatus\")\n\t\tMixToggle = Hud:FindFirstChild(\"RelayMixToggle\")\n\t\tif Status and MixToggle then\n\t\t\tbreak\n\t\tend\n\tend\n\ttask.wait()\nend\nif not (Status and MixToggle) then\n\twarn(\"[Gameplay:Relay] PlayerGui did not receive the complete HUD\")\n\treturn\nend\nMixToggle.Interactable = Mix ~= nil\n\nlocal PendingCell\nlocal CellCollected\nlocal CellConnection\nlocal Announcement = \"\"\nlocal AnnouncementSeconds = 0\n\nlocal MixFeedback\nlocal function ShowMixState(Muted)\n\tMixToggle.AccessibilitySelected = Muted\n\tMixToggle.AccessibleName = if Muted then \"Unmute game audio\" else \"Mute game audio\"\n\tMixToggle.ImageColor3 = if Muted then Color3.new(0.50, 0.58, 0.62) else Color3.new(1, 1, 1)\nend\nShowMixState(Mix ~= nil and Mix:GetMasterMuted())\n\nlocal MixConnection = MixToggle.Activated:Connect(function()\n\tif not Mix then\n\t\treturn\n\tend\n\tlocal Muted = not Mix:GetMasterMuted()\n\tMix:SetMasterMuted(Muted)\n\tShowMixState(Muted)\n\tMixToggle:ReleaseFocus()\n\tif MixFeedback then\n\t\ttask.cancel(MixFeedback)\n\tend\n\tMixToggle.BackgroundColor3 = Color3.new(0.25, 0.49, 0.53)\n\tMixFeedback = task.delay(0.25, function()\n\t\tMixFeedback = nil\n\t\tMixToggle.BackgroundColor3 = Color3.new(0.12, 0.22, 0.26)\n\tend)\nend)\n\nlocal PulseReference = \"asset://ca34ffb8742655186db2cfb54124a5ff\"\nlocal ToneReference = \"asset://a0d10f78c368437daac002a4e59fdd64\"\nlocal BeaconAnimator\nlocal TriedAnimator\nlocal Pulse\nlocal CueBeacon\nlocal ChargeTone\nlocal PreviousCharges\nlocal PreviousRelayEnabled\nlocal LandRequested = false\nlocal LastFacing = 0\nlocal LastDrone\n\nlocal function GetDrone()\n\tlocal Entity = Player.PossessedEntity\n\tif Entity and Entity:IsA(\"BasePart\") and Entity:GetAttribute(\"RelayDrone\") == true then\n\t\treturn Entity\n\tend\n\treturn nil\nend\n\nlocal ActionConnection = ActionMap.ActionBegan:Connect(function(ActionName)\n\tif ActionName == \"Jump\" and GetDrone() then\n\t\tLandRequested = true\n\tend\nend)\n\nlocal SimulationConnection = RunService.PreSimulation:Connect(function()\n\tif not GetDrone() then\n\t\tLandRequested = false\n\t\treturn\n\tend\n\tlocal Horizontal = ActionMap:GetValue(\"MoveRight\") - ActionMap:GetValue(\"MoveLeft\")\n\tlocal Forward = ActionMap:GetValue(\"MoveForward\") - ActionMap:GetValue(\"MoveBackward\")\n\tlocal Direction = Vector2.new(Horizontal, -Forward)\n\tif Direction.Magnitude > 1 then\n\t\tDirection = Direction.Unit\n\tend\n\tif Direction.Magnitude > 0.001 then\n\t\tLastFacing = math.atan2(-Direction.X, -Direction.Y)\n\tend\n\tif CharacterControl:SubmitPossessionIntent(Direction, LastFacing, LandRequested) then\n\t\tLandRequested = false\n\tend\nend)\n\nlocal RenderConnection = RunService.PreRender:Connect(function(DeltaTime)\n\tlocal Course = Workspace:FindFirstChild(\"RelayCourse\")\n\tif Course and (not CellCollected or CellCollected.Destroyed) then\n\t\tif CellConnection then CellConnection:Disconnect() end\n\t\tCellCollected = Course:FindFirstChild(\"CellCollected\")\n\t\tif CellCollected then\n\t\t\tCellConnection = CellCollected.OnClientEvent:Connect(function(Message)\n\t\t\t\t-- The local presentation step owns GUI writes.\n\t\t\t\tPendingCell = Message\n\t\t\tend)\n\t\tend\n\tend\n\tAnnouncementSeconds -= DeltaTime\n\tif PendingCell then\n\t\tlocal Message = PendingCell\n\t\tPendingCell = nil\n\t\tlocal Swatch = Message.Item.SwatchRGB\n\t\tStatus.TextColor3 = Color3.new(buffer.readu8(Swatch, 0) / 255, buffer.readu8(Swatch, 1) / 255,\n\t\t\tbuffer.readu8(Swatch, 2) / 255)\n\t\tAnnouncement = string.format(\"%s collected. Inventory contains %d cells.\", Message.Item.Name, Message.Count)\n\t\tAnnouncementSeconds = 2\n\t\tStatus.AccessibleName = Announcement\n\t\tTweenService:Create(Status, TweenInfo.new(0.35), { TextColor3 = Color3.new(0.84, 1, 0.94) }):Play()\n\tend\n\tlocal Drone = GetDrone()\n\tif Drone then\n\t\tlocal Camera = Workspace.CurrentCamera\n\t\tlocal Focus = Drone.Position\n\t\tlocal View = CFrame.new(Focus + Vector3.new(0, 6, 12), Focus)\n\t\tCamera.CFrame = if Drone == LastDrone then Camera.CFrame:Lerp(View, math.clamp(DeltaTime * 14, 0, 1)) else View\n\tend\n\tLastDrone = Drone\n\n\tlocal Beacon = Course and Course:FindFirstChild(\"RelayBeacon\")\n\tBeaconAnimator = Beacon and Beacon:FindFirstChildOfClass(\"Animator\")\n\tif BeaconAnimator ~= TriedAnimator then\n\t\tif Pulse then\n\t\t\tPulse:Stop()\n\t\t\tPulse = nil\n\t\tend\n\t\tTriedAnimator = BeaconAnimator\n\t\tPreviousRelayEnabled = nil\n\t\tif BeaconAnimator then\n\t\t\tlocal Loaded, Track = pcall(function()\n\t\t\t\treturn BeaconAnimator:LoadAnimation(PulseReference)\n\t\t\tend)\n\t\t\tif Loaded then\n\t\t\t\tPulse = Track\n\t\t\t\tPulse.Looped = true\n\t\t\t\tPulse:Play()\n\t\t\telse\n\t\t\t\twarn(\"[Gameplay:Relay] Relay beacon animation failed to load\")\n\t\t\tend\n\t\tend\n\tend\n\n\tlocal Enabled = Course and Course:GetAttribute(\"RelayEnabled\") == true\n\tif Pulse and Enabled ~= PreviousRelayEnabled then\n\t\tPulse.Speed = if Enabled then 2 else 0.35\n\t\tPreviousRelayEnabled = Enabled\n\tend\n\n\tlocal Health = Player:GetAttribute(\"Health\") or 100\n\tlocal Charges = if Course then Course:GetAttribute(\"RelayCharges\") or 0 else 0\n\tif CueBeacon ~= Beacon then\n\t\tCueBeacon = Beacon\n\t\tPreviousCharges = nil\n\t\tif ChargeTone and not ChargeTone.Destroyed then\n\t\t\tChargeTone:Destroy()\n\t\tend\n\t\tChargeTone = nil\n\t\tif Beacon then\n\t\t\tlocal Cue = Instance.new(\"Sound\")\n\t\t\tCue.Name = \"RelayChargeTone\"\n\t\t\tCue.SoundId = ToneReference\n\t\t\tCue.MixCategory = Enum.SoundMixCategory.Effects\n\t\t\tCue.Volume = 0.4\n\t\t\tCue.Parent = Beacon\n\t\t\tChargeTone = Cue\n\t\tend\n\tend\n\tif ChargeTone and PreviousCharges and Charges > PreviousCharges then\n\t\tChargeTone:Play()\n\tend\n\tPreviousCharges = Charges\n\n\tlocal Mode = Player:GetAttribute(\"RelayMode\")\n\tlocal Help\n\tif Charges == 3 then\n\t\tHelp = \"Relay restored\"\n\telseif Mode == \"Respawning\" then\n\t\tHelp = \"Respawning at the start\"\n\telseif Drone then\n\t\tHelp = if Enabled then \"Fly to the elevated relay. Space to land.\" else \"Ask a teammate to hold the green switch. Space to land.\"\n\telseif Course and Course:GetAttribute(\"RelayMultiplayer\") == false then\n\t\tHelp = \"Local preview. Walk with WASD and jump with Space.\"\n\telse\n\t\tHelp = \"Walk onto the cyan launch pad or hold the green switch.\"\n\tend\n\tlocal Text = string.format(\"Health %d   |   Relay %d / 3\\n%s\", Health, Charges,\n\t\tif AnnouncementSeconds > 0 then Announcement else Help)\n\tif Status.Text ~= Text then\n\t\tStatus.Text = Text\n\tend\nend)\n\nscript.Destroying:Connect(function()\n\tif CellConnection then CellConnection:Disconnect() end\n\tRenderConnection:Disconnect()\n\tSimulationConnection:Disconnect()\n\tActionConnection:Disconnect()\n\tMixConnection:Disconnect()\n\tif MixFeedback then\n\t\ttask.cancel(MixFeedback)\n\tend\n\tif ChargeTone and not ChargeTone.Destroyed then\n\t\tChargeTone:Destroy()\n\tend\n\tif Pulse then\n\t\tPulse:Stop()\n\tend\nend)\n"
             }
           },
           "Attributes": {},
@@ -1090,10 +1103,10 @@
           "CustomProperties": [],
           "Tags": [],
           "Children": [],
-          "NodeId": 29
+          "NodeId": 30
         }
       ],
-      "NodeId": 27
+      "NodeId": 28
     }
   ],
   "NodeId": 1

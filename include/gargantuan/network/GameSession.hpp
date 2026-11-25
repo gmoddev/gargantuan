@@ -7,6 +7,7 @@
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/network/ReplicationRelevance.hpp"
 #include "gargantuan/network/ReliableServiceProfile.hpp"
+#include "gargantuan/network/RemoteManager.hpp"
 #include "gargantuan/network/Transport.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
 
@@ -297,6 +298,8 @@ namespace gargantuan::network {
 		[[nodiscard]] std::shared_ptr<DataModel> GetClientDataModel() const;
 		[[nodiscard]] std::optional<ConnectionId> GetPrimaryConnection() const;
 		[[nodiscard]] std::shared_ptr<Player> GetAcceptedPlayer(ConnectionId Connection) const;
+		[[nodiscard]] std::shared_ptr<Player> ResolveRemotePlayer(const RemotePeerContext &Peer) const;
+		[[nodiscard]] std::optional<RemotePeerContext> ResolveRemotePeer(const Player &PlayerValue) const;
 		[[nodiscard]] std::vector<GameSessionPeerIdentity> GetPeerIdentities() const;
 		bool SetTrustedReplicationFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints);
 
