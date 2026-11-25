@@ -197,9 +197,9 @@ Reliable events use `ReliableOrdered` delivery and `ReliableApplication`
 traffic. A Remote's published lifetime is its outgoing event ordering stream
 for each peer. An admitted event waiting for materialization retains its place
 ahead of later events in that stream. Connection receive dispatch preserves
-the order in which the transport admitted frames to the manager. Terminal disconnect ends
-the delivery promise. Reliable admission failure is observable to the local
-caller; it does not create an unbounded fallback queue.
+the order in which the transport admitted frames to the manager. Terminal
+disconnect ends the delivery promise. The local caller can observe outbound
+admission failure through the bounded submission API.
 
 Unreliable events use `UnreliableUnordered` and `EphemeralApplication`. They may
 drop, duplicate, or reorder. `RemoteManager` never retries them. The encoded

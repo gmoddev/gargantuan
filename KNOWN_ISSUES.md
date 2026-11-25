@@ -16,7 +16,7 @@ observations. These dispositions apply to the 10B development branch.
 | KI-LUAU-001, Instance keys | The development branch interns wrappers. The independent review candidate also makes detached equality side-effect free. Windows Foundation tests cover both, and GameSession tests at `0ea0b4a04` verified the replicated Player as a dictionary key across callbacks. |
 | KI-NET-001, Player addressing | Implemented and covered on the development branch. Player targeting and explicit submission outcomes use the server's current session mapping. The two-client session and real-GNS Relay cases passed at `0ea0b4a04`. |
 | KI-LUAU-002, execution budget | The independent candidate latches expiry through the outer gameplay entry. The configurable deadline still applies at VM execution safepoints. Per-frame aggregate work, native call interruption, VM allocation limits and general continuation retirement remain open. |
-| Reliable remote callback order | Open on the qualified baseline and development candidate. Fair dispatch can move an older queued message behind a newer message from the same connection when a pump exhausts its budget. The Remote queue owner must preserve per-connection order across pumps and qualify the integration with 10B. |
+| Reliable remote callback order | Resolved on the independent 10B candidate at `39b747402`. Per-peer FIFOs keep their ordering across pump exhaustion and the outbound dependency queue preserves same-stream event and request order. Permanent regressions cover reentry, retirement, sustained saturation, simulated delivery and two-client GNS. |
 
 Public multiplayer package confidentiality remains a separate release gate.
 

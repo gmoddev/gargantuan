@@ -14,7 +14,7 @@ and ordinary script deadline diagnostics. Relay Rescue exercises the
 integrated APIs with two clients. The [qualification record](../Validation/Foundation10BDeveloperRuntime.md)
 identifies the source, affected subsystem gates and measured runtime costs.
 The [independent promotion review](../Validation/Foundation10BIndependentReview.md)
-records the required reliable-dispatch correction and requalification.
+records the reliable-dispatch correction, requalification and promotion decision.
 
 Provider-neutral persistence follows the [Engine handoff](GameplayPersistenceHandoff.md).
 The distributed Player package and the existing lifecycle assignments retain

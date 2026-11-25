@@ -1,9 +1,10 @@
 # Foundation 10B independent promotion review
 
-**Hold promotion.** Two bounded runtime corrections passed focused Windows
-Release verification. The inherited reliable receive queue can still reorder
-gameplay callbacks. Its correction and integration evidence are required for
-the reliable-ordered contract in the 10B assignment.
+**Recommend promotion for private engineering.** The follow-up corrected the
+inherited receive-ordering blocker and the related outgoing materialization
+ordering gap. Focused Windows Release and Linux sanitizer suites, real
+localhost GNS and the five existing standalone gates passed. Foundation 10A
+remains the public distribution gate.
 
 ## Reviewed source
 
@@ -14,6 +15,7 @@ the reliable-ordered contract in the 10B assignment.
 | Reported three-commit candidate | `b960c091ae2ad6385548d0cca4ce3b74599bf04b` | `784aa66f901efa12844ae465def321984294608d` |
 | Original development branch, `foundation/engine-10b` | `b236bcf8dddee623b05ec53c52d7409657a56c89` | `784aa66f901efa12844ae465def321984294608d` |
 | Runtime correction on the independent branch | `cded087d40ed6b4dc31e3231dd771beaf8dfc091` | `b8d0353a913ea11bd186e57ab1fca1a62b4b70fe` |
+| Initial independent review hold | `c3f1a3fe64e23408c8ccfec35649bad321892d2b` | `9cd89d324da1af51ecd938c2faf94f999530761d` |
 
 The candidate's second commit has the exact qualified implementation tree.
 Its third commit changes six documentation and inventory paths. The original
@@ -26,7 +28,7 @@ review uses the original developer-runtime assignment from chat
 
 | Finding | Classification and impact | Evidence, correction, and qualification |
 | --- | --- | --- |
-| Reliable callback order across bounded pumps | **Promotion blocker, inherited.** A healthy connection can deliver reliable messages to native admission in order and still run their gameplay callbacks out of order. An older valid RPC can also fail the monotonic-ID check after a newer request dispatches first. | High confidence. `RemoteManager::Pump` rotates ineligible entries to the back, then can reach the global message limit before visiting the original tail. A Windows Release native fixture fed four ordered structured events from one peer and two from another. It observed `1, 2, 4, 3` across two pumps. The same rotation and early exit exist at `bf50b0987` and trace to `d52256135`. Correct this in the receive-queue owner. Preserve peer fairness, FIFO for queued work, accounting, peer teardown, and reentrant enqueue/retirement. Qualify interleaved reliable events and requests, bounded pump exit and removal, simulated and real GNS service, and the existing correctness workloads after integration. |
+| Reliable callback order across bounded pumps | **Inherited promotion blocker, corrected.** A healthy connection could deliver reliable messages to native admission in order and still run gameplay callbacks out of order. The RPC monotonic-ID check could then reject the earlier valid request. | High confidence. The issue traces to `d52256135` and reproduced at `c3f1a3fe6`. Correction `39b747402` preserves the receive prefix and closes a related gap in outbound materialization deferral. The qualification below covers both changes. |
 | Detached Instance equality publishes identity | **Required bounded correction, implemented.** Comparing different detached wrappers could allocate ObjectIds, or fail in a read-only domain. | High confidence. The legacy `Instance::LEqual` used `GetObjectId` on both operands after the cache made wrapping independent of publication. The regression fails on the reported implementation. The review compares the allocation owned by each wrapper. The Windows Release fixture checks read-only comparison, first-adoption journal publication with the original wrapper, separate VMs, destruction, generation reuse and GC. Authoritative identity and serialization still use ObjectIds. |
 | Deadline expiry after a protected call | **Required bounded correction, implemented.** The original hook reset its sampling counter before reporting expiry, so a protected call could turn an over-budget entry into ordinary success. | High confidence. The finite protected-call fixture fails on the original runtime and passes on the review runtime. `BudgetScope::Interrupt` keeps expiry latched until the outer entry unwinds and checks every execution safepoint once expired. The fixture also checks one deadline diagnostic, hook restoration, and recovery in a fresh entry. The original continuation-remediation scope remains independent. |
 | Structured decode work versus retention | **Nonblocking technical debt for private engineering.** Per-frame and retained-argument limits constrain memory. Frames rejected after decode consume transient allocation and CPU without consuming retained queue capacity. | High confidence in the accounting distinction. `HandleTransportEvent` validates wire size and queue headroom first, then parses and checks decoded retention. `GameSession::Poll` bounds one poll at 128 events. Trace rejected decode work separately and qualify worst-case allocation and mixed-peer service before making hostile-peer capacity claims. This belongs with networking input admission and overload work. |
@@ -189,6 +191,87 @@ gameplay. Trusted offline hosts can opt into cooperative debugging through
 native configuration. Untrusted creator execution needs independent
 isolation and quotas.
 
+## Reliable receive ordering follow-up
+
+With budget four and two busy peers, the old global deque started as
+`A1 A2 A3 B1 B2 A4`. The pump served `A1 A2`, rotated `A3` to the tail
+and served `B1 B2`. At the global budget exit the remaining queue was
+`A4 A3`. This was a dispatch-ordering defect after valid transport admission.
+The GNS and simulated transport polls drain their admitted events in order,
+and `GameSession::Poll` hands Remote frames to the manager in that order.
+The ordinary scheduler takes a connection's reliable application intents
+from the front of their traffic-class queue.
+
+Correction `39b74740244e94a955672dd6b676794a5e4945d6`, tree
+`7ed2441fd20f865162669e7a99dbf77dc9d0dd27`, separates receive queue ownership
+from scheduling. Each peer owns an ingress FIFO. A rotating list of ready
+peers advances at service time. The original global and per-peer allowances
+still bound every pump. The snapshot fences each peer's eligible prefix
+before timeout or message callbacks. Reentrant arrivals wait for a later
+pump, retirement adjusts the prefix and returns its charges, and nested
+pumps dispatch zero additional messages. Older work stays at the front of
+its own lane when the global budget ends. Receive validation either dispatches
+or retires the selected frame in that turn. Materialization waits live on the
+outgoing side, where they affect only the relevant ordering stream.
+
+The adjacent outbound dependency queue previously let newer requests advance
+the peer-wide request-ID watermark while an older request waited for an
+Instance to materialize. It also let a newer event overtake an older waiting
+event in the same publication. Waiting successors now share the existing
+bounded deferred budgets. The promotion pass advances each shared request
+stream and each event publication in order. Other peers, event publications
+and replies retain separate progress. Replies correlate by request ID and
+remain free to complete in handler completion order. Cancellation, expiry,
+unpublication and disconnect retire deferred ownership through one accounting
+path. The correction retains the wire protocol, deadlines, limits and
+scheduler policies.
+
+The updated native regressions fail on the old manager and pass on the corrected
+manager. They cover one-shot and repeated budget exhaustion, a new tail behind
+older work, mixed events, requests and correlated replies, callback admission,
+nested pumping, unpublication and disconnect retirement, structured buffers,
+outbound dependency release and cancellation, and repeated saturated rotation
+with five continuously backlogged peers. A staged two-client localhost GNS
+test repeats the receive failure with real reliable events and RPCs and checks
+all correlated buffer replies exactly once.
+
+Seven alternating MSVC Release processes per build measured the same admitted
+and dispatched message counts. Each row reports medians in nanoseconds per
+message for the original manager and the corrected manager.
+
+| Peers, depth per peer, pump budget | Admission before → after | Pump before → after | Combined before → after |
+| --- | ---: | ---: | ---: |
+| 1, 1, 1 | 186 → 219 | 352 → 312 | 539 → 530 |
+| 1, 64, 16 | 151 → 167 | 118 → 89 | 269 → 256 |
+| 32, 16, 8 | 161 → 185 | 492 → 166 | 653 → 351 |
+
+The empty-to-ready transition adds one list node allocation in the single-message
+case. The pump now avoids rebuilding and scanning per-message fairness state.
+Total requested allocations for that case fell from about eight to four per
+message. Combined admission and pump time fell by about 46% in the 32-peer fixture.
+These are manager microbenchmarks with a recording scheduler. The standalone
+workloads exercise real GNS scheduling and workload correctness separately.
+
+The corrected Windows Release runtime passed nine focused invocations and all
+five existing standalone gates with zero performance misses. Its standalone
+binary SHA-256 is
+`67680c419fce0000dd35f2e253976d897101e76f4824d5aff4842249e1b51206`.
+All 144 aggregate peer rows conserved accepted and completed RPCs with zero
+errors. Ordinary peer RPC p95 was 56.2–74.8 ms and overload peer RPC p95
+was 218.8–275.0 ms, close to the original 56.6–74.9 and 219.1–271.0 ms ranges.
+These are latency observations within the aggregate fixture. The 32-peer
+sample supports healthy service under the preserved workload limits.
+
+The follow-up also passed nine focused Clang 19 RelWithDebInfo invocations
+with ASan, UBSan and leak detection. The headless lane covered native Remote,
+Remote Luau, GameSession, simulated Relay and the custom Character mission.
+The GNS lane covered the two-client Remote regression, Relay, GameSession
+and pooled feedback refresh. Windows and Linux recompiled the changed units
+with the original build flags and relinked them with pinned compatible objects.
+The follow-up worker outputs are under
+`C:/Sandbox/Codex/Artifacts/Engine10BReceiveOrdering` and
+`C:/Sandbox/Codex/Artifacts/Engine10B/Linux/ReceiveOrdering`.
+
 ## Qualification and provenance
 
 - All 13 receipt hashes matched. Both source manifests bind 1,688 tracked
@@ -238,8 +321,8 @@ compilations in parallel. Review outputs are in
 logs and the candidate receipt are in the controller's
 `foundation-10b-independent-review` artifact directory.
 
-The review branch consolidates the corrections on top of the original
-three-commit candidate. Hold integration until the reliable FIFO dependency
-is corrected and qualified, then rerun the affected integration and sanitizer
-gates. The candidate's native validation and the public release gate remain
-separate decisions.
+The promotion branch is a documentation-only descendant of the qualified
+correction at `39b747402`. It includes the accepted detached Instance equality
+and latched deadline fixes and carries forward the source-equivalent
+qualification evidence described above. Foundation 10A and the independent
+continuation-lifecycle assignments retain their own acceptance criteria.
