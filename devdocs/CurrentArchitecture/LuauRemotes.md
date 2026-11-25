@@ -194,8 +194,10 @@ handle the timeout outcome in the caller.
 ## Event semantics
 
 Reliable events use `ReliableOrdered` delivery and `ReliableApplication`
-traffic. Ordering is the scheduler/transport order for the declared Remote
-logical stream while the connection remains healthy. Terminal disconnect ends
+traffic. A Remote's published lifetime is its outgoing event ordering stream
+for each peer. An admitted event waiting for materialization retains its place
+ahead of later events in that stream. Connection receive dispatch preserves
+the order in which the transport admitted frames to the manager. Terminal disconnect ends
 the delivery promise. Reliable admission failure is observable to the local
 caller; it does not create an unbounded fallback queue.
 
@@ -223,6 +225,12 @@ contains the local connection identity, Remote identity, ID, monotonic deadline,
 and completion callback. The default deadline is 10 seconds and the maximum is
 30 seconds. Zero, negative, non-finite Luau values, and longer deadlines are
 rejected.
+
+All functions share the request-ID ordering stream in one direction of a
+connection. The sender retains later requests behind a materialization-dependent
+request in that stream. Replies complete by correlation and can be produced
+in a different order from their requests. An independent event stream or
+correlated reply can proceed while a request waits for materialization.
 
 Every admitted request reaches exactly one terminal state:
 
@@ -386,7 +394,10 @@ object exists and cannot reach gameplay code.
 For a reliable outgoing message, a visible live Object that is not yet
 materialized creates an explicit bounded dependency. The message stays in the
 per-peer deferred reliable budget until `MarkMaterialized`, invalidation, or the
-30-second hard ceiling. An unreliable message is rejected instead of waiting.
+30-second hard ceiling. The same count, encoded-byte and retained-argument
+ceilings cover successors waiting for a dependency in their ordering stream.
+Separate peers, event publications, requests and correlated replies keep their
+own ordering rules. An unreliable message with an unresolved reference is rejected.
 If an Object is unpublished or destroyed before dispatch, validation fails and
 the Remote cannot resurrect it.
 
@@ -472,9 +483,13 @@ dictionary entries, strings and buffers. The per-peer decoded dispatch ceiling
 is four times its negotiated receive-byte budget. The per-peer deferred
 argument ceiling is four times its negotiated queued-reliable byte budget.
 These budgets complement encoded byte accounting and exclude allocator
-metadata. The runtime
-safe point processes at most the native per-tick message ceiling and divides a
-pump pass fairly across peers with queued work. Every Request frame, including
+metadata. Each peer owns one receive FIFO. At the runtime safe point the
+manager visits ready peers in rotating order and retains the existing global
+message ceiling and per-peer share. Budget exhaustion leaves each unserved
+prefix in place. Admission from a callback waits until the next pump, and
+unpublication or peer retirement removes affected entries from the current
+eligible prefix before delivery continues. Nested pumps share the enclosing
+safe point and dispatch no additional messages. Every Request frame, including
 an unknown or invalid request, consumes admission before a reliable rejection
 can be generated; over-rate requests are dropped and terminate at the caller's
 finite deadline.
