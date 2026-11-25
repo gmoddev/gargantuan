@@ -53,6 +53,7 @@ namespace gargantuan::network {
 			return Receiver.Root;
 		}
 		[[nodiscard]] std::shared_ptr<Instance> Resolve(ObjectId SourceObject) const;
+		[[nodiscard]] std::optional<ObjectId> GetSourceObject(const Instance &Object) const;
 		[[nodiscard]] ReplicationEpoch GetEpoch() const {
 			return Epoch;
 		}

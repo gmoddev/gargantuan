@@ -265,6 +265,31 @@ int main() {
 		"localhost GNS correlates bounded request/response in both directions"
 	);
 
+	const std::vector<RemoteValue> Structured{RemoteDictionary{{
+		{"inventory", RemoteArray{{std::string("coil"), std::string("battery")}}},
+		{"state", RemoteBuffer{{std::byte{0}, std::byte{0xff}, std::byte{4}}}},
+	}}};
+	int StructuredEvents = 0;
+	const auto ReceiveStructured = [&](const RemoteInvocation &Invocation) {
+		if (Invocation.Arguments == Structured) ++StructuredEvents;
+	};
+	Test.Server->SetEventHandler(ClientToServer, ReceiveStructured);
+	Test.Server->SetEventHandler(Unreliable, ReceiveStructured);
+	Test.Server->SetEventHandler(Sequenced, ReceiveStructured);
+	for (const auto Remote : {ClientToServer, Unreliable, Sequenced})
+		Check(Test.Client->SendEvent(Test.ClientConnection, Remote, Structured).Accepted(),
+			"localhost GNS admits a structured value for each RemoteEvent delivery mode");
+	Test.Server->SetRequestHandler(Function, [](const RemoteInvocation &Message, RemoteManager::RequestReply Reply) {
+		(void)Reply(Message.Arguments, std::nullopt);
+	});
+	ClientResult.reset();
+	Check(Test.Client->StartRequest(Test.ClientConnection, Function, Structured,
+		[&](RemoteRequestResult Result) { ClientResult = std::move(Result); }, 2s).Accepted(),
+		"localhost GNS admits a structured function request");
+	Check(Test.PumpUntil(5s, [&] { return StructuredEvents >= 3 && ClientResult.has_value(); }) &&
+		ClientResult->Outcome.Status == RemoteRequestTerminalStatus::Success && ClientResult->Results == Structured,
+		"real GNS preserves nested tables and buffers across all delivery modes and RPC reply");
+
 	int StressDelivered = 0;
 	Test.Server->SetEventHandler(ClientToServer, [&](const RemoteInvocation &) { ++StressDelivered; });
 	for (int Index = 0; Index < 200; ++Index)

@@ -1,5 +1,7 @@
 #include "gargantuan/network/RemoteLuau.hpp"
 
+#include "RemoteValueBudget.hpp"
+
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/datatypes/CFrame.hpp"
 #include "gargantuan/datatypes/Color3.hpp"
@@ -9,16 +11,37 @@
 #include "gargantuan/datatypes/Vector3.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 
+#include "../scripting/LuauTableStorage.hpp"
+
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstring>
 #include <limits>
+#include <map>
 #include <stdexcept>
 
 namespace gargantuan::network {
 	namespace {
-		WireValue ReadArgument(lua_State *L, int Index) {
+		void RequireBudget(bool WithinBudget) {
+			if (!WithinBudget) throw std::invalid_argument("Remote values exceed a payload, allocation, or reference limit");
+		}
+
+		RemoteValue ReadScalar(
+			lua_State *L, int Index, bool TopLevel, const RemoteManager *Manager, detail::RemoteValueBudget &Budget
+		) {
 			if (lua_isnil(L, Index)) return std::monostate{};
 			if (lua_isboolean(L, Index)) return lua_toboolean(L, Index) != 0;
-			if (lua_isnumber(L, Index)) {
+			if (lua_type(L, Index) == LUA_TSTRING) {
+				std::size_t Length = 0;
+				const auto *Text = lua_tolstring(L, Index, &Length);
+				if (Length > MaximumRemoteStringBytes) throw std::invalid_argument("Remote string exceeds 16 KiB");
+				if (std::memchr(Text, 0, Length))
+					throw std::invalid_argument("Remote string contains an embedded null");
+			}
+			// Preserve the established numeric-string conversion for positional
+			// arguments. Nested data is a raw typed snapshot.
+			if (lua_type(L, Index) == LUA_TNUMBER || (TopLevel && lua_isnumber(L, Index))) {
 				const auto Value = static_cast<double>(lua_tonumber(L, Index));
 				if (!std::isfinite(Value)) throw std::invalid_argument("Remote number must be finite");
 				if (std::trunc(Value) == Value && Value >= std::numeric_limits<int>::min() &&
@@ -26,19 +49,23 @@ namespace gargantuan::network {
 					return static_cast<int>(Value);
 				return Value;
 			}
-			if (lua_isstring(L, Index)) {
+			if (lua_type(L, Index) == LUA_TSTRING) {
 				std::size_t Length = 0;
 				const auto *Value = lua_tolstring(L, Index, &Length);
-				if (Length > MaximumRemoteStringBytes) throw std::invalid_argument("Remote string exceeds 16 KiB");
-				std::string Result(Value, Length);
-				ValidateProtocolString(Result, MaximumRemoteStringBytes, "Remote string");
-				return Result;
+				const std::string_view Text(Value, Length);
+				RequireBudget(detail::ChargeRemoteScalar(Budget, Text));
+				ValidateProtocolString(Text, MaximumRemoteStringBytes, "Remote string");
+				return std::string(Text);
 			}
 			if (StackValue<std::shared_ptr<Instance>>::Is(L, Index)) {
 				auto InstanceValue = StackValue<std::shared_ptr<Instance>>::From(L, Index);
-				if (!InstanceValue || InstanceValue->IsDestroying())
+				if (!InstanceValue || InstanceValue->IsDestroying() || InstanceValue->GetDestroyed())
 					throw std::invalid_argument("Remote Instance reference is destroyed");
-				return WireObjectReference{WireObjectId::FromObjectId(InstanceValue->GetObjectId())};
+				const auto Object = Manager ? Manager->MapOutgoingReference(*InstanceValue) :
+					std::optional(InstanceValue->GetObjectId());
+				if (!Object || !Object->IsValid())
+					throw std::invalid_argument("Remote Instance reference has no current network identity");
+				return WireObjectReference{WireObjectId::FromObjectId(*Object)};
 			}
 			if (StackValue<Vector2>::Is(L, Index)) {
 				const auto Value = StackValue<Vector2>::From(L, Index).Value;
@@ -81,7 +108,119 @@ namespace gargantuan::network {
 			throw std::invalid_argument("Remote argument type is unsupported");
 		}
 
-		int PushArgument(lua_State *L, const WireValue &Argument, const RemoteManager::ObjectResolver &ResolveObject) {
+		struct ArgumentReader {
+			lua_State *L;
+			const RemoteManager *Manager;
+			detail::RemoteValueBudget Budget;
+			std::array<const void *, MaximumRemoteContainerDepth> Ancestors{};
+			std::size_t RemainingTableSlots = MaximumRemoteLuauTableSlots;
+
+			void ChargeTableTraversal(std::size_t Slots) {
+				if (Slots > RemainingTableSlots)
+					throw std::invalid_argument("Remote tables exceed the cumulative Luau storage scan limit");
+				RemainingTableSlots -= Slots;
+			}
+
+			RemoteValue Read(int Index, std::size_t Depth) {
+				RequireBudget(Budget.Value());
+				if (lua_istable(L, Index)) return ReadTable(lua_absindex(L, Index), Depth);
+				if (lua_isbuffer(L, Index)) {
+					std::size_t Length = 0;
+					const auto *Bytes = static_cast<const std::byte *>(lua_tobuffer(L, Index, &Length));
+					if (Length > MaximumRemoteBufferBytes) throw std::invalid_argument("Remote buffer exceeds 64 KiB");
+					RequireBudget(Budget.Wire(4 + Length) && Budget.Storage(Length));
+					RemoteBuffer Result;
+					if (Length != 0) Result.Bytes.assign(Bytes, Bytes + Length);
+					return Result;
+				}
+				auto Result = ReadScalar(L, Index, Depth == 0, Manager, Budget);
+				std::visit([&](const auto &Value) {
+					using Type = std::decay_t<decltype(Value)>;
+					if constexpr (!std::is_same_v<Type, RemoteArray> && !std::is_same_v<Type, RemoteDictionary> &&
+						!std::is_same_v<Type, RemoteBuffer> && !std::is_same_v<Type, std::string>)
+						RequireBudget(detail::ChargeRemoteScalar(Budget, Value));
+				}, Result);
+				return Result;
+			}
+
+			RemoteValue ReadTable(int Index, std::size_t Depth) {
+				if (Depth >= MaximumRemoteContainerDepth)
+					throw std::invalid_argument("Remote table exceeds eight levels");
+				if (lua_getmetatable(L, Index)) throw std::invalid_argument("Remote tables cannot have metatables");
+				const auto *Identity = lua_topointer(L, Index);
+				if (std::find(Ancestors.begin(), Ancestors.begin() + Depth, Identity) != Ancestors.begin() + Depth)
+					throw std::invalid_argument("Remote tables cannot contain cycles");
+				Ancestors[Depth] = Identity;
+				RequireBudget(Budget.Wire(2));
+				// Raw iteration scans empty backing slots as well as live entries.
+				// Read the bundled Luau layout only to cap that native work.
+				const std::size_t Slots = LuauTableStorageSlots(Identity);
+				ChargeTableTraversal(Slots);
+
+				std::size_t Count = 0;
+				std::size_t LastIndex = 0;
+				bool HasKeys = false;
+				for (int Cursor = lua_rawiter(L, Index, 0); Cursor >= 0; Cursor = lua_rawiter(L, Index, Cursor)) {
+					RequireBudget(++Count <= MaximumRemoteValueCount - Budget.ValueCount);
+					const int KeyType = lua_type(L, -2);
+					if (KeyType == LUA_TNUMBER) {
+						const double Key = lua_tonumber(L, -2);
+						if (!(Key >= 1 && Key <= MaximumRemoteValueCount) || std::trunc(Key) != Key)
+							throw std::invalid_argument("Remote arrays require consecutive positive integer keys");
+						LastIndex = std::max(LastIndex, static_cast<std::size_t>(Key));
+					} else if (KeyType == LUA_TSTRING) {
+						HasKeys = true;
+					} else {
+						throw std::invalid_argument("Remote table keys must be array indices or strings");
+					}
+					if (HasKeys && LastIndex != 0)
+						throw std::invalid_argument("Remote tables cannot mix array indices and string keys");
+					lua_pop(L, 2);
+				}
+				if (!HasKeys) {
+					if (LastIndex != Count) throw std::invalid_argument("Remote arrays cannot contain holes");
+					RequireBudget(Budget.Children(Count, sizeof(RemoteValue)));
+					RemoteArray Result;
+					Result.Values.resize(Count);
+					if (Count != 0) {
+						ChargeTableTraversal(Slots);
+						for (int Cursor = lua_rawiter(L, Index, 0); Cursor >= 0; Cursor = lua_rawiter(L, Index, Cursor)) {
+							const auto Key = static_cast<std::size_t>(lua_tonumber(L, -2));
+							Result.Values[Key - 1] = Read(-1, Depth + 1);
+							lua_pop(L, 2);
+						}
+					}
+					return Result;
+				}
+
+				RequireBudget(Budget.Children(Count, sizeof(RemoteDictionaryEntry)));
+				ChargeTableTraversal(Slots);
+				RemoteDictionary Result;
+				Result.Entries.reserve(Count);
+				for (int Cursor = lua_rawiter(L, Index, 0); Cursor >= 0; Cursor = lua_rawiter(L, Index, Cursor)) {
+					std::size_t Length = 0;
+					const auto *KeyBytes = lua_tolstring(L, -2, &Length);
+					const std::string_view Key(KeyBytes, Length);
+					ValidateProtocolString(Key, MaximumRemoteDictionaryKeyBytes, "Remote dictionary key");
+					RequireBudget(Budget.Wire(4 + Length) && Budget.Storage(Length));
+					Result.Entries.push_back({std::string(Key), Read(-1, Depth + 1)});
+					lua_pop(L, 2);
+				}
+				std::ranges::sort(Result.Entries, {}, &RemoteDictionaryEntry::Key);
+				return Result;
+			}
+		};
+
+		std::shared_ptr<Instance> ResolveLuauReference(
+			ObjectId Object, const RemoteManager::ObjectResolver &ResolveObject
+		) {
+			auto InstanceValue = ResolveObject ? ResolveObject(Object) : nullptr;
+			if (!InstanceValue || InstanceValue->GetDestroyed() || InstanceValue->IsDestroying())
+				throw std::invalid_argument("Remote Object reference is unresolved");
+			return InstanceValue;
+		}
+
+		int PushArgument(lua_State *L, const RemoteValue &Argument, const RemoteManager::ObjectResolver &ResolveObject) {
 			return std::visit(
 				[&](const auto &Value) -> int {
 					using Type = std::decay_t<decltype(Value)>;
@@ -122,10 +261,30 @@ namespace gargantuan::network {
 						auto Item = Enum->second->FromName(Value.Item);
 						if (!Item) throw std::runtime_error("Remote enum item is unavailable");
 						return StackValue<EnumItem>::Push(L, *Item);
+					} else if constexpr (std::is_same_v<Type, RemoteArray>) {
+						lua_createtable(L, static_cast<int>(Value.Values.size()), 0);
+						int Index = 1;
+						for (const auto &Entry : Value.Values) {
+							PushArgument(L, Entry, ResolveObject);
+							lua_rawseti(L, -2, Index++);
+						}
+						return 1;
+					} else if constexpr (std::is_same_v<Type, RemoteDictionary>) {
+						lua_createtable(L, 0, static_cast<int>(Value.Entries.size()));
+						for (const auto &Entry : Value.Entries) {
+							lua_pushlstring(L, Entry.Key.data(), Entry.Key.size());
+							PushArgument(L, Entry.Value, ResolveObject);
+							lua_rawset(L, -3);
+						}
+						return 1;
+					} else if constexpr (std::is_same_v<Type, RemoteBuffer>) {
+						auto *Destination = lua_newbuffer(L, Value.Bytes.size());
+						if (!Value.Bytes.empty()) std::memcpy(Destination, Value.Bytes.data(), Value.Bytes.size());
+						return 1;
 					} else if constexpr (std::is_same_v<Type, WireObjectReference>) {
-						auto InstanceValue = ResolveObject ? ResolveObject(Value.Object.ToObjectId()) : nullptr;
-						if (!InstanceValue) throw std::runtime_error("Remote Object reference is unresolved");
-						return StackValue<std::shared_ptr<Instance>>::Push(L, std::move(InstanceValue));
+						return StackValue<std::shared_ptr<Instance>>::Push(
+							L, ResolveLuauReference(Value.Object.ToObjectId(), ResolveObject)
+						);
 					} else {
 						throw std::runtime_error("Remote schema enum values are not exposed to Luau yet");
 					}
@@ -135,22 +294,28 @@ namespace gargantuan::network {
 		}
 	}
 
-	std::vector<WireValue> ReadRemoteLuauArguments(lua_State *L, int FirstIndex) {
+	std::vector<RemoteValue> ReadRemoteLuauArguments(lua_State *L, int FirstIndex, const RemoteManager *Manager) {
 		const int Top = lua_gettop(L);
 		const int Count = std::max(Top - FirstIndex + 1, 0);
 		if (Count > MaximumRemoteArguments) throw std::invalid_argument("Remote argument count exceeds 32");
-		std::vector<WireValue> Result;
+		if (!lua_checkstack(L, static_cast<int>(2 * MaximumRemoteContainerDepth + 2)))
+			throw std::invalid_argument("Remote table exceeds Luau stack capacity");
+		ArgumentReader Reader{.L = L, .Manager = Manager};
+		RequireBudget(Reader.Budget.Children(Count, sizeof(RemoteValue)));
+		std::vector<RemoteValue> Result;
 		Result.reserve(Count);
-		for (int Index = FirstIndex; Index <= Top; ++Index)
-			Result.push_back(ReadArgument(L, Index));
+		try {
+			for (int Index = FirstIndex; Index <= Top; ++Index)
+				Result.push_back(Reader.Read(Index, 0));
+		} catch (...) {
+			lua_settop(L, Top);
+			throw;
+		}
 		return Result;
 	}
 
-	void ValidateRemoteLuauArguments(
-		std::span<const WireValue> Arguments, const RemoteManager::ObjectResolver &ResolveObject
-	) {
-		if (Arguments.size() > MaximumRemoteArguments) throw std::invalid_argument("Remote argument count exceeds 32");
-		for (const auto &Argument : Arguments) {
+	namespace {
+		void ValidateLuauValue(const RemoteValue &Argument) {
 			if (std::holds_alternative<WireSchemaEnumValue>(Argument))
 				throw std::invalid_argument("Remote schema enum values are not exposed to Luau");
 			if (const auto *Value = std::get_if<WireEnumItem>(&Argument)) {
@@ -158,40 +323,60 @@ namespace gargantuan::network {
 				if (Enum == Enums::GetEnums().end() || !Enum->second->FromName(Value->Item))
 					throw std::invalid_argument("Remote EnumItem is unavailable");
 			}
-			if (const auto *Reference = std::get_if<WireObjectReference>(&Argument);
-				Reference && (!ResolveObject || !ResolveObject(Reference->Object.ToObjectId())))
-				throw std::invalid_argument("Remote Object reference is unresolved");
 		}
+
+	}
+
+	void ValidateRemoteLuauArguments(
+		std::span<const RemoteValue> Arguments, const RemoteManager::ObjectResolver &ResolveObject
+	) {
+		for (const auto &Argument : Arguments)
+			detail::VisitRemoteValues(Argument, [&](const RemoteValue &Value) {
+				ValidateLuauValue(Value);
+				if (const auto *Reference = std::get_if<WireObjectReference>(&Value))
+					(void)ResolveLuauReference(Reference->Object.ToObjectId(), ResolveObject);
+				return true;
+			});
 	}
 
 	RemoteManager::ObjectResolver StabilizeRemoteLuauObjectReferences(
-		std::span<const WireValue> Arguments, const RemoteManager::ObjectResolver &ResolveObject
+		std::span<const RemoteValue> Arguments, const RemoteManager::ObjectResolver &ResolveObject
 	) {
-		ValidateRemoteLuauArguments(Arguments, ResolveObject);
-		std::vector<std::shared_ptr<Instance>> Objects;
-		Objects.reserve(Arguments.size());
-		for (const auto &Argument : Arguments) {
-			const auto *Reference = std::get_if<WireObjectReference>(&Argument);
-			if (!Reference) continue;
-			auto Object = ResolveObject(Reference->Object.ToObjectId());
-			if (!Object) throw std::invalid_argument("Remote Object reference is unresolved");
-			Objects.push_back(std::move(Object));
-		}
-		return [Objects = std::move(Objects)](ObjectId Id) -> std::shared_ptr<Instance> {
-			for (const auto &Object : Objects)
-				if (Object && Object->GetObjectId() == Id) return Object;
-			return nullptr;
+		using ResolvedReferences = std::map<ObjectId, std::shared_ptr<Instance>>;
+		std::shared_ptr<ResolvedReferences> Objects;
+		for (const auto &Argument : Arguments)
+			detail::VisitRemoteValues(Argument, [&](const RemoteValue &Value) {
+				ValidateLuauValue(Value);
+				if (const auto *Reference = std::get_if<WireObjectReference>(&Value)) {
+					const auto Object = Reference->Object.ToObjectId();
+					if (!Objects) Objects = std::make_shared<ResolvedReferences>();
+					if (!Objects->contains(Object)) Objects->emplace(Object, ResolveLuauReference(Object, ResolveObject));
+				}
+				return true;
+			});
+		if (!Objects) return {};
+		return [Objects = std::shared_ptr<const ResolvedReferences>(std::move(Objects))](ObjectId Id)
+			-> std::shared_ptr<Instance> {
+			const auto Found = Objects->find(Id);
+			return Found != Objects->end() ? Found->second : nullptr;
 		};
 	}
 
 	int PushRemoteLuauArguments(
-		lua_State *L, std::span<const WireValue> Arguments, const RemoteManager::ObjectResolver &ResolveObject
+		lua_State *L, std::span<const RemoteValue> Arguments, const RemoteManager::ObjectResolver &ResolveObject
 	) {
-		if (Arguments.size() > MaximumRemoteArguments || !lua_checkstack(L, static_cast<int>(Arguments.size())))
+		const auto Top = lua_gettop(L);
+		if (Arguments.size() > MaximumRemoteArguments ||
+			!lua_checkstack(L, static_cast<int>(Arguments.size() + 2 * MaximumRemoteContainerDepth + 2)))
 			throw std::runtime_error("Remote arguments exceed Luau stack capacity");
 		int Pushed = 0;
-		for (const auto &Argument : Arguments)
-			Pushed += PushArgument(L, Argument, ResolveObject);
+		try {
+			for (const auto &Argument : Arguments)
+				Pushed += PushArgument(L, Argument, ResolveObject);
+		} catch (...) {
+			lua_settop(L, Top);
+			throw;
+		}
 		return Pushed;
 	}
 

@@ -63,6 +63,68 @@ uses independent transforms and shared project assets.
 of 1 and 30. Rendering observes the current viewport budget, visibility,
 and retained content. Studio GUI Preview shows the authored layout and camera.
 
+## Property tweens
+
+`game:GetService("TweenService"):Create(Target, Info, Goals)` makes a runtime
+`Tween` for a live Instance in the current DataModel. Goals is a plain table
+with one through 16 reflected property names and matching typed end values.
+Use a small literal for the goals. Oversized preallocated tables above 256
+backing slots are rejected before scanning.
+Supported properties are numbers, integers, `Vector2`, `Vector3`, `Color3`,
+`UDim`, `UDim2`, and `CFrame`. Integer values and pixel offsets round to the
+nearest integer. CFrame blends position and quaternion rotation. The property
+must be readable and writable under the caller's ordinary permissions and
+accept each interpolated value.
+
+```luau
+local TweenService = game:GetService("TweenService")
+local Fade = TweenService:Create(Panel, TweenInfo.new(0.25), {
+	Position = UDim2.fromOffset(32, 12),
+	BackgroundTransparency = 0.2,
+})
+
+Fade.Completed:Connect(function(State)
+	if State == Enum.PlaybackState.Completed then
+		Panel.Interactable = true
+	end
+end)
+Fade:Play()
+
+-- In a server script, move an anchored world part through normal property replication.
+local Open = TweenService:Create(Door, TweenInfo.new(0.8, Enum.EasingStyle.Sine), {
+	CFrame = Door.CFrame * CFrame.new(0, 5, 0),
+})
+Open:Play()
+```
+
+`TweenInfo.new(Time, EasingStyle, EasingDirection, RepeatCount, Reverses, DelayTime)`
+defaults to `1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, false, 0`.
+Time and delay are finite seconds in `[0, 86400]`. An integer repeat count
+in `[0, 1000]` adds that many cycles. Delay runs once at the start.
+Reverse adds a return leg to each cycle. Zero duration reaches the terminal
+value on the first tween step after the delay.
+
+`Play()` samples the current properties and starts a fresh playback, or resumes
+a paused playback. `Pause()` freezes elapsed time and retains the property
+claims. `Resume()` continues the same playback. `Cancel()` leaves the last
+committed values in place. A new playback takes over overlapping properties
+and cancels the whole previous playback. The read-only `PlaybackState` is
+`Begin`, `Delayed`, `Playing`, `Paused`, `Completed`, or `Cancelled`. The
+read-only `TweenInfo` describes the configured playback.
+
+The step dispatches `Completed(State)` for natural finish, explicit
+cancellation, replacement, target retirement, or a rejected live write.
+Changes started by a completion callback first advance on a later step.
+Runtime shutdown and the retirement of a known creating Script discard
+its active work without callbacks. Invalid inputs and full playback capacity
+raise a catchable script error. Each VM reserves at most 1,024 slots for
+active and pending completion work.
+
+Client tweens use normal local presentation writes, including permitted owner
+`PlayerGui` properties. Server tweens use the usual property replication and
+physics behavior. Use anchored Parts for intentional transform animation.
+See the [runtime details](../../../../../devdocs/CurrentArchitecture/TweenRuntime.md).
+
 ## Assets, animation, and sound
 
 `AssetService:ResolveAsset(Reference: string) -> string?` returns the same valid `asset://` or `builtin://` reference when currently available, otherwise nil. `IsAssetAvailable(Reference) -> boolean` checks the valid last-known-good catalog entry. `GetAssetMetadata(Reference) -> table?` returns a bounded semantic copy with common fields such as `Reference`, `AssetId`, `Kind`, `State`, `ContentRevision`, and `Available`; kind-specific fields can include dimensions, mesh counts, audio duration, or animation duration/track count. A syntactically invalid or unknown reference returns nil for `ResolveAsset` and `GetAssetMetadata`, or false for `IsAssetAvailable`. A non-string argument or reference longer than 256 bytes raises a script error. These calls do not expose raw asset bytes or filesystem paths. Use the result to decide whether to attach a `MeshPart.Mesh`, `ImageLabel.Image`, `Sound.SoundId`, or animation clip.

@@ -1,5 +1,13 @@
 # Relay Rescue
 
+The server keys its inventory by the current Player. When a pilot earns a
+cell, a reliable event sends that pilot an item name, inventory count and
+three-byte RGB swatch. The client animates its own HUD on the next render
+step. The server animates the ground switch and retains authority over the
+charge count. The replicated attributes drive the mission display when
+submission is declined. Use the package commands below for local or private
+engineering runs. Public distribution has a separate client-package gate.
+
 Restore the relay with two players. One player holds the green ground switch
 while another launches a survey drone from the cyan pad and reaches the
 elevated beacon. Fly away and return between charges. Restore three charges
@@ -34,7 +42,7 @@ the place with the same project asset origin.
 
 ## Run with two clients
 
-Use a GNS-enabled Release build of Engine Foundation 9. Run these from the
+Use a GNS-enabled Release build of Engine Foundation 10B. Run these from the
 repository root using the matching build output for the packager and both
 runtime distributions.
 
@@ -70,3 +78,26 @@ The beacon uses Gargantuan's existing FirstCompleteGame two-joint rig and
 canonical animation artifacts copied into this sample's own catalog, so the
 project opens independently. The client also uses the original sample badge
 and tone. See [asset provenance](../FirstCompleteGame/assets/NOTICE.md).
+
+## Try the authored Character
+
+In a copy of this project, run `python BuildProject.py --custom-character`.
+The regenerated project adds [a violet Survey Suit template](RelayCharacterTemplate.instance.json)
+in ReplicatedStorage and [a server spawn policy](RelayCharacterPolicy.luau)
+under GameScripts. The saved Relay server and client scripts use the same
+source in both configurations. Keep the default Players controller and
+automatic Character loading enabled. The spawn policy clones the authored
+KinematicCharacter, keeps the accepted spawn transform, and assigns the clone
+to `Player.Character`. Its RootPart points into the clone. The default
+locomotion and camera apply to the new body.
+
+Run the same two-client journey after opening or privately packaging this
+variant. Launching the drone retires the suit. Landing and hazard respawn
+create new suits with the same authored body. The headless test runs the
+original saved project with these two add-on files and checks both players'
+initial Characters, the pilot's possession, and the replicated Characters
+after landing and hazard respawn.
+
+```powershell
+ctest --test-dir build-release -C Release -R "^gargantuan_gameplay_relay_custom_character$" --output-on-failure
+```

@@ -292,11 +292,19 @@ namespace {
 			"identity observation establishes an actual live source-to-replica map");
 		const auto FirstLocal = Replica.Resolve(FirstSource), SecondLocal = Replica.Resolve(SecondSource);
 		if (!FirstLocal || !SecondLocal) { Check(false, "identity observation requires both actual live replicas"); return; }
+		auto LocalOnly = std::make_shared<Folder>();
+		LocalOnly->SetParent(Replica.GetReplicaRoot());
+		Check(Replica.GetSourceObject(*FirstLocal) == FirstSource &&
+			Replica.GetSourceObject(*SecondLocal) == SecondSource &&
+			!Replica.GetSourceObject(*First) && !Replica.GetSourceObject(*LocalOnly),
+			"reverse wire mapping admits current replicas and denies authoritative or client-only objects");
+		LocalOnly->Destroy();
 		const std::array Observed{SecondLocal, FirstLocal};
 		for (const auto Domain : {ExecutionDomain::Worker, ExecutionDomain::IO, ExecutionDomain::Simulation}) {
 			ExecutionDomainScope Scope(Domain);
 			Check(!Access::ReadClientReplicaIdentities(Replica, Observed),
 				"non-Main qualification caller is rejected before traversing the live replica");
+			Check(!Replica.GetSourceObject(*FirstLocal), "reverse wire mapping is restricted to Main");
 		}
 		const auto Identities = Access::ReadClientReplicaIdentities(Replica, Observed);
 		Check(FirstLocal->GetObjectId() != FirstSource && SecondLocal->GetObjectId() != SecondSource &&
@@ -343,6 +351,7 @@ namespace {
 		ReplicationFrame Remove{ReplicationProtocolVersion, ReplicationMessageKind::Incremental, ReplicationEpoch(11),
 			ReliableReplicationSequence(2), {}, {{ReplicationEpoch(11), UnpublishReplication{FirstSource}}}};
 		Check(Replica.ApplyFrame(Remove).Succeeded() && !Replica.Resolve(FirstSource) &&
+			!Replica.GetSourceObject(*FirstLocal) &&
 			!Access::ReadClientReplicaIdentities(Replica, std::array{FirstLocal}),
 			"unpublished source cannot retain an observation through its stale local replica pointer");
 		Check(!Access::VerifyClientReplicaIdentities(Replica, Observed, *Identities),
@@ -372,6 +381,9 @@ namespace {
 		Check(Replica.ApplyFrame(Reused).Succeeded() && !Replica.Resolve(FirstSource),
 			"fresh epoch accepts only the full reused source generation");
 		const auto ReusedLocal = Replica.Resolve(ReusedSource);
+		Check(ReusedLocal && Replica.GetSourceObject(*ReusedLocal) == ReusedSource &&
+			!Replica.GetSourceObject(*FirstLocal) && !Replica.GetSourceObject(*SecondLocal),
+			"only the new replica lifetime maps to a wire source after epoch replacement");
 		const auto ReusedIdentity = ReusedLocal ? Access::ReadClientReplicaIdentities(Replica, std::array{ReusedLocal}) : std::nullopt;
 		Check(ReusedIdentity && (*ReusedIdentity)[0].Source == ReusedSource &&
 			(*ReusedIdentity)[0].Local == ReusedLocal->GetObjectId() && (*ReusedIdentity)[0].Epoch == ReplicationEpoch(12) &&
@@ -383,12 +395,14 @@ namespace {
 			"fresh epoch and source generation validate only the new live replica at the final cut");
 		if (ReusedLocal) {
 			ReusedLocal->Destroy();
+			Check(!Replica.GetSourceObject(*ReusedLocal), "destroyed local replica loses its outgoing wire identity");
 			Check(!Access::ReadClientReplicaIdentities(Replica, std::array{ReusedLocal}),
 				"destroyed local target cannot certify a source binding");
 			Check(!ReusedIdentity || !Access::VerifyClientReplicaIdentities(Replica, std::array{ReusedLocal}, *ReusedIdentity),
 				"destroyed target invalidates a previously captured forward witness");
 		}
 		Replica.Reset();
+		Check(!Replica.GetSourceObject(*FirstLocal), "reset replica rejects retained pointers");
 		Check(!Replica.GetEpoch().IsValid() && !Access::ReadClientReplicaIdentities(Replica, Observed),
 			"reset replica owns no epoch or valid historical source/local witness");
 		Check(!Access::VerifyClientReplicaIdentities(Replica, Observed, *Identities),

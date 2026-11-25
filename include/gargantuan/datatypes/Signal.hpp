@@ -87,7 +87,7 @@ namespace gargantuan {
 			CallbackType callback, lua_State *L = nullptr, int callbackReference = LUA_NOREF
 		);
 
-		void Fire(CallbackArgument argument);
+		void Fire(CallbackArgument argument, std::function<bool()> CanDispatch = {});
 		void DisconnectAll();
 		static void SetDispatchProfilingEnabled(bool Enabled);
 		static void ResetDispatchProfile();

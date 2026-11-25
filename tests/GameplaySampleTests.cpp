@@ -1,5 +1,6 @@
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/animation/AnimationRuntime.hpp"
+#include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/audio/AudioRuntime.hpp"
 #include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/Frame.hpp"
@@ -7,6 +8,7 @@
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/ScreenGui.hpp"
+#include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/Sound.hpp"
 #include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
@@ -183,8 +185,43 @@ namespace {
 		return std::move(*Document);
 	}
 
+	std::shared_ptr<Script> AddCustomCharacterPolicy(const std::shared_ptr<DataModel> &World,
+		const std::filesystem::path &ProjectRoot) {
+		const auto Scripts = World->FindFirstChild("GameScripts", false);
+		Require(Scripts != nullptr, "custom Character scenario requires the saved Relay scripts");
+		if (auto Existing = std::dynamic_pointer_cast<Script>(Scripts->FindFirstChild("RelayCharacterPolicy", false)))
+			return Existing;
+		std::ifstream Model(ProjectRoot / "RelayCharacterTemplate.instance.json", std::ios::binary);
+		Require(static_cast<bool>(Model), "custom Character scenario opens its authored template");
+		auto Template = InstanceSerialization::DeserializeDetached(InstanceSerialization::InstanceFormat::Json, Model);
+		if (!Template.Ok)
+			throw std::runtime_error(Template.Errors.empty() ? "custom Character template does not load" :
+				Template.Errors.front());
+		Template.Instance->MarkPersistenceSubtreeArchivable();
+		Template.Instance->SetParent(World->GetService("ReplicatedStorage"));
+		std::ifstream Source(ProjectRoot / "RelayCharacterPolicy.luau", std::ios::binary | std::ios::ate);
+		const std::streamoff SourceSize = Source.tellg();
+		Require(SourceSize > 0 && SourceSize <= 32 * 1024, "custom Character scenario opens its server policy");
+		std::string SourceText(static_cast<std::size_t>(SourceSize), '\0');
+		Source.seekg(0);
+		Require(static_cast<bool>(Source.read(SourceText.data(), SourceSize)), "custom Character policy reads in full");
+		auto Policy = std::make_shared<Script>();
+		Policy->SetName("RelayCharacterPolicy");
+		Policy->SetRunContext(Enums::RunContext::Server);
+		Policy->SetSource(std::move(SourceText));
+		Policy->SetParent(Scripts);
+		return Policy;
+	}
+
+	bool HasSurveyCharacter(const Player &Owner) {
+		const auto Value = Owner.GetCharacter().value_or(nullptr);
+		const auto Body = Value ? Value->GetRootPart().value_or(nullptr) : nullptr;
+		return Value && Value->IsA("KinematicCharacter") && Body && Body->GetName() == "SurveySuitBody" &&
+			Body->GetParent().value_or(nullptr) == Value && Body->GetSize() == glm::vec3(1.75f, 3.8f, 1.75f);
+	}
+
 	void RunRelayRescue(bool UseGns, bool RenderGpu, bool EnableAudio, const std::filesystem::path &ProjectRoot,
-		const std::optional<std::filesystem::path> &GasPlacePath) {
+		const std::optional<std::filesystem::path> &GasPlacePath, bool CustomCharacter) {
 		auto Network = UseGns ? nullptr : SimulatedNetwork::Create({.BaseLatency = 6ms});
 		const auto CreateTransport = [&]() -> std::shared_ptr<IGameTransport> {
 			if (Network) return Network->CreateTransport();
@@ -204,6 +241,7 @@ namespace {
 		};
 		auto TrustedWorld = LoadWorld();
 		auto ServerWorld = LoadWorld();
+		const auto CustomPolicy = CustomCharacter ? AddCustomCharacterPolicy(ServerWorld, ProjectRoot) : nullptr;
 		ServerWorld->InitializeLoadedProjectRevision();
 		auto Assets = std::dynamic_pointer_cast<AssetService>(TrustedWorld->GetService("AssetService"));
 		Require(Assets != nullptr, "sample asset catalog loads");
@@ -220,6 +258,10 @@ namespace {
 		HeadlessRenderer ServerRenderer(Vector2(320, 240));
 		Engine ServerRuntime(ServerWorld, &ServerRenderer, ReportError,
 			{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer});
+		if (CustomPolicy) {
+			ServerRuntime.Script->RunBootstrapScript(CustomPolicy);
+			Require(CustomPolicy->Status == ScriptStatus::Finished, "custom Character policy starts before peers join");
+		}
 		const auto LegacyHud = std::make_shared<ScreenGui>();
 		LegacyHud->SetName("LegacyReplicationHud");
 		LegacyHud->SetParent(ServerRuntime.Workspace);
@@ -319,14 +361,14 @@ namespace {
 			const auto LocalPlayer = Peer.Runtime->Players->GetLocalPlayer().value_or(nullptr);
 			return LocalPlayer ? LocalPlayer->FindFirstChildOfClass("PlayerGui", false) : nullptr;
 		};
-		Until(180, "both peers hydrate stock Characters, their private HUD, and both animations", [&] {
+		Until(180, "both peers hydrate their Characters, private HUD, and both animations", [&] {
 			for (const auto &Peer : Clients) {
 				if (!Peer.Runtime || Peer.Session->GetStatus() != GameSessionStatus::Ready ||
 					Peer.Runtime->Animation->GetMetrics().ActiveTracks < 2)
 					return false;
 				auto PlayerValue = Peer.Runtime->Players->GetLocalPlayer().value_or(nullptr);
 				if (!PlayerValue || !PlayerValue->GetCharacter() || !NumberEquals(*PlayerValue, "Health", 100) ||
-					!GetPlayerGui(Peer))
+					!GetPlayerGui(Peer) || (CustomCharacter && !HasSurveyCharacter(*PlayerValue)))
 					return false;
 			}
 			return Server->GetMetrics().ReadyPeers == 2;
@@ -391,7 +433,11 @@ namespace {
 		const auto Pilot = FindServerPlayer(PilotClient);
 		const auto SwitchOperator = FindServerPlayer(Clients.back());
 		Require(Pilot && SwitchOperator && Pilot != SwitchOperator && Pilot->GetCharacter() &&
-				SwitchOperator->GetCharacter(), "stock Characters belong to distinct server Players");
+				SwitchOperator->GetCharacter(), "Characters belong to distinct server Players");
+		if (CustomCharacter)
+			Require(HasSurveyCharacter(*Pilot) && HasSurveyCharacter(*SwitchOperator) &&
+				(*Pilot->GetCharacter())->GetRootPart() != (*SwitchOperator->GetCharacter())->GetRootPart(),
+				"both Players receive separate clones with remapped custom roots");
 		const auto ServerPilotGui = Pilot->FindFirstChildOfClass("PlayerGui", false);
 		Require(ServerPilotGui != nullptr, "the server owns the pilot's GUI lifecycle");
 		for (const auto &Peer : Clients) {
@@ -420,7 +466,7 @@ namespace {
 		};
 		const auto PlaceAt = [&](const std::shared_ptr<Player> &Value, std::string Name) {
 			const auto CharacterValue = Value->GetCharacter();
-			Require(CharacterValue.has_value(), "placement requires a stock Character");
+			Require(CharacterValue.has_value(), "placement requires a live Character");
 			(*CharacterValue)->SetCFrame(CFrame(PartAt(std::move(Name))));
 		};
 		PlaceAt(SwitchOperator, "GroundSwitch");
@@ -484,6 +530,14 @@ namespace {
 			Require(NumberEquals(*Course, "RelayCharges", Charge), "one charge is awarded per visit");
 		}
 		const auto Inventory = Pilot->FindFirstChild("RelayInventory", std::nullopt);
+		const auto PilotStatus = PilotHud->FindFirstChild("RelayStatus", false);
+		const auto ObserverStatus = ObserverHud->FindFirstChild("RelayStatus", false);
+		const WireValue Announcement = std::string("RelayCell3 collected. Inventory contains 3 cells.");
+		Until(60, "the pilot receives the structured cell inventory and binary swatch", [&] {
+			return PilotStatus && PilotStatus->ReadPropertyWireValue("AccessibleName") == Announcement;
+		});
+		Require(ObserverStatus && ObserverStatus->ReadPropertyWireValue("AccessibleName") != Announcement,
+			"the other player's HUD receives no pilot inventory announcement");
 		Require(Inventory && Inventory->GetChildren().size() == 3 && NumberEquals(*Pilot, "RelayCharges", 3) &&
 			NumberEquals(*SwitchOperator, "RelayCharges", 0), "only the pilot owns each earned cell");
 		for (const auto &Cell : Inventory->GetChildren())
@@ -518,9 +572,19 @@ namespace {
 
 		SetKey(PilotClient, PhysicalKey::Space, LogicalKey::Space, ButtonState::Pressed);
 		Until(90, "landing intent returns the pilot to the stock controller", [&] {
-			return Drone->GetDestroyed() && !Pilot->GetPossessedEntity() && Pilot->GetCharacter();
+			return Drone->GetDestroyed() && !Pilot->GetPossessedEntity() && Pilot->GetCharacter() &&
+				(!CustomCharacter || HasSurveyCharacter(*Pilot));
 		});
 		SetKey(PilotClient, PhysicalKey::Space, LogicalKey::Space, ButtonState::Released);
+		std::shared_ptr<Character> BeforeDeathReplica;
+		if (CustomCharacter) {
+			Until(60, "landing restores the custom Character on the pilot client", [&] {
+				const auto LocalPlayer = *PilotClient.Runtime->Players->GetLocalPlayer();
+				if (!HasSurveyCharacter(*LocalPlayer) || LocalPlayer->GetPossessedEntity()) return false;
+				BeforeDeathReplica = *LocalPlayer->GetCharacter();
+				return true;
+			});
+		}
 		if (RenderGpu) {
 			Until(60, "landing retires the old drone from both GPU views", [&] {
 				return PilotClient.GetGpu().HasDroneRetired() && Clients.back().GetGpu().HasDroneRetired();
@@ -532,14 +596,22 @@ namespace {
 		const auto BeforeBriefing = PilotGui->FindFirstChild("RelayBriefing", false);
 		Require(BeforeBriefing != nullptr, "the pilot retains a spawn-reset briefing before death");
 		PlaceAt(Pilot, "Hazard");
-		Until(120, "server damage retires the stock Character", [&] {
+		Until(120, "server damage retires the current Character", [&] {
 			return BeforeDeath->GetDestroyed() && !Pilot->GetCharacter() && NumberEquals(*Pilot, "Health", 0);
 		});
 		const auto DeathTime = Clock::now();
 		const auto DeathTick = ServerRuntime.GetSimulationTick();
 		Until(180, "sample respawns the same Player with a new Character and full health", [&] {
-			return Pilot->GetCharacter() && *Pilot->GetCharacter() != BeforeDeath && NumberEquals(*Pilot, "Health", 100);
+			return Pilot->GetCharacter() && *Pilot->GetCharacter() != BeforeDeath && NumberEquals(*Pilot, "Health", 100) &&
+				(!CustomCharacter || HasSurveyCharacter(*Pilot));
 		});
+		if (CustomCharacter) {
+			Until(60, "hazard respawn replaces the retired pilot replica with a fresh custom Character", [&] {
+				const auto LocalPlayer = *PilotClient.Runtime->Players->GetLocalPlayer();
+				return HasSurveyCharacter(*LocalPlayer) && *LocalPlayer->GetCharacter() != BeforeDeathReplica &&
+					BeforeDeathReplica->GetDestroyed() && NumberEquals(*LocalPlayer, "Health", 100);
+			});
+		}
 		Until(60, "respawn replaces the briefing and keeps the player's active HUD", [&] {
 			const auto Briefing = PilotGui->FindFirstChild("RelayBriefing", false);
 			return Briefing && Briefing != BeforeBriefing && BeforeBriefing->GetDestroyed() &&
@@ -547,6 +619,7 @@ namespace {
 		});
 		const auto RespawnMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - DeathTime);
 		std::cout << "[Gameplay:Relay] transport=" << (UseGns ? "gns-loopback" : "simulated")
+			<< (CustomCharacter ? " character=survey-suit" : "")
 			<< " respawn_wall_ms=" << RespawnMilliseconds.count()
 			<< " respawn_server_ticks=" << ServerRuntime.GetSimulationTick() - DeathTick << '\n';
 
@@ -578,6 +651,7 @@ int main(int ArgumentCount, char **Arguments) {
 		bool UseGns = false;
 		bool RenderGpu = false;
 		bool EnableAudio = false;
+		bool CustomCharacter = false;
 		std::filesystem::path ProjectRoot = GARGANTUAN_GAMEPLAY_SAMPLE_ROOT;
 		std::optional<std::filesystem::path> GasPlacePath;
 		for (int Index = 1; Index < ArgumentCount; ++Index) {
@@ -587,11 +661,13 @@ int main(int ArgumentCount, char **Arguments) {
 				RenderGpu = RenderGpu || Argument == "--gns-gpu";
 			} else if (Argument == "--audio")
 				EnableAudio = true;
+			else if (Argument == "--custom-character")
+				CustomCharacter = true;
 			else if (Argument == "--project" && Index + 1 < ArgumentCount)
 				ProjectRoot = std::filesystem::absolute(Arguments[++Index]);
 			else if (Argument == "--gasp" && Index + 1 < ArgumentCount)
 				GasPlacePath = std::filesystem::absolute(Arguments[++Index]);
-			else throw std::invalid_argument("Use --gns, --gns-gpu, --audio, --project <root>, or --gasp <file>");
+			else throw std::invalid_argument("Use --gns, --gns-gpu, --audio, --custom-character, --project <root>, or --gasp <file>");
 		}
 		struct SdlLifetime {
 			bool Active;
@@ -603,7 +679,7 @@ int main(int ArgumentCount, char **Arguments) {
 			gargantuan::BootstrapPackagedRuntimeSchema(gargantuan::ReadProjectPreRunSource(ProjectRoot));
 		else
 			gargantuan::BootstrapNativeRuntimeSchema();
-		RunRelayRescue(UseGns, RenderGpu, EnableAudio, ProjectRoot, GasPlacePath);
+		RunRelayRescue(UseGns, RenderGpu, EnableAudio, ProjectRoot, GasPlacePath, CustomCharacter);
 		std::cout << "[Gameplay:Relay] Saved two-player mission passed\n";
 		return 0;
 	} catch (const std::exception &Error) {

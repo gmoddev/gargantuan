@@ -132,6 +132,22 @@ it requires both the hidden `PreRunRegistration` lifecycle phase and the native
 mutation authority. Runtime construction and custom property writes continue
 to require the ordinary DataModel mutation path after the registry is frozen.
 
+## Ordinary gameplay execution budget
+
+Ordinary Engine-owned gameplay entry points share a native wall-clock budget
+across nested calls in a VM. The default is 250 ms per outer entry. Trusted
+hosts may set `ScriptEngine::GameplayExecutionBudget` to zero for cooperative
+offline debugging. A fresh task, signal, invocation, entitlement completion
+or Script resume starts a new interval. Character policy callbacks use the
+same budget. Module execution inherits the caller's interval.
+
+The interrupt samples elapsed time at VM execution safepoints, checking the
+clock once per 512 visits after the first. On expiry it raises a Luau error
+and emits one bounded runtime diagnostic on unwind. Native calls return
+before the VM can check another safepoint. Protected script calls may catch
+errors. Per-frame aggregate work, allocation quotas, hostile-code isolation
+and retirement of pending script-owned continuations require separate controls.
+
 ## Deferred
 
 There is no plugin grant/consent system, persistent project trust, capability

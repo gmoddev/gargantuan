@@ -1,6 +1,8 @@
 #include "gargantuan/scripting/ThreadEngine.hpp"
+#include "gargantuan/scripting/ExecutionBudget.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/Log.hpp"
+#include "DiagnosticText.hpp"
 
 #include <SDL3/SDL_log.h>
 #include <algorithm>
@@ -46,15 +48,22 @@ namespace gargantuan {
 		}
 		ScriptSecurityScope SecurityScope(std::move(securityContext));
 		const int PreResumeStatus = lua_costatus(L, thread);
-		int status = lua_resume(thread, L, argumentCount);
+		int status = ResumeGameplay(thread, L, argumentCount);
 		ScriptEngine::Get(L)->CompleteManagedScriptThreadResume(thread, status, PreResumeStatus);
 		switch (status) {
 		case LUA_OK:
 		case LUA_YIELD:
 			break;
 
-		default:
-			LOG_ERROR(Lua, "Thread error: %s", lua_tostring(thread, -1));
+		default: {
+			size_t Length = 0;
+			const char *Detail = lua_tolstring(thread, -1, &Length);
+			std::string Message = "[Runtime:Task] ";
+			Message += Detail ? BoundedDiagnosticText({Detail, Length}, 1024) : "Task failed";
+			LOG_ERROR(Lua, "%s", Message.c_str());
+			ScriptEngine::Get(L)->EmitRuntimeDiagnostic("Error", std::move(Message));
+			break;
+		}
 		}
 		lua_unref(L, threadReference);
 	}

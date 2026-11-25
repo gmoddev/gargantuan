@@ -686,6 +686,7 @@ target_link_libraries(gargantuan_core
 		Luau.Config
 		Tracy::TracyClient
 	PRIVATE
+		Luau.VM.Internals
 		nlohmann_json
 )
 
@@ -1004,7 +1005,7 @@ if(BUILD_TESTING)
 	)
 	add_executable(gargantuan_entitlement_provider_benchmark "tests/EntitlementProviderBenchmark.cpp")
 	target_link_libraries(gargantuan_entitlement_provider_benchmark PRIVATE gargantuan_core nlohmann_json)
-	add_executable(gargantuan_gui_foundation_tests "tests/GuiFoundationTests.cpp")
+	add_executable(gargantuan_gui_foundation_tests "tests/GuiFoundationTests.cpp" "tests/BenchmarkAllocationProbe.cpp")
 	target_link_libraries(gargantuan_gui_foundation_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_viewport_frame_tests "tests/ViewportFrameTests.cpp")
 	target_link_libraries(gargantuan_viewport_frame_tests PRIVATE gargantuan_core)
@@ -1280,6 +1281,8 @@ if(BUILD_TESTING)
 		GARGANTUAN_GAMEPLAY_SAMPLE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/GameplayFoundation7")
 	add_test(NAME gargantuan_gameplay_relay_sample COMMAND gargantuan_gameplay_sample_tests)
 	set_tests_properties(gargantuan_gameplay_relay_sample PROPERTIES LABELS "networking;runtime;sample" TIMEOUT 45)
+	add_test(NAME gargantuan_gameplay_relay_custom_character COMMAND gargantuan_gameplay_sample_tests --custom-character)
+	set_tests_properties(gargantuan_gameplay_relay_custom_character PROPERTIES LABELS "networking;runtime;sample" TIMEOUT 45)
 	add_test(NAME gargantuan_gas_relay_rescue
 		COMMAND ${CMAKE_COMMAND}
 			-DPACKAGER=$<TARGET_FILE:gargantuan_packager>

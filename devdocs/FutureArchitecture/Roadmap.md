@@ -5,6 +5,19 @@ authority: non-normative
 
 # Delivery roadmap
 
+## Foundation 10B developer runtime
+
+The development branch builds on Foundation 9 merge `bf50b0987`. Acceptance
+requires consistent Instance table keys, Player-targeted delivery over the
+session mapping, bounded structured messages and buffers, tweened properties
+and ordinary script deadline diagnostics. Relay Rescue exercises the
+integrated APIs with two clients. Review the resulting native, sanitizer,
+real-GNS, documentation and workload receipts before promotion.
+
+Provider-neutral persistence follows the [Engine handoff](GameplayPersistenceHandoff.md).
+The distributed Player package and the existing lifecycle assignments retain
+their own acceptance criteria.
+
 This roadmap optimizes for a dependable creator loop, not checkbox parity. Phases
 have exit tests; dates should be assigned only after Phase 0 measures build and
 defect throughput.

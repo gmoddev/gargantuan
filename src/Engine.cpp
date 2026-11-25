@@ -408,6 +408,8 @@ namespace gargantuan {
 
 			{
 				G_PROFILE("Simulation");
+				ScriptRuntime->StepTweens(deltaTime);
+				if (Destroyed) return;
 				if (CharacterControl) CharacterControl->SetPreSimulationActive(true);
 				try {
 					runtime_detail::MeasureWork(runtime_detail::WorkPhase::PreSimulation,

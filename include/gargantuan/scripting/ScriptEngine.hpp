@@ -6,6 +6,7 @@
 #include "gargantuan/scripting/ThreadEngine.hpp"
 
 #include <Luau/Compiler.h>
+#include <chrono>
 #include <functional>
 #include <list>
 #include <lua.h>
@@ -23,6 +24,7 @@ namespace gargantuan {
 	class ModuleScript;
 	class RemoteFunction;
 	class SignalConnection;
+	class TweenRuntime;
 
 	int OpenLibBase(lua_State *L);
 	int OpenLibRequire(lua_State *L);
@@ -62,6 +64,7 @@ namespace gargantuan {
 
 		lua_State *L = nullptr;
 		ThreadEngine Threads;
+		std::chrono::milliseconds GameplayExecutionBudget{250};
 		lua_CompileOptions CompileOptions;
 		std::unordered_set<std::shared_ptr<Script>> ScriptQueue;
 		std::list<std::pair<ObjectId, std::weak_ptr<Script>>> ManagedScripts;
@@ -75,13 +78,16 @@ namespace gargantuan {
 		RuntimeMode Mode = RuntimeMode::Offline;
 		[[nodiscard]] bool IsStopping() const { return Stopping; }
 		std::shared_ptr<Instance> FindRequiredInstanceByPath(const char *path);
-		void EmitRuntimeDiagnostic(std::string Severity, std::string Message) const;
+		void EmitRuntimeDiagnostic(std::string Severity, std::string Message) const noexcept;
 		void TrackSignalConnection(const std::shared_ptr<SignalConnection> &Connection);
 		void TrackRemoteFunction(const std::shared_ptr<RemoteFunction> &Function);
 		void TrackManagedScriptThread(lua_State *Thread, const std::shared_ptr<Script> &ScriptValue);
 		void UntrackManagedScriptThread(lua_State *Thread);
 		void CompleteManagedScriptThreadResume(lua_State *Thread, int Status, int PreResumeStatus);
 		void ShutdownRuntime();
+		TweenRuntime &GetTweenRuntime();
+		void StepTweens(float DeltaTime);
+		[[nodiscard]] std::weak_ptr<Script> FindManagedScriptThread(lua_State *Thread) const;
 		void RunBootstrapScript(const std::shared_ptr<Script> &ScriptValue);
 		[[nodiscard]] bool CanRunScript(const Script &ScriptValue) const;
 
@@ -96,6 +102,7 @@ namespace gargantuan {
 		std::map<std::weak_ptr<Script>, ManagedScriptIterator, std::owner_less<std::weak_ptr<Script>>>
 			DetachedManagedScripts;
 		std::unordered_map<lua_State *, std::weak_ptr<Script>> ManagedScriptThreads;
+		std::shared_ptr<TweenRuntime> Tweens;
 		ManagedScriptIterator ManagedScriptPruneCursor = ManagedScripts.end();
 		void TrackManagedScript(const std::shared_ptr<Script> &ScriptValue);
 		void PruneExpiredManagedScripts();

@@ -51,7 +51,7 @@ namespace gargantuan {
 		std::vector<std::string> DetachedTags;
 		SchemaId RuntimeSchemaClassId{};
 		std::unordered_map<std::string, std::shared_ptr<Signal<std::monostate>>> AttributeChangedSignals;
-		bool ReplicaMaterialization = false;
+		ObjectId ReplicaSourceObject;
 
 	  public:
 		std::weak_ptr<Instance> ParentReference;
@@ -152,7 +152,7 @@ namespace gargantuan {
 		void BindRuntimeSchemaClass(SchemaId classId);
 		[[nodiscard]] ObjectId GetObjectId() const;
 		[[nodiscard]] bool IsDestroying() const { return DestroyingState; }
-		[[nodiscard]] bool IsReplicaMaterialization() const { return ReplicaMaterialization; }
+		[[nodiscard]] bool IsReplicaMaterialization() const { return ReplicaSourceObject.IsValid(); }
 	};
 
 	template <> struct StackValue<std::shared_ptr<Instance>> : StackValue<Instance::Self> {

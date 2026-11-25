@@ -1,4 +1,5 @@
 #include "gargantuan/classes/Script.hpp"
+#include "gargantuan/scripting/ExecutionBudget.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 
 #include "gargantuan/scripting/ScriptSecurity.hpp"
@@ -107,7 +108,7 @@ namespace gargantuan {
 		Resuming = true;
 		int status;
 		try {
-			status = lua_resume(RunningThread, L, 0);
+			status = ResumeGameplay(RunningThread, L, 0);
 		} catch (...) {
 			Resuming = false;
 			if (CleanupAfterResume) Cleanup();

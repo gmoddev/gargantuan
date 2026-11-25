@@ -48,8 +48,11 @@ roles without changing Character policy; 3D does not add listen-server UX.
 
 ## Admission and identity
 
-The bounded `GSES` v1 handshake has three messages: `ClientHello`,
-`ServerAccepted`, and `ClientReady`. A peer progresses through:
+The bounded `GSES` handshake has three messages: `ClientHello`,
+`ServerAccepted`, and `ClientReady`. Foundation 3D introduced version 1.
+Foundation 10B uses version 2 with the same message layouts to require
+[Remote protocol version 3](LuauRemotes.md#binary-protocol-version-3) at both
+endpoints. A peer progresses through:
 
 ```text
 transport connected

@@ -87,22 +87,34 @@ GNS or simulator callback runs Luau directly.
 
 ### Events
 
-All three event classes expose the same initial surface:
+All three event classes expose the same targeting and submission surface:
 
 ```luau
 Remote:FireServer(...)
+Remote:FireClient(Player, ...)
 Remote:FireClient(PeerSlot, PeerGeneration, ...)
 Remote:FireAllClients(...)
 
+Remote.OnPlayerEvent:Connect(function(Player, ...) end)
 Remote.OnServerEvent:Connect(function(Peer, ...) end)
 Remote.OnClientEvent:Connect(function(...) end)
 ```
 
 `FireServer` is client-runtime only. `FireClient` and `FireAllClients` are
-server-runtime only. The server callback receives a read-only provisional peer
-table containing `Slot`, `Generation`, and `Epoch`; this is not a `Player` and
-does not claim to be one. Event handlers have no return value and create no
-request tracking.
+server-runtime only. `OnServerEvent` retains its read-only peer table containing
+`Slot`, `Generation`, and `Epoch`. `OnPlayerEvent` receives a Player when the
+server's current mapping is ready and live. The legacy signal fires first.
+Before each Player subscriber, the engine checks the Remote publication and
+the sender's exact association. Retirement during an earlier callback prevents
+later Player callbacks for that event.
+Both signals create no request tracking.
+
+`TryFireServer` and `TryFireClient` take the same arguments as their `Fire*`
+counterparts and return `Accepted, Code`. `TryFireAllClients` returns accepted
+and rejected recipient counts and a table of rejected counts by admission code.
+These results observe local admission, including deferred reliable publication
+dependencies. Successful admission can precede disconnect, failure to
+materialize a referenced Instance, or unreliable congestion loss.
 
 Broadcast validates every peer independently. A peer that cannot see the
 Remote or an Object argument is rejected without affecting other peers. Payload
@@ -119,10 +131,13 @@ The initial request surface is:
 ```luau
 local Results = Function:InvokeServer(...)
 local Results = Function:InvokeServerWithTimeout(Seconds, ...)
+local Results = Function:InvokeClient(Player, ...)
+local Results = Function:InvokeClientWithTimeout(Player, Seconds, ...)
 local Results = Function:InvokeClient(PeerSlot, PeerGeneration, ...)
 local Results = Function:InvokeClientWithTimeout(PeerSlot, PeerGeneration, Seconds, ...)
 
 Function:SetServerHandler(function(Peer, ...) return ... end)
+Function:SetPlayerHandler(function(Player, ...) return ... end)
 Function:SetClientHandler(function(...) return ... end)
 ```
 
@@ -133,6 +148,13 @@ A non-success terminal result resumes with:
 ```luau
 nil, StatusName, SanitizedMessage
 ```
+
+`TryInvokeServer(Seconds, ...)` and `TryInvokeClient(Player, Seconds, ...)` cover
+ordinary operational failures explicitly. They return `true, ...Results` on
+success, or `false, Code, Message` on failure, optionally followed by the
+structured error code. `TryInvokeClient` accepts the same explicit-peer overload
+as `InvokeClientWithTimeout`. Both forms preserve programming errors as errors.
+The original invocation methods retain their return and submission semantics.
 
 Nested RemoteFunction calls are supported: a handler may suspend on another
 RemoteFunction without blocking unrelated handlers. Each nested request keeps
@@ -147,10 +169,22 @@ RemoteFunction suspension; a rejected handler cannot remain scheduled and run
 after its terminal error. The shared script task queue is capped at 65,536
 entries.
 
-The handler API uses methods rather than Roblox callback properties. Peer
-slot/generation arguments and handler-setter spelling are intentionally
-provisional until the complete `Players` service exists. This is not a claim of
-full Roblox API parity.
+The two server handler methods address one runtime handler slot. Installing
+`SetServerHandler` selects peer context and installing `SetPlayerHandler` selects
+authoritative Player context. Client handler signatures remain unchanged.
+All three handler forms execute under the runtime's networking-only capability
+set. An authoritative Player argument can key ordinary closure state. Reflected
+DataModel reads and mutations require separate capabilities. RemoteEvent
+connections use the security context captured by the subscribing script.
+
+`GameSession` owns both directions of the Player association. Its native lookup
+uses the originating session's full connection identity and replication epoch, the ready phase, the
+live Player generation, and membership in that runtime's `Players` service.
+Pending session and peer failures invalidate lookup immediately. Outbound Player
+targeting resolves through this association and then uses the existing
+RemoteManager publication and admission path. Player addressing supplies no
+exception to peer visibility, publication, or admission. Sender identity comes
+from the transport delivery context and the current server association.
 
 ## Event semantics
 
@@ -226,24 +260,60 @@ sent. Richer detail may remain in local `[Networking:Remote]` logs.
 
 ## Argument model
 
-Remote arguments reuse the bounded Gargantuan-owned `WireValue` semantic model
-and shared primitive binary helpers. The Luau bridge accepts:
+Remote application arguments use `RemoteValue` and share the existing scalar
+`WireValue` representations and binary helpers with other codecs. Reflection,
+attributes, snapshots, structural replication, and persistence retain their
+own value domains. Luau Remote values include these types.
 
-- nil, boolean, signed 32-bit integer, and finite number;
+- positional nil, boolean, and finite number;
 - valid UTF-8 strings;
 - `Vector2`, `Vector3`, `Color3`, `UDim`, `UDim2`, and `CFrame`;
-- registered `EnumItem` values; and
-- visible, live Instance references.
+- registered `EnumItem` values;
+- visible, live Instance references;
+- arrays and dictionaries containing supported values; and
+- native Luau buffers, including zero-length buffers.
+
+A table with exactly the numeric keys `1..n` is an array. A nonempty table
+with only string keys is a dictionary. An empty table encodes as an empty
+array and reconstructs as an empty Luau table. Mixed keys, sparse indices,
+fractional or nonpositive indices, and other key types reject the whole
+message. Strings and dictionary keys use valid UTF-8 without embedded nulls.
+Dictionary keys can be empty, and
+the wire orders them by byte value. Receiver table iteration follows Luau's
+usual rules. Assigning nil removes a dictionary entry. Nil inside an array
+would leave a hole and is rejected. Numeric values use signed int32 when
+representable and integral, or a finite IEEE 754 binary64 value otherwise.
+Positional numeric strings retain the established numeric conversion. A
+numeric string nested in a container preserves its string type.
+
+Tables use raw traversal and must have no metatable or cycles. Shared
+acyclic subtrees are serialized at each occurrence and reconstructed
+independently. A large preallocated table can exceed the cumulative
+8,192-storage-slot scan budget even when it has few live entries. The engine
+uses its pinned Luau table layout only to read that capacity before raw
+iteration. This check keeps raw traversal bounded when a table has mostly
+empty backing storage.
+
+A buffer may contain arbitrary bytes. Submission snapshots the buffer into
+bounded native storage. Changes after submission leave queued bytes intact.
+Each callback or function result receives a fresh Luau buffer owned by the
+receiver, even when one sender buffer appears in several positions. Buffers
+and all container overhead count toward the full encoded frame budget. The
+negotiated unreliable frame limit can be much smaller than the individual
+buffer limit.
+
+Event dispatch shares the immutable native argument snapshot and one bounded
+reference lookup across signal subscribers. Conversion rechecks reference
+liveness before returning a receiver-owned Luau value. If a reference has
+retired, conversion rejects the entire callback argument tuple.
 
 The native codec also carries `WireFloat` and frozen-schema enum values.
-Schema-enum values are not yet exposed as a distinct Luau value and are rejected
-before a Luau gameplay handler runs. An unsupported response value resumes its
-caller with `protocol_rejected` rather than stranding the coroutine. Tables,
-containers, functions, threads, callbacks, arbitrary userdata, and cyclic data
-are unsupported. The bridge never serializes execution context, capabilities,
-or trust metadata.
+Frozen-schema enum values reject at the Luau boundary. An unsupported or stale
+value in a correlated response completes the invocation with
+`protocol_rejected`. Functions, threads, arbitrary userdata, capabilities,
+and execution contexts have no wire representation.
 
-## Binary protocol version 2
+## Binary protocol version 3
 
 The Remote protocol is Gargantuan-owned, language-neutral little-endian binary.
 It is independent of GNS, Box3D, nlohmann, Glaze, compiler ABI, and C++ struct
@@ -252,7 +322,7 @@ layout. The fixed 52-byte header is:
 | Offset | Bytes | Field |
 | ---: | ---: | --- |
 | 0 | 4 | magic `GRMT` |
-| 4 | 2 | protocol version (`1`) |
+| 4 | 2 | protocol version (`3`) |
 | 6 | 1 | message kind |
 | 7 | 1 | zero reserved |
 | 8 | 8 | Remote `ObjectId` slot/generation |
@@ -264,19 +334,34 @@ layout. The fixed 52-byte header is:
 | 46 | 2 | zero reserved |
 | 48 | 4 | payload bytes |
 
-Version 2 opcode assignments are `0 ReliableEvent`, `1 UnreliableEvent`,
+Opcode assignments are `0 ReliableEvent`, `1 UnreliableEvent`,
 `2 SequencedEvent`, `3 Request`, `4 Response`, `5 RequestError`, and
 `6 Cancellation`. Unknown versions, opcodes, nonzero reserved fields, invalid
 field combinations, count/length mismatches, invalid tags, invalid UTF-8,
 non-finite values, invalid IDs, and trailing bytes fail closed.
+
+`GRMT` v3 preserves the header layout, opcodes, and scalar tags 0–14 of v2.
+Three tags carry structured values and buffers.
+
+| Tag | Payload |
+| ---: | --- |
+| 15 | Array. An unsigned 16-bit count followed by that many complete tagged values. |
+| 16 | Dictionary. A nonzero unsigned 16-bit count, followed by each UTF-8 key and its tagged value. Each key has an unsigned 32-bit byte length. Keys must be strictly increasing in byte order. |
+| 17 | Buffer. An unsigned 32-bit byte length followed by that many bytes. |
+
+The `GSES` v2 handshake requires `GRMT` v3 support at both endpoints.
+The GSES message bodies retain their prior layouts. An older game client or
+server fails the handshake version check before gameplay starts. Standalone
+GRMT decoders require version 3. Update both endpoints together.
 
 `DecodeRemoteMessage(span<byte>)` is independent of sockets, GNS, a DataModel,
 and a Luau VM. `tests/fuzz/RemoteProtocolFuzz.cpp` is a dependency-free
 libFuzzer-ready adapter. Deterministic corpus tests cover empty/truncated input,
 all kinds, maximum and oversized values, invalid version/opcode/count/tag/UTF-8,
 invalid references/IDs/publications, malformed request/sequence fields,
-oversized errors, and trailing data. Version 1 frames are incompatible and fail
-closed rather than inheriting publication state implicitly.
+oversized errors, bounded compound counts, canonical dictionary order, and
+trailing data. The fuzz adapter also checks canonical re-encoding and owning
+storage accounting for accepted frames.
 
 ## Visibility and replication dependency
 
@@ -287,7 +372,7 @@ Remote invocation requires all of these checks:
 3. the peer's current session has published and materialized the Remote and the
    message carries that publication's current nonzero `RemotePublicationId`;
 4. `ReplicationView`-supplied visibility authorizes the Remote; and
-5. every Object argument resolves to a live current-generation Object visible
+5. every Object argument, including one in a nested table, resolves to a live current-generation Object visible
    to that peer.
 
 Guessing a hidden ObjectId therefore does not reveal whether an authoritative
@@ -299,6 +384,12 @@ per-peer deferred reliable budget until `MarkMaterialized`, invalidation, or the
 30-second hard ceiling. An unreliable message is rejected instead of waiting.
 If an Object is unpublished or destroyed before dispatch, validation fails and
 the Remote cannot resurrect it.
+
+The server uses its authoritative ObjectId. A client resolves outgoing
+references through its current replica's source association. A local-only,
+destroyed or retired replica has no current network identity. Receipt resolves
+the source identity against the current replica and preserves the receiving
+VM's Instance identity.
 
 This dependency guarantees only that a referenced Object is resolved before
 the handler sees it. Gargantuan promises no general causal ordering between
@@ -343,6 +434,12 @@ The initial hard ceilings are intentionally small in number:
 | Resource | Ceiling |
 | --- | ---: |
 | encoded Remote frame | 256 KiB |
+| logical retained native argument bytes per decoded message | 512 KiB |
+| nested values across all positional arguments | 1,024 values, including containers |
+| nested table depth | 8 containers |
+| source table traversal | 8,192 Luau backing slots across all passes |
+| Instance reference occurrences | 128 |
+| individual buffer / dictionary key | 64 KiB / 256 bytes |
 | arguments | 32 |
 | UTF-8 string | 16 KiB |
 | error code / message | 128 B / 1024 B |
@@ -355,6 +452,7 @@ The initial hard ceilings are intentionally small in number:
 | aggregate concurrent incoming handlers | 4096 |
 | aggregate in-flight outgoing requests | 8192 |
 | aggregate queued dispatch | 8192 messages / 32 MiB |
+| retained argument storage | 64 MiB each for queued dispatch and deferred reliable |
 | aggregate broadcast per second | 4096 submissions / 16 MiB |
 | generated reliable terminal messages per second | 4096 / 32 MiB |
 | shared Luau task queue | 65,536 tasks |
@@ -363,18 +461,23 @@ Negotiated `NetworkLimits` additionally bound reliable/unreliable message size,
 reliable queue bytes, in-flight outgoing requests per peer, decoded bytes per
 peer tick, messages per peer tick, send/receive bytes per tick, and unreliable
 datagram size. Deferred reliable bytes are accounted per peer. Incoming decoded
-queues are accounted per peer and against the manager-wide ceiling. The runtime
+queues are accounted per peer and against the manager-wide ceiling. Queue
+admission also charges the logical native size of the argument vectors,
+dictionary entries, strings and buffers. The per-peer decoded dispatch ceiling
+is four times its negotiated receive-byte budget. The per-peer deferred
+argument ceiling is four times its negotiated queued-reliable byte budget.
+These budgets complement encoded byte accounting and exclude allocator
+metadata. The runtime
 safe point processes at most the native per-tick message ceiling and divides a
 pump pass fairly across peers with queued work. Every Request frame, including
 an unknown or invalid request, consumes admission before a reliable rejection
 can be generated; over-rate requests are dropped and terminate at the caller's
 finite deadline.
 
-Individual Luau instruction preemption is not introduced by this milestone;
-the existing Luau runtime has no handler-specific instruction-budget facility.
-Remote-created handler count, dispatch count, request lifetime, and nested
-request trees are nevertheless bounded. A future general script watchdog must
-remain a scripting-runtime policy rather than Remote protocol state.
+Handlers and resumed callers share the ordinary VM execution deadline described
+in [Script security](ScriptSecurity.md#ordinary-gameplay-execution-budget).
+Remote request deadlines cover the asynchronous request lifetime. Admission
+also bounds handler count, dispatch count and nested request trees.
 
 ## Statistics
 
@@ -383,8 +486,9 @@ statistics. Saturating counters cover accepted/rejected reliable events,
 accepted/dropped unreliable events, accepted/superseded/stale sequenced events,
 requests started/completed/timed out/cancelled, handler errors, rate/visibility/
 protocol/resource rejections, and logical/per-peer broadcasts. Gauges expose
-queued dispatch bytes/messages, deferred reliable bytes/messages, and in-flight
-requests.
+queued dispatch bytes/messages, deferred reliable bytes/messages, logical
+retained argument bytes, and in-flight requests. Permanent `RemoteEncode` and
+`RemoteDecode` work phases report cost and logical byte counts when captured.
 
 ## Verification boundaries
 

@@ -12,18 +12,114 @@ Game remotes work only in an explicitly configured client/server session with a 
 | API | Caller | Arguments / behavior |
 | --- | --- | --- |
 | `FireServer(...RemoteValue)` | Client | Sends to its active server. |
-| `FireClient(PeerSlot, PeerGeneration, ...RemoteValue)` | Server | Sends to one provisional connection identity. |
+| `FireClient(Player, ...RemoteValue)` | Server | Submits to the current ready connection for the Player. |
+| `FireClient(PeerSlot, PeerGeneration, ...RemoteValue)` | Server | Submits to the explicit connection. |
 | `FireAllClients(...RemoteValue)` | Server | Submits independently to eligible peers. |
+| `TryFireServer(...RemoteValue)`, `TryFireClient(Target, ...RemoteValue)` | Client and server respectively | Return `Accepted, Code` for local submission. `TryFireClient` also accepts the slot and generation form. |
+| `TryFireAllClients(...RemoteValue)` | Server | Returns `AcceptedCount, RejectedCount, RejectedByCode`. |
+| `OnPlayerEvent:Connect(Callback)` | Server | Callback receives the current sending Player, then arguments. |
 | `OnServerEvent:Connect(Callback)` | Server | Callback receives read-only peer context, then arguments. |
 | `OnClientEvent:Connect(Callback)` | Client | Callback receives arguments only. |
 
-`RemoteEvent` is reliable and ordered; `UnreliableRemoteEvent` is best effort and unordered; `UnreliableSequencedRemoteEvent` is best effort, newest wins for state-like updates. A peer context contains `Slot`, `Generation`, and `Epoch`. It represents a current connection and must not be treated as `PlayerId` or durable authentication identity. `FireClient` takes slot and generation, not a `Player` object. Wrong domain, absent connection, unpublished Remote, invisible object reference, invalid arguments, or rejected admission can raise an error. A successful send call means accepted for scheduling, not proof that the recipient ran its handler.
+| Delivery mode | Gameplay use | Behavior |
+| --- | --- | --- |
+| `RemoteEvent` | An item claim or objective action | Reliable and ordered while the connection is healthy. |
+| `UnreliableRemoteEvent` | An independent dust puff or hit effect | Each message can drop, duplicate, or arrive out of order. |
+| `UnreliableSequencedRemoteEvent` | The current aim marker or a visual state sample | Newer samples can replace unsent older ones. The receiver discards stale samples in that Remote's peer channel. |
+
+A peer context contains `Slot`, `Generation`, and `Epoch` and represents a connection lifetime. `PlayerId` and durable authentication identifiers have separate scopes.
+
+The server resolves a Player target and an incoming event's sender from its current session association. A Player can be present in `Players` before its client becomes ready. Targeting a stale, offline, or unready Player returns `invalid_peer` through `TryFireClient`. A Player carried in the message is ordinary payload data.
+
+`TryFireServer` and `TryFireClient` return stable admission codes such as `accepted`, `waiting_for_publication`, `unpublished_remote`, `rate_limited`, and `scheduler_rejected`. Accepted submissions can still be superseded, dropped, or interrupted according to delivery mode and connection state. Broadcast requires a server-bound Remote and reports submission results by recipient. A bound Remote with zero recipients gives two zero counts and an empty rejection table. Wrong runtime domain and invalid Luau argument types still raise errors. The original `Fire*` methods raise on rejected submission and `FireAllClients` raises when nobody accepts the broadcast.
 
 ## Remote functions
 
-`RemoteFunction` exposes `InvokeServer(...RemoteValue)`, `InvokeServerWithTimeout(TimeoutSeconds, ...)`, `InvokeClient(PeerSlot, PeerGeneration, ...)`, and `InvokeClientWithTimeout(PeerSlot, PeerGeneration, TimeoutSeconds, ...)`. Client code installs `SetClientHandler(Callback)`; server code installs `SetServerHandler(Callback)`. The server handler receives peer context first. Invocation suspends **only the calling coroutine**; other scripts and frames can continue. A successful response returns the handler's values. A terminal failure returns `nil, Status, Message` where Status includes `timeout`, `cancelled`, `disconnected`, `remote_error`, `protocol_rejected`, or `resource_rejected`. Caller-selected timeouts must be finite and in `(0, 30]` seconds; the default deadline is 10 seconds. Handlers are runtime-session state, not saved properties.
+Install `SetPlayerHandler(Callback)` on the server to receive the current sending Player. Use `SetServerHandler(Callback)` for peer context. Each setter replaces the current server handler. Client code installs `SetClientHandler(Callback)`, which receives the arguments directly. Handlers belong to the active runtime session.
 
-Remote arguments and return values are scalar `nil`, boolean, finite number, bounded UTF-8 string, supported value datatypes (`Vector2`, `Vector3`, `Color3`, `UDim`, `UDim2`, `CFrame`, `EnumItem`), or a visible live `Instance` reference. Tables and arbitrary userdata are not supported as Remote arguments. There are at most 32 arguments, a 16 KiB string limit, and a 256 KiB frame ceiling. The manager also enforces per-peer/per-Remote rates, in-flight limits, and bounded queues. Use small semantic messages; let replication carry ordinary world state. Server handlers must validate gameplay intent and derive authority from server-side state, not from payloads or connection numbering.
+RemoteFunction handlers run with networking capabilities only. They can use the sender as a Luau table key and work with arguments and closure state. Reading ordinary reflected properties such as `Player.Name`, traversing the DataModel, or changing Instance state requires capabilities that the handler lacks. `OnPlayerEvent` and other Remote signal callbacks run with the security context captured at `Connect`. A callback registered by an ordinary server Script can read and mutate its server DataModel where the normal property and method checks allow it.
+
+- `TryInvokeServer(TimeoutSeconds, ...)` and `TryInvokeClient(Player, TimeoutSeconds, ...)` return `true, ...Results` on success, including when the first result is nil. Operational failure returns `false, Code, Message`, with a fourth bounded error code when the remote handler reports one. `TryInvokeClient` also accepts `PeerSlot, PeerGeneration` in place of `Player`.
+- `InvokeServer(...)` and `InvokeClient(Player, ...)` keep the original shape. They return the handler's values or `nil, Status, Message` on a terminal failure, and raise on rejected submission. Their `WithTimeout` counterparts take a deadline before the payload. Both `InvokeClient` methods accept explicit slot and generation in place of the Player.
+
+Invocation suspends only its calling coroutine. The default deadline is 10 seconds. Explicit timeouts accept finite values in `(0, 30]` seconds with millisecond resolution. Terminal statuses include `timeout`, `cancelled`, `disconnected`, `remote_error`, `protocol_rejected`, and `resource_rejected`. Native request owners can request cancellation. A deadline or disconnect can terminate the caller's wait while the other endpoint is still executing the handler, so design retryable requests around gameplay-level idempotence. Use a preconfigured Remote and a yieldable coroutine. Wrong domain and invalid Luau argument types raise errors in both API forms.
+
+### Player inventory request
+
+Pre-author an `InventoryRequest` RemoteFunction in `ReplicatedStorage`. An ordinary server Script owns the inventory table and registers a handler after the Remote binds to its session.
+
+```luau
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local InventoryRequest = assert(ReplicatedStorage:FindFirstChild("InventoryRequest"))
+local Inventories = {}
+
+local function AddPlayer(Player)
+	Inventories[Player] = {Items = {{Name = "Coil", Count = 1}}}
+end
+
+Players.PlayerAdded:Connect(AddPlayer)
+Players.PlayerRemoving:Connect(function(Player)
+	Inventories[Player] = nil
+end)
+for _, Player in Players:GetPlayers() do
+	AddPlayer(Player)
+end
+
+InventoryRequest:SetPlayerHandler(function(Player)
+	local Inventory = Inventories[Player]
+	if Inventory == nil then
+		return nil, "inventory_unavailable"
+	end
+	return Inventory
+end)
+```
+
+In a client Script that can see the published Remote, call it from a yieldable coroutine and check the transport and gameplay outcomes separately.
+
+```luau
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local InventoryRequest = assert(ReplicatedStorage:FindFirstChild("InventoryRequest"))
+
+task.spawn(function()
+	local Ok, Inventory, Message, HandlerCode = InventoryRequest:TryInvokeServer(3)
+	if not Ok then
+		warn("[Inventory:Remotes] request failed", Inventory, Message, HandlerCode)
+		return
+	end
+	if Inventory == nil then
+		warn("[Inventory:Remotes] inventory unavailable", Message)
+		return
+	end
+	for _, Item in Inventory.Items do
+		print(Item.Name, Item.Count)
+	end
+end)
+```
+
+## Remote values
+
+All delivery modes and RemoteFunction arguments and results accept booleans, finite numbers, UTF-8 strings, `Vector2`, `Vector3`, `Color3`, `UDim`, `UDim2`, `CFrame`, registered `EnumItem` values, visible live `Instance` references, Luau buffers, and nested tables of those values. Positional arguments and results can be nil. Project-defined schema enum values and arbitrary userdata are unsupported.
+
+Use a dense array with integer keys `1..n` or a dictionary with UTF-8 string keys. Empty tables round-trip as empty tables. Holes, mixed key types, metatables, and cycles reject submission. Strings and keys cannot contain embedded null bytes. Dictionary keys encode in byte order. Repeated tables are copied at each occurrence. A nested numeric string keeps its string type. A positional numeric string retains the legacy numeric conversion.
+
+```luau
+local Bits = buffer.create(2)
+buffer.writeu8(Bits, 0, 3)
+buffer.writeu8(Bits, 1, 15)
+
+local Accepted, Code = InventoryUpdate:TryFireClient(Player, {
+	Items = {{Name = "Coil", Count = 2}},
+	Flags = Bits,
+})
+if not Accepted then
+	warn("[Inventory:Remotes] update rejected", Code)
+end
+```
+
+Submission snapshots tables and buffers. Each receiver gets fresh values and can change them locally. Limits include 32 positional values, 1,024 total values, eight nested tables, 128 Instance references, 256 bytes per key, 16 KiB per string, 64 KiB per buffer, and 256 KiB for the complete encoded frame. Sparse backing storage can exceed the Luau table scan budget. Unreliable messages must also fit the negotiated datagram limit. Update the client and server together for the new Remote protocol.
+
+The manager enforces per-peer and per-Remote rates, in-flight limits, and bounded queues. Use small semantic messages and let replication carry ordinary world state. Derive authority from server-side state and validate gameplay intent on the server.
 
 ## Replication and saved state
 

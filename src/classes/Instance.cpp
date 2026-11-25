@@ -374,7 +374,7 @@ namespace gargantuan {
 		AssertAuthoritativeMutation("Instance::Destroy");
 		if (Destroyed || DestroyingState) return;
 		if (GetCurrentScriptSecurityContext().Domain == ScriptExecutionDomain::Client &&
-			ReplicaMaterialization && IsProtectedGuiReplicaHierarchy(*this))
+			IsReplicaMaterialization() && IsProtectedGuiReplicaHierarchy(*this))
 			throw std::runtime_error("[Gui:Ownership] Replicated player GUI hierarchy is server-owned");
 		if (dynamic_cast<PlayerGui *>(this) &&
 			GetCurrentScriptSecurityContext().Domain != ScriptExecutionDomain::Core) {
@@ -1185,7 +1185,7 @@ namespace gargantuan {
 		if (newParent) newParent->AssertIsAlive();
 		auto oldParent = ParentReference.lock();
 		if (oldParent == newParent) return;
-		if (GetCurrentScriptSecurityContext().Domain == ScriptExecutionDomain::Client && ReplicaMaterialization &&
+		if (GetCurrentScriptSecurityContext().Domain == ScriptExecutionDomain::Client && IsReplicaMaterialization() &&
 			(IsProtectedGuiReplicaHierarchy(*this) ||
 				(newParent && (dynamic_cast<PlayerGui *>(newParent.get()) || FindPlayerGuiScope(*newParent)))))
 			throw std::runtime_error("[Gui:Ownership] Replicated player GUI hierarchy is server-owned");
@@ -1642,6 +1642,23 @@ namespace gargantuan {
 
 	std::shared_ptr<Instance> Instance::FindFirstDescendantWhichIsA(std::string className) {
 		return FindFirstChildWhichIsA(className, true);
+	}
+
+	bool Instance::IsDescendantOf(std::shared_ptr<Instance> Ancestor) {
+		for (auto Parent = ParentReference.lock(); Parent; Parent = Parent->ParentReference.lock())
+			if (Parent == Ancestor) return true;
+		return false;
+	}
+
+	bool Instance::IsAncestorOf(std::shared_ptr<Instance> Descendant) {
+		return Descendant && Descendant->IsDescendantOf(shared_from_this());
+	}
+
+	std::vector<std::shared_ptr<Instance>> Instance::GetAncestors() {
+		std::vector<std::shared_ptr<Instance>> Result;
+		for (auto Parent = ParentReference.lock(); Parent; Parent = Parent->ParentReference.lock())
+			Result.push_back(Parent);
+		return Result;
 	}
 
 	std::shared_ptr<Instance> Instance::FindFirstAncestor(std::string name) {

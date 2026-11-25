@@ -10,6 +10,7 @@
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
+#include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 
 #include <algorithm>
@@ -274,8 +275,7 @@ namespace gargantuan::network {
 
 		auto InstallReceiver = [this](SnapshotLoadResult Loaded) {
 			for (const auto &[Id, Value] : Loaded.Objects) {
-				(void)Id;
-				Value->ReplicaMaterialization = true;
+				Value->ReplicaSourceObject = Id.ToObjectId();
 			}
 			Receiver = std::move(Loaded);
 		};
@@ -468,7 +468,7 @@ namespace gargantuan::network {
 							if (!InstanceValue || !Receiver.Objects.emplace(WireId, InstanceValue).second ||
 								!LiveAddresses->insert(InstanceValue.get()).second)
 								throw std::invalid_argument("Replica publish construction failed");
-							InstanceValue->ReplicaMaterialization = true;
+							InstanceValue->ReplicaSourceObject = WireId.ToObjectId();
 						}
 				});
 				// Establish the entire published ancestry before applying properties. A
@@ -592,5 +592,15 @@ namespace gargantuan::network {
 
 	std::shared_ptr<Instance> ReplicaApplier::Resolve(ObjectId SourceObject) const {
 		return Receiver.Resolve(WireObjectId::FromObjectId(SourceObject));
+	}
+
+	std::optional<ObjectId> ReplicaApplier::GetSourceObject(const Instance &Object) const {
+		if (GetCurrentExecutionDomain() != ExecutionDomain::Main || !Epoch.IsValid() ||
+			!Object.ReplicaSourceObject.IsValid() || Object.GetDestroyed() ||
+			Object.IsDestroying() || !Receiver.Root || Receiver.Root->GetDestroyed() || Receiver.Root->IsDestroying() ||
+			Object.GetReplicationScopeId() != Receiver.Root->GetObjectId() ||
+			Resolve(Object.ReplicaSourceObject).get() != &Object)
+			return std::nullopt;
+		return Object.ReplicaSourceObject;
 	}
 }

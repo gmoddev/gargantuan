@@ -145,7 +145,7 @@ return c({
 			returns = t.Array(t.Instance()),
 		},
 		ClearAllChildren = {
-			description = "Unparents all direct children of this instance",
+			description = "Destroys the direct children present at the start of the call, including their subtrees",
 			requiredCapability = "MutateDataModel",
 		},
 		-- WaitForChild = {
@@ -174,11 +174,11 @@ return c({
 		-- 	returns = t.Function()(),
 		-- },
 
-		-- IsDescendantOf = {
-		-- 	description = "Whether this instance is a descendant of the specified ancestor",
-		-- 	params = { p("ancestor", t.Instance()) },
-		-- 	returns = t.Bool,
-		-- },
+		IsDescendantOf = {
+			description = "Tests whether ancestor occurs on this instance's current parent chain. Self is excluded.",
+			params = { p("ancestor", t.Instance()) },
+			returns = t.Bool,
+		},
 		GetDescendants = {
 			description = "Returns all descendants below this instance",
 			returns = t.Array(t.Instance()),
@@ -204,15 +204,15 @@ return c({
 		-- 	returns = t.Function()(),
 		-- },
 
-		-- IsAncestorOf = {
-		-- 	description = "Whether this instance is an ancestor of the specified descendant",
-		-- 	params = { p("descendant", t.Instance()) },
-		-- 	returns = t.Bool,
-		-- },
-		-- GetAncestors = {
-		-- 	description = "Returns all ancestors above this instance",
-		-- 	returns = t.Array(t.Instance()),
-		-- },
+		IsAncestorOf = {
+			description = "Tests whether descendant currently belongs below this instance. Self is excluded.",
+			params = { p("descendant", t.Instance()) },
+			returns = t.Bool,
+		},
+		GetAncestors = {
+			description = "Returns a snapshot of the current parent chain, nearest parent first",
+			returns = t.Array(t.Instance()),
+		},
 		FindFirstAncestor = {
 			description = "Returns the first ancestor that matches the specified name",
 			params = { p("name", t.String) },

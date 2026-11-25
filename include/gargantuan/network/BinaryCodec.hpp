@@ -60,6 +60,8 @@ namespace gargantuan::network {
 		bool Float(float &Value);
 		bool Double(double &Value);
 		bool String(std::string &Value, std::size_t MaximumBytes);
+		bool Take(std::size_t Count, std::span<const std::byte> &Value);
+		bool Peek(std::uint8_t &Value);
 		bool Fail(std::string Message);
 		[[nodiscard]] bool Complete() const;
 		[[nodiscard]] std::size_t Remaining() const;

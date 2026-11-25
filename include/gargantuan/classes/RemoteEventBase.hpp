@@ -15,5 +15,10 @@ namespace gargantuan {
 	  private:
 		std::shared_ptr<network::RemoteSignal> OnClientSignal;
 		std::shared_ptr<network::RemoteSignal> OnServerSignal;
+		std::shared_ptr<network::RemoteSignal> OnPlayerSignal;
+
+		static int Submit(lua_State *L, Instance *InstanceValue, network::RemoteManagerRole Role,
+			bool ReturnStatus, std::string_view Method);
+		static int SubmitBroadcast(lua_State *L, Instance *InstanceValue, bool ReturnStatus);
 	};
 }

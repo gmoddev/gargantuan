@@ -248,8 +248,10 @@ namespace {
 		Check(Reliable.has_value(), "valid Remote corpus seed encodes");
 		if (!Reliable) return;
 		auto InvalidVersion = *Reliable;
-		InvalidVersion[4] = std::byte{3};
-		Check(!DecodeRemoteMessage(InvalidVersion), "unknown Remote protocol versions fail closed");
+		InvalidVersion[4] = std::byte{2};
+		const auto Legacy = DecodeRemoteMessage(InvalidVersion);
+		Check(!Legacy && Legacy.error().Code == SerializationErrorCode::UnsupportedVersion,
+			"previous Remote protocol version fails closed");
 		auto InvalidOpcode = *Reliable;
 		InvalidOpcode[6] = std::byte{0xff};
 		Check(!DecodeRemoteMessage(InvalidOpcode), "unknown Remote opcodes fail closed");
@@ -304,6 +306,200 @@ namespace {
 		auto OversizedError = Message(RemoteMessageKind::RequestError, Remote);
 		OversizedError.Error->Message.assign(MaximumRemoteErrorMessageBytes + 1, 'x');
 		Check(!EncodeRemoteMessage(OversizedError), "oversized untrusted error responses are rejected");
+	}
+
+	void TestStructuredCodec() {
+		const ObjectId Event{92, 7};
+		auto Original = Message(RemoteMessageKind::ReliableEvent, Event);
+		Original.Arguments = {
+			RemoteDictionary{{
+				{"empty", RemoteArray{}},
+				{"items", RemoteArray{{WireVector2{1, 2}, RemoteBuffer{{std::byte{0}, std::byte{0xff}}}}}},
+				{"ready", true},
+			}},
+			std::monostate{},
+			RemoteBuffer{},
+		};
+		const auto Encoded = EncodeRemoteMessage(Original);
+		Check(Encoded.has_value(), "compound frame encodes");
+		if (!Encoded) return;
+		std::size_t DecodedStorage = 0;
+		const auto Decoded = DecodeRemoteMessage(*Encoded, &DecodedStorage);
+		Check(Decoded && Decoded->Arguments == Original.Arguments &&
+			GetRemoteArgumentStorageBytes(Original.Arguments) == DecodedStorage,
+			"structured values preserve mixed scalar types, binary bytes, empty containers and positional nil");
+		if (Decoded) {
+			const auto Reencoded = EncodeRemoteMessage(*Decoded);
+			Check(Reencoded && *Reencoded == *Encoded, "canonical structured wire round-trips byte for byte");
+		}
+		for (std::size_t Boundary = 52; Boundary < Encoded->size(); ++Boundary)
+			Check(!DecodeRemoteMessage(std::span(*Encoded).first(Boundary)), "truncated compound frame is rejected");
+
+		auto Candidate = Message(RemoteMessageKind::ReliableEvent, Event);
+		Candidate.Arguments = {RemoteDictionary{{{"a", true}, {"b", false}}}};
+		if (auto Bytes = EncodeRemoteMessage(Candidate)) {
+			(*Bytes)[66] = std::byte{'a'};
+			Check(!DecodeRemoteMessage(*Bytes), "duplicate dictionary keys are rejected on decode");
+		}
+		Candidate.Arguments = {RemoteDictionary{{{"z", true}, {"a", false}}}};
+		Check(!EncodeRemoteMessage(Candidate), "native dictionaries require deterministic byte-sorted keys");
+		Candidate.Arguments = {std::string("a\0b", 3)};
+		Check(!EncodeRemoteMessage(Candidate), "existing scalar text rules reject embedded nulls");
+		Candidate.Arguments = {RemoteDictionary{{{std::string("a\0b", 3), true}}}};
+		Check(!EncodeRemoteMessage(Candidate), "native dictionary keys use the same text rules as Luau");
+		Candidate.Arguments = {RemoteArray{{std::monostate{}}}};
+		Check(!EncodeRemoteMessage(Candidate), "nil entries are rejected in compound values");
+
+		RemoteValue Tree = true;
+		for (std::size_t Depth = 0; Depth < MaximumRemoteContainerDepth; ++Depth)
+			Tree = RemoteArray{{std::move(Tree)}};
+		Candidate.Arguments = {Tree};
+		Check(EncodeRemoteMessage(Candidate).has_value(), "exact container-depth ceiling is accepted");
+		Candidate.Arguments = {RemoteArray{{std::move(Tree)}}};
+		Check(!EncodeRemoteMessage(Candidate), "one extra container level is rejected");
+
+		Candidate.Arguments = {RemoteArray{std::vector<RemoteValue>(MaximumRemoteValueCount - 1, true)}};
+		auto FullArray = EncodeRemoteMessage(Candidate);
+		Check(FullArray && DecodeRemoteMessage(*FullArray).has_value(), "exact aggregate value ceiling round-trips");
+		if (FullArray) {
+			(*FullArray)[53] = std::byte{0};
+			(*FullArray)[54] = std::byte{4};
+			Check(!DecodeRemoteMessage(*FullArray), "over-limit array count is rejected before reserving entries");
+		}
+		Candidate.Arguments = {RemoteArray{std::vector<RemoteValue>(MaximumRemoteValueCount, true)}};
+		Check(!EncodeRemoteMessage(Candidate), "one extra aggregate value is rejected");
+		Candidate.Arguments = {RemoteArray{std::vector<RemoteValue>(MaximumRemoteReferenceCount,
+			WireObjectReference{{2, 3}})}};
+		Check(EncodeRemoteMessage(Candidate).has_value(), "reference occurrence limit permits the exact boundary");
+		std::get<RemoteArray>(Candidate.Arguments.front()).Values.push_back(WireObjectReference{{2, 3}});
+		Check(!EncodeRemoteMessage(Candidate), "repeated references cannot bypass the occurrence limit");
+
+		Candidate.Arguments.assign(4, RemoteBuffer{std::vector<std::byte>(MaximumRemoteBufferBytes)});
+		auto &LastBuffer = std::get<RemoteBuffer>(Candidate.Arguments.back()).Bytes;
+		LastBuffer.resize(MaximumRemoteBufferBytes - 52 - 4 * 5);
+		const auto Boundary = EncodeRemoteMessage(Candidate);
+		Check(Boundary && Boundary->size() == MaximumRemoteFrameBytes && DecodeRemoteMessage(*Boundary).has_value(),
+			"the aggregate frame limit counts every buffer tag and length");
+		LastBuffer.push_back(std::byte{0});
+		Check(!EncodeRemoteMessage(Candidate), "compound aggregate payload cannot exceed the Remote frame ceiling");
+		Candidate.Arguments = {RemoteBuffer{std::vector<std::byte>(MaximumRemoteBufferBytes + 1)}};
+		Check(!EncodeRemoteMessage(Candidate), "one byte over the individual buffer limit is rejected");
+		Candidate.Arguments = {RemoteBuffer{}};
+		if (auto Bytes = EncodeRemoteMessage(Candidate)) {
+			(*Bytes)[53] = std::byte{1};
+			Check(!DecodeRemoteMessage(*Bytes), "malformed buffer length cannot expose a partial value");
+		}
+	}
+
+	void TestStructuredDelivery() {
+		RemoteFixture Fixture;
+		const auto Detached = std::make_shared<Folder>();
+		Check(!Fixture.Server->MapOutgoingReference(*Detached) && !Detached->Id.IsValid(),
+			"looking up an unpublished remote argument does not allocate its ObjectId");
+		const ObjectId Reliable{94, 1}, Unreliable{95, 1}, Sequenced{96, 1}, Function{97, 1};
+		Fixture.Register(Reliable, RemoteInstanceKind::ReliableEvent);
+		Fixture.Register(Unreliable, RemoteInstanceKind::UnreliableEvent);
+		Fixture.Register(Sequenced, RemoteInstanceKind::UnreliableSequencedEvent);
+		Fixture.Register(Function, RemoteInstanceKind::Function);
+		const std::vector<RemoteValue> Payload{RemoteDictionary{{
+			{"count", 4}, {"labels", RemoteArray{{std::string("inventory"), RemoteBuffer{}}}},
+		}}};
+		int Deliveries = 0;
+		const auto Observe = [&](const RemoteInvocation &Message) {
+			if (Message.Arguments == Payload) ++Deliveries;
+		};
+		Fixture.Client->SetEventHandler(Reliable, Observe);
+		Fixture.Server->SetEventHandler(Unreliable, Observe);
+		Fixture.Server->SetEventHandler(Sequenced, Observe);
+		Fixture.Server->SetRequestHandler(Function, [](const RemoteInvocation &Message, RemoteManager::RequestReply Reply) {
+			(void)Reply(Message.Arguments, std::nullopt);
+		});
+		auto Broadcast = Fixture.Server->Broadcast(Reliable, Payload);
+		Check(Broadcast.size() == 1 && Broadcast.front().Accepted(), "structured reliable broadcast is admitted");
+		auto InvalidBroadcast = Fixture.Server->Broadcast(Reliable,
+			{RemoteBuffer{std::vector<std::byte>(MaximumRemoteBufferBytes + 1)}});
+		Check(InvalidBroadcast.size() == 1 && InvalidBroadcast.front().Status == RemoteSendStatus::InvalidArguments,
+			"an oversized native broadcast is rejected before recipient submissions");
+		Check(Fixture.Client->SendEvent(Fixture.ClientConnection, Unreliable, Payload).Accepted() &&
+			Fixture.Client->SendEvent(Fixture.ClientConnection, Sequenced, Payload).Accepted(),
+			"small structured values fit the negotiated unreliable message budget");
+		Check(!Fixture.Client->SendEvent(Fixture.ClientConnection, Unreliable,
+			{RemoteBuffer{std::vector<std::byte>(1200)}}).Accepted(),
+			"the full structured frame is charged to the unreliable datagram limit");
+		bool Completed = false;
+		const auto Request = Fixture.Client->StartRequest(
+			Fixture.ClientConnection, Function, Payload, [&](RemoteRequestResult Result) {
+				Completed = Result.Outcome.IsTerminal() && Result.Outcome.Status == RemoteRequestTerminalStatus::Success &&
+					Result.Results == Payload;
+			}
+		);
+		Check(Request.Accepted(), "structured function request is admitted");
+		for (int Step = 0; Step < 10 && (!Completed || Deliveries != 3); ++Step)
+			Fixture.Cycle();
+		Check(Completed && Deliveries == 3, "all simulated delivery modes and RPC response preserve structured values");
+
+		Fixture.SetReferenceVisible(false);
+		const auto Target = Fixture.ReferencedObject->GetObjectId();
+		const RemoteArray Reference{{WireObjectReference{WireObjectId::FromObjectId(Target)}}};
+		Check(Fixture.Server->SendEvent(Fixture.ServerConnection, Reliable, {Reference}).Status ==
+			RemoteSendStatus::DeferredForMaterialization &&
+			Fixture.Server->GetMetrics().DeferredReliableArgumentBytes != 0,
+			"nested reference consumes dependency queue bytes before materialization");
+		Fixture.ReferencedObject->Destroy();
+		(void)Fixture.Server->MarkMaterialized(Fixture.ServerConnection, Target);
+		(void)Fixture.Server->Pump();
+		Check(Fixture.Server->GetMetrics().DeferredReliableArgumentBytes == 0 && Deliveries == 3,
+			"nested stale reference leaves the queue without partial gameplay dispatch");
+
+		std::optional<RemoteRequestTerminalStatus> InvalidResultStatus;
+		const auto Pending = Fixture.Client->StartRequest(
+			Fixture.ClientConnection, Function, Payload, [&](RemoteRequestResult Result) {
+				InvalidResultStatus = Result.Outcome.Status;
+			}
+		);
+		Check(Pending.Accepted() && Pending.Request.has_value(), "structured response test registers a current invocation");
+		if (Pending.Request) {
+			auto Response = Message(RemoteMessageKind::Response, Function);
+			Response.Request = *Pending.Request;
+			Response.Arguments = {Reference};
+			Check(Fixture.Client->HandleTransportEvent(Incoming(Fixture.ClientConnection, Response)) &&
+				Fixture.Client->Pump() == 1 && InvalidResultStatus == RemoteRequestTerminalStatus::ProtocolRejected,
+				"correlated response with a stale nested reference completes as protocol rejected");
+		}
+	}
+
+	void TestStructuredDispatchStorage() {
+		auto PeerLimits = TestLimits();
+		PeerLimits.MaximumReliableMessageBytes = 4096;
+		PeerLimits.MaximumDecodedMessageBytes = 4096;
+		PeerLimits.MaximumReceiveBytesPerTick = 16 * 1024;
+		RemoteFixture Fixture({}, PeerLimits);
+		const ObjectId Event{98, 1};
+		Fixture.Register(Event, RemoteInstanceKind::ReliableEvent);
+		auto Expanded = Message(RemoteMessageKind::ReliableEvent, Event);
+		// One tree must occupy three quarters of this peer's 4x retained-byte
+		// allowance on each supported standard library's RemoteValue layout.
+		const auto EntryCount = 3 * PeerLimits.MaximumReceiveBytesPerTick / sizeof(RemoteValue) - 1;
+		Expanded.Arguments = {RemoteArray{std::vector<RemoteValue>(EntryCount, true)}};
+		const auto Enqueue = [&] {
+			return Fixture.Server->HandleTransportEvent(Incoming(Fixture.ServerConnection, Expanded));
+		};
+		Check(Enqueue(), "compact structured payload fits the peer wire and argument limits once");
+		const auto Before = Fixture.Server->GetMetrics();
+		Check(Before.QueuedDispatchBytes * 2 < PeerLimits.MaximumReceiveBytesPerTick &&
+			Before.QueuedDispatchArgumentBytes > 2 * PeerLimits.MaximumReceiveBytesPerTick && !Enqueue(),
+			"expanded representation hits the retained per-peer budget before its byte or message ceilings");
+		Check(Fixture.Server->Pump() == 1 && Fixture.Server->GetMetrics().QueuedDispatchArgumentBytes == 0 &&
+			Enqueue(), "dispatch releases the expanded queue charge for reuse");
+		Fixture.SetReferenceVisible(false);
+		const auto Reference = WireObjectReference{WireObjectId::FromObjectId(Fixture.ReferencedObject->GetObjectId())};
+		const RemoteArray TooLarge{{Reference, RemoteBuffer{std::vector<std::byte>(4096)}}};
+		Check(!Fixture.Client->SendEvent(Fixture.ClientConnection, Event, {TooLarge}).Accepted() &&
+			Fixture.Client->GetMetrics().DeferredReliableArgumentBytes == 0,
+			"a reference-dependent reliable frame must fit the negotiated message limit even before deferral");
+		Check(Fixture.Server->RemovePeer(Fixture.ServerConnection) &&
+			Fixture.Server->GetMetrics().QueuedDispatchArgumentBytes == 0,
+			"disconnect retires all queued native argument bytes");
 	}
 
 	void TestReliableAndRequests() {
@@ -1163,7 +1359,7 @@ namespace {
 				"broadcast budget peer registers"
 			);
 		}
-		std::vector<WireValue> LargeArguments;
+		std::vector<RemoteValue> LargeArguments;
 		for (int Index = 0; Index < 15; ++Index)
 			LargeArguments.emplace_back(std::string(MaximumRemoteStringBytes, 'b'));
 		auto Results = BroadcastManager.Broadcast(Event, std::move(LargeArguments));
@@ -1365,6 +1561,9 @@ int main() {
 		return 1;
 	}
 	TestCodec();
+	TestStructuredCodec();
+	TestStructuredDelivery();
+	TestStructuredDispatchStorage();
 	TestReliableAndRequests();
 	TestUnreliableSequencedVisibilityAndLimits();
 	TestLifecycleAndEpochIsolation();

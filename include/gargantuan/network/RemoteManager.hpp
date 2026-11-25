@@ -16,6 +16,7 @@
 
 namespace gargantuan {
 	class Instance;
+	class Player;
 }
 
 namespace gargantuan::network {
@@ -29,6 +30,7 @@ namespace gargantuan::network {
 	inline constexpr std::size_t MaximumRemotePeerSlots = 16 * 1024;
 	inline constexpr std::size_t MaximumQueuedRemoteDispatchMessages = 8192;
 	inline constexpr std::size_t MaximumQueuedRemoteDispatchBytes = 32 * 1024 * 1024;
+	inline constexpr std::size_t MaximumRetainedRemoteArgumentBytes = 64 * 1024 * 1024;
 	inline constexpr std::size_t MaximumRemoteBroadcastSubmissionsPerSecond = 4096;
 	inline constexpr std::size_t MaximumRemoteBroadcastBytesPerSecond = 16 * 1024 * 1024;
 	inline constexpr std::size_t MaximumRemoteGeneratedReliableMessagesPerSecond = 4096;
@@ -62,6 +64,7 @@ namespace gargantuan::network {
 	};
 
 	[[nodiscard]] std::string_view GetRemoteSendStatusName(RemoteSendStatus Status);
+	[[nodiscard]] std::string_view GetRemoteSendStatusCode(RemoteSendStatus Status);
 
 	struct RemotePeerContext {
 		ConnectionId Connection;
@@ -71,12 +74,13 @@ namespace gargantuan::network {
 	struct RemoteInvocation {
 		RemotePeerContext Peer;
 		ObjectId Remote;
-		std::vector<WireValue> Arguments;
+		std::vector<RemoteValue> Arguments;
+		RemotePublicationId Publication;
 	};
 
 	struct RemoteRequestResult {
 		RemoteRequestOutcome Outcome;
-		std::vector<WireValue> Results;
+		std::vector<RemoteValue> Results;
 	};
 
 	struct RemoteRequestHandle {
@@ -123,8 +127,10 @@ namespace gargantuan::network {
 		std::uint64_t BroadcastPeerSubmissions = 0;
 		std::size_t QueuedDispatchMessages = 0;
 		std::size_t QueuedDispatchBytes = 0;
+		std::size_t QueuedDispatchArgumentBytes = 0;
 		std::size_t DeferredReliableMessages = 0;
 		std::size_t DeferredReliableBytes = 0;
+		std::size_t DeferredReliableArgumentBytes = 0;
 		std::size_t InFlightRequests = 0;
 		std::size_t IncomingHandlers = 0;
 	};
@@ -135,10 +141,13 @@ namespace gargantuan::network {
 		using ObjectResolver = std::function<std::shared_ptr<Instance>(ObjectId)>;
 		using Clock = std::function<std::chrono::steady_clock::time_point()>;
 		using EventHandler = std::function<void(const RemoteInvocation &)>;
-		using RequestReply = std::function<bool(std::vector<WireValue>, std::optional<StructuredRemoteError>)>;
+		using RequestReply = std::function<bool(std::vector<RemoteValue>, std::optional<StructuredRemoteError>)>;
+		using OutgoingReferenceMapper = std::function<std::optional<ObjectId>(const Instance &)>;
 		using RequestHandler = std::function<void(const RemoteInvocation &, RequestReply)>;
 		using RequestCompletion = std::function<void(RemoteRequestResult)>;
 		using TerminalHandler = std::function<void(ConnectionId, const DisconnectInfo &)>;
+		using PlayerLookup = std::function<std::shared_ptr<Player>(const RemotePeerContext &)>;
+		using PeerLookup = std::function<std::optional<RemotePeerContext>(const Player &)>;
 
 		RemoteManager(
 			RemoteManagerRole Role,
@@ -161,13 +170,15 @@ namespace gargantuan::network {
 		bool SetEventHandler(ObjectId Remote, EventHandler Handler);
 		bool SetRequestHandler(ObjectId Remote, RequestHandler Handler);
 		void SetTerminalHandler(TerminalHandler Handler);
+		void SetOutgoingReferenceMapper(OutgoingReferenceMapper Mapper);
+		[[nodiscard]] std::optional<ObjectId> MapOutgoingReference(const Instance &Object) const;
 
-		RemoteSendResult SendEvent(ConnectionId Connection, ObjectId Remote, std::vector<WireValue> Arguments);
-		std::vector<RemoteSendResult> Broadcast(ObjectId Remote, std::vector<WireValue> Arguments);
+		RemoteSendResult SendEvent(ConnectionId Connection, ObjectId Remote, std::vector<RemoteValue> Arguments);
+		std::vector<RemoteSendResult> Broadcast(ObjectId Remote, std::vector<RemoteValue> Arguments);
 		RemoteSendResult StartRequest(
 			ConnectionId Connection,
 			ObjectId Remote,
-			std::vector<WireValue> Arguments,
+			std::vector<RemoteValue> Arguments,
 			RequestCompletion Completion,
 			std::chrono::milliseconds Deadline = DefaultRemoteRequestDeadline
 		);
@@ -178,11 +189,20 @@ namespace gargantuan::network {
 		[[nodiscard]] RemoteMetrics GetMetrics() const;
 		[[nodiscard]] RemoteManagerRole GetRole() const;
 		[[nodiscard]] std::shared_ptr<Instance> ResolveObject(ObjectId Object) const;
+		// Installed by the authoritative server session. A standalone manager has no gameplay identity.
+		void SetPlayerResolvers(PlayerLookup ResolvePlayer, PeerLookup ResolvePeer);
+		[[nodiscard]] std::shared_ptr<Player> ResolvePlayer(const RemotePeerContext &Peer) const;
+		[[nodiscard]] std::optional<RemotePeerContext> ResolvePeer(const Player &PlayerValue) const;
+		[[nodiscard]] bool IsCurrentPublication(
+			const RemotePeerContext &Peer, ObjectId Remote, RemotePublicationId Publication
+		) const;
 		[[nodiscard]] std::weak_ptr<void> GetLifetimeToken() const;
 
 	  private:
 		struct Implementation;
 		std::shared_ptr<Implementation> State;
+		PlayerLookup FindPlayer;
+		PeerLookup FindPeer;
 		void DrainSchedulerTerminals();
 	};
 }

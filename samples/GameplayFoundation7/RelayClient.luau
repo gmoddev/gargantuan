@@ -4,6 +4,7 @@ local CharacterControl = game:GetService("CharacterControlService")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local Mix = game:GetService("AudioMixService")
+local TweenService = game:GetService("TweenService")
 local Player = Players.LocalPlayer
 if not Player then
 	warn("[Gameplay:Relay] Local player is unavailable")
@@ -29,6 +30,12 @@ if not (Status and MixToggle) then
 	return
 end
 MixToggle.Interactable = Mix ~= nil
+
+local PendingCell
+local CellCollected
+local CellConnection
+local Announcement = ""
+local AnnouncementSeconds = 0
 
 local MixFeedback
 local function ShowMixState(Muted)
@@ -103,6 +110,29 @@ local SimulationConnection = RunService.PreSimulation:Connect(function()
 end)
 
 local RenderConnection = RunService.PreRender:Connect(function(DeltaTime)
+	local Course = Workspace:FindFirstChild("RelayCourse")
+	if Course and (not CellCollected or CellCollected.Destroyed) then
+		if CellConnection then CellConnection:Disconnect() end
+		CellCollected = Course:FindFirstChild("CellCollected")
+		if CellCollected then
+			CellConnection = CellCollected.OnClientEvent:Connect(function(Message)
+				-- The local presentation step owns GUI writes.
+				PendingCell = Message
+			end)
+		end
+	end
+	AnnouncementSeconds -= DeltaTime
+	if PendingCell then
+		local Message = PendingCell
+		PendingCell = nil
+		local Swatch = Message.Item.SwatchRGB
+		Status.TextColor3 = Color3.new(buffer.readu8(Swatch, 0) / 255, buffer.readu8(Swatch, 1) / 255,
+			buffer.readu8(Swatch, 2) / 255)
+		Announcement = string.format("%s collected. Inventory contains %d cells.", Message.Item.Name, Message.Count)
+		AnnouncementSeconds = 2
+		Status.AccessibleName = Announcement
+		TweenService:Create(Status, TweenInfo.new(0.35), { TextColor3 = Color3.new(0.84, 1, 0.94) }):Play()
+	end
 	local Drone = GetDrone()
 	if Drone then
 		local Camera = Workspace.CurrentCamera
@@ -112,7 +142,6 @@ local RenderConnection = RunService.PreRender:Connect(function(DeltaTime)
 	end
 	LastDrone = Drone
 
-	local Course = Workspace:FindFirstChild("RelayCourse")
 	local Beacon = Course and Course:FindFirstChild("RelayBeacon")
 	BeaconAnimator = Beacon and Beacon:FindFirstChildOfClass("Animator")
 	if BeaconAnimator ~= TriedAnimator then
@@ -179,13 +208,15 @@ local RenderConnection = RunService.PreRender:Connect(function(DeltaTime)
 	else
 		Help = "Walk onto the cyan launch pad or hold the green switch."
 	end
-	local Text = string.format("Health %d   |   Relay %d / 3\n%s", Health, Charges, Help)
+	local Text = string.format("Health %d   |   Relay %d / 3\n%s", Health, Charges,
+		if AnnouncementSeconds > 0 then Announcement else Help)
 	if Status.Text ~= Text then
 		Status.Text = Text
 	end
 end)
 
 script.Destroying:Connect(function()
+	if CellConnection then CellConnection:Disconnect() end
 	RenderConnection:Disconnect()
 	SimulationConnection:Disconnect()
 	ActionConnection:Disconnect()

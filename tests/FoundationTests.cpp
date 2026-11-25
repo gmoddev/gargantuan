@@ -44,6 +44,7 @@
 #include "gargantuan/scripting/ModuleResolution.hpp"
 #include "gargantuan/scripting/NativeCallback.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
+#include "gargantuan/scripting/ExecutionBudget.hpp"
 #include "gargantuan/services/ProcessService.hpp"
 #include "gargantuan/services/Tags.hpp"
 #include "gargantuan/services/Workspace.hpp"
@@ -7772,7 +7773,7 @@ namespace {
 		};
 
 		lua_settop(L, 0);
-		Check(Load(L, R"(
+		const auto KeyScriptLoaded = Load(L, R"(
 			local Root = Instance.new("Folder")
 			local Child = Instance.new("Folder")
 			local Seen = { [Child] = "inventory" }
@@ -7783,24 +7784,40 @@ namespace {
 			assert(Seen[FromEvent] == "inventory")
 			assert(rawequal(Root:GetChildren()[1], Root:FindFirstChild("Item")))
 			assert(Seen[Root.Item] == "inventory" and rawequal(Root.Item.Parent, Root))
+			local Ancestors = Child:GetAncestors()
+			assert(#Ancestors == 1 and Ancestors[1] == Root)
+			assert(Child:IsDescendantOf(Root) and Root:IsAncestorOf(Child))
+			assert(not Child:IsAncestorOf(Child) and not Root:IsDescendantOf(Child))
 			Child:Destroy()
+			assert(not pcall(function() return Child:GetAncestors() end))
+			assert(not Root:IsAncestorOf(Child))
 			local New = Instance.new("Folder")
 			New.Name = "Item"
 			New.Parent = Root
 			assert(Seen[Root.Item] == nil and Seen[Child] == "inventory")
+			Root:ClearAllChildren()
+			assert(New.Destroyed and #Root:GetChildren() == 0)
 			Root:Destroy()
-		)", "instance-table-keys") == LUA_OK && lua_pcall(L, 0, 0, 0) == LUA_OK,
-			"Instance keys agree across Luau construction, signals, properties and hierarchy");
+		)", "instance-table-keys");
+		const bool KeyScriptPassed = KeyScriptLoaded == LUA_OK && lua_pcall(L, 0, 0, 0) == LUA_OK;
+		if (!KeyScriptPassed) std::cerr << "[Runtime:IdentityTest] " << lua_tostring(L, -1) << '\n';
+		Check(KeyScriptPassed, "Instance keys agree across Luau construction, signals, properties and hierarchy");
 		{
 			auto Detached = std::make_shared<Folder>();
 			std::weak_ptr<Instance> Lifetime = Detached;
-			StackValue<std::shared_ptr<Folder>>::Push(L, Detached);
+			const auto Scope = game->GetObjectId();
+			const auto BeforeExposure = ChangeJournal::Get().CreateCursor(Scope);
+			{
+				ExecutionDomainScope ReadOnly(ExecutionDomain::Worker);
+				StackValue<std::shared_ptr<Folder>>::Push(L, Detached);
+			}
 			const void *FirstWrapper = lua_topointer(L, -1);
 			{
-				ScriptEngine OtherVm(std::make_shared<DataModel>());
+				ScriptEngine OtherVm(std::make_shared<DataModel>(), {}, RuntimeMode::NetworkClient);
 				StackValue<std::shared_ptr<Instance>>::Push(OtherVm.L, Detached);
-				Check(lua_topointer(OtherVm.L, -1) != FirstWrapper && !Detached->Id.IsValid(),
-					"separate VMs wrap independently without publishing detached identity");
+				Check(lua_topointer(OtherVm.L, -1) != FirstWrapper && !Detached->Id.IsValid() &&
+					ChangeJournal::Get().Read(BeforeExposure).Records.empty(),
+					"first exposure in separate VMs needs no mutation authority, identity publication or journal commit");
 			}
 			const auto OldId = Detached->GetObjectId();
 			Detached->Destroy();
@@ -7814,6 +7831,37 @@ namespace {
 			Detached.reset();
 			lua_gc(L, LUA_GCCOLLECT, 0);
 			Check(Lifetime.expired(), "weak identity cache releases the native object after GC");
+		}
+		{
+			using namespace gargantuan::runtime_detail;
+			std::array<std::weak_ptr<Instance>, 1024> TransientObjects;
+			lua_gc(L, LUA_GCCOLLECT, 0);
+			const auto Before = lua_totalbytes(L, -1);
+			auto Peak = Before;
+			lua_gc(L, LUA_GCSTOP, 0);
+			WorkSample Churn{};
+			{
+				WorkCapture Capture(&Churn);
+				for (auto &Observed : TransientObjects) {
+					auto Value = std::make_shared<Folder>();
+					Observed = Value;
+					StackValue<std::shared_ptr<Folder>>::Push(L, Value);
+					StackValue<std::shared_ptr<Folder>>::Push(L, Value);
+					lua_pop(L, 2);
+					Peak = std::max(Peak, lua_totalbytes(L, -1));
+				}
+			}
+			lua_gc(L, LUA_GCRESTART, 0);
+			lua_gc(L, LUA_GCCOLLECT, 0);
+			const auto After = lua_totalbytes(L, -1);
+			const auto Expired = static_cast<std::size_t>(std::ranges::count_if(TransientObjects,
+				[](const auto &Value) { return Value.expired(); }));
+			const auto &Wraps = Churn[static_cast<std::size_t>(WorkPhase::InstanceWrap)];
+			Check(Wraps.Calls == TransientObjects.size() * 2 && Wraps.Units == TransientObjects.size() &&
+				Expired == TransientObjects.size(), "identity churn creates one wrapper per native object and collects each");
+			std::cout << "[Runtime:InstanceGc] transient_objects=" << TransientObjects.size()
+				<< " wrapper_misses=" << Wraps.Units << " expired_native=" << Expired
+				<< " vm_before_bytes=" << Before << " vm_peak_bytes=" << Peak << " vm_after_bytes=" << After << '\n';
 		}
 		lua_settop(L, 0);
 		Check(Load(L, R"(
@@ -7844,6 +7892,65 @@ namespace {
 			RuntimeDiagnostics[5].second == "<invalid utf-8>" &&
 			RuntimeDiagnostics[6].second.ends_with("<arguments truncated>"),
 			"runtime diagnostics preserve multiline UTF-8 and bound or sanitize unsafe strings");
+
+		engine.GameplayExecutionBudget = std::chrono::milliseconds(1);
+		Check(Load(L, "task.defer(function() error(string.char(255)) end)", "task-diagnostic") == LUA_OK &&
+			CallGameplay(L, 0, 0) == LUA_OK, "schedule a failed task with an invalid UTF-8 error");
+		engine.Threads.Step();
+		Check(RuntimeDiagnostics.back() == std::pair(std::string("Error"), std::string("[Runtime:Task] <invalid utf-8>")),
+			"a deferred error remains printable and encodable by the EditorHost diagnostic channel");
+		Check(Load(L, "local Sum=0 for I=1,100000000 do Sum+=I end return Sum", "finite-over-budget") ==
+			LUA_OK && CallGameplay(L, 0, 1) == LUA_ERRRUN &&
+			std::string_view(lua_tostring(L, -1)).find("[Runtime:ExecutionBudget]") != std::string_view::npos,
+			"ordinary finite long-running code returns a contextual execution-budget error");
+		Check(RuntimeDiagnostics.back().second.find("[Runtime:ExecutionBudget]") == 0 &&
+			lua_callbacks(L)->interrupt == nullptr, "the VM restores its interrupt hook and reports the deadline");
+		lua_settop(L, 0);
+		engine.GameplayExecutionBudget = std::chrono::milliseconds(250);
+		Check(Load(L, "return 5", "after-budget") == LUA_OK && CallGameplay(L, 0, 1) == LUA_OK &&
+			lua_tonumber(L, -1) == 5, "subsequent gameplay receives a fresh deadline");
+
+		{
+			using namespace gargantuan::runtime_detail;
+			auto Item = std::make_shared<Folder>();
+			constexpr int Iterations = 4096;
+			StackValue<std::shared_ptr<Folder>>::Push(L, Item);
+			const auto Wrap = [&] {
+				const auto Start = std::chrono::steady_clock::now();
+				for (int Index = 0; Index < Iterations; ++Index) {
+					StackValue<std::shared_ptr<Folder>>::Push(L, Item);
+					lua_pop(L, 1);
+				}
+				return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-Start).count();
+			};
+			const auto Plain = Wrap();
+			WorkSample Sample{};
+			std::int64_t Measured;
+			{
+				WorkCapture Capture(&Sample);
+				Measured = Wrap();
+			}
+			const auto &Hits = Sample[static_cast<std::size_t>(WorkPhase::InstanceWrap)];
+			Check(Hits.Calls == Iterations && Hits.Units == 0, "repeated pushes allocate no additional wrappers");
+			std::cout << "[Runtime:InstanceWrap] calls=" << Hits.Calls << " cache_misses=" << Hits.Units
+				<< " plain_ns=" << Plain << " captured_ns=" << Measured << '\n';
+			lua_pop(L, 1);
+			const auto Cost = [&](int Milliseconds) {
+				engine.GameplayExecutionBudget = std::chrono::milliseconds(Milliseconds);
+				Check(Load(L, "local N=0 for I=1,100000 do N+=I end return N", "budget-cost") == LUA_OK,
+					"budget workload compiles");
+				const auto Start = std::chrono::steady_clock::now();
+				const auto Status = CallGameplay(L, 0, 1);
+				const auto Elapsed = std::chrono::steady_clock::now()-Start;
+				Check(Status == LUA_OK && lua_tonumber(L, -1) == 5000050000.0, "budget measurements run identical work");
+				lua_pop(L, 1);
+				return std::chrono::duration_cast<std::chrono::nanoseconds>(Elapsed).count();
+			};
+			const auto CooperativeNs = Cost(0);
+			const auto BudgetedNs = Cost(250);
+			std::cout << "[Runtime:ExecutionBudget] iterations=100000 cooperative_ns=" << CooperativeNs
+				<< " budgeted_ns=" << BudgetedNs << '\n';
+		}
 
 		lua_settop(L, 0);
 		Check(Load(L, "return Vector3.new(1, 0, 0):Cross(Vector3.new(0, 1, 0)), type(Vector3.zero)",

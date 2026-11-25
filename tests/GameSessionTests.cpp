@@ -20,6 +20,7 @@
 #include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/PlayerGui.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
+#include "gargantuan/classes/RemoteFunction.hpp"
 #include "gargantuan/classes/ScreenGui.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
@@ -677,6 +678,11 @@ namespace {
 		auto WrongVersion = *Encoded;
 		WrongVersion[4] = std::byte{0xff};
 		Check(!DecodeGameSessionMessage(WrongVersion), "GSES rejects an unsupported protocol version");
+		auto LegacyHello = *Encoded;
+		LegacyHello[4] = std::byte{1};
+		const auto Legacy = DecodeGameSessionMessage(LegacyHello);
+		Check(!Legacy && Legacy.error().Code == SerializationErrorCode::UnsupportedVersion,
+			"GSES rejects a pre-structured client during handshake");
 		auto WrongMagic = *Encoded;
 		WrongMagic[0] = std::byte{0};
 		Check(!DecodeGameSessionMessage(WrongMagic), "GSES rejects an invalid protocol magic");
@@ -1990,6 +1996,45 @@ end)
 		auto FirstTransport = Network->CreateTransport();
 		auto SecondTransport = Network->CreateTransport();
 		auto ServerWorld = std::make_shared<DataModel>();
+		const auto Storage = ServerWorld->GetService("ReplicatedStorage");
+		auto Mailbox = std::make_shared<RemoteEvent>();
+		Mailbox->SetName("PlayerMailbox");
+		Mailbox->SetParent(Storage);
+		auto Request = std::make_shared<RemoteFunction>();
+		Request->SetName("PlayerRequest");
+		Request->SetParent(Storage);
+		auto ServerScript = std::make_shared<Script>();
+		ServerScript->SetName("PlayerRemoteServer");
+		ServerScript->SetRunContext(Enums::RunContext::Server);
+		ServerScript->SetSource(R"(
+local Players = game:GetService("Players")
+local Storage = game:GetService("ReplicatedStorage")
+local Mailbox = Storage.PlayerMailbox
+local Request = Storage.PlayerRequest
+local State = {}
+local function Add(Player)
+	State[Player] = true
+end
+for _, Player in Players:GetPlayers() do Add(Player) end
+Players.PlayerAdded:Connect(Add)
+Players.PlayerRemoving:Connect(function(Player) State[Player] = nil end)
+Mailbox.OnPlayerEvent:Connect(function(Sender, Claimed)
+	assert(State[Sender] and State[Claimed] and Sender ~= Claimed, "server sender must come from the session")
+	local Accepted, Status = Mailbox:TryFireClient(Sender, Sender)
+	assert(Accepted, "Player event submission returned " .. tostring(Status))
+	task.defer(function()
+		local Ok, Echo = Request:TryInvokeClient(Sender, 2, Sender.PlayerId)
+		assert(Ok, "Player invocation returned " .. tostring(Echo))
+		assert(Echo == Sender.PlayerId, "Player invocation reached the wrong recipient")
+		script:SetAttribute("TargetedInvocations", (script:GetAttribute("TargetedInvocations") or 0) + 1)
+	end)
+end)
+Request:SetPlayerHandler(function(Sender)
+	assert(State[Sender], "Player request sender must match the existing state key")
+	return nil, Sender
+end)
+)");
+		ServerScript->SetParent(ServerWorld);
 		HeadlessRenderer ServerRenderer(Vector2(320, 240));
 		Engine ServerRuntime(
 			ServerWorld,
@@ -2011,6 +2056,11 @@ end)
 		auto SecondConfiguration = Configuration(GameSessionRole::Client, "two-client-session");
 		SecondConfiguration.ClientNonce += 1;
 		GameSession Second(SecondTransport, SecondConfiguration);
+		std::size_t UnreadyPlayers = 0;
+		const auto UnreadyConnection = ServerRuntime.Players->PlayerAdded->Connect(
+			[&](const std::shared_ptr<Player> &Value) {
+				if (Value && !Server.ResolveRemotePeer(*Value)) ++UnreadyPlayers;
+			});
 		Check(
 			Server.Start().Succeeded() && First.Start().Succeeded() && Second.Start().Succeeded(),
 			"two-client session endpoints start on one server lifetime"
@@ -2068,16 +2118,74 @@ end)
 		);
 
 		auto ServerPlayers = ServerRuntime.Players->GetPlayers();
+		std::shared_ptr<Player> FirstServerPlayer;
+		std::shared_ptr<Player> SecondServerPlayer;
 		std::shared_ptr<KinematicCharacter> FirstCharacter;
 		std::shared_ptr<KinematicCharacter> SecondCharacter;
 		for (const auto &PlayerValue : ServerPlayers) {
-			if (!PlayerValue->GetCharacter()) continue;
-			auto CharacterValue = std::dynamic_pointer_cast<KinematicCharacter>(*PlayerValue->GetCharacter());
-			if (FirstLocal && PlayerValue->GetPlayerId() == (*FirstLocal)->GetPlayerId())
-				FirstCharacter = CharacterValue;
-			if (SecondLocal && PlayerValue->GetPlayerId() == (*SecondLocal)->GetPlayerId())
-				SecondCharacter = CharacterValue;
+			if (FirstLocal && PlayerValue->GetPlayerId() == (*FirstLocal)->GetPlayerId()) {
+				FirstServerPlayer = PlayerValue;
+				FirstCharacter = std::dynamic_pointer_cast<KinematicCharacter>(PlayerValue->GetCharacter().value_or(nullptr));
+			}
+			if (SecondLocal && PlayerValue->GetPlayerId() == (*SecondLocal)->GetPlayerId()) {
+				SecondServerPlayer = PlayerValue;
+				SecondCharacter = std::dynamic_pointer_cast<KinematicCharacter>(PlayerValue->GetCharacter().value_or(nullptr));
+			}
 		}
+		const auto FirstPeer = FirstServerPlayer ? Server.ResolveRemotePeer(*FirstServerPlayer) : std::nullopt;
+		const auto Unassociated = std::make_shared<Player>();
+		Check(!Server.ResolveRemotePeer(*Unassociated) && !Unassociated->Id.IsValid(),
+			"peer lookup of a detached Player leaves its identity unpublished");
+		const auto SecondPeer = SecondServerPlayer ? Server.ResolveRemotePeer(*SecondServerPlayer) : std::nullopt;
+		Check(UnreadyPlayers == 2 && FirstPeer && SecondPeer && FirstPeer->Connection != SecondPeer->Connection &&
+			Server.ResolveRemotePlayer(*FirstPeer) == FirstServerPlayer &&
+			Server.ResolveRemotePlayer(*SecondPeer) == SecondServerPlayer,
+			"ready server peers resolve to their current distinct Players and PlayerAdded does not imply readiness");
+		Check(FirstPeer && !Server.ResolveRemotePlayer({FirstPeer->Connection, ReplicationEpoch{}}) &&
+			!Server.ResolveRemotePlayer({{FirstPeer->Connection.Slot, FirstPeer->Connection.Generation + 1},
+				FirstPeer->Epoch}) && FirstLocal && !Server.ResolveRemotePeer(**FirstLocal) &&
+			!First.ResolveRemotePlayer(*FirstPeer),
+			"Player bridge rejects wrong epochs, generations, scopes and client-side lookup");
+
+		const auto InstallClientProbe = [](Engine *Runtime) -> std::shared_ptr<Script> {
+			if (!Runtime) return nullptr;
+			auto Value = std::make_shared<Script>();
+			Value->SetRunContext(Enums::RunContext::Client);
+			Value->SetSource(R"(
+local Players = game:GetService("Players")
+local Storage = game:GetService("ReplicatedStorage")
+local Mailbox = Storage.PlayerMailbox
+local Request = Storage.PlayerRequest
+local Local = Players.LocalPlayer
+local ExpectedId = Local.PlayerId
+local Cache = {[Local] = true}
+Mailbox.OnClientEvent:Connect(function(Recipient)
+	assert(Cache[Recipient], "Player event must carry the canonical local Player wrapper")
+	script:SetAttribute("Deliveries", (script:GetAttribute("Deliveries") or 0) + 1)
+end)
+Request:SetClientHandler(function(Marker)
+	assert(not pcall(function() return Local.PlayerId end), "request handler must remain network-only")
+	assert(Marker == ExpectedId, "Player request reached the wrong client")
+	return Marker
+end)
+assert(not pcall(function() Mailbox:TryFireClient(Local, "unauthorized") end))
+local Claimed
+for _, Player in Players:GetPlayers() do
+	if Player ~= Local then Claimed = Player end
+end
+assert(Claimed, "client fixture needs a second visible Player")
+local Accepted, Status = Mailbox:TryFireServer(Claimed)
+assert(Accepted, "client event submission returned " .. tostring(Status))
+local Ok, Empty, Recipient = Request:TryInvokeServer(2)
+assert(Ok, "server invocation returned " .. tostring(Empty))
+assert(Empty == nil and Cache[Recipient], "returns must preserve leading nil and local Player table-key identity")
+script:SetAttribute("ReturnedPlayer", true)
+)");
+			Value->SetParent(Runtime->DataModel);
+			return Value;
+		};
+		const auto FirstProbe = InstallClientProbe(FirstRuntime.get());
+		const auto SecondProbe = InstallClientProbe(SecondRuntime.get());
 		const auto FirstConnection = First.GetPrimaryConnection();
 		std::vector<std::shared_ptr<KinematicCharacter>> DistantCharacters;
 		for (int Index = 0; Index < 32; ++Index) {
@@ -2105,6 +2213,19 @@ end)
 			Second.Step(Tick);
 			(void)Network->Advance(20ms);
 		}
+		const auto GetCount = [](const Instance &Value, std::string_view Name) {
+			const auto Attribute = Value.GetAttributeValue(Name);
+			if (!Attribute) return 0.0;
+			if (const auto *Integer = std::get_if<int>(&*Attribute)) return static_cast<double>(*Integer);
+			if (const auto *Number = std::get_if<double>(&*Attribute)) return *Number;
+			return 0.0;
+		};
+		Check(FirstProbe && SecondProbe && GetCount(*FirstProbe, "Deliveries") == 1 &&
+			GetCount(*SecondProbe, "Deliveries") == 1 &&
+			FirstProbe->GetAttributeValue("ReturnedPlayer").has_value() &&
+			SecondProbe->GetAttributeValue("ReturnedPlayer").has_value() &&
+			GetCount(*ServerScript, "TargetedInvocations") == 2,
+			"both clients complete Player-targeted events and requests with local replica table-key identity");
 		auto FindClientCharacter = [](Engine *RuntimeValue, std::uint32_t PlayerId) {
 			if (!RuntimeValue) return std::shared_ptr<KinematicCharacter>{};
 			for (const auto &PlayerValue : RuntimeValue->Players->GetPlayers())
@@ -2244,6 +2365,10 @@ end)
 				ServerRuntime.Players->GetPlayers().front()->GetPlayerId() == (*SecondLocal)->GetPlayerId(),
 			"disconnect removes only the associated Player and preserves the other connection lifetime"
 		);
+		Check(FirstPeer && FirstServerPlayer && !Server.ResolveRemotePlayer(*FirstPeer) &&
+			!Server.ResolveRemotePeer(*FirstServerPlayer) && SecondPeer &&
+			Server.ResolveRemotePlayer(*SecondPeer) == SecondServerPlayer,
+			"disconnect invalidates both directions of only the retired Player association");
 
 		First.Stop();
 		Second.Stop();
@@ -3339,6 +3464,10 @@ int main(int ArgumentCount, char **Arguments) {
 		}
 		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--player-gui") {
 			TestPlayerGuiPrivateSession();
+			return Failures == 0 ? 0 : 1;
+		}
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--remote-player") {
+			TestTwoClientIdentityAndControlIsolation();
 			return Failures == 0 ? 0 : 1;
 		}
 		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--control-rebind") {

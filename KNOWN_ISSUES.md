@@ -4,6 +4,19 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+## Foundation 10B development entries
+
+The November 24 strategic reconciliation at `0195d658d` records the original
+observations. These dispositions apply to the 10B development branch.
+
+| Review issue | Implementation and qualification |
+| --- | --- |
+| KI-LUAU-001, Instance keys | Windows Release Foundation tests passed at `f76a862c9` for independent lookups, events, separate VMs, garbage collection and destroyed slot reuse. Integrated replicated Player coverage is part of the multiplayer gate. |
+| KI-NET-001, Player addressing | Player targeting and explicit submission outcomes use the server's current session mapping. Simulated and real transport acceptance is tracked with 10B. |
+| KI-LUAU-002, execution budget | Ordinary gameplay gets a configurable VM safepoint deadline. Per-frame aggregate work, native call interruption, VM allocation limits and general continuation retirement remain open. |
+
+Public multiplayer package confidentiality remains a separate release gate.
+
 ## KI-ANIM-001: Preview capture can reject a resized frame
 
 - Status: Resolved on the Advanced Creator branch; headless, native GPU and Studio resize-stage verification passed 2026-11-16.

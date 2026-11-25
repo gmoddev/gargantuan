@@ -555,7 +555,7 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 					auto &Sample = Samples[Index];
 					if (Sample.Pending != 0) continue;
 					for (int Call = 0; Call < Concurrent; ++Call) {
-						std::vector<WireValue> Arguments{static_cast<int>(Index), std::string(3072 - 62, static_cast<char>('a' + Call))};
+						std::vector<RemoteValue> Arguments{static_cast<int>(Index), std::string(3072 - 62, static_cast<char>('a' + Call))};
 						auto &Diagnostic = *AggregatePeers[Index];
 						const auto DiagnosticId = ++Diagnostic.RequestSequence;
 						const auto DiagnosticIdentity = Diagnostic.CaptureIdentity();
@@ -613,7 +613,7 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 					if (Submitted[Index] || Samples[Index].Pending != 0) continue;
 					Submitted[Index] = true;
 					for (int Call = 0; Call < 4; ++Call) {
-						std::vector<WireValue> Arguments{static_cast<int>(Index), std::string(3072 - 62, 'r')};
+						std::vector<RemoteValue> Arguments{static_cast<int>(Index), std::string(3072 - 62, 'r')};
 						const auto Sent = Managers[Index]->StartRequest(Connections[Index], Function->GetNetworkObjectId(), Arguments,
 							[Diagnostic, Arguments](RemoteRequestResult Result) {
 								Diagnostic->Resolved(Result.Outcome.Status == RemoteRequestTerminalStatus::Success && Result.Results == Arguments);
@@ -1068,7 +1068,7 @@ void RunReliableGameplayWorkload(
 		double ServerPollMs = 0, ClientPollMs = 0, ServerSessionMs = 0, ClientSessionMs = 0;
 		double ObserverMs = 0, SleepOvershootMs = 0;
 	};
-	struct PendingEvent { Clock::time_point Started; std::vector<WireValue> Arguments; };
+	struct PendingEvent { Clock::time_point Started; std::vector<RemoteValue> Arguments; };
 	Observation Results;
 	// One scalar witness per named case from the existing Main-owned sink.
 	// Forward every original callback; no payload history or changed health clock.
@@ -1172,7 +1172,7 @@ void RunReliableGameplayWorkload(
 
 	auto Send = [&](bool Rpc, std::size_t FrameBytes) {
 		const int Id = ++Sequence;
-		std::vector<WireValue> Arguments{Id, std::string(FrameBytes - 62, static_cast<char>('a' + Id % 26))};
+		std::vector<RemoteValue> Arguments{Id, std::string(FrameBytes - 62, static_cast<char>('a' + Id % 26))};
 		RemoteMessage Message;
 		Message.Kind = Rpc ? RemoteMessageKind::Request : RemoteMessageKind::ReliableEvent;
 		Message.Remote = Rpc ? ClientFunction->GetNetworkObjectId() : ClientEvent->GetNetworkObjectId();

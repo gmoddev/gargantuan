@@ -9,6 +9,7 @@
 #include "gargantuan/classes/Frame.hpp"
 #include "gargantuan/classes/ImageButton.hpp"
 #include "gargantuan/classes/ImageLabel.hpp"
+#include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/PlayerGui.hpp"
 #include "gargantuan/classes/ScreenGui.hpp"
@@ -26,6 +27,9 @@
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "gargantuan/services/TweenService.hpp"
+#include "BenchmarkAllocationProbe.hpp"
+#include "../src/runtime/RuntimeWorkDiagnostics.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -1280,6 +1284,256 @@ Button.Activated:Connect(function() end)
 			"nested GUI teardown sends FocusLost exactly once and clears focus safely");
 		Observer->Disconnect();
 	}
+
+	std::shared_ptr<gargantuan::Script> RunTweenScript(gargantuan::Engine &Runtime, const char *Source,
+		gargantuan::Enums::RunContext Context = gargantuan::Enums::RunContext::Server) {
+		using namespace gargantuan;
+		auto ScriptValue = std::make_shared<Script>();
+		ScriptValue->SetName("TweenExercise");
+		ScriptValue->SetRunContext(Context);
+		ScriptValue->SetSource(Source);
+		ScriptValue->SetParent(Runtime.DataModel);
+		Runtime.Script->RunBootstrapScript(ScriptValue);
+		if (ScriptValue->Status != ScriptStatus::Finished)
+			throw std::runtime_error("[Tween:Test] " + ScriptValue->ErrorMessage);
+		return ScriptValue;
+	}
+
+	void TestTweenInterpolationAndLifecycle() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		HeadlessRenderer Renderer(Vector2(800.0f, 600.0f));
+		Engine Runtime(Game, &Renderer);
+		auto Tree = BuildTree(Game);
+		Tree.Panel->SetBackgroundColor3(Color3(0, 0, 0));
+		Tree.Panel->SetPosition(UDim2::fromOffset(0, 0));
+		auto Block = std::make_shared<Part>();
+		Block->SetName("TweenBlock");
+		Block->SetAnchored(true);
+		Block->SetParent(Runtime.Workspace);
+		auto Source = RunTweenScript(Runtime, R"(
+local Service = game:GetService("TweenService")
+local Panel = game.FoundationGui.Panel
+local Block = game.Workspace.TweenBlock
+local Info = TweenInfo.new(2, Enum.EasingStyle.Linear, Enum.EasingDirection.In, 1, true, 1)
+local OversizedGoals = table.create(1024)
+local AcceptedGoals, GoalError = pcall(function() Service:Create(Panel, Info, OversizedGoals) end)
+assert(not AcceptedGoals and string.find(tostring(GoalError), "256 backing slots", 1, true),
+	"an oversized empty goal table must be rejected before iteration")
+assert(TweenInfo.new().Time == 1 and Info.DelayTime == 1)
+assert(not pcall(TweenInfo.new, 1, Enum.EasingDirection.In))
+assert(not pcall(TweenInfo.new, math.huge))
+assert(not pcall(TweenInfo.new, 1, nil, nil, 0.5))
+assert(not pcall(TweenInfo.new, 1, nil, nil, -1))
+assert(not pcall(function() Service:Create(Panel, Info, {}) end))
+assert(not pcall(function() Service:Create(Panel, Info, {Name = "changed"}) end))
+assert(not pcall(function() Service:Create(Panel, Info, {AbsoluteSize = Vector2.new(1, 1)}) end))
+assert(not pcall(function() Service:Create(Panel, Info, {ZIndex = "1e100"}) end))
+assert(not pcall(function() Service:Create(Panel, Info, {ZIndex = 1.5}) end))
+assert(not pcall(function() Service:Create(Panel, Info, {Rotation = math.huge}) end))
+assert(not pcall(function() Service:Create(Panel, Info, setmetatable({Rotation = 1}, {})) end))
+assert(not pcall(function() Service:Create(Instance.new("Frame"), Info, {Rotation = 1}) end))
+
+local Fade = Service:Create(Panel, Info, {
+	BackgroundTransparency = 1,
+	BackgroundColor3 = Color3.new(0.2, 0.4, 0.8),
+	Position = UDim2.fromOffset(30, 48),
+	ZIndex = 6,
+})
+assert(typeof(Fade) == "Tween" and Fade.PlaybackState == Enum.PlaybackState.Begin)
+assert(Fade.TweenInfo.Time == 2)
+Fade.Completed:Once(function(State)
+	assert(State == Enum.PlaybackState.Completed)
+	Panel:SetAttribute("FadeCompleted", true)
+	Fade:Play()
+end)
+Fade:Play()
+assert(Fade.PlaybackState == Enum.PlaybackState.Delayed)
+
+local Move = Service:Create(Block, TweenInfo.new(2, Enum.EasingStyle.Linear), {
+	CFrame = CFrame.new(10, 8, 6) * CFrame.Angles(0, math.pi / 2, 0),
+	Size = Vector3.new(3, 5, 7),
+})
+Move:Play()
+)");
+		Runtime.Script->StepTweens(1.0f);
+		const auto Half = Block->GetCFrame();
+		Check(Near(Half.Position.x, 5) && Near(Half.Position.y, 4) && Near(Half.Position.z, 3) &&
+			Near(Half.GetLookVector().x, -std::sqrt(0.5f)) && Near(Block->GetSize().z, 4),
+			"anchored Part advances reflected CFrame and Vector3 halfway");
+		Check(Near(Tree.Panel->GetBackgroundTransparency(), 0) && Tree.Panel->GetPosition().Y.Offset == 0,
+			"delayed GUI tween holds its verified start at the delay boundary");
+		Runtime.Script->StepTweens(1.0f);
+		const auto Color = Tree.Panel->GetBackgroundColor3();
+		Check(Near(Tree.Panel->GetBackgroundTransparency(), 0.5f) && Near(Color.R, 0.1f) &&
+			Near(Color.G, 0.2f) && Near(Color.B, 0.4f) &&
+			Tree.Panel->GetPosition().Y.Offset == 24 && Tree.Panel->GetZIndex() == 3,
+			"GUI tween interpolates scalar, distinct color channels, offset layout and integer goals");
+		Runtime.Script->StepTweens(7.0f);
+		Check(Tree.Panel->GetAttributeValue("FadeCompleted") == WireValue(true) &&
+			Near(Tree.Panel->GetBackgroundTransparency(), 0) && Tree.Panel->GetPosition().Y.Offset == 0,
+			"finite repeat and reverse finish at the start and reentrant Play waits for another step");
+		Runtime.Script->StepTweens(2.0f);
+		Check(Near(Tree.Panel->GetBackgroundTransparency(), 0.5f), "replay recaptures its initial values");
+		Source->Destroy();
+		Runtime.Script->StepTweens(10.0f);
+		Check(Near(Tree.Panel->GetBackgroundTransparency(), 0.5f), "destroying the tween's Script retires playback");
+
+		for (const auto &[Style, Directions] : EasingCurves::CURVES) {
+			for (const auto &[Direction, Curve] : Directions) {
+				Check(EasingCurves::CalculateAlpha(0, Style, Direction) == 0 &&
+					EasingCurves::CalculateAlpha(1, Style, Direction) == 1 &&
+					std::isfinite(EasingCurves::CalculateAlpha(0.25f, Style, Direction)),
+					"every easing curve has exact boundaries and a finite interior");
+			}
+		}
+	}
+
+	void TestTweenConflictAndAuthority() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		HeadlessRenderer Renderer(Vector2(800.0f, 600.0f));
+		Engine Runtime(Game, &Renderer);
+		const auto Tree = BuildTree(Game);
+		auto Locked = std::make_shared<Frame>();
+		Locked->SetName("Locked");
+		Locked->SetParent(Game->GetService("ReplicatedStorage"));
+		auto ReplacementTarget = std::make_shared<Frame>();
+		ReplacementTarget->SetName("RetiredPanel");
+		ReplacementTarget->SetParent(Tree.Root);
+		const auto RetiredId = ReplacementTarget->GetObjectId();
+		auto LocalPlayer = Runtime.Players->GetLocalPlayer().value_or(nullptr);
+		auto OtherPlayer = Runtime.Players->CreateSessionPlayer({"test", "tween-observer"});
+		OtherPlayer->SetName("TweenObserver");
+		if (!LocalPlayer) throw std::runtime_error("[Tween:Test] Offline local player was not established");
+		const auto BuildPlayerGui = [](const std::shared_ptr<Player> &Owner) {
+			auto Root = std::make_shared<ScreenGui>();
+			Root->SetParent(Owner->GetPlayerGui().value());
+			auto Panel = std::make_shared<Frame>();
+			Panel->SetName("OwnerPanel");
+			Panel->SetParent(Root);
+			return Panel;
+		};
+		auto LocalPanel = BuildPlayerGui(LocalPlayer);
+		auto OtherPanel = BuildPlayerGui(OtherPlayer);
+		(void)RunTweenScript(Runtime, R"(
+local Service = game.TweenService
+local Button = game.FoundationGui.Panel.PlayButton
+Service:Create(Button, TweenInfo.new(1, Enum.EasingStyle.Linear), {Rotation = 74}):Play()
+)");
+		(void)RunTweenScript(Runtime, R"(
+local Service = game.TweenService
+local Panel = game.FoundationGui.Panel
+local Info = TweenInfo.new(1, Enum.EasingStyle.Linear)
+assert(not pcall(function() Service:Create(game.ReplicatedStorage.Locked, Info, {Rotation = 20}) end))
+assert(not pcall(function() Service:Create(Panel.PlayButton, Info, {Rotation = 10}):Play() end))
+local LocalPanel = game.Players.LocalPlayer.PlayerGui:FindFirstChild("OwnerPanel", true)
+local OtherContainer = game.Players.TweenObserver:FindFirstChildOfClass("PlayerGui", false)
+local OtherPanel = OtherContainer and OtherContainer:FindFirstChild("OwnerPanel", true)
+assert(OtherPanel and not pcall(function() Service:Create(OtherPanel, Info, {Rotation = 10}) end))
+local Immediate = Service:Create(LocalPanel, TweenInfo.new(0), {Rotation = 20})
+Immediate:Play()
+local First = Service:Create(Panel, Info, {Rotation = 40, ZIndex = 6})
+local Second = Service:Create(Panel, Info, {Rotation = 100, ZIndex = 8})
+First.Completed:Once(function(State)
+	assert(State == Enum.PlaybackState.Cancelled)
+	Panel:SetAttribute("Conflict", true)
+end)
+Second.Completed:Once(function(State)
+	assert(State == Enum.PlaybackState.Cancelled and Panel:GetAttribute("Conflict"))
+	Panel:SetAttribute("Reentry", true)
+end)
+First:Play()
+First:Pause()
+assert(First.PlaybackState == Enum.PlaybackState.Paused)
+Second:Play()
+Second:Pause()
+Second:Resume()
+assert(Second.PlaybackState == Enum.PlaybackState.Playing and First.PlaybackState == Enum.PlaybackState.Cancelled)
+Panel:GetPropertyChangedSignal("Rotation"):Once(function() Second:Cancel() end)
+local Title = Panel.Title
+local PauseDuringWrite = Service:Create(Title, Info, {Rotation = 80, ZIndex = 8})
+Title:GetPropertyChangedSignal("Rotation"):Once(function()
+	PauseDuringWrite:Pause()
+	PauseDuringWrite:Resume()
+end)
+PauseDuringWrite:Play()
+local Retiring = Service:Create(game.FoundationGui.RetiredPanel, Info, {Rotation = 100})
+Retiring.Completed:Once(function(State)
+	assert(State == Enum.PlaybackState.Cancelled)
+	Panel:SetAttribute("TargetRetired", true)
+end)
+Retiring:Play()
+)", Enums::RunContext::Client);
+		ReplacementTarget->Destroy();
+		auto Replacement = std::make_shared<Frame>();
+		Replacement->SetParent(Tree.Root);
+		const auto ReplacementId = Replacement->GetObjectId();
+		Runtime.Script->StepTweens(0.5f);
+		Check(Near(Tree.Panel->GetRotation(), 50) && Tree.Panel->GetZIndex() == 0 &&
+			Tree.Panel->GetAttributeValue("Reentry") == WireValue(true),
+			"an overlap cancels the prior tween, and cancellation inside one property setter prevents later writes");
+		Check(ReplacementId.Slot == RetiredId.Slot && ReplacementId.Generation != RetiredId.Generation &&
+			Near(Replacement->GetRotation(), 0) && Tree.Panel->GetAttributeValue("TargetRetired") == WireValue(true),
+			"destroyed target cancels and fresh generation skips stale tween work");
+		Check(Near(Locked->GetRotation(), 0), "client tween cannot change a server-authoritative service property");
+		Check(Near(LocalPanel->GetRotation(), 20) && Near(OtherPanel->GetRotation(), 0),
+			"zero-duration client tween updates the local PlayerGui only");
+		Check(Near(Tree.Button->GetRotation(), 37), "client cannot replace an authoritative tween in a shared offline VM");
+		Check(Near(Tree.Title->GetRotation(), 40) && Tree.Title->GetZIndex() == 0,
+			"reentrant pause and resume pause the remaining writes until a later step");
+		Runtime.Script->StepTweens(0.5f);
+		Check(Near(Tree.Title->GetRotation(), 80) && Tree.Title->GetZIndex() == 8,
+			"the resumed playback finishes on the next sample");
+	}
+
+	void TestTweenPopulationAndShutdown() {
+		using namespace gargantuan;
+		using namespace gargantuan::runtime_detail;
+		auto Game = std::make_shared<DataModel>();
+		HeadlessRenderer Renderer(Vector2(800.0f, 600.0f));
+		Engine Runtime(Game, &Renderer);
+		(void)RunTweenScript(Runtime, R"(
+local Pool = Instance.new("Folder")
+Pool.Name = "TweenPool"
+Pool.Parent = game
+local Service = game.TweenService
+local Info = TweenInfo.new(1, Enum.EasingStyle.Linear)
+for Index = 1, 1024 do
+	local Panel = Instance.new("Frame")
+	Panel.Parent = Pool
+	local Tween = Service:Create(Panel, Info, {Rotation = 100})
+	Tween:Play()
+	if Index == 1 then
+		Tween.Completed:Connect(function() game:SetAttribute("UnexpectedCompletion", true) end)
+	end
+end
+local Excess = Instance.new("Frame")
+Excess.Parent = game
+assert(not pcall(function() Service:Create(Excess, Info, {Rotation = 100}):Play() end))
+)");
+		WorkSample Sample{};
+		BenchmarkAllocationProbe::Counts Allocations;
+		{
+			BenchmarkAllocationProbe::Scope Probe(Allocations);
+			WorkCapture Capture(&Sample, BenchmarkAllocationProbe::ReadCalls, BenchmarkAllocationProbe::ReadBytes);
+			for (int Step = 0; Step < 10; ++Step) Runtime.Script->StepTweens(0.05f);
+		}
+		const auto &Work = Sample[static_cast<std::size_t>(WorkPhase::TweenStep)];
+		Check(Work.Calls == 10 && Work.Units == TweenRuntime::MaximumPlaybacks * Work.Calls && Work.Rejected == 0,
+			"permanent work diagnostics count every tween across bounded scheduler passes");
+		std::cout << "[Tween:Qualification] active=" << TweenRuntime::MaximumPlaybacks
+			<< " steps=" << Work.Calls << " samples=" << Work.Units << " elapsed_ns=" << Work.Nanoseconds
+			<< " cpp_allocations=" << Work.Allocations << " cpp_allocated_bytes=" << Work.AllocatedBytes << '\n';
+		const auto Pool = Game->FindFirstChild("TweenPool", false);
+		Check(Pool && Pool->Children.size() == TweenRuntime::MaximumPlaybacks &&
+			Near(static_cast<Frame &>(*Pool->Children.front()).GetRotation(), 50) &&
+			Near(static_cast<Frame &>(*Pool->Children.back()).GetRotation(), 50),
+			"the active playback bound advances each retained tween equally");
+		Runtime.Script->ShutdownRuntime();
+		Runtime.Script->StepTweens(0.5f);
+		Check(!Game->GetAttributeValue("UnexpectedCompletion"), "shutdown discards pending playback notifications");
+	}
 }
 
 int main() {
@@ -1302,6 +1556,9 @@ int main() {
 		RunTest("DataModelBeforeEngineTeardown", TestDataModelBeforeEngineTeardown);
 		RunTest("GuiEventDestroysEngine", TestGuiEventDestroysEngine);
 		RunTest("FocusClearDestroysEngine", TestFocusClearDestroysEngine);
+		RunTest("TweenInterpolationAndLifecycle", TestTweenInterpolationAndLifecycle);
+		RunTest("TweenConflictAndAuthority", TestTweenConflictAndAuthority);
+		RunTest("TweenPopulationAndShutdown", TestTweenPopulationAndShutdown);
 	} catch (const std::exception &Exception) {
 		std::cerr << "[Gui:FoundationTest] unexpected exception: " << Exception.what() << '\n';
 		return 1;

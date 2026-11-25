@@ -1,4 +1,5 @@
 #include "gargantuan/scripting/ScriptEngine.hpp"
+#include "DiagnosticText.hpp"
 #include "gargantuan/runtime/ServicePolicy.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/animation/AnimationTrack.hpp"
@@ -7,6 +8,7 @@
 #include "gargantuan/classes/PlayerGui.hpp"
 #include "gargantuan/classes/RemoteFunction.hpp"
 #include "gargantuan/classes/Script.hpp"
+#include "gargantuan/classes/Tween.hpp"
 #include "gargantuan/datatypes/Axes.hpp"
 #include "gargantuan/datatypes/CFrame.hpp"
 #include "gargantuan/datatypes/Color3.hpp"
@@ -22,6 +24,7 @@
 #include "gargantuan/gui/PlayerGuiScope.hpp"
 #include "gargantuan/scripting/ThreadEngine.hpp"
 #include "gargantuan/scripting/UserdataTag.hpp"
+#include "gargantuan/services/TweenService.hpp"
 
 #include <Luau/Common.h>
 #include <Luau/Compiler.h>
@@ -72,6 +75,7 @@ namespace gargantuan {
 		{"UDim2", OpenLibUDim2, UDim2::CreateUserdataMetatable},
 		{"Signal", OpenLibSignal, BaseSignal::CreateUserdataMetatable},
 		{"SignalConnection", nullptr, SignalConnection::CreateUserdataMetatable},
+		{"Tween", nullptr, Tween::CreateUserdataMetatable},
 		{"TweenInfo", OpenLibTweenInfo, TweenInfo::CreateUserdataMetatable},
 		{"Vector2", OpenLibVector2, Vector2::CreateUserdataMetatable},
 		{"Vector3", OpenLibVector3},
@@ -186,6 +190,7 @@ namespace gargantuan {
 	void ScriptEngine::ShutdownRuntime() {
 		if (Stopping) return;
 		Stopping = true;
+		if (Tweens) Tweens->Shutdown();
 		ScriptQueue.clear();
 		Threads.ShutdownRuntime();
 		for (auto &WeakFunction : RemoteFunctions)
@@ -205,6 +210,20 @@ namespace gargantuan {
 
 	void ScriptEngine::TrackManagedScriptThread(lua_State *Thread, const std::shared_ptr<Script> &ScriptValue) {
 		ManagedScriptThreads.insert_or_assign(Thread, ScriptValue);
+	}
+
+	std::weak_ptr<Script> ScriptEngine::FindManagedScriptThread(lua_State *Thread) const {
+		auto Found = ManagedScriptThreads.find(Thread);
+		return Found == ManagedScriptThreads.end() ? std::weak_ptr<Script>{} : Found->second;
+	}
+
+	TweenRuntime &ScriptEngine::GetTweenRuntime() {
+		if (!Tweens) Tweens = std::make_shared<TweenRuntime>(*this);
+		return *Tweens;
+	}
+
+	void ScriptEngine::StepTweens(float DeltaTime) {
+		if (Tweens) Tweens->Step(DeltaTime);
 	}
 
 	void ScriptEngine::UntrackManagedScriptThread(lua_State *Thread) {
@@ -350,8 +369,15 @@ namespace gargantuan {
 		return engine;
 	}
 
-	void ScriptEngine::EmitRuntimeDiagnostic(std::string Severity, std::string Message) const {
-		if (RuntimeDiagnostic) RuntimeDiagnostic(std::move(Severity), std::move(Message));
+	void ScriptEngine::EmitRuntimeDiagnostic(std::string Severity, std::string Message) const noexcept {
+		try {
+			if (!RuntimeDiagnostic) return;
+			if (Message.size() > 2'048 || !IsValidProtocolUtf8(Message))
+				Message = BoundedDiagnosticText(Message, 2'048);
+			RuntimeDiagnostic(std::move(Severity), std::move(Message));
+		} catch (...) {
+			LOG_ERROR(Lua, "[Runtime:Diagnostics] Host diagnostic callback failed");
+		}
 	}
 
 	std::shared_ptr<Instance> ScriptEngine::FindRequiredInstanceByPath(const char *rawPath) {
@@ -403,12 +429,12 @@ namespace gargantuan {
 					Lua, "[Runtime:Luau] [%s] %s", script->GetFullName().c_str(), script->ErrorMessage.c_str()
 				);
 				if (RuntimeDiagnostic)
-					RuntimeDiagnostic("Error", "[" + script->GetFullName() + "] " + script->ErrorMessage);
+					EmitRuntimeDiagnostic("Error", "[" + script->GetFullName() + "] " + script->ErrorMessage);
 				[[fallthrough]];
 
 			case ScriptStatus::Finished:
 				if (status == ScriptStatus::Finished && RuntimeDiagnostic)
-					RuntimeDiagnostic("Information", "[" + script->GetFullName() + "] completed");
+					EmitRuntimeDiagnostic("Information", "[" + script->GetFullName() + "] completed");
 			case ScriptStatus::Disabled:
 			case ScriptStatus::Yielded:
 			case ScriptStatus::Running:
@@ -445,9 +471,9 @@ namespace gargantuan {
 				Lua, "[Runtime:Luau] [%s] %s", ScriptValue->GetFullName().c_str(), ScriptValue->ErrorMessage.c_str()
 			);
 			if (RuntimeDiagnostic)
-				RuntimeDiagnostic("Error", "[" + ScriptValue->GetFullName() + "] " + ScriptValue->ErrorMessage);
+				EmitRuntimeDiagnostic("Error", "[" + ScriptValue->GetFullName() + "] " + ScriptValue->ErrorMessage);
 		} else if (Status == ScriptStatus::Finished && RuntimeDiagnostic)
-			RuntimeDiagnostic("Information", "[" + ScriptValue->GetFullName() + "] completed");
+			EmitRuntimeDiagnostic("Information", "[" + ScriptValue->GetFullName() + "] completed");
 		ScriptQueue.erase(ScriptValue);
 	}
 } // namespace gargantuan

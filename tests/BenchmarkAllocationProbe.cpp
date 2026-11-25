@@ -49,6 +49,9 @@ namespace {
 }
 
 namespace BenchmarkAllocationProbe {
+	std::uint64_t ReadCalls() noexcept { return ActiveCounts ? ActiveCounts->Calls : 0; }
+	std::uint64_t ReadBytes() noexcept { return ActiveCounts ? ActiveCounts->Bytes : 0; }
+
 	Scope::Scope(Counts &Destination) noexcept : Previous(ActiveCounts) { ActiveCounts = &Destination; }
 	Scope::~Scope() { ActiveCounts = Previous; }
 }

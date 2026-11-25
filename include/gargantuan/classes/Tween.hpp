@@ -1,56 +1,59 @@
-// #pragma once
+#pragma once
 
-// #include "gargantuan/classes/Instance.hpp"
-// #include "gargantuan/datatypes/Color3.hpp"
-// #include "gargantuan/datatypes/Signal.hpp"
-// #include "gargantuan/datatypes/TweenInfo.hpp"
-// #include "gargantuan/datatypes/Vector2.hpp"
-// #include "gargantuan/reflection/Enums.hpp"
+#include "gargantuan/datatypes/Signal.hpp"
+#include "gargantuan/datatypes/TweenInfo.hpp"
+#include "gargantuan/runtime/ObjectId.hpp"
+#include "gargantuan/scripting/ScriptSecurity.hpp"
 
-// #include <glm/glm.hpp>
-// #include <lua.h>
-// #include <string>
-// #include <unordered_map>
-// #include <variant>
+#include <any>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
 
-// namespace gargantuan {
-// 	G_ENUM(
-// 		PlaybackState,
+namespace gargantuan {
+	G_ENUM(PlaybackState, Begin, Delayed, Playing, Paused, Completed, Cancelled);
 
-// 		Begin,
-// 		Delayed,
-// 		Playing,
-// 		Paused,
-// 		Completed,
-// 		Cancelled
-// 	)
+	class Instance;
+	class Script;
+	class TweenRuntime;
 
-// 	class Tween : public Instance {
-// 	  public:
-// 		G_INSTANCE_DECL(Tween);
+	G_SHARED_USERDATA_DECL(
+		Tween,
+		using Pointer = std::shared_ptr<Tween>;
+		using Blend = std::any (*)(const std::any &, const std::any &, float);
+		struct Goal {
+			std::string Property;
+			std::any End;
+			Blend Interpolate;
+		};
 
-// 		std::shared_ptr<Instance> Instance;
-// 		TweenInfo TweenInfo;
+		Tween(std::weak_ptr<TweenRuntime> Runtime, ObjectId Target, TweenInfo Info, std::vector<Goal> Goals,
+			std::weak_ptr<Script> Owner);
 
-// 		using TweenableValue = std::variant<float, Color3, Vector2, glm::vec3>;
-// 		using GoalPropertyMap = std::unordered_map<std::string, TweenableValue>;
-// 		GoalPropertyMap GoalProperties;
+		[[nodiscard]] Enums::PlaybackState GetPlaybackState() const { return State; }
+		[[nodiscard]] const TweenInfo &GetInfo() const { return Info; }
+		[[nodiscard]] std::shared_ptr<BaseSignal> GetCompleted() const { return Completed; }
 
-// 		Enums::PlaybackState PlaybackState;
+		void Play();
+		void Pause();
+		void Resume();
+		void Cancel();
 
-// 		void Play();
-// 		void Cancel();
-// 		void Pause();
-
-// 		static int LPlay(lua_State *L, gargantuan::Instance *self);
-// 		static int LStep(lua_State *L, gargantuan::Instance *self);
-
-// 		G_SIGNAL(Completed, Enums::PlaybackState)
-// 	  private:
-// 		bool IsPlaying;
-// 		double StartTime;
-// 		double LerpStartTime;
-// 		double EndTime;
-// 		GoalPropertyMap InitialProperties;
-// 	};
-// }
+	  private:
+		friend class TweenRuntime;
+		std::weak_ptr<TweenRuntime> Runtime;
+		ObjectId Target;
+		TweenInfo Info;
+		std::vector<Goal> Goals;
+		std::weak_ptr<Script> Owner;
+		bool HasOwner;
+		std::vector<std::any> Initial;
+		std::shared_ptr<Signal<Enums::PlaybackState>> Completed = std::make_shared<Signal<Enums::PlaybackState>>();
+		ScriptSecurityContext Context;
+		Enums::PlaybackState State = Enums::PlaybackState::Begin;
+		std::uint64_t Sequence = 0;
+		double Elapsed = 0;
+		bool SampleInterrupted = false;
+	);
+}

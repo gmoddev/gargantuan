@@ -19,17 +19,32 @@ return c({
 		InvokeClient = {
 			description = "Suspends only the calling server coroutine until one client returns",
 			asLuau = true,
-			luauSignature = "(self: RemoteFunction, peerSlot: number, peerGeneration: number, ...RemoteValue) -> ...RemoteValue",
+			luauSignature = "((self: RemoteFunction, Target: Player, ...RemoteValue) -> ...RemoteValue) & ((self: RemoteFunction, PeerSlot: number, PeerGeneration: number, ...RemoteValue) -> ...RemoteValue)",
 		},
 		InvokeClientWithTimeout = {
 			description = "Invokes one client with a finite caller-selected deadline",
 			asLuau = true,
-			luauSignature = "(self: RemoteFunction, peerSlot: number, peerGeneration: number, timeoutSeconds: number, ...RemoteValue) -> ...RemoteValue",
+			luauSignature = "((self: RemoteFunction, Target: Player, TimeoutSeconds: number, ...RemoteValue) -> ...RemoteValue) & ((self: RemoteFunction, PeerSlot: number, PeerGeneration: number, TimeoutSeconds: number, ...RemoteValue) -> ...RemoteValue)",
+		},
+		TryInvokeServer = {
+			description = "Invokes the server with an explicit deadline and a boolean before results or failure details",
+			asLuau = true,
+			luauSignature = "(self: RemoteFunction, TimeoutSeconds: number, ...RemoteValue) -> (boolean, ...RemoteValue)",
+		},
+		TryInvokeClient = {
+			description = "Invokes one Player or explicit peer with a deadline and a boolean before results or failure details",
+			asLuau = true,
+			luauSignature = "((self: RemoteFunction, Target: Player, TimeoutSeconds: number, ...RemoteValue) -> (boolean, ...RemoteValue)) & ((self: RemoteFunction, PeerSlot: number, PeerGeneration: number, TimeoutSeconds: number, ...RemoteValue) -> (boolean, ...RemoteValue))",
 		},
 		SetServerHandler = {
-			description = "Installs the server request callback for this runtime-only session",
+			description = "Installs the server request callback with peer context as its first argument",
 			asLuau = true,
 			luauSignature = "(self: RemoteFunction, callback: (RemotePeer, ...RemoteValue) -> ...RemoteValue) -> ()",
+		},
+		SetPlayerHandler = {
+			description = "Installs the server request callback with the current Player as its first argument",
+			asLuau = true,
+			luauSignature = "(self: RemoteFunction, Callback: (Player, ...RemoteValue) -> ...RemoteValue) -> ()",
 		},
 		SetClientHandler = {
 			description = "Installs the client request callback for this runtime-only session",

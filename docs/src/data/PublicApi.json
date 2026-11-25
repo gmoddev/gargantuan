@@ -1983,7 +1983,7 @@
       "Name": "Instance",
       "Kind": "Class",
       "Source": "assets/classes/Instance.luau",
-      "SourceSha256": "abe97266e6f2924ccf0c6232f0a9b2549af0710144521c40e47a6f99698d164a",
+      "SourceSha256": "23eb3894ddbbc52bd8b1e15cd557b515d2c6f4bf5865571b873f73014d21b28e",
       "Description": "Abstract class for all instances which can be part of the DataModel",
       "Extends": null,
       "Abstract": true,
@@ -2038,7 +2038,7 @@
       "Methods": [
         {
           "Name": "ClearAllChildren",
-          "Description": "Unparents all direct children of this instance",
+          "Description": "Destroys the direct children present at the start of the call, including their subtrees",
           "RequiredCapability": "MutateDataModel"
         },
         {
@@ -2106,6 +2106,11 @@
           "Returns": "t.Instance()"
         },
         {
+          "Name": "GetAncestors",
+          "Description": "Returns a snapshot of the current parent chain, nearest parent first",
+          "Returns": "t.Array(t.Instance())"
+        },
+        {
           "Name": "GetAttribute",
           "Description": "Returns a bounded runtime attribute or nil",
           "AsLuau": true,
@@ -2154,6 +2159,18 @@
           "Name": "IsA",
           "Description": "Whether this instance derives from the specified class",
           "Params": "{ p(\"className\", t.String) }",
+          "Returns": "t.Bool"
+        },
+        {
+          "Name": "IsAncestorOf",
+          "Description": "Tests whether descendant currently belongs below this instance. Self is excluded.",
+          "Params": "{ p(\"descendant\", t.Instance()) }",
+          "Returns": "t.Bool"
+        },
+        {
+          "Name": "IsDescendantOf",
+          "Description": "Tests whether ancestor occurs on this instance's current parent chain. Self is excluded.",
+          "Params": "{ p(\"ancestor\", t.Instance()) }",
           "Returns": "t.Bool"
         },
         {
@@ -3469,7 +3486,7 @@
       "Name": "RemoteEventBase",
       "Kind": "Class",
       "Source": "assets/classes/RemoteEventBase.luau",
-      "SourceSha256": "df79821d29266badd9ea91c01e657a1677671782fb00aafb52b234c17a095866",
+      "SourceSha256": "5b58ee8a9f30a6ba42e1d8e1648b5871e3fb3e5e8a714949b1aa229c5164c060",
       "Description": "Internal base for bounded remote events",
       "Extends": "RemoteBase",
       "Abstract": true,
@@ -3486,8 +3503,17 @@
           "WriteLevel": "Never"
         },
         {
+          "Name": "OnPlayerEvent",
+          "Description": "Fires on the server with the current sending Player followed by the arguments",
+          "Type": "t.RemoteSignal",
+          "Unmodified": "std::shared_ptr<BaseSignal>{}",
+          "OverrideRead": "GetOnPlayerEvent",
+          "Writable": false,
+          "WriteLevel": "Never"
+        },
+        {
           "Name": "OnServerEvent",
-          "Description": "Fires for a validated client event with provisional peer context",
+          "Description": "Fires on the server with the sender's peer context followed by the arguments",
           "Type": "t.RemoteSignal",
           "Unmodified": "std::shared_ptr<BaseSignal>{}",
           "OverrideRead": "GetOnServerEvent",
@@ -3504,15 +3530,33 @@
         },
         {
           "Name": "FireClient",
-          "Description": "Sends bounded arguments from a server to one provisional peer identity",
+          "Description": "Submits to one current Player or to an explicit peer slot and generation",
           "AsLuau": true,
-          "LuauSignature": "(self: RemoteEventBase, peerSlot: number, peerGeneration: number, ...RemoteValue) -> ()"
+          "LuauSignature": "((self: RemoteEventBase, Target: Player, ...RemoteValue) -> ()) & ((self: RemoteEventBase, PeerSlot: number, PeerGeneration: number, ...RemoteValue) -> ())"
         },
         {
           "Name": "FireServer",
           "Description": "Sends bounded arguments from a client to its server",
           "AsLuau": true,
           "LuauSignature": "(self: RemoteEventBase, ...RemoteValue) -> ()"
+        },
+        {
+          "Name": "TryFireAllClients",
+          "Description": "Returns accepted and rejected counts plus rejected counts by reason code",
+          "AsLuau": true,
+          "LuauSignature": "(self: RemoteEventBase, ...RemoteValue) -> (number, number, {[string]: number})"
+        },
+        {
+          "Name": "TryFireClient",
+          "Description": "Returns local admission and a reason code for submission to one Player or explicit peer",
+          "AsLuau": true,
+          "LuauSignature": "((self: RemoteEventBase, Target: Player, ...RemoteValue) -> (boolean, string)) & ((self: RemoteEventBase, PeerSlot: number, PeerGeneration: number, ...RemoteValue) -> (boolean, string))"
+        },
+        {
+          "Name": "TryFireServer",
+          "Description": "Returns local admission and a reason code for submission to the current server",
+          "AsLuau": true,
+          "LuauSignature": "(self: RemoteEventBase, ...RemoteValue) -> (boolean, string)"
         }
       ],
       "Signals": []
@@ -3521,7 +3565,7 @@
       "Name": "RemoteFunction",
       "Kind": "Class",
       "Source": "assets/classes/RemoteFunction.luau",
-      "SourceSha256": "a84f30723a42ccc9c57495fae9df47094742b9fa3650e4cd58983d4e0181b6d7",
+      "SourceSha256": "def72dcd4d0a4f207ce593caac0c3b71aa7a4c2e4e57e28f2123c4f9b1a8b1e9",
       "Description": "Bounded reliable request and terminal response",
       "Extends": "RemoteBase",
       "Abstract": false,
@@ -3533,13 +3577,13 @@
           "Name": "InvokeClient",
           "Description": "Suspends only the calling server coroutine until one client returns",
           "AsLuau": true,
-          "LuauSignature": "(self: RemoteFunction, peerSlot: number, peerGeneration: number, ...RemoteValue) -> ...RemoteValue"
+          "LuauSignature": "((self: RemoteFunction, Target: Player, ...RemoteValue) -> ...RemoteValue) & ((self: RemoteFunction, PeerSlot: number, PeerGeneration: number, ...RemoteValue) -> ...RemoteValue)"
         },
         {
           "Name": "InvokeClientWithTimeout",
           "Description": "Invokes one client with a finite caller-selected deadline",
           "AsLuau": true,
-          "LuauSignature": "(self: RemoteFunction, peerSlot: number, peerGeneration: number, timeoutSeconds: number, ...RemoteValue) -> ...RemoteValue"
+          "LuauSignature": "((self: RemoteFunction, Target: Player, TimeoutSeconds: number, ...RemoteValue) -> ...RemoteValue) & ((self: RemoteFunction, PeerSlot: number, PeerGeneration: number, TimeoutSeconds: number, ...RemoteValue) -> ...RemoteValue)"
         },
         {
           "Name": "InvokeServer",
@@ -3560,10 +3604,28 @@
           "LuauSignature": "(self: RemoteFunction, callback: (...RemoteValue) -> ...RemoteValue) -> ()"
         },
         {
+          "Name": "SetPlayerHandler",
+          "Description": "Installs the server request callback with the current Player as its first argument",
+          "AsLuau": true,
+          "LuauSignature": "(self: RemoteFunction, Callback: (Player, ...RemoteValue) -> ...RemoteValue) -> ()"
+        },
+        {
           "Name": "SetServerHandler",
-          "Description": "Installs the server request callback for this runtime-only session",
+          "Description": "Installs the server request callback with peer context as its first argument",
           "AsLuau": true,
           "LuauSignature": "(self: RemoteFunction, callback: (RemotePeer, ...RemoteValue) -> ...RemoteValue) -> ()"
+        },
+        {
+          "Name": "TryInvokeClient",
+          "Description": "Invokes one Player or explicit peer with a deadline and a boolean before results or failure details",
+          "AsLuau": true,
+          "LuauSignature": "((self: RemoteFunction, Target: Player, TimeoutSeconds: number, ...RemoteValue) -> (boolean, ...RemoteValue)) & ((self: RemoteFunction, PeerSlot: number, PeerGeneration: number, TimeoutSeconds: number, ...RemoteValue) -> (boolean, ...RemoteValue))"
+        },
+        {
+          "Name": "TryInvokeServer",
+          "Description": "Invokes the server with an explicit deadline and a boolean before results or failure details",
+          "AsLuau": true,
+          "LuauSignature": "(self: RemoteFunction, TimeoutSeconds: number, ...RemoteValue) -> (boolean, ...RemoteValue)"
         }
       ],
       "Signals": []
@@ -4483,6 +4545,28 @@
       "Signals": []
     },
     {
+      "Name": "TweenService",
+      "Kind": "Service",
+      "Source": "assets/services/TweenService.luau",
+      "SourceSha256": "e782ce4cddbbd0135d5401b38eff9f43b554d799391edea335fea5aab23f039e",
+      "Description": "Creates runtime tweens of writable properties on live Instances.",
+      "Extends": "Instance",
+      "Abstract": false,
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [],
+      "Methods": [
+        {
+          "Name": "Create",
+          "Description": "Validates and captures a bounded table of end values. Playback snapshots initial values when Play starts.",
+          "AsLuau": true,
+          "RequiredCapability": "MutateDataModel",
+          "LuauSignature": "(self: TweenService, target: Instance, info: TweenInfo, goals: { [string]: any }) -> Tween"
+        }
+      ],
+      "Signals": []
+    },
+    {
       "Name": "UIListLayout",
       "Kind": "Class",
       "Source": "assets/classes/UIListLayout.luau",
@@ -5301,6 +5385,7 @@
       "Path": "include/gargantuan/classes/Instance.hpp",
       "Types": [
         "DataModel",
+        "Instance",
         "StackValue"
       ]
     },
@@ -5393,7 +5478,8 @@
       "Path": "include/gargantuan/classes/RemoteBase.hpp",
       "Types": [
         "RemoteBase",
-        "RemoteManager"
+        "RemoteManager",
+        "RemoteManagerRole"
       ]
     },
     {
@@ -5499,7 +5585,12 @@
     },
     {
       "Path": "include/gargantuan/classes/Tween.hpp",
-      "Types": []
+      "Types": [
+        "Goal",
+        "Instance",
+        "Script",
+        "TweenRuntime"
+      ]
     },
     {
       "Path": "include/gargantuan/classes/UIListLayout.hpp",
@@ -6120,6 +6211,7 @@
       "Types": [
         "Implementation",
         "Instance",
+        "Player",
         "RemoteInvocation",
         "RemoteManager",
         "RemoteManagerRole",
@@ -6144,7 +6236,18 @@
       "Path": "include/gargantuan/network/RemoteSignal.hpp",
       "Types": [
         "RemoteSignal",
-        "RemoteSignalPayload"
+        "RemoteSignalPayload",
+        "RemoteSignalSender"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/network/RemoteValue.hpp",
+      "Types": [
+        "RemoteArray",
+        "RemoteBuffer",
+        "RemoteDictionary",
+        "RemoteDictionaryEntry",
+        "RemoteValue"
       ]
     },
     {
@@ -6883,6 +6986,10 @@
       ]
     },
     {
+      "Path": "include/gargantuan/scripting/ExecutionBudget.hpp",
+      "Types": []
+    },
+    {
       "Path": "include/gargantuan/scripting/ModuleResolution.hpp",
       "Types": [
         "Instance",
@@ -6900,7 +7007,8 @@
         "RemoteFunction",
         "Script",
         "ScriptEngine",
-        "SignalConnection"
+        "SignalConnection",
+        "TweenRuntime"
       ]
     },
     {
@@ -7104,7 +7212,13 @@
     },
     {
       "Path": "include/gargantuan/services/TweenService.hpp",
-      "Types": []
+      "Types": [
+        "Completion",
+        "DataModel",
+        "ScriptEngine",
+        "TweenRuntime",
+        "TweenService"
+      ]
     },
     {
       "Path": "include/gargantuan/services/UserInputService.hpp",
