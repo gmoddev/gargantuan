@@ -101,6 +101,8 @@ namespace gargantuan {
 			Audio->AttachMixService(Mixer, ProviderConfiguration.Mode);
 		}
 		RenderPublishing.SetSpatialResolver(Spatial);
+		if (ProviderConfiguration.Mode != RuntimeMode::NetworkClient)
+			Script->ConfigurePersistence(std::move(ProviderConfiguration.Persistence));
 		if (ProviderConfiguration.Entitlements &&
 			!Entitlements->ConfigureProvider(std::move(ProviderConfiguration.Entitlements)))
 			LOG_WARN(

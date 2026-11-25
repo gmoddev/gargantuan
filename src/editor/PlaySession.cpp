@@ -33,7 +33,8 @@ namespace gargantuan {
 		std::uint32_t Height,
 		std::uint64_t AuthoringRevision,
 		AssetProjectSnapshot Assets,
-		bool AudioEnabled
+		bool AudioEnabled,
+		std::shared_ptr<IPersistenceProvider> Persistence
 	) : Id(SessionId), State(PlaySessionState::Starting), LaunchAuthoringRevision(AuthoringRevision) {
 		if (Id.Value == 0 || AuthoringRevision == 0) throw std::invalid_argument("Play session identity and revision must be nonzero");
 		std::istringstream Input(std::move(LaunchContents));
@@ -60,6 +61,7 @@ namespace gargantuan {
 		RuntimeRenderer = std::make_unique<HeadlessRenderer>(Vector2(Width, Height),
 			HeadlessRenderer::PublicationMode::DeferredGpuPresentation);
 		EngineProviderConfiguration Providers{.AudioEnabled = AudioEnabled};
+		Providers.Persistence = std::move(Persistence);
 		RuntimeEngine = std::make_unique<Engine>(
 			RuntimeWorld,
 			RuntimeRenderer.get(),

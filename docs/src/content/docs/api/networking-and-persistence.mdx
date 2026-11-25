@@ -125,6 +125,43 @@ The manager enforces per-peer and per-Remote rates, in-flight limits, and bounde
 
 The authoritative server DataModel, its committed change journal, per-peer replication view, and wire scheduling are distinct. `ReplicatedStorage` is a shared replicated container; it is not a general publish-any-object authority escape. Some properties in declarations carry `replicated = true`; this does not make every property, service, or runtime resource automatically visible to every peer. Visibility, materialization, schema compatibility, and server authority still apply. An object reference in a Remote is accepted only if it is visible and materialized for that peer.
 
-Properties marked `serializable = true` in class declarations participate in engine-owned save/package semantics when their Instance is eligible. `Archivable` and class policy matter. Attribute, tag, extension, and custom class semantic state have their own bounded serialization rules. Transient input state, active connections, running scripts, animation tracks, sound voices, physics bodies, and GPU resources are not persisted runtime handles. The public service declarations do **not** contain a gameplay `DataStore`, HTTP persistence service, or generic `game:Save()` / `game:Load()` method. `Instance:Clone()` creates an in-session detached semantic copy; it is not durable storage. Project/package persistence is owned by native authoring and loading paths, subject to schema and authority validation.
+Properties marked `serializable = true` in class declarations participate in engine-owned save/package semantics when their Instance is eligible. `Archivable` and class policy matter. Attribute, tag, extension, and custom class semantic state have their own bounded serialization rules. Transient input state, active connections, running scripts, animation tracks, sound voices, physics bodies, and GPU resources are runtime state. `Instance:Clone()` creates an in-session detached semantic copy. Native authoring and loading paths own project/package persistence.
+
+## Gameplay DataStoreService
+
+Server gameplay can select a named byte store or document collection with `GetKeyValueStore(Name)` and `GetDocumentStore(Name)`. The host chooses the provider and its credentials before scripts run. `GetCapabilities()` reports support for key/value, documents, and document queries. A runtime with persistence disabled returns `Unavailable`.
+
+```luau
+local Service = game:GetService("DataStoreService")
+local Profiles = Service:GetDocumentStore("Profiles")
+local Operation = Profiles:GetAsync("TrustedProfileKey")
+local Result = Operation:Poll()
+while Result.Status == "Pending" do
+	task.wait()
+	Result = Operation:Poll()
+end
+if Result.Status == "Ok" then
+	local Profile = Result.Record.Value
+	local Revision = Result.Record.Revision
+	print(Profile.Currency, Revision)
+end
+```
+
+| Store method | Result fields when successful |
+| --- | --- |
+| `GetAsync(Key, TimeoutMs?)` | `Record = { Key, Value, Revision }` |
+| `PutAsync(Key, Value, ExpectedRevision?, TimeoutMs?)` | `Revision` |
+| `DeleteAsync(Key, ExpectedRevision?, TimeoutMs?)` | `Revision` |
+| `QueryAsync(Options?, TimeoutMs?)` on a document store | `Records` and an optional opaque `Cursor` |
+
+A method returns a pollable operation. Read and query payloads are returned once by `Poll()`. Further polls after consuming that payload return `Consumed`; keep the returned Luau table or buffer when needed. Other terminal statuses can be polled again. `Cancel()` signals cancellation and returns whether the signal was newly sent. Poll for the actual outcome. The default deadline is 1,000 ms and the allowed integer range is 1–2,000 ms, including queue time.
+
+Use revisions as canonical decimal strings. Omitting the expected revision requests an unconditional mutation. Pass `"0"` to put only if absent, or pass the last observed positive revision for a conditional put or delete. The provider compares the revision and applies the mutation atomically for one record. Read fresh state after `Conflict` before deciding whether to retry. Never blindly retry a mutation after `UnknownOutcome`. An application-owned reward or request marker committed in the same record lets you reconcile a lost acknowledgement by reading the record. An absent marker on one read can leave the outcome unresolved.
+
+Key/value values are native `buffer` values up to 64 KiB. Documents contain UTF-8 string-keyed dictionaries, dense one-based arrays, finite numbers, booleans, strings, and the sentinel returned by `Service:GetNull()`. Nil represents absence. An empty table is an object; `Service:CreateArray()` makes an array that retains its type when empty. Documents accept at most 2,048 values, 12 levels and a 64 KiB accounted value budget. Store names, keys and field names have limits of 96, 256 and 128 UTF-8 bytes respectively. The binding rejects cycles, sparse or mixed arrays, arbitrary metatables, nested buffers, Instances and other runtime values. Calls snapshot the input and return fresh Luau values.
+
+Document query options use `Limit`, `Cursor`, `Filters` and `Order`. Omit empty option lists. A filter has a `Path` array, an `Operator` and a scalar `Value`, except `Exists` takes no value. Operators are `Equal`, `NotEqual`, `Less`, `LessOrEqual`, `Greater`, `GreaterOrEqual` and `Exists`. Filters are combined with AND. An order entry has a `Path` array and optional `Descending` boolean. Each page contains at most ten records. Use a cursor with the identical query and collection. On `StaleCursor`, restart the query if the application can tolerate a new view. The local development providers implement document CRUD.
+
+Other operation outcomes are `Missing`, `Invalid`, `Denied`, `Unsupported`, `Busy`, `Deadline` and `Cancelled`. Malformed Luau arguments can raise an argument error before submission. A binding error, denied access or `Busy` submits no mutation. Choose durable profile keys from trusted server-owned application identity. Connection IDs, runtime Player IDs and display names have session scope.
 
 For exact network behavior see `devdocs/CurrentArchitecture/NetworkingContracts.md`, `BasicClientReplication.md`, and the later Character/Remote foundation documents. These contracts describe narrower implemented slices than a general multiplayer platform.

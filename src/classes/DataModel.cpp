@@ -160,6 +160,7 @@ namespace gargantuan {
 			{"AssetService", SchemaId::FromNativeName("Engine", "AssetService")},
 			{"AudioMixService", SchemaId::FromNativeName("Engine", "AudioMixService")},
 			{"CharacterControlService", SchemaId::FromNativeName("Engine", "CharacterControlService")},
+			{"DataStoreService", SchemaId::FromNativeName("Engine", "DataStoreService")},
 			{"EntitlementService", SchemaId::FromNativeName("Engine", "EntitlementService")},
 			{"InteractionService", SchemaId::FromNativeName("Engine", "InteractionService")},
 			{"InputService", SchemaId::FromNativeName("Engine", "InputService")},

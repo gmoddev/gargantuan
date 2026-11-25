@@ -19,6 +19,7 @@
 #include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/gui/GuiRuntime.hpp"
 #include "gargantuan/packaging/PackageBuilder.hpp"
+#include "gargantuan/persistence/LocalPersistenceProvider.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/reflection/PreRunRegistration.hpp"
@@ -34,6 +35,8 @@
 #include "runtime/PreparedPropertyCommit.hpp"
 #include "editor/StreamingDiagnosticsEncoding.hpp"
 
+#include <SDL3/SDL_filesystem.h>
+#include <SDL3/SDL_stdinc.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -53,6 +56,13 @@
 #include <type_traits>
 #include <unordered_set>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
 
 namespace gargantuan {
 	namespace {
@@ -504,14 +514,19 @@ namespace gargantuan {
 			return Result;
 		}
 
-		std::optional<PlaySessionId> DecodePlaySessionId(const Json &Value) {
+		std::optional<std::uint64_t> DecodeNonzeroDecimal(const Json &Value) {
 			if (!Value.is_string()) return std::nullopt;
 			const auto &Encoded = Value.get_ref<const std::string &>();
 			std::uint64_t Parsed = 0;
 			const auto [End, Error] = std::from_chars(Encoded.data(), Encoded.data() + Encoded.size(), Parsed);
 			if (Encoded.empty() || Encoded.front() == '0' || Error != std::errc{} ||
 				End != Encoded.data() + Encoded.size() || Parsed == 0) return std::nullopt;
-			return PlaySessionId{Parsed};
+			return Parsed;
+		}
+
+		std::optional<PlaySessionId> DecodePlaySessionId(const Json &Value) {
+			const auto Parsed = DecodeNonzeroDecimal(Value);
+			return Parsed ? std::optional(PlaySessionId{*Parsed}) : std::nullopt;
 		}
 
 		struct ScriptResourceLookup {
@@ -944,6 +959,83 @@ namespace gargantuan {
 			return result;
 		}
 
+		void RequirePlainPlayStorageDirectory(const std::filesystem::path &Path) {
+			if (!Path.is_absolute() || !std::filesystem::is_directory(std::filesystem::symlink_status(Path)))
+				throw std::runtime_error("Invalid Play storage directory");
+#if defined(_WIN32)
+			const auto Attributes = GetFileAttributesW(Path.c_str());
+			if (Attributes == INVALID_FILE_ATTRIBUTES || (Attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+				throw std::runtime_error("Invalid Play storage directory");
+#endif
+		}
+
+		std::filesystem::path GetPlayStorageRoot() {
+			// This optional override is a trusted launch environment input, never a wire parameter.
+			if (const auto *Override = SDL_getenv("GARGANTUAN_STUDIO_PLAY_DATA_ROOT"); Override && *Override)
+				return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t *>(Override)));
+			const std::unique_ptr<char, decltype(&SDL_free)> Root(SDL_GetPrefPath("Gargantuan", "Studio"), SDL_free);
+			if (!Root) throw std::runtime_error("No Studio user-data directory");
+			return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t *>(Root.get())));
+		}
+
+		std::shared_ptr<IPersistenceProvider> OpenPersistentPlayStorage(const Project &ProjectValue, bool Create) {
+			const auto CanonicalProjectRoot = std::filesystem::canonical(ProjectValue.Root);
+			const auto ProjectRoot = Paths::ToUtf8(CanonicalProjectRoot);
+			const auto Identity = ProjectValue.Identity.ToString();
+			const auto Digest = AssetContentId::Hash(
+				std::span(reinterpret_cast<const std::uint8_t *>(ProjectRoot.data()), ProjectRoot.size())).ToString();
+			auto Root = GetPlayStorageRoot();
+			while (!Root.has_filename() && Root.has_relative_path()) Root = Root.parent_path();
+			RequirePlainPlayStorageDirectory(Root);
+			const auto Directory = std::filesystem::canonical(Root) / "PlayPersistence-v1";
+			const auto Common = std::mismatch(CanonicalProjectRoot.begin(), CanonicalProjectRoot.end(),
+				Directory.begin(), Directory.end());
+			if (Common.first == CanonicalProjectRoot.end() || Common.second == Directory.end())
+				throw std::runtime_error("Play storage and authored project roots overlap");
+			if (Create) std::filesystem::create_directory(Directory);
+			else if (!std::filesystem::exists(std::filesystem::symlink_status(Directory))) return {};
+			RequirePlainPlayStorageDirectory(Directory);
+			return MakeDurableLocalPersistenceProvider({
+				.Path = Directory / (Identity + "-" + Digest + ".sqlite3"),
+				.ProfileId = Identity + ":" + ProjectRoot,
+				.Limits = {},
+				.CreateIfMissing = Create,
+			});
+		}
+
+		Json EncodePlayStorageDocument(const PersistenceDocumentValue &Value) {
+			return std::visit([](const auto &Entry) -> Json {
+				using EntryType = std::decay_t<decltype(Entry)>;
+				if constexpr (std::is_same_v<EntryType, std::monostate>) {
+					return nullptr;
+				} else if constexpr (std::is_same_v<EntryType, PersistenceDocumentValue::Array>) {
+					Json Array = Json::array();
+					for (const auto &Item : Entry) Array.push_back(EncodePlayStorageDocument(Item));
+					return Array;
+				} else if constexpr (std::is_same_v<EntryType, PersistenceDocumentValue::Object>) {
+					Json Object = Json::object();
+					for (const auto &Field : Entry) Object[Field.Name] = EncodePlayStorageDocument(Field.Value);
+					return Object;
+				} else {
+					return Entry;
+				}
+			}, Value.Data);
+		}
+
+		Json EncodePlayStorageRecord(const PersistenceRecord &Record) {
+			Json Result = {{"Revision", std::to_string(Record.Revision)}};
+			if (const auto *Bytes = std::get_if<PersistenceBytes>(&Record.Payload)) {
+				std::vector<std::uint8_t> BytesForWire;
+				BytesForWire.reserve(Bytes->size());
+				for (const auto Byte : *Bytes) BytesForWire.push_back(std::to_integer<std::uint8_t>(Byte));
+				Result["ByteCount"] = Bytes->size();
+				Result["BytesBase64"] = EncodeBase64(BytesForWire);
+			} else {
+				Result["Document"] = EncodePlayStorageDocument(std::get<PersistenceDocumentValue>(Record.Payload));
+			}
+			return Result;
+		}
+
 		std::string PreRunRevision(const std::optional<std::string> &Source) {
 			if (!Source) return "missing";
 			return AssetContentId::Hash(std::span(reinterpret_cast<const std::uint8_t *>(Source->data()), Source->size())).ToString();
@@ -1348,6 +1440,7 @@ namespace gargantuan {
 			// expired legacy group. These diagnostics do not edit document state.
 			if (World && method != "SetPropertyBatch" && method != "GetStreamingDiagnostics" &&
 				method != "ConfigureStreamingDiagnostics" && method != "GetPlayInputSnapshot" &&
+				method != "InspectPlayPersistenceRecord" && method != "ResetPlayPersistenceRecord" &&
 				method != "GetCharacterComposition" && method != "GetAnimationRig" &&
 				method != "OpenAnimationPreview" && method != "ControlAnimationPreview" &&
 				method != "CaptureAnimationPreview" && method != "CloseAnimationPreview")
@@ -1411,7 +1504,7 @@ namespace gargantuan {
 					"OptimisticProjectRevision", "CreateInstanceInitialProperties", "CreateScriptWithSource",
 					"ReadScriptSource", "WriteScriptSource", "ScriptDocumentBinding", "PreRunSource", "ValidatePreRun",
 					"CustomServiceDeclarations", "ReplicatedStorage",
-					"PlaySession", "DiagnosticStream", "SendPlayInput", "StreamingDiagnostics", "PlayInputInspection",
+					"PlaySession", "DiagnosticStream", "SendPlayInput", "StreamingDiagnostics", "PlayInputInspection", "PlayPersistence",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
 					"AdvancedMaterialMetadata",
 					"AnimationRig", "AnimationPreview", "AnimationPreviewBlend", "CharacterComposition",
@@ -1449,6 +1542,8 @@ namespace gargantuan {
 						{"StreamingDiagnosticsVersion", 1},
 						{"AnimationPreviewBlendVersion", 1},
 						{"CharacterCompositionVersion", 1},
+						{"PlayPersistenceVersion", 1},
+						{"PlayPersistentStorage", SupportsDurableLocalPersistence()},
 						{"Capabilities", std::move(capabilities)},
 						{"ViewportWireVersion", 2},
 						{"ViewportTransports", std::move(viewportTransports)},
@@ -1676,8 +1771,12 @@ namespace gargantuan {
 			}
 
 			if (method == "StartPlaySession") {
-				if (!parameters.empty())
-					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "StartPlaySession takes no parameters"));
+				if (!HasOnlyFields(parameters, {"PersistenceMode"}) ||
+					(parameters.contains("PersistenceMode") && !parameters["PersistenceMode"].is_string()))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Invalid Play persistence parameters"));
+				const auto PersistenceMode = parameters.value("PersistenceMode", std::string("Disabled"));
+				if (PersistenceMode != "Disabled" && PersistenceMode != "Disposable" && PersistenceMode != "Persistent")
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Unknown Play persistence mode"));
 				if (!StudioSecurity.HasCapability(ScriptCapability::EditorCommands) ||
 					!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Play requires EditorCommands and ReadDataModel"));
@@ -1691,6 +1790,19 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionActive", "One local Play session is already active"));
 				if (NextPlaySessionId == 0)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionExhausted", "Play session identity is exhausted"));
+				std::shared_ptr<IPersistenceProvider> Persistence;
+				if (PersistenceMode != "Disabled") {
+					try {
+						if (PersistenceMode == "Disposable")
+							Persistence = MakeMemoryPersistenceProvider();
+						else if (SupportsDurableLocalPersistence())
+							Persistence = OpenPersistentPlayStorage(*CurrentProject, true);
+					} catch (const std::exception &) {
+						return SerializeBoundedResponse(ErrorResponse(requestId, "PlayPersistenceUnavailable", "Local Play data could not be opened"));
+					}
+					if (!Persistence)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "PlayPersistenceUnavailable", "Requested local Play storage is unavailable"));
+				}
 				const auto Id = PlaySessionId{NextPlaySessionId++};
 				try {
 					auto Snapshot = CurrentProject->CaptureGame(World, World->GetAuthoritativeRevision());
@@ -1698,7 +1810,7 @@ namespace gargantuan {
 						Id, std::move(Snapshot.Contents), CurrentProject->InstanceFileFormat,
 						CurrentProject->Root, ViewportWidth == 0 ? 720 : ViewportWidth,
 						ViewportHeight == 0 ? 540 : ViewportHeight, Snapshot.Revision, std::move(Snapshot.Assets),
-						AudioEnabled
+						AudioEnabled, std::move(Persistence)
 					);
 					AdvanceViewportGeneration();
 					ActivePlaySession = std::move(NewPlaySession);
@@ -1709,6 +1821,7 @@ namespace gargantuan {
 					return SerializeBoundedResponse(SuccessResponse(requestId, {
 						{"PlaySessionId", std::to_string(Id.Value)},
 						{"State", GetPlaySessionStateName(LastPlaySessionState)},
+						{"PersistenceMode", PersistenceMode},
 						{"LaunchAuthoritativeRevision", Snapshot.Revision},
 						{"ViewportGeneration", ViewportGeneration},
 						{"Diagnostics", EncodePlayDiagnostics(ActivePlaySession->DrainDiagnostics())},
@@ -1718,6 +1831,60 @@ namespace gargantuan {
 					LastPlaySessionId = Id;
 					LastPlaySessionState = PlaySessionState::Failed;
 					return SerializeBoundedResponse(ErrorResponse(requestId, "PlayStartFailed", Error.what()));
+				}
+			}
+
+			if (method == "InspectPlayPersistenceRecord" || method == "ResetPlayPersistenceRecord") {
+				const bool Reset = method == "ResetPlayPersistenceRecord";
+				if (!StudioSecurity.HasCapability(ScriptCapability::EditorCommands) ||
+					!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Play storage inspection requires owner access"));
+				if (!World || !CurrentProject)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectRequired", "OpenProject must succeed first"));
+				if (ActivePlaySession || ActiveAnimationPreview)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "PlayPersistenceBusy", "Stop Play and Preview before inspecting local data"));
+				if (!HasOnlyFields(parameters, Reset ? std::initializer_list<std::string_view>{"Kind", "Store", "Key", "Revision"} :
+					std::initializer_list<std::string_view>{"Kind", "Store", "Key"}) ||
+					!parameters.contains("Kind") || !parameters["Kind"].is_string() ||
+					!parameters.contains("Store") || !parameters["Store"].is_string() ||
+					!parameters.contains("Key") || !parameters["Key"].is_string())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Play storage record fields are invalid"));
+				const auto &Kind = parameters["Kind"].get_ref<const std::string &>();
+				const auto &Store = parameters["Store"].get_ref<const std::string &>();
+				const auto &Key = parameters["Key"].get_ref<const std::string &>();
+				if ((Kind != "KeyValue" && Kind != "Document") || !IsPersistenceStoreName(Store) || !IsPersistenceKey(Key))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Play storage record identity is invalid"));
+				std::optional<std::uint64_t> Revision;
+				if (Reset) {
+					Revision = parameters.contains("Revision") ? DecodeNonzeroDecimal(parameters["Revision"]) : std::nullopt;
+					if (!Revision)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Reset requires the inspected revision"));
+				}
+				try {
+					auto Provider = SupportsDurableLocalPersistence() ? OpenPersistentPlayStorage(*CurrentProject, false) : nullptr;
+					const PersistenceRequest Request{
+						.Kind = Kind == "KeyValue" ? PersistenceStoreKind::KeyValue : PersistenceStoreKind::Document,
+						.Operation = Reset ? PersistenceOperation::Delete : PersistenceOperation::Get,
+						.Store = Store,
+						.Key = Key,
+						.ExpectedRevision = Revision,
+						.Deadline = PersistenceClock::now() + std::chrono::milliseconds(150),
+					};
+					PersistenceResult Result;
+					if (Provider) {
+						try {
+							Result = Provider->Execute(Request, {});
+						} catch (...) {
+							Result = {.Status = Reset ? PersistenceStatus::UnknownOutcome : PersistenceStatus::Unavailable};
+						}
+						if (!IsPersistenceResultValid(Request, Result))
+							Result = {.Status = Reset ? PersistenceStatus::UnknownOutcome : PersistenceStatus::Unavailable};
+					}
+					Json Reply = {{"Status", GetPersistenceStatusName(Result.Status)}};
+					if (Result.Record) Reply["Record"] = EncodePlayStorageRecord(*Result.Record);
+					return SerializeBoundedResponse(SuccessResponse(requestId, std::move(Reply)));
+				} catch (const std::exception &) {
+					return SerializeBoundedResponse(ErrorResponse(requestId, "PlayPersistenceUnavailable", "Local Play data is unavailable"));
 				}
 			}
 

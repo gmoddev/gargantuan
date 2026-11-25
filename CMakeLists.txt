@@ -273,7 +273,9 @@ option(GARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS "Build the serialization baseli
 option(GARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE "Build the private Glaze codec evaluation targets" OFF)
 option(GARGANTUAN_WITH_GNS "Build the optional GameNetworkingSockets transport adapter" OFF)
 option(GARGANTUAN_WITH_NODE_CONTENT "Build the trusted GargantuanServer Node ContentStreaming adapter" OFF)
-set(GARGANTUAN_NODE_PROTOCOL_ROOT "" CACHE PATH "Path to gargantuan-node/protocol/proto for official Server Node content support")
+option(GARGANTUAN_WITH_NODE_PERSISTENCE "Build the trusted GargantuanServer Node DataStore adapter" OFF)
+option(GARGANTUAN_WITH_LOCAL_SQLITE "Build durable SQLite storage for local development profiles" OFF)
+set(GARGANTUAN_NODE_PROTOCOL_ROOT "" CACHE PATH "Path to gargantuan-node/protocol/proto for official Server Node support")
 option(GARGANTUAN_RUN_GRAPHICAL_PACKAGE_SMOKE "Run the packaged player smoke on a GPU-capable test host" OFF)
 set(GARGANTUAN_FILAMENT_ROOT "" CACHE PATH "External Filament SDK root for the experimental renderer benchmark")
 set(GARGANTUAN_WITH_FILAMENT OFF)
@@ -302,16 +304,19 @@ if(GARGANTUAN_WITH_GNS)
 	include(cmake/GameNetworkingSockets.cmake)
 endif()
 
-if(GARGANTUAN_WITH_NODE_CONTENT)
-	if(NOT EXISTS "${GARGANTUAN_NODE_PROTOCOL_ROOT}/content/v1/content.proto")
-		message(FATAL_ERROR
-			"GARGANTUAN_WITH_NODE_CONTENT requires GARGANTUAN_NODE_PROTOCOL_ROOT to name the canonical gargantuan-node protocol/proto directory")
-	endif()
+if(GARGANTUAN_WITH_NODE_CONTENT OR GARGANTUAN_WITH_NODE_PERSISTENCE)
 	find_package(Protobuf CONFIG QUIET)
 	if(NOT Protobuf_FOUND)
 		find_package(Protobuf REQUIRED)
 	endif()
 	find_package(gRPC CONFIG REQUIRED)
+endif()
+
+if(GARGANTUAN_WITH_NODE_CONTENT)
+	if(NOT EXISTS "${GARGANTUAN_NODE_PROTOCOL_ROOT}/content/v1/content.proto")
+		message(FATAL_ERROR
+			"GARGANTUAN_WITH_NODE_CONTENT requires GARGANTUAN_NODE_PROTOCOL_ROOT to name the canonical gargantuan-node protocol/proto directory")
+	endif()
 	set(GARGANTUAN_NODE_CONTENT_PROTO "${GARGANTUAN_NODE_PROTOCOL_ROOT}/content/v1/content.proto")
 	set(GARGANTUAN_NODE_CONTENT_GENERATED_ROOT "${CMAKE_CURRENT_BINARY_DIR}/generated/node-content")
 	set(GARGANTUAN_NODE_CONTENT_GENERATED_SOURCES
@@ -332,6 +337,57 @@ if(GARGANTUAN_WITH_NODE_CONTENT)
 		DEPENDS "${GARGANTUAN_NODE_CONTENT_PROTO}"
 		VERBATIM
 	)
+endif()
+
+if(GARGANTUAN_WITH_NODE_PERSISTENCE)
+	set(GARGANTUAN_NODE_PERSISTENCE_PROTO "${GARGANTUAN_NODE_PROTOCOL_ROOT}/datastore/v1/datastore.proto")
+	set(GARGANTUAN_NODE_COMMON_PROTO "${GARGANTUAN_NODE_PROTOCOL_ROOT}/common/v1/common.proto")
+	if(NOT EXISTS "${GARGANTUAN_NODE_PERSISTENCE_PROTO}" OR NOT EXISTS "${GARGANTUAN_NODE_COMMON_PROTO}")
+		message(FATAL_ERROR "Node persistence requires the canonical datastore/v1 and common/v1 protocols")
+	endif()
+	get_target_property(GARGANTUAN_PROTOBUF_INCLUDES protobuf::libprotobuf INTERFACE_INCLUDE_DIRECTORIES)
+	find_path(GARGANTUAN_PROTOBUF_WELL_KNOWN_TYPES google/protobuf/struct.proto
+		HINTS ${GARGANTUAN_PROTOBUF_INCLUDES} ${Protobuf_INCLUDE_DIRS} REQUIRED)
+	set(GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT "${CMAKE_CURRENT_BINARY_DIR}/generated/node-persistence")
+	set(GARGANTUAN_NODE_PERSISTENCE_GENERATED_SOURCES
+		"${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}/datastore/v1/datastore.pb.cc"
+		"${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}/datastore/v1/datastore.grpc.pb.cc"
+		"${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}/common/v1/common.pb.cc")
+	set(GARGANTUAN_NODE_PERSISTENCE_GENERATED_HEADERS
+		"${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}/datastore/v1/datastore.pb.h"
+		"${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}/datastore/v1/datastore.grpc.pb.h"
+		"${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}/common/v1/common.pb.h")
+	add_custom_command(
+		OUTPUT ${GARGANTUAN_NODE_PERSISTENCE_GENERATED_SOURCES} ${GARGANTUAN_NODE_PERSISTENCE_GENERATED_HEADERS}
+		COMMAND ${CMAKE_COMMAND} -E make_directory "${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}"
+		COMMAND protobuf::protoc
+			--proto_path "${GARGANTUAN_NODE_PROTOCOL_ROOT}"
+			--proto_path "${GARGANTUAN_PROTOBUF_WELL_KNOWN_TYPES}"
+			--cpp_out "${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}"
+			"${GARGANTUAN_NODE_PERSISTENCE_PROTO}" "${GARGANTUAN_NODE_COMMON_PROTO}"
+		COMMAND protobuf::protoc
+			--proto_path "${GARGANTUAN_NODE_PROTOCOL_ROOT}"
+			--proto_path "${GARGANTUAN_PROTOBUF_WELL_KNOWN_TYPES}"
+			--grpc_out "${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}"
+			--plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
+			"${GARGANTUAN_NODE_PERSISTENCE_PROTO}"
+		DEPENDS "${GARGANTUAN_NODE_PERSISTENCE_PROTO}" "${GARGANTUAN_NODE_COMMON_PROTO}"
+		VERBATIM
+	)
+endif()
+
+if(GARGANTUAN_WITH_LOCAL_SQLITE)
+	include(FetchContent)
+	enable_language(C)
+	FetchContent_Declare(gargantuan_sqlite_source
+		URL https://www.sqlite.org/2026/sqlite-amalgamation-3540100.zip
+		URL_HASH SHA3_256=92281c86e2957f9b9305890f9ac04204caa7b677cc868dc326d942689df28e30
+		DOWNLOAD_EXTRACT_TIMESTAMP FALSE
+		TLS_VERIFY TRUE)
+	FetchContent_MakeAvailable(gargantuan_sqlite_source)
+	add_library(gargantuan_sqlite STATIC "${gargantuan_sqlite_source_SOURCE_DIR}/sqlite3.c")
+	target_include_directories(gargantuan_sqlite PUBLIC "${gargantuan_sqlite_source_SOURCE_DIR}")
+	target_compile_definitions(gargantuan_sqlite PRIVATE SQLITE_THREADSAFE=1 SQLITE_OMIT_LOAD_EXTENSION)
 endif()
 
 option(
@@ -385,6 +441,10 @@ list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/network/Gam
 include(cmake/Manifold.cmake)
 add_library(gargantuan_core OBJECT ${GARGANTUAN_SOURCES})
 target_link_libraries(gargantuan_core PUBLIC GargantuanManifold)
+if(GARGANTUAN_WITH_LOCAL_SQLITE)
+	target_link_libraries(gargantuan_core PUBLIC gargantuan_sqlite)
+	target_compile_definitions(gargantuan_core PUBLIC GARGANTUAN_WITH_LOCAL_SQLITE=1)
+endif()
 if(GARGANTUAN_WORK_TRACE)
 	target_compile_definitions(gargantuan_core PUBLIC GARGANTUAN_WORK_TRACE=1)
 endif()
@@ -418,6 +478,18 @@ if(GARGANTUAN_WITH_NODE_CONTENT)
 		PRIVATE gRPC::grpc++ protobuf::libprotobuf)
 	target_link_libraries(gargantuan_server_host PRIVATE gargantuan_node_content_provider)
 	target_compile_definitions(gargantuan_server_host PRIVATE GARGANTUAN_WITH_NODE_CONTENT=1)
+endif()
+if(GARGANTUAN_WITH_NODE_PERSISTENCE)
+	add_library(gargantuan_node_persistence_provider STATIC
+		"src/host/server/NodePersistenceProvider.cpp"
+		${GARGANTUAN_NODE_PERSISTENCE_GENERATED_SOURCES}
+		${GARGANTUAN_NODE_PERSISTENCE_GENERATED_HEADERS})
+	target_include_directories(gargantuan_node_persistence_provider PRIVATE
+		"${CMAKE_CURRENT_SOURCE_DIR}/src" "${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}")
+	target_link_libraries(gargantuan_node_persistence_provider PUBLIC gargantuan_core
+		PRIVATE gRPC::grpc++ protobuf::libprotobuf)
+	target_link_libraries(gargantuan_server_host PRIVATE gargantuan_node_persistence_provider)
+	target_compile_definitions(gargantuan_server_host PRIVATE GARGANTUAN_WITH_NODE_PERSISTENCE=1)
 endif()
 add_executable(gargantuan_server "src/server/ServerMain.cpp")
 set_target_properties(gargantuan_server PROPERTIES OUTPUT_NAME "GargantuanServer")
@@ -501,7 +573,7 @@ if(GARGANTUAN_WITH_GNS)
 	endif()
 endif()
 set(GARGANTUAN_NODE_SERVER_RUNTIME_ARGUMENTS)
-if(GARGANTUAN_WITH_NODE_CONTENT AND WIN32)
+if((GARGANTUAN_WITH_NODE_CONTENT OR GARGANTUAN_WITH_NODE_PERSISTENCE) AND WIN32)
 	list(APPEND GARGANTUAN_NODE_SERVER_RUNTIME_ARGUMENTS
 		"-DGARGANTUAN_OPTIONAL_RUNTIME_FILES=$<JOIN:$<TARGET_RUNTIME_DLLS:gargantuan_server>,|>")
 	if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
@@ -1000,6 +1072,23 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_interaction_foundation_benchmark PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_entitlement_service_tests "tests/EntitlementServiceTests.cpp")
 	target_link_libraries(gargantuan_entitlement_service_tests PRIVATE gargantuan_core nlohmann_json)
+	add_executable(gargantuan_persistence_runtime_tests
+		"tests/PersistenceRuntimeTests.cpp" "tests/BenchmarkAllocationProbe.cpp")
+	target_link_libraries(gargantuan_persistence_runtime_tests PRIVATE gargantuan_core)
+	target_compile_definitions(gargantuan_persistence_runtime_tests PRIVATE
+		GARGANTUAN_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+	add_executable(gargantuan_local_persistence_provider_tests "tests/LocalPersistenceProviderTests.cpp")
+	target_link_libraries(gargantuan_local_persistence_provider_tests PRIVATE gargantuan_core)
+	if(GARGANTUAN_WITH_NODE_PERSISTENCE)
+		target_compile_definitions(gargantuan_persistence_runtime_tests PRIVATE GARGANTUAN_WITH_NODE_PERSISTENCE=1)
+		target_include_directories(gargantuan_persistence_runtime_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+		target_link_libraries(gargantuan_persistence_runtime_tests PRIVATE gargantuan_node_persistence_provider)
+		add_executable(gargantuan_node_persistence_provider_tests "tests/NodePersistenceProviderTests.cpp")
+		target_include_directories(gargantuan_node_persistence_provider_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+		target_link_libraries(gargantuan_node_persistence_provider_tests PRIVATE gargantuan_node_persistence_provider)
+		add_test(NAME gargantuan_node_persistence_provider COMMAND gargantuan_node_persistence_provider_tests)
+		set_tests_properties(gargantuan_node_persistence_provider PROPERTIES LABELS "persistence;node;headless" TIMEOUT 30)
+	endif()
 	target_compile_definitions(gargantuan_entitlement_service_tests PRIVATE
 		GARGANTUAN_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 	)
@@ -1616,6 +1705,8 @@ if(BUILD_TESTING)
 			gargantuan_interaction_foundation_tests
 			gargantuan_interaction_foundation_benchmark
 			gargantuan_entitlement_service_tests
+			gargantuan_persistence_runtime_tests
+			gargantuan_local_persistence_provider_tests
 			gargantuan_entitlement_provider_benchmark
 			gargantuan_gui_foundation_tests
 			gargantuan_viewport_frame_tests
@@ -1782,6 +1873,10 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_interaction_foundation_benchmark_smoke
 		COMMAND gargantuan_interaction_foundation_benchmark --quick)
 	add_test(NAME gargantuan_entitlement_service COMMAND gargantuan_entitlement_service_tests)
+	add_test(NAME gargantuan_persistence_runtime COMMAND gargantuan_persistence_runtime_tests)
+	add_test(NAME gargantuan_local_persistence_provider COMMAND gargantuan_local_persistence_provider_tests)
+	set_tests_properties(gargantuan_persistence_runtime gargantuan_local_persistence_provider
+		PROPERTIES LABELS "persistence;runtime;headless" TIMEOUT 60)
 	add_test(NAME gargantuan_entitlement_provider_benchmark_smoke
 		COMMAND gargantuan_entitlement_provider_benchmark --quick)
 	add_test(NAME gargantuan_gui_foundation COMMAND gargantuan_gui_foundation_tests)

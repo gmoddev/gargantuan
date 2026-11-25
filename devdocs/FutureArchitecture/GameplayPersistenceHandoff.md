@@ -1,5 +1,12 @@
 # Provider-neutral gameplay persistence
 
+The original design handoff below preceded the Foundation 11 implementation.
+The [current provider and lifecycle contract](../CurrentArchitecture/GameplayPersistence.md)
+describes the candidate behavior. It uses bounded operation polling and
+therefore leaves general yielding continuation retirement with its existing
+owner. The [Foundation 11 qualification record](../Validation/Foundation11Persistence.md)
+tracks the remaining gates against exact source.
+
 The Engine integration should expose a server-only service. The first useful
 consumer is a player's inventory, loaded on join and updated with an expected
 revision. Player object keys are appropriate for live state. Persistent player

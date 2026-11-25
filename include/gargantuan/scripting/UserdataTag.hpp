@@ -31,5 +31,7 @@ namespace gargantuan {
 		Vector2,
 		Vector3,
 		Tween,
+		DataStore,
+		PersistenceOperation,
 	};
 }

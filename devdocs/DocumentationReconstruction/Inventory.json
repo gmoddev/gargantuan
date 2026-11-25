@@ -1511,6 +1511,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "devdocs/CurrentArchitecture/GameplayPersistence.md",
+      "Purpose": "Gameplay persistence",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/content/docs/api/networking-and-persistence.mdx"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "devdocs/CurrentArchitecture/GnsPacketSequenceAttribution3L.md",
       "Purpose": "KI-008 packet sequence attribution",
       "LastMeaningfulUpdate": {
@@ -4612,6 +4625,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "devdocs/Validation/Foundation11Persistence.md",
+      "Purpose": "Foundation 11 persistence qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "devdocs/Validation/Foundation3MScaleService.txt",
       "Purpose": "[Content:ResidencyService] sampledSteps=4 policyMeanUs=6.25 policyP50Us=0.8 policyP95Us=0.9 policyP99Us=0.9 policyMaxUs=22.6 serviceMeanUs=39 serviceP50Us=10.4 serviceP95Us=67.1 serviceP99Us=67.1 serviceMaxUs=68.3 policyRequests=2 serviceRequests=2 acquisitions=2 acquisitionDeduplications=0 admissions=2",
       "LastMeaningfulUpdate": null,
@@ -5863,6 +5889,19 @@
       },
       "RelevantSourceSubsystem": [
         "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Maintain setup, authority and sample-specific execution limits",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "samples/Foundation11Persistence/README.md",
+      "Purpose": "Persistent quest profile",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/content/docs/api/networking-and-persistence.mdx"
       ],
       "Status": "Current",
       "StatusLabel": "Current and authoritative",

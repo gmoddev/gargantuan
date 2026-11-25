@@ -20,6 +20,17 @@ observations. These dispositions apply to the 10B development branch.
 
 Public multiplayer package confidentiality remains a separate release gate.
 
+## Foundation 11 persistence entries
+
+| Issue | Disposition |
+| --- | --- |
+| Game scripts lack access to Node DataStore | The Foundation 11 candidate adds a server-only Engine API, a native Node adapter, and local development providers. The qualification record tracks separate Engine, Node and Studio evidence. |
+| A write can commit before its acknowledgement is lost | The public outcome is `UnknownOutcome`. The sample reconciles a record-local reward marker without retrying an uncertain mutation. General mutation idempotency remains open. |
+| DocumentStore query scans and decodes candidates | Open. PostgreSQL caps candidate collections. Engine's bounded pages constrain the reply. Indexed query pushdown requires proven result, order and cursor parity. |
+| A GameSession Player lacks a production authenticated profile key | Open. Runtime and transport IDs are unsuitable for persistent accounts. Verified provider identity must be bound before gameplay admission, then exposed as an opaque server-side profile key. |
+
+See the [Foundation 11 qualification and handoffs](devdocs/Validation/Foundation11Persistence.md).
+
 ## KI-ANIM-001: Preview capture can reject a resized frame
 
 - Status: Resolved on the Advanced Creator branch; headless, native GPU and Studio resize-stage verification passed 2026-11-16.

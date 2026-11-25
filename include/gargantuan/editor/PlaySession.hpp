@@ -17,6 +17,7 @@
 #include <vector>
 
 namespace gargantuan {
+	class IPersistenceProvider;
 	struct PlaySessionId { std::uint64_t Value = 0; };
 	enum class PlaySessionState { Stopped, Starting, Running, Stopping, Failed };
 
@@ -42,7 +43,8 @@ namespace gargantuan {
 			std::uint32_t Height,
 			std::uint64_t AuthoringRevision,
 			AssetProjectSnapshot Assets = {},
-			bool AudioEnabled = false
+			bool AudioEnabled = false,
+			std::shared_ptr<IPersistenceProvider> Persistence = {}
 		);
 		~PlaySession();
 

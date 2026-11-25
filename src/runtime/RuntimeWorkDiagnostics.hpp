@@ -44,6 +44,7 @@ enum class WorkPhase : std::size_t {
 	AudioReconcile, AudioMix,
 	ViewportExtract, ViewportDraw,
 	TweenStep, RemoteEncode, RemoteDecode, InstanceWrap,
+	PersistenceSubmit, PersistencePoll, PersistencePump,
 	Count
 };
 
@@ -75,7 +76,8 @@ inline constexpr std::array<std::string_view, static_cast<std::size_t>(WorkPhase
 	"RenderDraw", "HostFramePacing",
 	"AudioReconcile", "AudioMix",
 	"ViewportExtract", "ViewportDraw",
-	"TweenStep", "RemoteEncode", "RemoteDecode", "InstanceWrap"
+	"TweenStep", "RemoteEncode", "RemoteDecode", "InstanceWrap",
+	"PersistenceSubmit", "PersistencePoll", "PersistencePump"
 };
 
 struct WorkDuration {

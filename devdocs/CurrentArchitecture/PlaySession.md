@@ -84,6 +84,31 @@ Stop destroys the exact runtime Engine/VM/graph/renderer and discards all runtim
 mutation. It never saves, changes persisted revision, advances authoritative
 revision, dirties the project, or adds Undo/Redo history.
 
+## Local development persistence
+
+The owner can choose a development provider at Start. Existing callers get
+`Disabled` when they omit the mode. `Disposable` gives each Play session a
+fresh bounded in-memory provider. `Persistent` configures the optional local
+SQLite provider for the authorized project's development profile. EditorHost
+selects and injects the provider before the runtime starts. It accepts neither
+provider credentials nor storage paths from the project or Studio RPCs.
+
+Persistent data lives under the Studio user-data directory in
+`PlayPersistence-v1`. Its identity combines the canonical project directory and
+persisted `ProjectId`. Reopening the same project at the same location reuses
+its data. Save As, a distinct copy, or moving the project selects a new profile.
+The trusted launch environment may set `GARGANTUAN_STUDIO_PLAY_DATA_ROOT` to an
+existing local directory for an isolated development fixture. That directory
+cannot overlap the authored project through the `PlayPersistence-v1` path.
+
+While Play and Preview are inactive, the owner can inspect an exact persistent
+record and delete the revision it inspected. A concurrent change rejects the
+delete. Inspection and reset never create a missing profile. The local provider
+is independent of Node and is never selected for a production server by
+Studio. Neither the provider configuration nor its records participate in
+project Save, GASP, or GASM serialization. The [protocol](EditorHostProtocol.md#local-play-persistence-capability-version-1)
+defines version negotiation and the bounded commands.
+
 ## Player runtime startup and teardown
 
 The runtime Engine initializes the canonical Players service with exactly one
