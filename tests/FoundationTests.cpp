@@ -7813,11 +7813,39 @@ namespace {
 			}
 			const void *FirstWrapper = lua_topointer(L, -1);
 			{
+				auto Different = std::make_shared<Folder>();
+				Check(Load(L, "local A, B = ...; return A == B", "detached-instance-equality") == LUA_OK,
+					"detached equality probe compiles");
+				ExecutionDomainScope ReadOnly(ExecutionDomain::Worker);
+				lua_pushvalue(L, -2);
+				StackValue<std::shared_ptr<Folder>>::Push(L, Different);
+				const int Status = lua_pcall(L, 2, 1, 0);
+				Check(Status == LUA_OK && lua_isboolean(L, -1) && !lua_toboolean(L, -1) &&
+					!Detached->Id.IsValid() && !Different->Id.IsValid(),
+					"equality distinguishes detached objects without publishing either identity");
+				lua_pop(L, 1);
+			}
+			{
 				ScriptEngine OtherVm(std::make_shared<DataModel>(), {}, RuntimeMode::NetworkClient);
 				StackValue<std::shared_ptr<Instance>>::Push(OtherVm.L, Detached);
 				Check(lua_topointer(OtherVm.L, -1) != FirstWrapper && !Detached->Id.IsValid() &&
 					ChangeJournal::Get().Read(BeforeExposure).Records.empty(),
 					"first exposure in separate VMs needs no mutation authority, identity publication or journal commit");
+			}
+			{
+				auto Adopted = std::make_shared<Folder>();
+				StackValue<std::shared_ptr<Folder>>::Push(L, Adopted);
+				const void *Wrapper = lua_topointer(L, -1);
+				const auto BeforeAdoption = ChangeJournal::Get().CreateCursor(Scope);
+				Adopted->SetParent(game);
+				StackValue<std::shared_ptr<Instance>>::Push(L, Adopted);
+				const auto Records = ChangeJournal::Get().Read(BeforeAdoption).Records;
+				Check(Adopted->Id.IsValid() && ObjectRegistry::Get().Lookup(Adopted->Id) == Adopted &&
+					lua_topointer(L, -1) == Wrapper && std::ranges::any_of(Records, [&](const auto &Record) {
+						return Record.Object == Adopted->Id && std::holds_alternative<ObjectCreatedChange>(Record.Payload);
+					}), "first adoption publishes the object while preserving its pre-adoption Luau key");
+				lua_pop(L, 2);
+				Adopted->Destroy();
 			}
 			const auto OldId = Detached->GetObjectId();
 			Detached->Destroy();
@@ -7906,6 +7934,19 @@ namespace {
 		Check(RuntimeDiagnostics.back().second.find("[Runtime:ExecutionBudget]") == 0 &&
 			lua_callbacks(L)->interrupt == nullptr, "the VM restores its interrupt hook and reports the deadline");
 		lua_settop(L, 0);
+		const auto DiagnosticsBeforeProtectedCall = RuntimeDiagnostics.size();
+		Check(Load(L, R"(
+			return pcall(function()
+				local Sum = 0
+				for Index = 1, 100000000 do Sum += Index end
+				return Sum
+			end)
+		)", "deadline-in-protected-call") == LUA_OK &&
+			CallGameplay(L, 0, LUA_MULTRET) == LUA_ERRRUN &&
+			RuntimeDiagnostics.size() == DiagnosticsBeforeProtectedCall + 1 &&
+			lua_callbacks(L)->interrupt == nullptr,
+			"expiry ends the outer gameplay entry even when a protected call catches the first error");
+		lua_settop(L, 0);
 		engine.GameplayExecutionBudget = std::chrono::milliseconds(250);
 		Check(Load(L, "return 5", "after-budget") == LUA_OK && CallGameplay(L, 0, 1) == LUA_OK &&
 			lua_tonumber(L, -1) == 5, "subsequent gameplay receives a fresh deadline");
@@ -7935,21 +7976,42 @@ namespace {
 			std::cout << "[Runtime:InstanceWrap] calls=" << Hits.Calls << " cache_misses=" << Hits.Units
 				<< " plain_ns=" << Plain << " captured_ns=" << Measured << '\n';
 			lua_pop(L, 1);
-			const auto Cost = [&](int Milliseconds) {
-				engine.GameplayExecutionBudget = std::chrono::milliseconds(Milliseconds);
-				Check(Load(L, "local N=0 for I=1,100000 do N+=I end return N", "budget-cost") == LUA_OK,
-					"budget workload compiles");
+			enum class DeadlineMode { Cooperative, EmptyHook, Deadline };
+			const auto Cost = [&](const char *Source, double Expected, DeadlineMode Mode) {
+				using namespace std::chrono_literals;
+				engine.GameplayExecutionBudget = Mode == DeadlineMode::Deadline ? 250ms : 0ms;
+				Check(Load(L, Source, "budget-cost") == LUA_OK, "budget workload compiles");
+				if (Mode == DeadlineMode::EmptyHook) lua_callbacks(L)->interrupt = [](lua_State *, int) {};
 				const auto Start = std::chrono::steady_clock::now();
 				const auto Status = CallGameplay(L, 0, 1);
 				const auto Elapsed = std::chrono::steady_clock::now()-Start;
-				Check(Status == LUA_OK && lua_tonumber(L, -1) == 5000050000.0, "budget measurements run identical work");
+				lua_callbacks(L)->interrupt = nullptr;
+				Check(Status == LUA_OK && lua_tonumber(L, -1) == Expected, "budget measurements run identical work");
 				lua_pop(L, 1);
 				return std::chrono::duration_cast<std::chrono::nanoseconds>(Elapsed).count();
 			};
-			const auto CooperativeNs = Cost(0);
-			const auto BudgetedNs = Cost(250);
-			std::cout << "[Runtime:ExecutionBudget] iterations=100000 cooperative_ns=" << CooperativeNs
-				<< " budgeted_ns=" << BudgetedNs << '\n';
+			const auto Compare = [&](std::string_view Name, const char *Source, double Expected) {
+				constexpr std::size_t Modes = 3;
+				constexpr std::size_t Repeats = 15;
+				std::array<std::array<std::int64_t, Repeats>, Modes> Samples{};
+				for (std::size_t Repeat = 0; Repeat < Repeats; ++Repeat) {
+					for (std::size_t Offset = 0; Offset < Modes; ++Offset) {
+						const auto Mode = (Repeat + Offset) % Modes;
+						Samples[Mode][Repeat] = Cost(Source, Expected, static_cast<DeadlineMode>(Mode));
+					}
+				}
+				for (auto &Set : Samples) std::ranges::sort(Set);
+				std::cout << "[Runtime:ExecutionBudget] workload=" << Name << " repeats=" << Repeats
+					<< " cooperative_median_ns=" << Samples[0][Repeats / 2]
+					<< " empty_hook_median_ns=" << Samples[1][Repeats / 2]
+					<< " budgeted_median_ns=" << Samples[2][Repeats / 2] << '\n';
+			};
+			Compare("tight_loop", "local N=0 for I=1,100000 do N+=I end return N", 5000050000.0);
+			Compare("instance_reads",
+				"local W=game.Workspace local N=0 for I=1,10000 do N+=#W.Name end return N", 90000);
+			Compare("native_calls",
+				"local N=0 for I=1,10000 do if game:FindFirstChild('Workspace') then N+=1 end end return N", 10000);
+			Compare("short_callback", "return #game.Workspace.Name", 9);
 		}
 
 		lua_settop(L, 0);

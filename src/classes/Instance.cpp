@@ -1535,8 +1535,10 @@ namespace gargantuan {
 
 	int Instance::LEqual(lua_State *L, Instance *self) {
 		return InvokeNativeCallback(L, [L, self] {
-			auto Other = StackValue<std::shared_ptr<Instance>>::From(L, 2);
-			return StackValue<bool>::Push(L, self && Other && self->GetObjectId() == Other->GetObjectId());
+			const auto Other = StackValue<std::shared_ptr<Instance>>::From(L, 2);
+			// Both wrappers own their allocation. Comparing them must not publish
+			// detached objects or require authority to mutate the DataModel.
+			return StackValue<bool>::Push(L, self && self == Other.get());
 		});
 	}
 

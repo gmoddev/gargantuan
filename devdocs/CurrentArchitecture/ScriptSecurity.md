@@ -142,10 +142,14 @@ or Script resume starts a new interval. Character policy callbacks use the
 same budget. Module execution inherits the caller's interval.
 
 The interrupt samples elapsed time at VM execution safepoints, checking the
-clock once per 512 visits after the first. On expiry it raises a Luau error
-and emits one bounded runtime diagnostic on unwind. Native calls return
-before the VM can check another safepoint. Protected script calls may catch
-errors. Per-frame aggregate work, allocation quotas, hostile-code isolation
+clock at the first visit and at most 512 execution safepoints apart after
+that. Expiry remains latched for the current outer entry. If a protected
+call handles the first error, the next execution safepoint raises it again.
+The outer entry emits one bounded deadline diagnostic on unwind.
+
+The bound is in VM safepoint visits. Native calls and GC can run until they
+return to an execution safepoint, so wall time can exceed the configured
+deadline. Per-frame aggregate work, allocation quotas, hostile-code isolation
 and retirement of pending script-owned continuations require separate controls.
 
 ## Deferred

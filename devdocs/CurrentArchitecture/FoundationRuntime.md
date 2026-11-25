@@ -187,7 +187,9 @@ Each ordinary VM interns Instance wrappers in a registry-owned weak-value
 table that Luau may shrink during collection. Coroutines share this table.
 An entry uses the native address solely for allocation-local memoization.
 The userdata owns a shared reference, so that allocation survives every
-reachable wrapper. Pushing a detached Instance does not publish an ObjectId.
+reachable wrapper. Pushing or comparing detached Instances leaves their
+ObjectIds unpublished. First DataModel adoption assigns identities and
+publishes the subtree through the normal mutation path.
 Destruction invalidates its registry identity through the normal lifecycle.
 A retained key still denotes the destroyed object, including after slot
 reuse. VM shutdown releases the table and its userdata.

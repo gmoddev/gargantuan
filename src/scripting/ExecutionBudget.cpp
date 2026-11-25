@@ -8,6 +8,7 @@
 namespace gargantuan {
 	namespace {
 		using Clock = std::chrono::steady_clock;
+		constexpr unsigned SafepointsPerClockCheck = 512;
 		struct BudgetScope {
 			static thread_local BudgetScope *Active;
 			lua_State *Main;
@@ -30,14 +31,16 @@ namespace gargantuan {
 
 			static void Interrupt(lua_State *State, int Gc) {
 				auto *Budget = Active;
-				while (Budget->Main != lua_mainthread(State)) Budget = Budget->Parent;
+				const auto *Main = lua_mainthread(State);
+				while (Budget->Main != Main) Budget = Budget->Parent;
 				if (Budget->PriorInterrupt) Budget->PriorInterrupt(State, Gc);
 				if (Gc >= 0 || --Budget->UntilCheck != 0) return;
-				Budget->UntilCheck = 512;
-				if (Clock::now() >= Budget->Deadline) {
+				if (Budget->Expired || Clock::now() >= Budget->Deadline) {
 					Budget->Expired = true;
+					Budget->UntilCheck = 1;
 					luaL_error(State, "[Runtime:ExecutionBudget] gameplay execution deadline exceeded");
 				}
+				Budget->UntilCheck = SafepointsPerClockCheck;
 			}
 		};
 		thread_local BudgetScope *BudgetScope::Active = nullptr;
