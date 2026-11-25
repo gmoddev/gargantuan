@@ -9,12 +9,14 @@ open until its resolution criteria are implemented and verified.
 The November 24 strategic reconciliation at `0195d658d` records the original
 observations. These dispositions apply to the 10B development branch.
 [Qualification record](devdocs/Validation/Foundation10BDeveloperRuntime.md)
+[Independent promotion review](devdocs/Validation/Foundation10BIndependentReview.md)
 
 | Review issue | Implementation and qualification |
 | --- | --- |
-| KI-LUAU-001, Instance keys | Resolved on the development branch. Windows Foundation tests at `f76a862c9` covered events, separate VMs, collection and slot reuse. GameSession tests at `0ea0b4a04` verified the replicated Player as a dictionary key across callbacks. |
+| KI-LUAU-001, Instance keys | The development branch interns wrappers. The independent review candidate also makes detached equality side-effect free. Windows Foundation tests cover both, and GameSession tests at `0ea0b4a04` verified the replicated Player as a dictionary key across callbacks. |
 | KI-NET-001, Player addressing | Implemented and covered on the development branch. Player targeting and explicit submission outcomes use the server's current session mapping. The two-client session and real-GNS Relay cases passed at `0ea0b4a04`. |
-| KI-LUAU-002, execution budget | Ordinary gameplay gets a configurable VM safepoint deadline. Per-frame aggregate work, native call interruption, VM allocation limits and general continuation retirement remain open. |
+| KI-LUAU-002, execution budget | The independent candidate latches expiry through the outer gameplay entry. The configurable deadline still applies at VM execution safepoints. Per-frame aggregate work, native call interruption, VM allocation limits and general continuation retirement remain open. |
+| Reliable remote callback order | Open on the qualified baseline and development candidate. Fair dispatch can move an older queued message behind a newer message from the same connection when a pump exhausts its budget. The Remote queue owner must preserve per-connection order across pumps and qualify the integration with 10B. |
 
 Public multiplayer package confidentiality remains a separate release gate.
 
