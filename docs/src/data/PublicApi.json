@@ -966,6 +966,49 @@
       "Signals": []
     },
     {
+      "Name": "DataStoreService",
+      "Kind": "Service",
+      "Source": "assets/services/DataStoreService.luau",
+      "SourceSha256": "32cad0999bccdd99b2562e1caadb5aaedc77ed5a00432811e012887e2e2211bb",
+      "Description": "Submits bounded persistence work to the server's configured provider.",
+      "Extends": "Instance",
+      "Abstract": false,
+      "ServicePolicy": "ServerOnly",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [],
+      "Methods": [
+        {
+          "Name": "CreateArray",
+          "Description": "Creates a document array that retains its type when empty.",
+          "AsLuau": true,
+          "RequiredCapability": "PersistenceAccess",
+          "LuauSignature": "(self: DataStoreService) -> { any }"
+        },
+        {
+          "Name": "GetDocumentStore",
+          "Description": "Gets a named collection for structured documents.",
+          "AsLuau": true,
+          "RequiredCapability": "PersistenceAccess",
+          "LuauSignature": "(self: DataStoreService, Name: string) -> { GetAsync: (any, string, number?) -> any, PutAsync: (any, string, { [string]: any }, string?, number?) -> any, DeleteAsync: (any, string, string?, number?) -> any, QueryAsync: (any, { [string]: any }, number?) -> any, GetCapabilities: (any) -> { KeyValue: boolean, Documents: boolean, DocumentQueries: boolean } }"
+        },
+        {
+          "Name": "GetKeyValueStore",
+          "Description": "Gets a named store for native buffer values.",
+          "AsLuau": true,
+          "RequiredCapability": "PersistenceAccess",
+          "LuauSignature": "(self: DataStoreService, Name: string) -> { GetAsync: (any, string, number?) -> any, PutAsync: (any, string, buffer, string?, number?) -> any, DeleteAsync: (any, string, string?, number?) -> any, GetCapabilities: (any) -> { KeyValue: boolean, Documents: boolean, DocumentQueries: boolean } }"
+        },
+        {
+          "Name": "GetNull",
+          "Description": "Returns the sentinel for a stored document null.",
+          "AsLuau": true,
+          "RequiredCapability": "PersistenceAccess",
+          "LuauSignature": "(self: DataStoreService) -> unknown"
+        }
+      ],
+      "Signals": []
+    },
+    {
       "Name": "DeformableBody",
       "Kind": "Class",
       "Source": "assets/classes/DeformableBody.luau",
@@ -5838,6 +5881,7 @@
     {
       "Path": "include/gargantuan/editor/PlaySession.hpp",
       "Types": [
+        "IPersistenceProvider",
         "PlayDiagnostic",
         "PlaySession",
         "PlaySessionId",
@@ -6414,6 +6458,43 @@
       ]
     },
     {
+      "Path": "include/gargantuan/persistence/LocalPersistenceProvider.hpp",
+      "Types": [
+        "DurableLocalPersistenceConfiguration",
+        "LocalPersistenceLimits"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/persistence/PersistenceProvider.hpp",
+      "Types": [
+        "IPersistenceProvider",
+        "PersistenceCapabilities",
+        "PersistenceComparison",
+        "PersistenceDocumentField",
+        "PersistenceDocumentValue",
+        "PersistenceFilter",
+        "PersistenceOperation",
+        "PersistenceOrder",
+        "PersistenceQuery",
+        "PersistenceRecord",
+        "PersistenceRequest",
+        "PersistenceResult",
+        "PersistenceStatus",
+        "PersistenceStoreKind"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/persistence/PersistenceRuntime.hpp",
+      "Types": [
+        "DataModel",
+        "PersistenceHandle",
+        "PersistenceResultBudget",
+        "PersistenceRuntime",
+        "Script",
+        "State"
+      ]
+    },
+    {
       "Path": "include/gargantuan/physics/PhysicsBackend.hpp",
       "Types": [
         "IPhysicsBackend",
@@ -6807,7 +6888,8 @@
       "Path": "include/gargantuan/runtime/EngineProviderConfiguration.hpp",
       "Types": [
         "EngineProviderConfiguration",
-        "IEntitlementProvider"
+        "IEntitlementProvider",
+        "IPersistenceProvider"
       ]
     },
     {
@@ -7003,7 +7085,9 @@
     {
       "Path": "include/gargantuan/scripting/ScriptEngine.hpp",
       "Types": [
+        "IPersistenceProvider",
         "ModuleScript",
+        "PersistenceRuntime",
         "RemoteFunction",
         "Script",
         "ScriptEngine",
@@ -7127,6 +7211,12 @@
         "RegisteredAction",
         "RuntimeAttachment",
         "WorldRoot"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/services/DataStoreService.hpp",
+      "Types": [
+        "DataStoreService"
       ]
     },
     {

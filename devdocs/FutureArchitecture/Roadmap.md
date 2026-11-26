@@ -47,7 +47,7 @@ this documentation review, and the runtime suites were not rerun.
 | 2 | Partial; input, audio/animation, retained GUI, assets, Lighting/Sky and Windows packaging exist | Mesh collision, rendering breadth/performance and every minimum-game acceptance gate. |
 | 3 | Foundation3L core correctness qualified on draftPR6 | Deferred physical/provider deployment certification; authenticated admission before public hosting; broader release qualification. |
 | 4 | Partial; native Studio shell, docking, source editing/history, local Play and MCP exist | Two-way source sync, advanced authoring/language tooling, multi-client orchestration and plugin trust. |
-| 5 | Partial; Node and telemetry foundations exist | Durable backend storage, creator distribution, public operations, signing/provenance and external-creator qualification. |
+| 5 | Partial; Node, telemetry, and durable PostgreSQL storage exist. Foundation 11 adds a candidate Engine/Studio persistence consumer | Authenticated player binding, broad storage and query qualification, creator distribution, public operations, signing/provenance and external-creator qualification. |
 | 6 | Future, demand-led | Default-space 3M precedes semantic regions/topology; other expansion requires its own measured gates. |
 
 ### Subsystem status

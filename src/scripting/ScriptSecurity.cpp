@@ -53,6 +53,7 @@ namespace gargantuan {
 			ScriptCapability::NetworkSend,
 			ScriptCapability::NetworkReceive,
 			ScriptCapability::DefineSchema,
+			ScriptCapability::PersistenceAccess,
 		};
 	}
 
@@ -89,6 +90,7 @@ namespace gargantuan {
 				ScriptCapability::MutateDataModel,
 				ScriptCapability::NetworkSend,
 				ScriptCapability::NetworkReceive,
+				ScriptCapability::PersistenceAccess,
 			},
 		};
 	}
@@ -138,6 +140,7 @@ namespace gargantuan {
 			case ScriptCapability::NetworkSend: return "NetworkSend";
 			case ScriptCapability::NetworkReceive: return "NetworkReceive";
 			case ScriptCapability::DefineSchema: return "DefineSchema";
+			case ScriptCapability::PersistenceAccess: return "PersistenceAccess";
 		}
 		throw std::invalid_argument("Unknown script capability");
 	}

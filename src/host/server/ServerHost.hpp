@@ -9,6 +9,8 @@
 #include <string>
 #include <variant>
 
+namespace gargantuan { class IPersistenceProvider; }
+
 namespace gargantuan::host {
 	struct LocalServerContentConfiguration final {
 		ContentResidencyMode Mode = ContentResidencyMode::FullyResident;
@@ -38,6 +40,7 @@ namespace gargantuan::host {
 	struct ServerHostConfiguration final {
 		ServerContentConfiguration Content = LocalServerContentConfiguration{};
 		std::optional<network::ReliableServiceProfile> ReliableService;
+		std::shared_ptr<IPersistenceProvider> Persistence;
 	};
 
 	int RunDedicatedServer(

@@ -22,8 +22,10 @@
 #include "gargantuan/datatypes/UDim2.hpp"
 #include "gargantuan/datatypes/Vector2.hpp"
 #include "gargantuan/gui/PlayerGuiScope.hpp"
+#include "gargantuan/persistence/PersistenceRuntime.hpp"
 #include "gargantuan/scripting/ThreadEngine.hpp"
 #include "gargantuan/scripting/UserdataTag.hpp"
+#include "gargantuan/services/DataStoreService.hpp"
 #include "gargantuan/services/TweenService.hpp"
 
 #include <Luau/Common.h>
@@ -77,6 +79,7 @@ namespace gargantuan {
 		{"SignalConnection", nullptr, SignalConnection::CreateUserdataMetatable},
 		{"Tween", nullptr, Tween::CreateUserdataMetatable},
 		{"TweenInfo", OpenLibTweenInfo, TweenInfo::CreateUserdataMetatable},
+		{"DataStore", nullptr, RegisterDataStoreUserdata},
 		{"Vector2", OpenLibVector2, Vector2::CreateUserdataMetatable},
 		{"Vector3", OpenLibVector3},
 
@@ -190,6 +193,8 @@ namespace gargantuan {
 	void ScriptEngine::ShutdownRuntime() {
 		if (Stopping) return;
 		Stopping = true;
+		if (Persistence) Persistence->Shutdown();
+		Persistence.reset();
 		if (Tweens) Tweens->Shutdown();
 		ScriptQueue.clear();
 		Threads.ShutdownRuntime();
@@ -206,6 +211,12 @@ namespace gargantuan {
 		DetachedManagedScripts.clear();
 		ManagedScriptThreads.clear();
 		ManagedScriptPruneCursor = ManagedScripts.end();
+	}
+
+	void ScriptEngine::ConfigurePersistence(std::shared_ptr<IPersistenceProvider> Provider) {
+		if (Stopping || Persistence || Mode == RuntimeMode::NetworkClient)
+			throw std::logic_error("[Persistence:Runtime] Invalid provider composition state");
+		Persistence = std::make_shared<PersistenceRuntime>(std::move(Provider), DataModel);
 	}
 
 	void ScriptEngine::TrackManagedScriptThread(lua_State *Thread, const std::shared_ptr<Script> &ScriptValue) {
@@ -405,6 +416,7 @@ namespace gargantuan {
 		// VM and this queue alive through the current step.
 		[[maybe_unused]] auto KeepAlive = weak_from_this().lock();
 		if (Stopping) return;
+		if (Persistence) Persistence->Pump();
 		Threads.Step();
 		if (Stopping) return;
 		PruneExpiredManagedScripts();

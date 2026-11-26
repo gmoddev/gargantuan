@@ -98,6 +98,7 @@ UTF-8 bytes with no NUL.
 | `GetScriptBinding` / `ResolveScriptBinding` | Optional `ScriptDocumentBinding`; obtains or resolves a version-1 project/SourceId/class binding to a fresh authoring ObjectId, without source or persistence mutation. See [Script document bindings](ScriptDocumentBindings.md). |
 | `SetScriptSource` | Commits bounded UTF-8 Source through MutationGateway using the exact expected SourceVersion and optional project `ExpectedRevision`. |
 | `StartPlaySession` / `StopPlaySession` | Starts or destroys the one isolated local runtime from current authoritative in-memory state using an exact engine-issued session identity. |
+| `InspectPlayPersistenceRecord` / `ResetPlayPersistenceRecord` | Optional v1 exact-record inspection and revision-conditional reset of the owner project's local development profile while Play and Preview are inactive. |
 | `GetPlaySessionState` / `PollPlayDiagnostics` | Observes bounded lifecycle and runtime diagnostics without granting mutation authority. |
 | `ConfigureStreamingDiagnostics` / `GetStreamingDiagnostics` | Optional version-1, exact-Play-session opt-in collection and bounded read-only residency diagnostics. |
 | `GetPlayInputSnapshot` | Optional `PlayInputInspection` capability; returns an owned input diagnostic snapshot v1 for the exact running `PlaySessionId`, requiring `ReadDataModel`. |
@@ -214,6 +215,37 @@ it through existing observation. Shared project image and material resources
 use the canonical asset stream. Preview-owned texture identities are retired
 on disable or document replacement. Play uses its independent runtime
 projection and suspends edit preview until the session ends.
+
+## Local Play persistence capability, version 1
+
+A supporting host advertises `PlayPersistence` in
+`Handshake.Result.Capabilities` and returns `PlayPersistenceVersion: 1`.
+`PlayPersistentStorage` is a boolean indicating durable local provider support
+in the build. The token-bound owner must have `EditorCommands` and
+`ReadDataModel` for each command.
+
+`StartPlaySession.Params` accepts one optional field, `PersistenceMode`,
+with the closed values `Disabled`, `Disposable`, or `Persistent`. An omitted
+mode defaults to `Disabled`. The start result echoes the accepted mode.
+Unknown fields and modes return `MalformedRequest`. If the requested local
+provider is unavailable at launch, the host returns
+`PlayPersistenceUnavailable` and no session starts. A provider loss after
+launch is reported through the runtime persistence operation status.
+
+`InspectPlayPersistenceRecord.Params` has exactly `Kind`, `Store`, and
+`Key`. Kind is `KeyValue` or `Document`. Store and key follow the provider's
+validated UTF-8 bounds of 96 and 256 bytes. The response contains `Status`
+and, on success, `Record` with a canonical nonzero unsigned decimal string
+`Revision` and either `Document` (structured JSON) or `ByteCount` and
+`BytesBase64` (native bytes). The local maximum value is 64 KiB.
+
+`ResetPlayPersistenceRecord.Params` has the same identity fields and the
+required inspected `Revision`. It returns the provider's conditional delete
+`Status`. A newer revision returns `Conflict`. A missing profile yields
+`Unavailable`. Both commands require a loaded project, return
+`PlayPersistenceBusy` during Play or Animation Preview, and have a
+150-millisecond provider deadline. They do not create a database, accept
+storage locators, or advance the authoring revision or transaction history.
 
 ## Streaming diagnostics extension, version 1
 

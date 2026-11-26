@@ -8,6 +8,7 @@
 
 namespace gargantuan {
 	class IEntitlementProvider;
+	class IPersistenceProvider;
 
 	// Trusted host composition only. Provider objects and their deployment
 	// configuration never enter the DataModel or project serialization.
@@ -20,5 +21,6 @@ namespace gargantuan {
 		// manual-demand hosts keep their established request ownership.
 		bool EnableResidencyDemandPolicy = false;
 		bool EnableStreamingDiagnostics = false;
+		std::shared_ptr<IPersistenceProvider> Persistence;
 	};
 }

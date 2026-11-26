@@ -25,6 +25,7 @@ namespace gargantuan {
 		NetworkSend = 1ull << 8,
 		NetworkReceive = 1ull << 9,
 		DefineSchema = 1ull << 10,
+		PersistenceAccess = 1ull << 11,
 	};
 
 	class ScriptDomainSet {

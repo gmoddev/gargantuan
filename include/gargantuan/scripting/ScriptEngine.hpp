@@ -20,6 +20,8 @@
 #include <utility>
 
 namespace gargantuan {
+	class IPersistenceProvider;
+	class PersistenceRuntime;
 	class Script;
 	class ModuleScript;
 	class RemoteFunction;
@@ -85,6 +87,8 @@ namespace gargantuan {
 		void UntrackManagedScriptThread(lua_State *Thread);
 		void CompleteManagedScriptThreadResume(lua_State *Thread, int Status, int PreResumeStatus);
 		void ShutdownRuntime();
+		void ConfigurePersistence(std::shared_ptr<IPersistenceProvider> Provider);
+		std::shared_ptr<PersistenceRuntime> GetPersistenceRuntime() const { return Persistence; }
 		TweenRuntime &GetTweenRuntime();
 		void StepTweens(float DeltaTime);
 		[[nodiscard]] std::weak_ptr<Script> FindManagedScriptThread(lua_State *Thread) const;
@@ -103,6 +107,7 @@ namespace gargantuan {
 			DetachedManagedScripts;
 		std::unordered_map<lua_State *, std::weak_ptr<Script>> ManagedScriptThreads;
 		std::shared_ptr<TweenRuntime> Tweens;
+		std::shared_ptr<PersistenceRuntime> Persistence;
 		ManagedScriptIterator ManagedScriptPruneCursor = ManagedScripts.end();
 		void TrackManagedScript(const std::shared_ptr<Script> &ScriptValue);
 		void PruneExpiredManagedScripts();

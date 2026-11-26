@@ -56,6 +56,10 @@
 #if defined(GARGANTUAN_WITH_NODE_CONTENT)
 #include "host/server/NodeContentProvider.hpp"
 #endif
+#if defined(GARGANTUAN_WITH_NODE_PERSISTENCE)
+#include "host/server/NodePersistenceProvider.hpp"
+#endif
+#include "gargantuan/persistence/LocalPersistenceProvider.hpp"
 
 namespace gargantuan::host {
 	namespace {
@@ -248,6 +252,16 @@ namespace gargantuan::host {
 		Program.add_argument("--content-node-token-env")
 			.default_value(std::string())
 			.help("environment-variable name containing the Node workload token");
+		Program.add_argument("--persistence-provider").default_value(std::string("disabled"))
+			.help("server persistence: disabled (default), memory, sqlite (development), or node");
+		Program.add_argument("--persistence-local-db").default_value(std::string())
+			.help("trusted local development database path used in sqlite mode");
+		Program.add_argument("--persistence-node-endpoint").default_value(std::string())
+			.help("TLS DataStore endpoint used in node mode");
+		Program.add_argument("--persistence-node-root-ca").default_value(std::string())
+			.help("trusted root certificate file for Node DataStore");
+		Program.add_argument("--persistence-node-token-file").default_value(std::string())
+			.help("trusted file holding the tenant-bound Node DataStore workload credential");
 		Program.add_argument("--content-lifecycle-smoke")
 			.default_value(std::string())
 			.help("test-only trusted content key for official load/evict/reload validation");
@@ -390,6 +404,32 @@ namespace gargantuan::host {
 #endif
 			}
 		}
+
+		const auto PersistenceMode = Program.get<std::string>("--persistence-provider");
+		const auto PersistenceLocal = Program.get<std::string>("--persistence-local-db");
+		const auto PersistenceEndpoint = Program.get<std::string>("--persistence-node-endpoint");
+		const auto PersistenceCertificate = Program.get<std::string>("--persistence-node-root-ca");
+		const auto PersistenceToken = Program.get<std::string>("--persistence-node-token-file");
+		const bool HasPersistenceNodeOptions =
+			!PersistenceEndpoint.empty() || !PersistenceCertificate.empty() || !PersistenceToken.empty();
+		if ((PersistenceMode != "disabled" && PersistenceMode != "memory" && PersistenceMode != "sqlite" &&
+			PersistenceMode != "node") || (PersistenceMode == "sqlite") != (!PersistenceLocal.empty()) ||
+			(PersistenceMode == "node" ? !ParseEndpoint(PersistenceEndpoint) || PersistenceCertificate.empty() ||
+				PersistenceToken.empty() : HasPersistenceNodeOptions) ||
+			(HostConfiguration.Persistence && Program.is_used("--persistence-provider"))) {
+			std::cerr << "GargantuanServer persistence provider arguments are invalid.\n";
+			return 2;
+		}
+		if (PersistenceMode == "sqlite" && !SupportsDurableLocalPersistence()) {
+			std::cerr << "GargantuanServer was built without durable local persistence support.\n";
+			return 2;
+		}
+#if !defined(GARGANTUAN_WITH_NODE_PERSISTENCE)
+		if (PersistenceMode == "node") {
+			std::cerr << "GargantuanServer was built without Node persistence support.\n";
+			return 2;
+		}
+#endif
 
 		const auto BindText = Program.get<std::string>("--bind");
 		const auto BindEndpoint = BindText.empty() ? std::nullopt : ParseEndpoint(BindText);
@@ -594,6 +634,20 @@ namespace gargantuan::host {
 					  << " TLS=" << (IsNodeProvider ? "enabled" : "not-applicable")
 					  << " Endpoint=" << (IsNodeProvider ? NodeEndpointDiagnostic : "not-applicable") << '\n';
 			const auto ContentBootstrapStarted = std::chrono::steady_clock::now();
+			auto Persistence = std::move(HostConfiguration.Persistence);
+			if (PersistenceMode == "memory") Persistence = MakeMemoryPersistenceProvider();
+			if (PersistenceMode == "sqlite")
+				Persistence = MakeDurableLocalPersistenceProvider({
+					.Path = PersistenceLocal, .ProfileId = Payload->Inspection.Identity.ToString(),
+				});
+#if defined(GARGANTUAN_WITH_NODE_PERSISTENCE)
+			if (PersistenceMode == "node")
+				Persistence = std::make_shared<NodePersistenceProvider>(NodePersistenceProviderConfiguration{
+					PersistenceEndpoint, PersistenceCertificate, PersistenceToken,
+				});
+#endif
+			if (PersistenceMode != "disabled" && !Persistence)
+				throw std::runtime_error("[Persistence:Server] Provider could not be configured");
 			Runtime = std::make_unique<Engine>(
 				World,
 				Renderer.get(),
@@ -607,6 +661,7 @@ namespace gargantuan::host {
 					.Mode = RuntimeMode::NetworkServer,
 					.EnableResidencyDemandPolicy = !FarmMode && ContentLifecycleKey.empty() && StopInFlightKey.empty(),
 					.EnableStreamingDiagnostics = Program.get<bool>("--streaming-diagnostics"),
+					.Persistence = std::move(Persistence),
 				}
 			);
 #if defined(GARGANTUAN_WITH_GNS)

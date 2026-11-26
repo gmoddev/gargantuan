@@ -140,6 +140,7 @@ The following documents describe recently implemented, source-verified slices:
 - [Persistent input actions](../../devdocs/CurrentArchitecture/InputActions.md)
 - [Entitlement service](../../devdocs/CurrentArchitecture/EntitlementService.md)
 - [Backend Provider Integration Foundation 1](../../devdocs/CurrentArchitecture/BackendProviderIntegration1.md)
+- [Foundation 11 gameplay persistence](../../devdocs/CurrentArchitecture/GameplayPersistence.md)
 - [Renderer backend boundary](../../devdocs/CurrentArchitecture/RendererBackendBoundary.md)
 - [Renderer Foundation 2 accepted architecture](../../devdocs/CurrentArchitecture/RendererFoundation2.md)
 - [Renderer Foundation 2C final backend decision](../../devdocs/CurrentArchitecture/RendererFoundation2C.md)
