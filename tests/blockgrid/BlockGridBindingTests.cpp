@@ -542,6 +542,21 @@ int main() try {
 		Shapes:DefineBlock("project:ghost",{Shape="Slab",Collision="None",Queryable=true})
 		Shapes:DefineBlock("project:solid",{Shape="Slab",Queryable=false})
 		Shapes:SetBlock(Vector3.zero,"project:ramp")
+		local Token = Shapes:GetRevision()
+		local Pending = Shapes:BeginEdit(Token)
+		Pending:SetBlock(Vector3.new(15,0,0),"Stone")
+		local Search = Shapes:FindConnected({Vector3.zero},{Bounds={Min=Vector3.zero,MaxExclusive=Vector3.one}})
+		local Moving = Instance.new("BlockGrid")
+		Moving.Parent=Room
+		Moving:SetBlock(Vector3.zero,"Stone")
+		Moving:SetMotionMode("Dynamic",Moving:GetRevision())
+		Moving:SetAssemblyVelocity(Vector3.new(4,0,0),Vector3.zero,Moving:GetRevision())
+		Room.Parent=nil
+		Room.Parent=workspace
+		assert(Shapes:GetRevision()~=Token and not pcall(function() Pending:Commit() end))
+		assert(Search:Step(1).Status=="Expired" and Shapes:GetBlock(Vector3.new(15,0,0))==nil)
+		assert(Moving.MotionMode=="Static" and Moving:GetAssemblyState().LinearVelocity==Vector3.zero)
+		Moving:Destroy()
 		Shapes:SetBlock(Vector3.new(2,0,0),"project:stair")
 		Shapes:SetBlock(Vector3.new(3,0,0),"project:ghost")
 		Shapes:SetBlock(Vector3.new(4,0,0),"project:solid")

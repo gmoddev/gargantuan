@@ -296,7 +296,7 @@ namespace gargantuan {
 		void InitializeTerrainRuntime(RuntimeMode Mode, bool AdmitNetworkTerrain = false,
 			bool ExperimentalVisualDensity = false, std::shared_ptr<const terrain::TerrainMaterialPalette> Palette = {});
 		void PollTerrainWork();
-		void RetireDomainTerrainRuntime();
+		void RetireDomainRuntime();
 		[[nodiscard]] bool IsSpatiallyAvailable() const;
 		std::uint64_t SpatialActivation{1};
 		friend class SpatialCollisionLease;

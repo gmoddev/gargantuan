@@ -251,8 +251,8 @@ namespace gargantuan {
 		const auto Scope=GetReplicationScopeId(), Id=GetObjectId();
 		const auto World=WorldRoot::GetEffectiveWorld(*this);
 		const auto Domain=World?World->GetObjectId():ObjectId{};
-		return std::format("{}.{}:{}.{}:{}.{}:{}:{}",Scope.Slot,Scope.Generation,Id.Slot,Id.Generation,Domain.Slot,Domain.Generation,
-			ConfigurationRevision,SourceRevision);
+		return std::format("{}.{}:{}.{}:{}.{}:{}:{}:{}",Scope.Slot,Scope.Generation,Id.Slot,Id.Generation,Domain.Slot,Domain.Generation,
+			World ? World->GetSpatialActivation() : 0,ConfigurationRevision,SourceRevision);
 	}
 	std::string BlockGrid::ApplyEdit(const blockgrid::EditRequest& Edit,const blockgrid::Patch* Prepared) {
 		AssertCanMutate();

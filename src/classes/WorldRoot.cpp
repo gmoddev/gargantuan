@@ -1220,8 +1220,12 @@ namespace gargantuan {
 		return !dynamic_cast<const SpatialRegion *>(this) || bool(SpatialRegion::FindAttachedWorld(*this));
 	}
 
-	void WorldRoot::RetireDomainTerrainRuntime() {
+	void WorldRoot::RetireDomainRuntime() {
 		RetireSpatialCollision();
+		while (BlockGridState && !BlockGridState->Members.empty()) {
+			const auto Grid = BlockGridState->Members.begin()->second.Grid;
+			RemoveBlockGrid(Grid);
+		}
 		TerrainRuntimeValue.reset();
 		TerrainEditTickets.reset();
 		TerrainTicketBase = LastTerrainTicket;
