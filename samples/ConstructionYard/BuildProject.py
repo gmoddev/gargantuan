@@ -50,10 +50,13 @@ def Build(Engine, Destination):
         State = Stamp(Host, State, dict(Shape="Sphere", Mode="Add", Center=[7, -1.1, -5], Radius=3, Material=2))
         Stamp(Host, State, dict(Shape="Sphere", Mode="Subtract", Center=[1, -0.7, -3], Radius=2.1))
         Script = Schema["Script"]
-        Create("Script", "Yard", Root, InitialSource=(Sources / "Yard.luau").read_text(encoding="utf-8"),
-               InitialProperties=[dict(DeclaringClassSchemaId=Script["SchemaId"],
-                                       DeclaringDefinitionVersion=Script["DefinitionVersion"], Property="RunContext",
-                                       Value=dict(Type="EnumItem", Enum="RunContext", Value="Server"))])
+        Storage = next(Item["Id"] for Item in Snapshot["Objects"] if Item["ClassName"] == "ReplicatedStorage")
+        Create("RemoteEvent", "YardRequest", Storage)
+        for Name, Context in (("Yard", "Server"), ("YardInput", "Client")):
+            Create("Script", Name, Root, InitialSource=(Sources / f"{Name}.luau").read_text(encoding="utf-8"),
+                   InitialProperties=[dict(DeclaringClassSchemaId=Script["SchemaId"],
+                                           DeclaringDefinitionVersion=Script["DefinitionVersion"], Property="RunContext",
+                                           Value=dict(Type="EnumItem", Enum="RunContext", Value=Context))])
         Host.Call("SaveProject")
         Host.Call("OpenProject", Root=Destination.as_posix())
         Reopened = Host.Call("GetSnapshot")["Snapshot"]

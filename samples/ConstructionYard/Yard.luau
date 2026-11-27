@@ -1,6 +1,7 @@
 local Space = game:GetService("Workspace")
 local Players = game:GetService("Players")
 local Actions = game:GetService("ActionMap")
+local YardRequest = game:GetService("ReplicatedStorage").YardRequest
 local Workshop = Space.Workshop
 local Wall = Space.RetainingWall
 local Floor = Workshop.WorkshopBlocks
@@ -20,12 +21,9 @@ end
 -- Both survey markers occupy the same coordinates in separate physics worlds.
 PlacePart(Space, "OutdoorMarker", V(4, 3, 3), true, Color3.fromRGB(229, 154, 55))
 PlacePart(Workshop, "WorkshopMarker", V(4, 3, 3), true, Color3.fromRGB(59, 142, 190))
-PlacePart(Space, "LooseStone", V(5, 6, 1), false, Color3.fromRGB(108, 121, 134))
-
-local function Character()
-	local Player = Players.LocalPlayer or Players:GetPlayers()[1]
-	return if Player then Player.Character else nil
-end
+-- The offline stone demonstrates gravity. Online the stationary stone is safe to reserve for a returning player.
+local Loose = Players.LocalPlayer ~= nil
+PlacePart(Space, "LooseStone", if Loose then V(5, 6, 1) else V(5, 1, 1), not Loose, Color3.fromRGB(108, 121, 134))
 
 local Width = 6
 local BlocksAdded = {[Wall] = 0, [Floor] = 0}
@@ -143,20 +141,53 @@ if Durable then
 		warn("[Spatial:ConstructionYard] Could not restore edits: " .. tostring(Failure))
 	end
 end
-local function UseTool(Name)
-	local Avatar = Character()
-	if not Avatar or not Avatar.RootPart then return end
+local PendingDoors = {}
+
+local function UseDoor(Player, Avatar, Inside)
+	if PendingDoors[Player] then return end
+	local LocalPosition = Avatar.RootPart.Position
+	if math.abs(LocalPosition.X) > 10 or math.abs(LocalPosition.Z - 2) > 10 then return end
+	local Destination = if Inside then Space else Workshop
+	local Params = RaycastParams.new()
+	Params.IncludeBlockGrids = true
+	Params.IncludeTerrain = true
+	local FloorHit = Destination:Raycast(V(0, 10, 2), V(0, -24, 0), Params)
+	if not FloorHit then return end
+	local Landing = FloorHit.Position + V(0, math.max(Avatar.CapsuleHeight, Avatar.RootPart.Size.Y) * 0.5 + 1, 0)
+	local Margin = V(4, math.max(5, Avatar.CapsuleHeight + 1), 4)
+	local Ticket, Failure = Player:RequestSpatialTransfer(Destination, CFrame.new(Landing), Landing - Margin, Landing + Margin)
+	if not Ticket then
+		warn("[Spatial:ConstructionYard] Door request " .. tostring(Failure))
+		return
+	end
+	PendingDoors[Player] = Ticket
+	task.spawn(function()
+		local Status = Ticket:GetStatus()
+		while Status == "Pending" do
+			task.wait(0.03)
+			Status = Ticket:GetStatus()
+		end
+		if PendingDoors[Player] ~= Ticket then return end
+		PendingDoors[Player] = nil
+		if Status == "Applied" then
+			if Player == Players.LocalPlayer then
+				Space.CurrentSpatialRegion = Avatar.RootPart.SpatialRegion
+			else
+				YardRequest:TryFireClient(Player, "DoorApplied")
+			end
+		else
+			warn("[Spatial:ConstructionYard] Door request ended " .. Status)
+		end
+	end)
+end
+
+local function UseTool(Player, Name)
+	if typeof(Name) ~= "string" or (Name ~= "YardDoor" and Name ~= "YardBuild" and Name ~= "YardDig") then return end
+	local Avatar = Player and Player.Character
+	if not Avatar or not Avatar.RootPart or PendingDoors[Player] then return end
 	local Inside = Avatar.RootPart.SpatialRegion == Workshop
 	if Name == "YardDoor" then
-		local Destination = if Inside then Space else Workshop
-		local Params = RaycastParams.new()
-		Params.IncludeBlockGrids = true
-		Params.IncludeTerrain = true
-		local FloorHit = Destination:Raycast(V(0, 8, 2), V(0, -20, 0), Params)
-		if not FloorHit then return end
-		Avatar.RootPart.SpatialRegion = if Inside then nil else Workshop
-		Avatar.CFrame = CFrame.new(0, FloorHit.Position.Y + 3, 2)
-		Space.CurrentSpatialRegion = if Inside then nil else Workshop
+		UseDoor(Player, Avatar, Inside)
 	elseif Name == "YardBuild" then
 		local Grid = if Inside then Floor else Wall
 		if BlocksAdded[Grid] < Width * 4 then Change({Kind = if Inside then "floor" else "wall"}) end
@@ -166,15 +197,22 @@ local function UseTool(Name)
 	end
 end
 
-local Bindings = {
-	Actions:BindKey("YardBuild", Enum.KeyCode.B, 1, 101, true),
-	Actions:BindKey("YardDig", Enum.KeyCode.E, 1, 101, true),
-	Actions:BindKey("YardDoor", Enum.KeyCode.F, 1, 101, true),
-}
-local Connection = Actions.ActionBegan:Connect(UseTool)
+local Remote = YardRequest.OnPlayerEvent:Connect(UseTool)
+local LocalInput = Actions.ActionBegan:Connect(function(Name)
+	local LocalPlayer = Players.LocalPlayer
+	if LocalPlayer then UseTool(LocalPlayer, Name) end
+end)
+local Removing = Players.PlayerRemoving:Connect(function(Player)
+	local Ticket = PendingDoors[Player]
+	if Ticket then
+		PendingDoors[Player] = nil
+		Ticket:Cancel()
+	end
+end)
 script.Destroying:Connect(function()
-	Connection:Disconnect()
-	for _, Binding in Bindings do Actions:Unbind(Binding) end
+	Remote:Disconnect()
+	LocalInput:Disconnect()
+	Removing:Disconnect()
 end)
 if not Faulted then
 	print(string.format("[Spatial:ConstructionYard] ready edits=%d persistence=%s", #History, if Durable then "documents" else "session"))
