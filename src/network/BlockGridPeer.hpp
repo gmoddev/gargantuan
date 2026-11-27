@@ -64,15 +64,16 @@ namespace gargantuan::network {
 			std::size_t Cursor{};
 			std::uint64_t ProgressTick{};
 			std::uint64_t SourceRevision{};
-			bool Offered{}, Installed{};
+			bool Offered{}, Installed{}, Publishing{};
 		};
 		bool Server;
+		bool Retired{};
 		std::uint64_t Epoch{}, NextToken{1};
 		ObjectId Domain, LastServed;
 		std::uint64_t GrantGeneration{};
 		std::shared_ptr<const blockgrid::SharedAssetPins> SharedAssets;
 		std::map<ObjectId, Entry> Grids;
-		std::optional<Transfer> Active;
+		std::shared_ptr<Transfer> Active;
 		GridStreamReceiver Receiver;
 		[[nodiscard]] bool FencesInstalled(ObjectId Source,const SpatialDestinationBounds* Bounds=nullptr) const;
 		[[nodiscard]] GridTransferFence CurrentFence(ObjectId Id,const BlockGrid& Grid,const Resolve& Find) const;

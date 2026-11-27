@@ -47,7 +47,7 @@ namespace gargantuan::network {
 		return NextToken++;
 	}
 	void BlockGridPeer::Track(ObjectId Grid) {
-		if (Server || Grids.contains(Grid)) return;
+		if (Retired || Server || Grids.contains(Grid)) return;
 		if (Grids.size() >= MaximumGrids) throw std::length_error("[BlockGrid:Network] Grid shell budget exhausted");
 		Grids.emplace(Grid, Entry{.Subscription = Token()});
 	}
@@ -63,6 +63,7 @@ namespace gargantuan::network {
 		}
 	}
 	void BlockGridPeer::Retire() {
+		Retired=true;
 		while (!Grids.empty())
 			Forget(Grids.begin()->first);
 	}
@@ -165,6 +166,7 @@ namespace gargantuan::network {
 			ReceiptContent(Entry.Known.Digest,Entry.MotionRevision,Entry.Fence.Generation),Entry.Revision,Entry.Configuration,true,Empty};
 	}
 	void BlockGridPeer::Receive(const GridStreamMessage &Message, const Resolve &Find, std::uint64_t Tick) {
+		if (Retired) return;
 		if (Message.Scope.Epoch != Epoch || Message.Scope.Domain != Domain || Message.Scope.GrantGeneration != GrantGeneration)
 			throw std::invalid_argument("[BlockGrid:Network] Transfer outside the session grant");
 		if (Server)
@@ -227,7 +229,7 @@ namespace gargantuan::network {
 		auto &Entry = Found->second;
 		if (Entry.LocalMembership && Entry.LocalMembership!=Grid->GetDomainMembershipRevision()) {
 			Forget(M.Scope.Grid);
-			Track(M.Scope.Grid);
+			if (Find(M.Scope.Grid)==Grid) Track(M.Scope.Grid);
 			return;
 		}
 		Entry.Replica = Grid;
@@ -239,20 +241,20 @@ namespace gargantuan::network {
 				throw std::invalid_argument("[BlockGrid:Network] Unknown cancellation");
 			Active.reset();
 			Receiver.Cancel();
-			Grid->RetireReplicaContent();
 			Entry.Known = {};
 			Entry.Revision = Entry.Configuration = Entry.MotionRevision = 0;
 			Entry.LastSerial = M.Serial;
+			Grid->RetireReplicaContent();
 			return;
 		}
 		if (!Entry.Requested || M.Serial <= Entry.LastSerial)
 			throw std::invalid_argument("[BlockGrid:Network] Unrequested transfer");
 		if (M.Kind == GridStreamKind::Unavailable) {
 			if (Active) throw std::invalid_argument("[BlockGrid:Network] Availability changed during an active offer");
-			Grid->RetireReplicaContent();
 			Entry.Known = {};
 			Entry.Revision = Entry.Configuration = Entry.MotionRevision = 0;
 			Entry.LastSerial = M.Serial;
+			Grid->RetireReplicaContent();
 			return;
 		}
 		if (M.Kind == GridStreamKind::Offer) {
@@ -265,7 +267,7 @@ namespace gargantuan::network {
 				(M.Revision == Entry.Revision && M.Configuration == Entry.Configuration &&
 				 M.MotionRevision == Entry.MotionRevision && M.Fence==Entry.Fence))
 				throw std::invalid_argument("[BlockGrid:Network] Unexpected revision");
-			Active.emplace(Transfer{.Offer = M, .ProgressTick = Tick});
+			Active=std::make_shared<Transfer>(Transfer{.Offer=M,.ProgressTick=Tick});
 			Entry.LocalMembership=Grid->GetDomainMembershipRevision();
 			if (Grid->HasReplicaField() && Entry.Known.Bytes && Entry.Known.Digest == M.Target && M.Base == M.Target &&
 				M.Prefix == M.Size && M.Size == Entry.Known.Bytes->size()) {
@@ -287,14 +289,18 @@ namespace gargantuan::network {
 		}
 	}
 	void BlockGridPeer::Prune(const Resolve &Find) {
-		for (auto It = Grids.begin(); It != Grids.end();) {
-			const auto Current=It++;
+		// Forget publishes replica retirement. Its callbacks may remove further subscriptions.
+		std::optional<ObjectId> Previous;
+		for (;;) {
+			const auto Current=Previous ? Grids.upper_bound(*Previous) : Grids.begin();
+			if (Current==Grids.end()) break;
 			const auto Id=Current->first;
+			Previous=Id;
 			const auto Grid=Find(Id);
 			if (!Grid) Forget(Id);
 			else if (!Server && Current->second.LocalMembership && Current->second.LocalMembership!=Grid->GetDomainMembershipRevision()) {
 				Forget(Id);
-				Track(Id);
+				if (Find(Id)==Grid) Track(Id);
 			}
 		}
 	}
@@ -304,29 +310,52 @@ namespace gargantuan::network {
 			throw std::runtime_error("[BlockGrid:Network] Grid transfer timed out");
 		if (!Server) {
 			if (Active && Active->Content.Bytes) {
-				const auto &Offer = Active->Offer;
-				const auto Grid = Find(Offer.Scope.Grid);
-				if (!Grid || !Offer.Assembly || PlacementDigest(*Grid, Offer.Assembly->Pose) != Offer.Placement) return;
-				if (Active->PendingField) {
-					Grid->InstallReplicaField(std::move(*Active->PendingField),Active->Content.Coverage);
-					Active->PendingField.reset();
+				const auto Held=Active;
+				if (Held->Publishing) return;
+				const auto &Offer=Held->Offer;
+				const auto Id=Offer.Scope.Grid;
+				const auto Grid=Find(Id);
+				if (!Grid || !Offer.Assembly || PlacementDigest(*Grid,Offer.Assembly->Pose)!=Offer.Placement) return;
+				const auto Membership=Grid->GetDomainMembershipRevision();
+				const auto Current=[&] {
+					return Active==Held && !Retired && !Grid->GetDestroyed() && !Grid->IsDestroying() &&
+						Grid->GetDomainMembershipRevision()==Membership && Find(Id)==Grid;
+				};
+				// Publish field and pose together. A callback can close the session, retire the
+				// subscription or poll again before native collision is acknowledged.
+				struct Publication {
+					bool &Flag;
+					explicit Publication(bool &Value) : Flag(Value) { Flag=true; }
+					~Publication() { Flag=false; }
+				} Guard(Held->Publishing);
+				ScopedSignalDeferral Signals;
+				if (Held->PendingField) {
+					Grid->InstallReplicaField(std::move(*Held->PendingField),Held->Content.Coverage);
+					Held->PendingField.reset();
 				}
 				(void)Grid->ApplyReplicaAssemblyProjection(*Offer.Assembly);
-				const auto World = WorldRoot::GetEffectiveWorld(*Grid);
-				if (!World || !Grid->EnsureAssetBindings() || !World->VerifyReplicaGridInstallation(*Grid)) return;
-				Active->Installed = true;
-				auto Ack = Offer;
-				Ack.Kind = GridStreamKind::Installed;
-				if (!Queue(Ack)) return;
-				auto &Entry = Grids.at(Offer.Scope.Grid);
-				Entry.Known = std::move(Active->Content);
-				Entry.Revision = Offer.Revision;
-				Entry.Configuration = Offer.Configuration;
-				Entry.MotionRevision = Offer.MotionRevision;
+				const auto FieldRevision=Grid->GetField().GetRevision();
+				const auto Configuration=Grid->GetConfigurationRevision();
+				Signals.Commit();
+				if (!Current() || !Grid->HasReplicaField() || Grid->GetField().GetRevision()!=FieldRevision ||
+					Grid->GetConfigurationRevision()!=Configuration || PlacementDigest(*Grid,Grid->GetCFrame())!=Offer.Placement) return;
+				const auto InstalledMotion=Grid->GetAssemblyProjection();
+				const auto World=WorldRoot::GetEffectiveWorld(*Grid);
+				if (!InstalledMotion || InstalledMotion->Revision!=Offer.MotionRevision || !World ||
+					!Grid->EnsureAssetBindings() || !World->VerifyReplicaGridInstallation(*Grid) || !Current()) return;
+				Held->Installed=true;
+				auto Ack=Offer;
+				Ack.Kind=GridStreamKind::Installed;
+				if (!Queue(Ack) || !Current()) return;
+				auto &Entry=Grids.at(Id);
+				Entry.Known=std::move(Held->Content);
+				Entry.Revision=Offer.Revision;
+				Entry.Configuration=Offer.Configuration;
+				Entry.MotionRevision=Offer.MotionRevision;
 				Entry.WireMembership=Offer.Membership;
-				Entry.Placement = Offer.Placement;
+				Entry.Placement=Offer.Placement;
 				Entry.Fence=Offer.Fence;
-				Entry.LastSerial = Offer.Serial;
+				Entry.LastSerial=Offer.Serial;
 				Active.reset();
 			}
 			for (auto &[Id, Entry] : Grids) {
@@ -422,7 +451,7 @@ namespace gargantuan::network {
 					Coverage.Rectangle && Entry.Known.Coverage->Rectangle==Coverage.Rectangle && Entry.SourceRevision==Revision &&
 					Offer.Configuration==Entry.Configuration && Offer.MotionRevision==Entry.MotionRevision &&
 					Offer.Placement==Entry.Placement && Fence==Entry.Fence;
-				Active.emplace(
+				Active=std::make_shared<Transfer>(
 					Transfer{.Offer=Offer,.Content=std::move(*Next),.Cursor=NextGridLiteral(Offer,Offer.Prefix).first,
 						.ProgressTick=Tick,.SourceRevision=Revision}
 				);
