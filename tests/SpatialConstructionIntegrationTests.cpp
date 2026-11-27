@@ -510,7 +510,7 @@ namespace {
 		DiskFilesystem Files(Root);
 		auto DiskProject = Project::fromExisting(&Files);
 		constexpr auto ChangedSource = R"(Schema:RegisterClass({Namespace="Game", Name="SpatialTestMarker",
-			Version=1, Base="Engine.Folder", Properties={}}))";
+			Version=1, Base="Engine.Folder", Properties={MarkerEnabled={Type="Boolean",Default=true}}}))";
 		Require(DiskProject.ReplacePreRunSource(std::nullopt,ChangedSource), "PreRun project source change was not admitted");
 		Ok("OpenProject",Open);
 		const auto ChangedSourceState = Ok("GetPreRunSource",Empty);
