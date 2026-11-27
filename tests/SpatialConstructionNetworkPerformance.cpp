@@ -128,6 +128,8 @@ namespace {
 			for (const auto &Child : Collection->GetChildren()) {
 				const auto Piece = std::dynamic_pointer_cast<Part>(Child);
 				Require(Piece && Piece->GetAnchored() && Piece->GetSize() == glm::vec3(1), "invalid received Part");
+				const glm::vec3 ExpectedColor(139.f / 255.f, 144.f / 255.f, 151.f / 255.f);
+				Require(glm::length(glm::vec3(Piece->GetColor()) - ExpectedColor) < .001f, "received color differs");
 				const auto P = Piece->GetCFrame().Position - glm::vec3(.5f);
 				const glm::ivec3 Cell(P);
 				Require(
@@ -161,6 +163,7 @@ namespace {
 		auto In = std::make_shared<GameNetworkingSocketsTransport>();
 		const auto Limits = GameSessionConfiguration::DefaultLimits();
 		const TransportEndpoint Endpoint{"127.0.0.1", Port};
+		std::unique_ptr<Engine> RemoteRuntime;
 		GameSession Server(
 			Out,
 			{.Role = GameSessionRole::Server, .Endpoint = Endpoint, .Limits = Limits, .SpatialContent = true},
@@ -169,7 +172,6 @@ namespace {
 		GameSession Client(
 			In, {.Role = GameSessionRole::Client, .Endpoint = Endpoint, .Limits = Limits, .SpatialContent = true}
 		);
-		std::unique_ptr<Engine> RemoteRuntime;
 		std::uint64_t Tick{}, StartTick{};
 		double ServerUs{}, ClientUs{};
 		auto Start = Clock::now();
