@@ -333,20 +333,35 @@ namespace gargantuan {
 						try {
 							const auto& Edit = *CommandValue.Edit;
 							if (Replay) {
-								if (!Edit.Writes.empty() || Edit.ExpectedRevision)
+								if (!Edit.Writes.empty() || Edit.ExpectedRevision || Edit.Binding || (Edit.Replay->Binding && !Edit.Replay->Cells.empty()))
 									return {MutationStatus::ValidationFailed,{}, "[BlockGrid:History] Mixed replay command"};
+								if (Edit.Replay->Binding)
+									return {.Status=MutationStatus::Success, .Object=CommandValue.Object,
+										.BlockRevision=Grid->ApplyWrites({}, {}, false, nullptr, &*Edit.Replay->Binding, Edit.Forward)};
 								auto Writes = blockgrid::ReplayWrites(Grid->GetField(),*Edit.Replay,Edit.Forward);
 								return {.Status=MutationStatus::Success, .Object=CommandValue.Object,
 									.BlockRevision=Grid->ApplyWrites(Writes,{},true)};
 							}
+							if (Edit.Binding && (!Edit.Writes.empty() || (Edit.Binding->Replace && !Edit.ExpectedRevision)))
+								return {MutationStatus::ValidationFailed,{}, "[BlockGrid:Definition] Invalid definition edit"};
 							const auto ApplyEdit = [&]() -> MutationResult {
 								return {.Status=MutationStatus::Success, .Object=CommandValue.Object,
-									.BlockRevision=Grid->ApplyWrites(Edit.Writes,Edit.ExpectedRevision)};
+									.BlockRevision=Grid->ApplyWrites(Edit.Writes,Edit.ExpectedRevision,false,Edit.Binding?&*Edit.Binding:nullptr)};
 							};
 							if (!Editor) return ApplyEdit();
 							if (Edit.ExpectedRevision && Grid->GetBlockRevision()!=*Edit.ExpectedRevision)
 								return {MutationStatus::Conflict,{}, "[BlockGrid:Conflict] Revision changed"};
-							BlockGridTransactionChange History{CommandValue.Object,blockgrid::CapturePatch(Grid->GetField(),Edit.Writes)};
+							BlockGridTransactionChange History{CommandValue.Object,{}};
+							if (Edit.Binding) {
+								const auto& Spec=Edit.Binding->Spec;
+								blockgrid::ValidateDefinition(Spec);
+								auto Patch=std::make_shared<blockgrid::Patch>();
+								const auto& F=Grid->GetField();
+								std::optional<blockgrid::Definition> Before;
+								if (const auto Id=F.FindDefinitionId(Spec.Key)) Before=F.GetDefinition(*Id);
+								if (!Before || *Before!=Spec) Patch->Binding=blockgrid::BindingDelta{std::move(Before),Spec};
+								History.Delta=std::move(Patch);
+							} else History.Delta=blockgrid::CapturePatch(Grid->GetField(),Edit.Writes);
 							// Match ordinary authoring owner/transaction checks, including a no-op.
 							return ApplyAuthoringTransaction(World,"Edit BlockGrid",History,ApplyEdit,
 								[History](const MutationResult&) -> TransactionChange { return History; });

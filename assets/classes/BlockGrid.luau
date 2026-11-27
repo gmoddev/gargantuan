@@ -5,6 +5,7 @@ const function Native(Signature: string, Description: string, Edit: boolean?)
 end
 const Rotation = '{ Up: string, Front: string }'
 const Block = '{ Definition: string, Orientation: ' .. Rotation .. ' }'
+const Definition = '{ Shape: ("Cube" | "Slab" | "Wedge" | "Stairs")?, Color: Color3?, Collision: ("Shape" | "None")?, Queryable: boolean?, Ports: {string}? }'
 return c({
 	name = "BlockGrid",
 	description = "A discrete construction grid with native, automatically partitioned cells.",
@@ -28,7 +29,10 @@ return c({
 	},
 	methods = {
 		GetRevision = Native("(self: BlockGrid) -> string", "Returns an opaque scoped grid revision."),
-		SetBlock = Native("(self: BlockGrid, Cell: Vector3, Definition: string, Rotation: " .. Rotation .. "?) -> string", "Places a Stone or Brick at an integer cell.", true),
+		SetBlock = Native("(self: BlockGrid, Cell: Vector3, Definition: string, Rotation: " .. Rotation .. "?) -> string", "Places a built-in or registered definition at an integer cell.", true),
+		DefineBlock = Native("(self: BlockGrid, Key: string, Spec: " .. Definition .. ") -> string", "Registers a project definition and returns the current grid revision.", true),
+		ReplaceDefinition = Native("(self: BlockGrid, Key: string, Spec: " .. Definition .. ", Expected: string) -> string", "Replaces a registered definition at the expected grid revision.", true),
+		GetDefinitionDigest = Native("(self: BlockGrid, Key: string) -> string", "Returns the canonical SHA-256 digest of a definition."),
 		RemoveBlock = Native("(self: BlockGrid, Cell: Vector3) -> string", "Clears one cell.", true),
 		GetBlock = Native("(self: BlockGrid, Cell: Vector3) -> " .. Block .. "?", "Reads an occupied cell, or nil for air."),
 		Fill = Native("(self: BlockGrid, Min: Vector3, MaxExclusive: Vector3, Definition: string, Rotation: " .. Rotation .. "?) -> string", "Fills a half-open grid-local box atomically.", true),

@@ -9,7 +9,7 @@ namespace gargantuan::blockgrid {
 		std::size_t Visits=0;
 		for (const auto& W : Writes) {
 			Visits+=Volume(W.Bounds,MaximumEditVisits-Visits);
-			if (!ValidBlock(W.Value)) throw std::invalid_argument("[BlockGrid:History] Invalid definition or orientation");
+			if (!Source.IsValid(W.Value)) throw std::invalid_argument("[BlockGrid:History] Invalid definition or orientation");
 		}
 		std::map<Cell,Block,CellOrder> Desired;
 		for (const auto& W : Writes)
@@ -29,7 +29,7 @@ namespace gargantuan::blockgrid {
 		Result.reserve(P.Cells.size());
 		std::optional<Cell> Previous;
 		for (const auto& D : P.Cells) {
-			if ((Previous && !CellOrder{}(*Previous,D.Position)) || !ValidBlock(D.Before) || !ValidBlock(D.After) || D.Before==D.After)
+			if ((Previous && !CellOrder{}(*Previous,D.Position)) || !Source.IsValid(D.Before) || !Source.IsValid(D.After) || D.Before==D.After)
 				throw std::invalid_argument("[BlockGrid:History] Invalid cell history");
 			Previous=D.Position;
 			if (Source.Get(D.Position)!=(Forward?D.Before:D.After))

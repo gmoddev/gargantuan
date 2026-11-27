@@ -5,6 +5,7 @@
 #include "gargantuan/blockgrid/Edit.hpp"
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <iostream>
 #include <random>
 #include <stdexcept>
@@ -19,8 +20,91 @@ namespace {
 	bool Fill(Field& Grid, Region Bounds, Block B) {
 		const Write W{Bounds,B}; return Grid.Apply(std::span(&W,1));
 	}
+	using DVec=std::array<double,3>;
+	DVec Rotate(DVec P,std::uint8_t R,double Pivot) {
+		DVec Out{Pivot,Pivot,Pivot};
+		for (unsigned I=0;I<3;++I) for (unsigned J=0;J<3;++J) Out[I]+=Basis(R)[J][I]*(P[J]-Pivot);
+		return Out;
+	}
+	void TestDefinitions() {
+		Field F;
+		const auto Empty=Encode(F);
+		Definition Ramp{"project:ramp",Shape::Wedge,{.25f,.5f,.75f},true,true,9};
+		Check(F.Define(Ramp) && !F.Define(Ramp) && F.GetDefinitionId(Ramp.Key)==3 && F.IsValid({3,23}));
+		Reject([&]{ (void)F.GetDefinitionId("project:unknown"); });
+		for (const auto Key:{"Stone","material:x","project:","project:A","project:0-a","project:bad/key"}) {
+			auto Invalid=Ramp; Invalid.Key=Key; Reject([&]{ (void)F.Define(Invalid); });
+		}
+		auto Other=Ramp; Other.Color[1]=.2f;
+		Reject([&]{ (void)F.Define(Other); });
+		Check(DefinitionDigest(Ramp).size()==64 && DefinitionDigest(Other)!=DefinitionDigest(Ramp));
+		const auto Inactive=F;
+		Check(Fill(F,SingleCell({-1,1,1}),{3,23}) && Fill(F,SingleCell({8,0,0}),{3,1}));
+		const auto Original=Encode(F);
+		Check(Original[4]==2 && Encode(Decode(Original))==Original);
+		auto Restored=Decode(Original);
+		Reject([&]{ Restored.UndoDefinitionInsertion(Ramp); });
+		Check(Restored.GetDefinition(3)==Ramp);
+		unsigned Dirty=0;
+		Reject([&]{ (void)Restored.Define(Other,true,[&](const Field::Candidate& Next,auto Writes) {
+			Check(Writes.empty() && Next.GetDefinition(3)==Other && Next.GetOccupiedCount()==2);
+			Next.ForEachChangedLeaf([&](Cell,const Leaf* L){ Check(L && L->GetOccupiedCount()==1); ++Dirty; });
+			return false;
+		}); });
+		Check(Dirty==2 && Encode(Restored)==Original);
+		auto Changed=Restored;
+		Check(Fill(Changed,SingleCell({-1,1,1}),{}));
+		Dirty=0;
+		Check(Changed.Define(Other,true,[&](const auto& Next,auto) {
+			Next.ForEachChangedLeaf([&](Cell P,const Leaf*){ Check(P==Cell{8,0,0}); ++Dirty; });
+			return true;
+		}) && Dirty==1 && Restored.GetDefinition(3)==Ramp);
+		auto Undo=Inactive; Undo.UndoDefinitionInsertion(Ramp); Check(Encode(Undo)==Empty);
+		auto Broken=Original; Broken[7]=255; Reject([&]{ (void)Decode(Broken); });
+		Broken=Original; Broken[8]='x'; Reject([&]{ (void)Decode(Broken); });
+		Broken=Original; Broken[8+Ramp.Key.size()]=255; Reject([&]{ (void)Decode(Broken); });
+		Broken=Original; Broken[8+Ramp.Key.size()+14]=128; Reject([&]{ (void)Decode(Broken); });
+		for (unsigned S=0;S<4;++S) for (std::uint8_t R=0;R<24;++R) {
+			const auto Kind=static_cast<Shape>(S);
+			const auto& G=GetGeometry(Kind,R);
+			const auto [U,Front]=OrientationFaces(R);
+			Check(OrientationIndex(U,Front)==R && G.Collision.size()==(Kind==Shape::Stairs?2:1));
+			double Volume=0;
+			for (const auto& Face:G.Faces) {
+				Check(Face.Count==3 || Face.Count==4);
+				for (unsigned J=1;J+1<Face.Count;++J) {
+					const auto A=Face.Corners[0],B=Face.Corners[J],C=Face.Corners[J+1];
+					Volume+=(A[0]*(B[1]*C[2]-B[2]*C[1])+A[1]*(B[2]*C[0]-B[0]*C[2])+A[2]*(B[0]*C[1]-B[1]*C[0]))/6.;
+				}
+			}
+			Check(std::abs(Volume-(Kind==Shape::Cube?1.:Kind==Shape::Stairs?.75:.5))<1e-6);
+			unsigned Mask=0;
+			for (unsigned A=0;A<6;++A) if (Kind==Shape::Cube || A==3 || (Kind!=Shape::Slab && A==4))
+				Mask|=1u<<RotateFace(A,R);
+			Check(G.FullFaces==Mask);
+			if (Kind==Shape::Wedge) {
+				Check(G.Collision[0].Kind==PieceKind::Wedge && RotateFace(5,G.Collision[0].Orientation)==RotateFace(4,R));
+			}
+			Field ShapeField; auto Spec=Ramp; Spec.Geometry=Kind; Check(ShapeField.Define(Spec));
+			Check(Fill(ShapeField,SingleCell({0,0,0}),{3,R}));
+			for (double Z:{.25,.75}) {
+				const auto Hit=Cast(ShapeField,Rotate({.25,2,Z},R,.5),Rotate({0,-2,0},R,0));
+				const auto Top=Kind==Shape::Cube?1.:Kind==Shape::Slab?.5:Kind==Shape::Wedge?Z:Z<.5?.5:1.;
+				Check(Hit && Hit->Position==Cell{} && std::abs(Hit->Fraction-(2.-Top)/2.)<1e-12);
+				const auto N=Rotate(Kind==Shape::Wedge?DVec{0,std::sqrt(.5),-std::sqrt(.5)}:DVec{0,1,0},R,0);
+				for (unsigned Axis=0;Axis<3;++Axis) Check(std::abs(Hit->Normal[Axis]-N[Axis])<1e-12);
+			}
+			if (Kind==Shape::Stairs) {
+				const auto Interior=Cast(ShapeField,Rotate({.25,.25,.75},R,.5),Rotate({0,1,0},R,0));
+				Check(Interior && Interior->Fraction==.75);
+			}
+			Spec.Queryable=false; Check(ShapeField.Define(Spec,true));
+			Check(!Cast(ShapeField,Rotate({.25,2,.75},R,.5),Rotate({0,-2,0},R,0)));
+		}
+	}
 }
 int main() try {
+	TestDefinitions();
 	Field Grid;
 	Check(!Grid.GetOccupiedCount() && !Grid.GetLeafCount() && Grid.Get({-1,-1,-1}) == Block{});
 	Check(Fill(Grid,{{-8,-8,-8},{0,0,0}},{Stone,0}) && Grid.GetOccupiedCount() == LeafVolume);

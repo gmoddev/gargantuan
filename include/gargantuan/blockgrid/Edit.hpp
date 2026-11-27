@@ -6,7 +6,9 @@
 
 namespace gargantuan::blockgrid {
 	struct CellDelta { Cell Position; Block Before, After; };
-	struct Patch { std::vector<CellDelta> Cells; };
+	struct BindingDelta { std::optional<Definition> Before; Definition After; };
+	struct Patch { std::vector<CellDelta> Cells; std::optional<BindingDelta> Binding; };
+	struct BindingEdit { Definition Spec; bool Replace{}; };
 	[[nodiscard]] std::shared_ptr<const Patch> CapturePatch(const Field& Source, std::span<const Write> Writes);
 	[[nodiscard]] std::vector<Write> ReplayWrites(const Field& Source, const Patch& Value, bool Forward);
 	struct EditRequest {
@@ -15,5 +17,6 @@ namespace gargantuan::blockgrid {
 		// Only the trusted authoring history replay path may supply an inverse.
 		std::shared_ptr<const Patch> Replay;
 		bool Forward{};
+		std::optional<BindingEdit> Binding;
 	};
 }
