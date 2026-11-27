@@ -11,6 +11,7 @@
 #include "gargantuan/physics/SoftBodyBackend.hpp"
 #include "gargantuan/runtime/RuntimeMode.hpp"
 #include "gargantuan/runtime/SpatialDestination.hpp"
+#include "gargantuan/runtime/SpatialResidency.hpp"
 #include <span>
 
 #include <cstdint>
@@ -88,6 +89,11 @@ namespace gargantuan {
 		[[nodiscard]] bool CanHoldSpatialCollision(ObjectId Subject) const;
 		[[nodiscard]] bool CanHoldSpatialSubject(ObjectId Subject);
 		[[nodiscard]] std::uint64_t GetSpatialActivation() const noexcept { return SpatialActivation; }
+		[[nodiscard]] std::expected<std::shared_ptr<SpatialCollisionLease>,SpatialRequestFailure> RequestSpatialCollision(
+			SpatialResidencyAudience Audience,const SpatialDestinationBounds &Bounds,std::span<const ObjectId> RequiredOwners,
+			SpatialDemandPriority Priority,std::chrono::milliseconds Duration,SpatialResidencyClock::time_point Now);
+		[[nodiscard]] SpatialCollisionWork PumpSpatialCollision(SpatialResidencyClock::time_point Now,std::size_t MaximumCaptures=2);
+		void RetireSpatialAudience(SpatialResidencyAudience Audience);
 		// Main-only checked teleport for one ordinary rigid Part. Clearance uses its conservative oriented box.
 		[[nodiscard]] PhysicsOperationResult CommitSpatialTransfer(const std::shared_ptr<BasePart> &Member,
 			const SpatialMovementRequest &Movement, const SpatialDestinationReceipt &Receipt, const SpatialMovementLease &Admission = {});
@@ -275,6 +281,10 @@ namespace gargantuan {
 		void RetireDomainTerrainRuntime();
 		[[nodiscard]] bool IsSpatiallyAvailable() const;
 		std::uint64_t SpatialActivation{1};
+		friend class SpatialCollisionLease;
+		std::shared_ptr<SpatialCollisionQueue> CollisionDemand;
+		bool SpatialDemandScheduled{};
+		void RetireSpatialCollision();
 		std::uint64_t TerrainTicketBase{};
 		std::uint64_t LastTerrainTicket{};
 		[[nodiscard]] std::expected<std::uint64_t, terrain::EditStatus>

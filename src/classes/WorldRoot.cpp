@@ -1139,6 +1139,7 @@ namespace gargantuan {
 	}
 
 	WorldRoot::~WorldRoot() {
+		RetireSpatialCollision();
 		ShutdownPhysics();
 		if (auto Child = TerrainChild.lock()) Child->RetireField();
 	}
@@ -1218,6 +1219,7 @@ namespace gargantuan {
 	}
 
 	void WorldRoot::RetireDomainTerrainRuntime() {
+		RetireSpatialCollision();
 		TerrainRuntimeValue.reset();
 		TerrainEditTickets.reset();
 		TerrainTicketBase = LastTerrainTicket;
@@ -1649,6 +1651,7 @@ namespace gargantuan {
 		(void)Instances;
 		if (!IsSpatiallyAvailable()) return;
 		PollTerrainWork();
+		if (SpatialDemandScheduled) (void)PumpSpatialCollision(SpatialResidencyClock::now());
 		const auto *TerrainPhysics = GetTerrainPhysics();
 		if (TerrainPhysics && (TerrainPhysics->IsStaging() || !TerrainPhysics->IsHealthy())) return;
 
