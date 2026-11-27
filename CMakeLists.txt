@@ -1085,6 +1085,12 @@ if(BUILD_TESTING)
 		if(GARGANTUAN_RUN_GRAPHICAL_PACKAGE_SMOKE)
 			add_test(NAME gargantuan_spatial_construction_vulkan COMMAND gargantuan_spatial_construction_integration_tests --vulkan)
 			set_tests_properties(gargantuan_spatial_construction_vulkan PROPERTIES LABELS "spatial;blockgrid;graphical")
+			if(GARGANTUAN_SPATIAL_TEST_PYTHON)
+				add_test(NAME gargantuan_spatial_domain_lighting
+					COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialDomainLighting.py"
+						--engine $<TARGET_FILE:gargantuan>)
+				set_tests_properties(gargantuan_spatial_domain_lighting PROPERTIES LABELS "spatial;editor;graphical" TIMEOUT 65)
+			endif()
 		endif()
 	endif()
 	add_executable(gargantuan_prepared_property_tests "tests/PreparedPropertyTests.cpp")
