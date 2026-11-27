@@ -24,7 +24,7 @@ local Lo, Hi = Vector3.new(-8,-6,-8), Vector3.new(9,6,9)
 local function Signature(Bytes)
 	local Sum=0
 	for I=1,#Bytes do Sum=(Sum*131+string.byte(Bytes,I))%4294967291 end
-	return string.format("%.0f",Sum)
+	return Sum
 end
 local function Surface()
 	local Space=game.Workspace
