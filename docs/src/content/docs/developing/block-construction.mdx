@@ -33,6 +33,59 @@ The direction vector includes the length of the ray segment. A grid raycast retu
 
 Use `Clear(Min, MaxExclusive)` to remove a box. `ReadRegion` returns occupied cells and the revision of the read. Point and box edits are atomic. Keep opaque revision strings with their issuing grid and current world. In this implementation a single fill or clear visits up to 32,768 cells and a region read covers up to 4,096 cells. A large build can use several bounded edits. Each edit may also reach a physics or storage budget, so arrange large batches around meaningful application changes.
 
+## Define an oriented block
+
+Register a shared shape once per grid. A definition key begins with `project:` and uses lowercase letters. Local ports rotate with the block. Choose perpendicular directions for `Up` and `Front`.
+
+```luau
+Wall:DefineBlock("project:ledge", {
+	Shape = "Slab",
+	Color = Color3.fromRGB(174, 131, 89),
+	Ports = {"+X", "-X"},
+})
+Wall:SetBlock(Vector3.new(0, 3, 0), "project:ledge", {Up = "+Y", Front = "-Z"})
+```
+
+The primitive shapes are `Cube`, `Slab`, `Wedge` and `Stairs`. Set `Collision = "None"` for a decorative piece. Set `Queryable = false` to exclude it from picking. Replacing a definition updates its existing cells. Pass the grid's current revision to `ReplaceDefinition` and use `GetDefinitionDigest(Key)` to compare the content of a particular definition.
+
+## Commit one gameplay change
+
+A server can place a cell and set gameplay state in the same edit. Declare each channel once. Its default is shared, so a cell only needs storage for a value that differs from the default.
+
+```luau
+Wall:DefineChannel("powered", {Kind = "Bool", Default = false, Indexed = true})
+local Cell = Vector3.new(0, 3, 0)
+local Edit = Wall:BeginEdit()
+Edit:SetBlock(Cell, "project:ledge")
+Edit:SetValue(Cell, "powered", true)
+Edit:Commit()
+assert(Wall:GetValue(Cell, "powered"))
+```
+
+Use `BeginEdit(ExpectedRevision)` after a read that drives a decision. If another writer changes the grid before commit, the stale edit fails as a unit. Read the affected cells again before deciding whether to retry. Call `Cancel()` to discard pending commands. An edit accepts up to 1,024 commands and is also bounded by visited cells and provider capacity.
+
+Channels support `Bool`, `UInt8`, `Int32` and `Float32`. Choose `Persistent = true` for authored save data, `OnCopy = "Value"` for values that should follow copies, and `Indexed = true` when gameplay needs to enumerate nondefault entries. The default network audience is server-only. `Audience = "RelevantPeers"` opts a channel into the public projection for an admitted peer.
+
+## Process a connected component in batches
+
+```luau
+local Search = Wall:FindConnected({Cell}, {
+	Bounds = {Min = Vector3.new(-8, 0, -8), MaxExclusive = Vector3.new(8, 8, 8)},
+	Adjacency = "Face", UsePorts = true, MaxVisited = 128,
+})
+while true do
+	local Page = Search:Step(32)
+	for _, Position in Page.Cells do
+		print(Position)
+	end
+	if Page.Status ~= "More" then break end
+end
+```
+
+With `UsePorts`, each face connection requires a matching port on both oriented neighbors. `StopAt` can finish the traversal when it finds a particular definition. A traversal pins the grid state it started from. Compare its revision with the live grid before applying decisions. `FindActive(Channel, Bounds)` uses the same paging interface for an indexed channel. A limited, expired or canceled traversal can return a partial result. Only a completed traversal establishes that the component was exhausted.
+
+For rectangular selections, `ReadRegion` accepts a definition list or a channel equality filter. `ReadPacked` returns a palette, its definition digests and an X-fastest buffer. Use an edit's `WritePacked` to validate and apply it. For copying within a grid, `CopyRegion` and `MoveRegion` work on native cells inside the same edit.
+
 ## Give an interior its own space
 
 ```luau
