@@ -50,6 +50,7 @@ namespace gargantuan::blockgrid {
 	  public:
 		[[nodiscard]] Block Get(unsigned X, unsigned Y, unsigned Z) const;
 		[[nodiscard]] unsigned GetOccupiedCount() const noexcept { return Occupied; }
+		[[nodiscard]] bool HasCustomCells() const noexcept { return CustomCells!=0; }
 		[[nodiscard]] std::optional<Block> GetUniform() const noexcept;
 		void ForEachOccupied(const std::function<void(unsigned, unsigned, unsigned, Block)>& Visit) const;
 

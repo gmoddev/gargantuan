@@ -1440,10 +1440,11 @@ namespace gargantuan {
 			}
 			if (!CandidateObject.IsValid())
 				return Fail(PhysicsOperationStatus::BackendFailure, "Physics raycast hit has no live semantic owner");
-			if (!SelectedHit || CandidateObject < SelectedObject ||
+			const bool SameClass=bool(CandidateGrid)==bool(SelectedGrid);
+			if (!SelectedHit || (!CandidateGrid && SelectedGrid && Candidate.Distance==NearestDistance) || (SameClass && (CandidateObject < SelectedObject ||
 				(CandidateObject == SelectedObject && (CandidateChunk < SelectedChunk ||
 					(Cell && SelectedCell && std::tie(Cell->x, Cell->y, Cell->z) <
-						std::tie(SelectedCell->x, SelectedCell->y, SelectedCell->z))))) {
+						std::tie(SelectedCell->x, SelectedCell->y, SelectedCell->z))))))) {
 				SelectedHit = &Candidate;
 				SelectedPart = std::move(CandidatePart);
 				SelectedGrid = std::move(CandidateGrid);

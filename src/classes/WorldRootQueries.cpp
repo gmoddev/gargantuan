@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <set>
+#include <tuple>
 
 namespace gargantuan {
     namespace {
@@ -46,22 +48,44 @@ namespace gargantuan {
         const auto *TerrainPhysics = GetTerrainPhysics();
         const auto CandidateTerrain = Params.IncludeTerrain ? GetTerrainQueryOwner() : nullptr;
         Result.Parts.reserve(BackendResult.Bodies.size());
+        std::vector<std::pair<std::shared_ptr<BlockGrid>,PhysicsBodyId>> GridBodies;
         for (auto Id:BackendResult.Bodies) {
             auto Part=ResolvePart(Id);
             if (Part) Result.Parts.push_back(std::move(Part));
-            else if (auto Grid = ResolveBlockGrid(Id)) Result.BlockGrids.push_back(std::move(Grid));
+            else if (auto Grid = ResolveBlockGrid(Id)) GridBodies.emplace_back(std::move(Grid),Id);
             else if (CandidateTerrain && TerrainPhysics->FindOwner(Id))
                 Result.TerrainInstance = CandidateTerrain;
             else return {.Status=PhysicsOperationStatus::BackendFailure, .Message="Overlap has no live semantic owner"};
         }
         std::ranges::sort(Result.Parts, {}, [](const auto &Part) { return Part->GetObjectId(); });
-        std::ranges::sort(Result.BlockGrids, {}, [](const auto &Grid) { return Grid->GetObjectId(); });
-        const auto Repeated = std::ranges::unique(Result.BlockGrids);
-        Result.BlockGrids.erase(Repeated.begin(), Repeated.end());
-        Result.Truncated = Result.Parts.size() + Result.BlockGrids.size() > MaxResults;
+        Result.Truncated = Result.Parts.size() > MaxResults;
         if (Result.Parts.size() > MaxResults) Result.Parts.resize(MaxResults);
-        const auto GridLimit = MaxResults - Result.Parts.size();
-        if (Result.BlockGrids.size() > GridLimit) Result.BlockGrids.resize(GridLimit);
+        if (!Params.IncludeBlockGrids) return Result;
+        auto Remaining=MaxResults-Result.Parts.size();
+        if (Result.TerrainInstance) {
+            if (Remaining) --Remaining;
+            else { Result.TerrainInstance.reset(); Result.Truncated=true; }
+        }
+        if (Result.Truncated || GridBodies.empty()) return Result;
+        std::ranges::sort(GridBodies,{},[](const auto& Pair){return std::pair{Pair.first->GetObjectId(),Pair.second};});
+        std::set<std::tuple<ObjectId,int,int,int>> Seen;
+        std::size_t Work=blockgrid::MaximumEditVisits;
+        for (const auto& [Grid,Body]:GridBodies) {
+            const auto Status=VisitBlockOverlap(Body,Shape,Work,[&](glm::ivec3 P) {
+                if (!Seen.emplace(Grid->GetObjectId(),P.x,P.y,P.z).second) return true;
+                if (!Remaining) { Result.Truncated=true; return false; }
+                --Remaining;
+                Result.GridCells.push_back({Grid,P,Grid->GetBlockRevision()});
+                if (Result.BlockGrids.empty() || Result.BlockGrids.back()!=Grid) Result.BlockGrids.push_back(Grid);
+                return true;
+            });
+            if (Status!=PhysicsOperationStatus::Success)
+                return {.Status=Status,.Message="[BlockGrid:Unavailable] Overlap cell refinement could not complete"};
+            if (Result.Truncated) break;
+        }
+        std::ranges::sort(Result.GridCells,{},[](const OverlapResult::GridCell& V){
+            return std::tuple{V.Grid->GetObjectId(),V.Cell.z,V.Cell.y,V.Cell.x};
+        });
         return Result;
     }
 
@@ -103,6 +127,20 @@ namespace gargantuan {
             }
             lua_setreadonly(L,-1,true);
             lua_setfield(L,-2,"Parts");
+            if (Params.IncludeBlockGrids) {
+                lua_createtable(L,static_cast<int>(Result.GridCells.size()),0);
+                int GridIndex=0;
+                for (const auto& Cell:Result.GridCells) {
+                    lua_createtable(L,0,3);
+                    StackValue<std::shared_ptr<Instance>>::Push(L,Cell.Grid); lua_setfield(L,-2,"Grid");
+                    StackValue<glm::vec3>::Push(L,glm::vec3(Cell.Cell)); lua_setfield(L,-2,"Cell");
+                    lua_pushlstring(L,Cell.Revision.data(),Cell.Revision.size()); lua_setfield(L,-2,"Revision");
+                    lua_setreadonly(L,-1,true);
+                    lua_rawseti(L,-2,++GridIndex);
+                }
+                lua_setreadonly(L,-1,true);
+                lua_setfield(L,-2,"GridCells");
+            }
             if (!Result.BlockGrids.empty()) {
                 lua_createtable(L, static_cast<int>(Result.BlockGrids.size()), 0);
                 int GridIndex = 1;

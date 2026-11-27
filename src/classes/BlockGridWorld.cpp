@@ -1,8 +1,8 @@
 #include "BlockGridWorldState.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "../physics/Box3DShapeQuery.hpp"
 
 #include <algorithm>
-#include <bitset>
 #include <cmath>
 #include <limits>
 #include <type_traits>
@@ -13,27 +13,43 @@ namespace gargantuan {
 		constexpr std::size_t MaximumGridBoxes = MaximumRaycastFilterBodies;
 		constexpr std::size_t MaximumWorldBoxes = MaximumPhysicsCollisionConsumers;
 
-		std::vector<BlockGridBox> LeafBoxes(blockgrid::Cell Origin, const blockgrid::Leaf &Leaf) {
+		std::uint8_t Participation(bool Collide,bool Query) {
+			return static_cast<std::uint8_t>(unsigned(Collide)|(unsigned(Query)<<1));
+		}
+		template<class Snapshot>
+		std::vector<BlockGridBox> LeafBoxes(blockgrid::Cell Origin,const blockgrid::Leaf& Leaf,const Snapshot& Cells,std::uint8_t GridMask) {
 				std::vector<BlockGridBox> Boxes;
-				if (Leaf.GetOccupiedCount() == blockgrid::LeafVolume) {
+				const auto Uniform=Leaf.GetUniform();
+				if (Leaf.GetOccupiedCount()==blockgrid::LeafVolume && (!Leaf.HasCustomCells() ||
+					(Uniform && Cells.GetDefinition(Uniform->Definition).Geometry==blockgrid::Shape::Cube))) {
 					const int Extent = static_cast<int>(Side);
-					Boxes.push_back({Origin.X, Origin.Y, Origin.Z, Origin.X+Extent, Origin.Y+Extent, Origin.Z+Extent});
+					const auto& Spec=Cells.GetDefinition(Uniform?Uniform->Definition:blockgrid::Stone);
+					const auto Flags=static_cast<std::uint8_t>(GridMask&Participation(Spec.CanCollide,Spec.Queryable));
+					if (Flags) Boxes.push_back({{Origin.X,Origin.Y,Origin.Z,Origin.X+Extent,Origin.Y+Extent,Origin.Z+Extent},Flags});
 					return Boxes;
 				}
-				std::bitset<Side * Side * Side> Filled;
+				std::array<std::uint8_t,blockgrid::LeafVolume> Filled{};
 				const auto Index = [](unsigned X, unsigned Y, unsigned Z) { return (Z * Side + Y) * Side + X; };
-				Leaf.ForEachOccupied([&](unsigned X, unsigned Y, unsigned Z, blockgrid::Block) {
-					Filled.set(Index(X, Y, Z));
+				Leaf.ForEachOccupied([&](unsigned X, unsigned Y, unsigned Z, blockgrid::Block B) {
+					const auto& Spec=Cells.GetDefinition(B.Definition);
+					const auto Flags=static_cast<std::uint8_t>(GridMask&Participation(Spec.CanCollide,Spec.Queryable));
+					if (!Flags) return;
+					if (Spec.Geometry==blockgrid::Shape::Cube) { Filled[Index(X,Y,Z)]=Flags; return; }
+					const auto& Data=blockgrid::GetGeometry(Spec.Geometry,B.Orientation);
+					const int I=Origin.X+static_cast<int>(X), J=Origin.Y+static_cast<int>(Y), K=Origin.Z+static_cast<int>(Z);
+					for (std::uint8_t Piece=0;Piece<Data.Collision.size();++Piece)
+						Boxes.push_back({{I,J,K,I+1,J+1,K+1},Flags,Spec.Geometry,B.Orientation,Piece});
 				});
 				for (unsigned Z = 0; Z != Side; ++Z) {
 					for (unsigned Y = 0; Y != Side; ++Y) {
 						for (unsigned X = 0; X != Side; ++X) {
-							if (!Filled.test(Index(X, Y, Z))) continue;
+							const auto Flags=Filled[Index(X,Y,Z)];
+							if (!Flags) continue;
 							unsigned EndX = X + 1, EndY = Y + 1, EndZ = Z + 1;
-							while (EndX < Side && Filled.test(Index(EndX, Y, Z))) ++EndX;
+							while (EndX < Side && Filled[Index(EndX,Y,Z)]==Flags) ++EndX;
 							const auto FullRow = [&](unsigned Row, unsigned Plane) {
 								for (unsigned I = X; I < EndX; ++I)
-									if (!Filled.test(Index(I, Row, Plane))) return false;
+									if (Filled[Index(I,Row,Plane)]!=Flags) return false;
 								return true;
 							};
 							while (EndY < Side && FullRow(EndY, Z)) ++EndY;
@@ -45,10 +61,10 @@ namespace gargantuan {
 							}
 							for (unsigned K = Z; K < EndZ; ++K)
 								for (unsigned J = Y; J < EndY; ++J)
-									for (unsigned I = X; I < EndX; ++I) Filled.reset(Index(I, J, K));
-							Boxes.push_back({Origin.X + static_cast<int>(X), Origin.Y + static_cast<int>(Y),
+									for (unsigned I = X; I < EndX; ++I) Filled[Index(I,J,K)]=0;
+							Boxes.push_back({{Origin.X + static_cast<int>(X), Origin.Y + static_cast<int>(Y),
 								Origin.Z + static_cast<int>(Z), Origin.X + static_cast<int>(EndX),
-								Origin.Y + static_cast<int>(EndY), Origin.Z + static_cast<int>(EndZ)});
+								Origin.Y + static_cast<int>(EndY), Origin.Z + static_cast<int>(EndZ)},Flags});
 						}
 					}
 				}
@@ -57,8 +73,8 @@ namespace gargantuan {
 
 		template <typename Snapshot>
 		bool PrepareTopology(BlockGridWorldState &State, BlockGridParticipant &Member, const Snapshot &Cells) {
-			const bool Active = Member.Grid->GetCanCollide() || Member.Grid->GetCanQuery();
-			const bool Patch = Active && Member.TopologyCurrent && Member.TopologyActive &&
+			const auto Mask=Participation(Member.Grid->GetCanCollide(),Member.Grid->GetCanQuery());
+			const bool Patch = Mask && Member.TopologyCurrent && Member.TopologyMask==Mask &&
 				std::is_same_v<Snapshot, blockgrid::Field::Candidate>;
 			BlockGridLeafBoxes Changed;
 			std::vector<blockgrid::Cell> Replaced;
@@ -70,11 +86,11 @@ namespace gargantuan {
 					if (auto It = Member.Desired.find(Origin); It != Member.Desired.end()) OldCount += It->second.size();
 				}
 				if (!Page) return;
-				auto Boxes = LeafBoxes(Origin, *Page);
+				auto Boxes = LeafBoxes(Origin,*Page,Cells,Mask);
 				NewCount += Boxes.size();
-				Changed.emplace(Origin, std::move(Boxes));
+				if (!Boxes.empty()) Changed.emplace(Origin,std::move(Boxes));
 			};
-			if (Active) {
+			if (Mask) {
 				if constexpr (std::is_same_v<Snapshot, blockgrid::Field::Candidate>) {
 					if (Patch) Cells.ForEachChangedLeaf(Visit);
 					else Cells.ForEachLeaf([&](auto Origin, const auto &Page) { Visit(Origin, &Page); });
@@ -89,21 +105,30 @@ namespace gargantuan {
 			State.ReservedBoxes = State.ReservedBoxes - Member.DesiredCount + Count;
 			Member.DesiredCount = Count;
 			Member.TopologyCurrent = true;
-			Member.TopologyActive = Active;
+			Member.TopologyMask = Mask;
 			return true;
 		}
 
 		PhysicsBodyDesc DescribeBox(const BlockGrid &Grid, const BlockGridBox &Box) {
-			const glm::vec3 Min(Box[0], Box[1], Box[2]), Max(Box[3], Box[4], Box[5]);
+			const auto& Bounds=Box.Cells;
+			const glm::vec3 Min(Bounds[0], Bounds[1], Bounds[2]), Max(Bounds[3], Bounds[4], Bounds[5]);
 			const auto Pose = Grid.GetCFrame();
 			const float Size = Grid.GetCellSize();
 			PhysicsBodyDesc Result;
 			Result.Transform = CFrame(Pose.PointToWorldSpace((Min + Max) * (Size * 0.5f)), Pose.Rotation);
 			Result.Shape = {PhysicsShapeKind::Box, (Max - Min) * Size};
+			if (Box.Geometry!=blockgrid::Shape::Cube) {
+				const auto& Piece=blockgrid::GetGeometry(Box.Geometry,Box.Orientation).Collision[Box.Piece];
+				const auto V=[](const blockgrid::Point& P){return glm::vec3(P[0],P[1],P[2]);};
+				const auto& B=blockgrid::Basis(Piece.Orientation);
+				Result.Transform=CFrame(Pose.PointToWorldSpace((Min+V(Piece.Center))*Size),
+					Pose.Rotation*glm::mat3(V(B[0]),V(B[1]),V(B[2])));
+				Result.Shape={Piece.Kind==blockgrid::PieceKind::Wedge?PhysicsShapeKind::Wedge:PhysicsShapeKind::Box,V(Piece.Size)*Size};
+			}
 			Result.Anchored = true;
-			Result.CanCollide = Grid.GetCanCollide();
+			Result.CanCollide = (Box.Participation&1)!=0;
 			Result.CanTouch = false;
-			Result.CanQuery = Grid.GetCanQuery();
+			Result.CanQuery = (Box.Participation&2)!=0;
 			Result.RequiresBlockGridQuery = true;
 			return Result;
 		}
@@ -161,8 +186,8 @@ namespace gargantuan {
 				Member.CellSize != Grid.GetCellSize() || Member.Collidable != Grid.GetCanCollide() ||
 				Member.Queryable != Grid.GetCanQuery();
 			if (!ConfigChanged && Member.Revision == Field.GetRevision() && Member.Ready) continue;
-			const bool Active = Grid.GetCanCollide() || Grid.GetCanQuery();
-			if ((!Member.TopologyCurrent || Member.TopologyActive != Active) && !PrepareTopology(State, Member, Field)) {
+			const auto Mask=Participation(Grid.GetCanCollide(),Grid.GetCanQuery());
+			if ((!Member.TopologyCurrent || Member.TopologyMask != Mask) && !PrepareTopology(State, Member, Field)) {
 				Member.Ready = false;
 				Ready = false;
 				continue;
@@ -220,10 +245,50 @@ namespace gargantuan {
 	std::optional<glm::ivec3> WorldRoot::ResolveBlockCell(PhysicsBodyId Body, glm::vec3 Position) const {
 		const auto Grid = ResolveBlockGrid(Body);
 		if (!Grid) return std::nullopt;
-		const auto &Box = BlockGridState->Owners.at(Body).Bounds;
+		const auto &Box = BlockGridState->Owners.at(Body).Bounds.Cells;
+		if (Box[3]==Box[0]+1 && Box[4]==Box[1]+1 && Box[5]==Box[2]+1)
+			return glm::ivec3(Box[0],Box[1],Box[2]);
 		const auto Local = Grid->GetCFrame().PointToObjectSpace(Position) / Grid->GetCellSize();
 		if (!std::isfinite(Local.x) || !std::isfinite(Local.y) || !std::isfinite(Local.z)) return std::nullopt;
 		const glm::vec3 Min(Box[0], Box[1], Box[2]), MaxCell(Box[3]-1, Box[4]-1, Box[5]-1);
-		return glm::ivec3(glm::clamp(glm::floor(Local), Min, MaxCell));
+		auto Cell=glm::floor(Local);
+		for (unsigned Axis=0;Axis<3;++Axis) if (Local[Axis]==Cell[Axis] && Cell[Axis]>Min[Axis]) --Cell[Axis];
+		return glm::ivec3(glm::clamp(Cell,Min,MaxCell));
+	}
+	PhysicsOperationStatus WorldRoot::VisitBlockOverlap(PhysicsBodyId Body,const PhysicsQueryShape& Query,std::size_t& Work,
+		const std::function<bool(glm::ivec3)>& Emit) const {
+		const auto Grid=ResolveBlockGrid(Body);
+		if (!Grid) return PhysicsOperationStatus::BackendFailure;
+		const auto& Box=BlockGridState->Owners.at(Body).Bounds.Cells;
+		const glm::ivec3 Min(Box[0],Box[1],Box[2]), Max(Box[3],Box[4],Box[5]);
+		// A detailed piece has one semantic owner. The backend already intersected its actual convex shape.
+		if (Max-Min==glm::ivec3(1)) { (void)Emit(Min); return PhysicsOperationStatus::Success; }
+		Box3DShapeQuery Proxy;
+		if (!Proxy.Set(Query)) return PhysicsOperationStatus::InvalidDescription;
+		const auto Frame=Grid->GetCFrame();
+		const float Unit=Grid->GetCellSize();
+		const auto Q=Box3DConversions::ToBox3(glm::quat_cast(Frame.Rotation));
+		auto Status=PhysicsOperationStatus::Success;
+		const auto Visit=[&](auto&& Self,glm::ivec3 Lo,glm::ivec3 Hi,bool Known)->bool {
+			if (!Known) {
+				if (!Work) { Status=PhysicsOperationStatus::ResourceLimit; return false; }
+				--Work;
+				const glm::vec3 Half=glm::vec3(Hi-Lo)*(.5f*Unit);
+				const auto Center=Frame.PointToWorldSpace(glm::vec3(Hi+Lo)*(.5f*Unit));
+				const auto Relative=Box3DConversions::ToBox3(Center-Query.Transform.Position);
+				const auto Hull=b3MakeBoxHull(Half.x,Half.y,Half.z);
+				if (!b3OverlapHull(&Hull.base,{Relative,Q},&Proxy.Proxy)) return true;
+			}
+			const auto Range=Hi-Lo;
+			if (Range==glm::ivec3(1)) return Emit(Lo);
+			unsigned Axis=0;
+			if (Range.y>Range.x) Axis=1;
+			if (Range.z>Range[Axis]) Axis=2;
+			auto Left=Hi, Right=Lo;
+			Left[Axis]=Right[Axis]=Lo[Axis]+Range[Axis]/2;
+			return Self(Self,Lo,Left,false) && Self(Self,Right,Hi,false);
+		};
+		(void)Visit(Visit,Min,Max,true);
+		return Status;
 	}
 }
