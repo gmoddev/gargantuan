@@ -6,6 +6,8 @@
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
+#include "gargantuan/classes/Terrain.hpp"
+#include "gargantuan/terrain/Field.hpp"
 #include "gargantuan/network/GameSession.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -68,6 +70,15 @@ namespace {
 		const auto Room = std::make_shared<SpatialRegion>(), Gallery = std::make_shared<SpatialRegion>();
 		Room->SetName("LandingRoom");
 		Room->SetParent(Space);
+		if (CharacterProfile) {
+			auto Field = std::make_unique<terrain::Field>(terrain::GridSpec{.SpacingShift=1});
+			const terrain::SphereBrush Brush{{4,26,4},3.5,terrain::BrushMode::Add,3};
+			const auto Area = terrain::GetBrushBounds(Field->GetGrid(),Brush).value();
+			const auto Keys = terrain::GetRegionChunks(Area).value();
+			auto Edit = terrain::Field::Prepare(Field->Capture(Keys).value(),Brush).value();
+			(void)Field->Commit(std::move(Edit)).value();
+			Room->RestoreTerrainField(std::move(Field));
+		}
 		Gallery->SetName("SpectatorRoom");
 		Gallery->SetParent(Space);
 		const auto SourcePose = CFrame(0, 8, 0), Target = CFrame(0, 30, 0);
@@ -263,6 +274,15 @@ namespace {
 		);
 		Require(SawScopedGrid, "owner moved without an observed installed landing grid");
 		const auto ReplicaRoom = std::dynamic_pointer_cast<SpatialRegion>(Find(*OwnerRuntime, "LandingRoom"));
+		if (CharacterProfile) {
+			RaycastParams Filter;
+			Filter.IncludeTerrain = true;
+			const auto Cast = [&](SpatialRegion &Domain) { return Domain.ResolveRaycast({4,34,4},{0,-12,0},Filter); };
+			const auto ServerHit = Cast(*Room);
+			Require(ReplicaRoom && ReplicaRoom->GetTerrain()->GetField().GetGrid()==Room->GetTerrain()->GetField().GetGrid() &&
+				ServerHit.TerrainInstance==Room->GetTerrain() && Cast(*ReplicaRoom).TerrainInstance==ReplicaRoom->GetTerrain(),
+				"named terrain window and native collider did not follow the authenticated transfer");
+		}
 		Require(
 			ReplicaRoom && WorldRoot::GetEffectiveWorld(*ReplicaActor) == ReplicaRoom &&
 				WorldRoot::GetEffectiveWorld(*Actor) == Room && Actor->GetObjectId() == ActorId &&

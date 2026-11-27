@@ -1691,7 +1691,7 @@ namespace gargantuan {
 		auto Domains = terrain::CaptureDocumentTerrain(World, ProjectValue.Identity, Terrain ? Terrain->ClosureBytes : 0);
 		const auto DomainBindings = terrain::GetDomainTerrainBindings(Domains);
 		if ((Terrain || !Domains.empty()) && (Audience != PackageAudience::Trusted || ManagedMultiplayer) &&
-			!(ManagedMultiplayer && SpatialContent && Domains.empty()))
+			!(ManagedMultiplayer && SpatialContent))
 			throw RuntimeDistributionError("UnsupportedTerrainTarget",
 				"Terrain requires a trusted package or a managed Offline Player.");
 		if (Audience != PackageAudience::Trusted || (RuntimeDistribution &&
@@ -1724,7 +1724,7 @@ namespace gargantuan {
 			.SchemaSnapshot = GetRuntimeSchemaLifecycle().GetActiveRegistry(),
 			.TerrainArtifacts = Terrain && Audience == PackageAudience::Trusted ? std::move(Terrain->Artifacts) : std::vector<terrain::TerrainArtifact>{},
 		};
-		if (!Domains.empty()) {
+		if (Audience == PackageAudience::Trusted && !Domains.empty()) {
 			for (auto &[Node, Capture] : Domains)
 				for (auto &Artifact : Capture.Artifacts) Result.TerrainArtifacts.push_back(std::move(Artifact));
 			std::ranges::sort(Result.TerrainArtifacts, {}, &terrain::TerrainArtifact::Id);
@@ -1846,9 +1846,15 @@ namespace gargantuan {
 					Request.Payload.DisplayName.size() > MaximumDisplayNameBytes ||
 					PackageAssets.CatalogJson.size() > 1024 * 1024)
 					throw std::runtime_error("Package payload snapshot is invalid or exceeds its bounds");
-				const bool SpatialServerTerrain = Plan && Plan->SpatialContent &&
+				bool SpatialServerTerrain = false;
+				if (!Request.Payload.TerrainArtifacts.empty() && Plan && Plan->SpatialContent && !Distributed &&
 					Plan->Request.Target == RuntimeDistributionTarget::DedicatedServer &&
-					Request.Configuration == PackageConfiguration::Development && !Plan->WorkspaceTerrainManifest.empty();
+					Request.Configuration == PackageConfiguration::Development) {
+					terrain::DomainTerrainBindings Domains;
+					const auto Workspace = InstanceSerialization::InspectTerrainManifest(Request.Payload.ProjectJson, &Domains);
+					SpatialServerTerrain = Workspace && (Workspace->has_value() || !Domains.empty()) &&
+						(*Workspace ? (*Workspace)->ToString() : std::string{}) == Plan->WorkspaceTerrainManifest;
+				}
 				if (!Request.Payload.TerrainArtifacts.empty() && (Distributed ||
 					(Plan && Plan->Request.Target != RuntimeDistributionTarget::OfflinePlayer && !SpatialServerTerrain)))
 					throw RuntimeDistributionError("UnsupportedTerrainTarget",
@@ -2439,7 +2445,8 @@ namespace gargantuan {
 			);
 		}
 		const bool SpatialServerTerrain = Manifest->RuntimeDistribution && Manifest->RuntimeDistribution->SpatialContent &&
-			Manifest->Inspection.Target == RuntimeDistributionTarget::DedicatedServer && DomainBindings.empty();
+			Manifest->Inspection.Configuration == PackageConfiguration::Development &&
+			Manifest->Inspection.Target == RuntimeDistributionTarget::DedicatedServer;
 		if (SpatialServerTerrain &&
 			(TerrainDigest ? TerrainDigest->ToString() : std::string{}) != Manifest->RuntimeDistribution->WorkspaceTerrainManifest) {
 			AddDiagnostic(Diagnostics,PackageDiagnosticSeverity::Error,"Content","InvalidTerrainClosure","Spatial server terrain does not match its package binding.");

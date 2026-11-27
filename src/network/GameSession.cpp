@@ -11,6 +11,7 @@
 #include "GameSessionTestAccess.hpp"
 #include "BlockGridPeer.hpp"
 #include "SpatialAudience.hpp"
+#include "DomainTerrainEnvelope.hpp"
 #include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
@@ -243,6 +244,25 @@ namespace gargantuan::network {
 			SpatialTransferReplica Replica;
 		};
 
+		struct DomainTerrainDelivery {
+			ObjectId Region;
+			std::uint64_t Grant{};
+			terrain::GridSpec Grid;
+			TerrainWindowIdentity Acknowledged;
+			std::optional<TerrainSessionWindow> Window;
+			TerrainVersions Versions{};
+			std::optional<TerrainTransfer> Pending;
+			std::shared_ptr<TerrainReceiveWork> Receiving;
+			std::vector<std::uint8_t> Bytes;
+			std::weak_ptr<WorldRoot> InstalledOwner;
+			std::shared_ptr<const WorldRoot::TerrainMotionGuard> Coverage;
+			std::uint64_t InstalledLifetime{};
+			~DomainTerrainDelivery() {
+				if (Pending && Pending->Sending) Pending->Sending->Stop.request_stop();
+				if (Receiving) Receiving->Stop.request_stop();
+			}
+		};
+
 		struct Peer {
 			struct TransferDomain {
 				SpatialAudienceFrame Frame;
@@ -250,6 +270,7 @@ namespace gargantuan::network {
 				std::unique_ptr<BlockGridPeer> Grids;
 				SpatialTransferClock::time_point Expires;
 				AssetContentId EmptyTerrainPin;
+				std::shared_ptr<DomainTerrainDelivery> Terrain;
 			};
 			struct PoseBinding {
 				std::uint64_t Epoch = 0;
@@ -267,6 +288,7 @@ namespace gargantuan::network {
 			std::unique_ptr<SessionSpatialTransfer> SpatialTransfer;
 			std::unique_ptr<BlockGridPeer> Grids;
 			std::unique_ptr<TransferDomain> Staging;
+			std::shared_ptr<DomainTerrainDelivery> NamedTerrain;
 			std::uint64_t CurrentGrantGeneration{}, LastStagingSerial{};
 			std::uint32_t PlayerId = 0;
 			std::optional<TerrainSessionWindow> TerrainWindow;
@@ -311,6 +333,8 @@ namespace gargantuan::network {
 		std::vector<std::uint8_t> TerrainReceiveBuffer;
 		std::unique_ptr<terrain::Field> ReceivedTerrain;
 		std::shared_ptr<TerrainReceiveWork> ClientTerrainWork;
+		std::array<std::shared_ptr<TerrainReceiveWork>, 2> NamedTerrainDecodeSlots;
+		std::uint64_t NamedTerrainPublication{};
 		std::shared_ptr<const WorldRoot::TerrainMotionGuard> TerrainMotionAdmission;
 		std::shared_ptr<const DataModel::DefaultNetworkSpatialProfile> NetworkSpatialProfile;
 		std::shared_ptr<SpatialTransferProtection> SpatialProtection;
@@ -967,6 +991,7 @@ namespace gargantuan::network {
 		}
 
 #include "SpatialSessionContent.inl"
+#include "SpatialSessionTerrain.inl"
 
 		std::shared_ptr<BlockGrid> ResolveGrid(ConnectionId Connection, const Peer &Value, ObjectId Id, bool Staged) const {
 			if (Staged && (!Value.Staging || SpatialTransferClock::now() >= Value.Staging->Expires ||
@@ -989,10 +1014,13 @@ namespace gargantuan::network {
 				const auto Send = [&](const GridStreamMessage &Frame) {
 					return QueueTerrainFrame(Connection, Value, EncodeGridStream(Frame));
 				};
+				PumpDomainTerrain(Connection, Value, Value.NamedTerrain, Value.AuthorizedSpatialRegion, Value.CurrentGrantGeneration, nullptr);
 				Value.Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, false); }, Send, CurrentTick);
 				if (Value.Staging) {
 					const auto Now = SpatialTransferClock::now();
 					if (Now < Value.Staging->Expires) {
+						PumpDomainTerrain(Connection, Value, Value.Staging->Terrain, Value.Staging->Grant->Region,
+							Value.Staging->Frame.Serial, &Value.Staging->Frame.Bounds);
 						Value.Staging->Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, true); }, Send, CurrentTick);
 					} else if (Configuration.Role == GameSessionRole::Server) {
 						if (!ReleaseTransferDomain(Connection, Value.Staging->Frame.Serial))
@@ -1953,6 +1981,10 @@ namespace gargantuan::network {
 				HandleSessionMessage(Received.Connection, Received);
 				return;
 			}
+			if (Magic == DomainTerrainMagic) {
+				ReceiveDomainTerrain(Received, PeerIterator->second);
+				return;
+			}
 			if (Magic == SpatialAudienceMagic) {
 				ReceiveSpatialAudience(Received, PeerIterator->second);
 				return;
@@ -2686,7 +2718,11 @@ namespace gargantuan::network {
 			RetireSessionTransfer(Connection, Iterator->second);
 			auto PeerValue = std::move(Iterator->second);
 			Peers.erase(Iterator);
-			if (PeerValue.Staging) PeerValue.Staging->Grids->Retire();
+			RetireDomainTerrain(PeerValue.NamedTerrain);
+			if (PeerValue.Staging) {
+				RetireDomainTerrain(PeerValue.Staging->Terrain);
+				PeerValue.Staging->Grids->Retire();
+			}
 			if (PeerValue.Grids) PeerValue.Grids->Retire();
 			if (PeerValue.TerrainPending && PeerValue.TerrainPending->Sending)
 				PeerValue.TerrainPending->Sending->Stop.request_stop();

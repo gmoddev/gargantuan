@@ -87,6 +87,7 @@ std::optional<SpatialAppliedBinding> ProjectTransferProvider(ConnectionId Connec
 			return SpatialAppliedBinding{Key, Identity.ManifestDigest, Identity.FieldRevision, Identity.Serial, true,
 				Native.Installed.empty()};
 		}
+		if (Destination != Runtime->Workspace) return GetTransferTerrainBinding(Connection, Native, Bounds);
 		const auto Empty = GetTransferEmptyTerrainBinding(Connection, Request.Scope.Destination, Bounds, Request.Serial);
 		if (!Empty || !Empty->IsValid() || !Native.AuthoritativeEmpty || !Native.Installed.empty()) return {};
 		return SpatialAppliedBinding{Key, *Empty, 0, Request.Serial, true, true};

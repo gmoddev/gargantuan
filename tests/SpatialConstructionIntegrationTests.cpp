@@ -648,7 +648,17 @@ namespace {
 		auto Inside = MakeGrid(Region,"EastGrid",{blockgrid::Brick,1},Pose);
 		if (Session) AddPackageSessionProof(Game,Inside);
 		else AddTerrainFixture(Space,Region);
-		if (WorkspaceTerrain) AddPackageWorkspaceTerrain(Space);
+		if (WorkspaceTerrain) {
+			AddPackageWorkspaceTerrain(Space);
+			if (Session) {
+				auto Domain = std::make_unique<terrain::Field>();
+				const std::array<terrain::SampleWrite,1> Samples{{{{2,2,2},{-730,3}}}};
+				const std::array Keys{terrain::GetChunkKey(Samples.front().Point)};
+				auto Patch = terrain::Field::Prepare(Domain->Capture(Keys).value(), Samples).value();
+				Require(Domain->Commit(std::move(Patch)).has_value(),"authored mixed package domain terrain");
+				Region->RestoreTerrainField(std::move(Domain));
+			}
+		}
 		auto Proof = std::make_shared<Script>();
 		Proof->SetName("VerifyPackagedGrids");
 		Proof->SetRunContext(Enums::RunContext::Server);

@@ -60,14 +60,7 @@ namespace gargantuan {
 	}
 
 	void DataModel::CheckDefaultNetworkSpatialParticipant(const Instance &Node, bool SpatialContent) {
-		if (SpatialContent) {
-			if (const auto *Region = dynamic_cast<const SpatialRegion *>(&Node)) {
-				const auto TerrainOwner = Region->GetOwnedTerrain();
-				if (TerrainOwner && (TerrainOwner->GetField().GetRevision() || TerrainOwner->GetField().GetGrid() != terrain::GridSpec{}))
-					throw std::invalid_argument("[Spatial:Network] Domain terrain needs a separately admitted content stream");
-			}
-			return;
-		}
+		if (SpatialContent) return;
 		const auto *Assigned = dynamic_cast<const SpatialDomainMember *>(&Node);
 		if (dynamic_cast<const SpatialRegion *>(&Node) || dynamic_cast<const BlockGrid *>(&Node) ||
 			(Assigned && Assigned->HasAssignedRegion()))

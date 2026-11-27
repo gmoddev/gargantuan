@@ -107,11 +107,14 @@ bool StageTransferDomain(ConnectionId Connection, WireObjectId Destination, cons
 
 void FinishTransferDomain(Peer &Value,bool Promote) {
 	if (Promote) {
+		RetireDomainTerrain(Value.NamedTerrain);
+		Value.NamedTerrain=std::move(Value.Staging->Terrain);
 		Value.Grids->Retire();
 		Value.Grids=std::move(Value.Staging->Grids);
 		Value.AuthorizedSpatialRegion=Value.Staging->Grant->Region;
 		Value.CurrentGrantGeneration=Value.Staging->Frame.Serial;
 	} else {
+		RetireDomainTerrain(Value.Staging->Terrain);
 		Value.Staging->Grids->Retire();
 	}
 	Value.Staging.reset();
