@@ -4053,7 +4053,7 @@ namespace gargantuan {
 					if (!Input) return Fail("InvalidTerrainBrush", std::string(Input.error()));
 					const auto Count = CountTerrainBrushSamples(Input->Bounds);
 					if (!Count) return Fail("TerrainBrushLimit", "Use a smaller brush or region covering at most 4096 lattice samples");
-					Pending.Patch.emplace();
+						Pending.Patch = TerrainAuthoringState::BrushHistory{};
 					Pending.Patch->Terrain = Owner->GetObjectId();
 					Pending.Patch->Before.reserve(*Count);
 					Pending.Patch->After.resize(*Count);
