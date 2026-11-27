@@ -129,11 +129,13 @@ namespace gargantuan {
 
 	const SDLGpuMesh *SDLMeshCache::Find(RenderGeometry geometry) const {
 		auto mesh = Meshes.find(geometry);
-		return mesh == Meshes.end() ? nullptr : mesh->second.get();
+		if (mesh != Meshes.end()) return mesh->second.get();
+		return Shared ? Shared->Find(geometry) : nullptr;
 	}
 
 	const SDLGpuMesh *SDLMeshCache::Find(RenderMeshIdentity Mesh) const {
 		const auto Found = DynamicMeshes.find(Mesh);
-		return Found == DynamicMeshes.end() ? nullptr : Found->second.get();
+		if (Found != DynamicMeshes.end()) return Found->second.get();
+		return Shared ? Shared->Find(Mesh) : nullptr;
 	}
 }

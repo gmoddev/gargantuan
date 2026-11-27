@@ -108,7 +108,7 @@ namespace gargantuan {
 			}
 		}
 		WorldRoot->InitializeTerrainRuntime(ProviderConfiguration.Mode, ProviderConfiguration.AdmitNetworkTerrain,
-			TerrainVisualDensity, std::move(TerrainPalette));
+			TerrainVisualDensity, TerrainPalette);
 		if (ProviderConfiguration.Mode != RuntimeMode::NetworkServer) {
 			auto Mixer = std::dynamic_pointer_cast<AudioMixService>(DataModel->FindFirstChildOfClass("AudioMixService", false));
 			if (!Mixer) {
@@ -147,9 +147,17 @@ namespace gargantuan {
 		}
 		if (DataModel->Filesystem) ProjectSources = std::make_unique<SourceMount>(*DataModel->Filesystem);
 
-		UnbindDescendants = DataModel->BindDescendants([this](std::shared_ptr<Instance> inst) {
+		UnbindDescendants = DataModel->BindDescendants([this, Mode = ProviderConfiguration.Mode, TerrainVisualDensity,
+			TerrainPalette = std::move(TerrainPalette)](std::shared_ptr<Instance> inst) {
 			if (Destroyed || !Script || Script->IsStopping()) return;
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::EngineActivation);
+			if (const auto Region = std::dynamic_pointer_cast<SpatialRegion>(inst);
+				Region && SpatialRegion::FindAttachedWorld(*Region) == DataModel) {
+				if (Mode != RuntimeMode::Offline)
+					throw std::runtime_error("[Spatial:Terrain] This network session cannot admit a spatial domain");
+				(void)Region->GetTerrain();
+				Region->InitializeTerrainRuntime(Mode, false, TerrainVisualDensity, TerrainPalette);
+			}
 			if (auto script = std::dynamic_pointer_cast<gargantuan::Script>(inst)) {
 				this->Script->ScriptQueue.insert(script);
 			}
@@ -451,7 +459,7 @@ namespace gargantuan {
 					WorldRoot->StepPhysics(deltaTime, std::nullopt);
 					if (Destroyed) return;
 					for (const auto &Region : DataModel->GetSpatialRegions()) {
-						if (!Region->GetDestroyed() && !Region->IsDestroying() && Region->GetDataModel() == DataModel)
+						if (SpatialRegion::FindAttachedWorld(*Region) == DataModel)
 							Region->StepPhysics(deltaTime, std::nullopt);
 						if (Destroyed) break;
 					}

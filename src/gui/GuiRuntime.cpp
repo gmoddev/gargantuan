@@ -21,6 +21,8 @@
 #include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/gui/GuiLimits.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
+#include "gargantuan/render/SpatialViewportCapture.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "runtime/RuntimeWorkDiagnostics.hpp"
 
@@ -297,6 +299,7 @@ namespace gargantuan {
 		};
 		std::vector<ViewportRequest> ViewportRequests;
 		std::unordered_map<ObjectId, ViewportSample> ViewportSamples;
+		std::unordered_map<ObjectId, SpatialViewportCapture> DomainCaptures;
 		std::shared_ptr<const RenderViewportScenes> ViewportScenes;
 		std::vector<ObjectId> VisibleViewportAnimationObjects;
 		std::uint64_t ViewportAssetRevision = 0;
@@ -1385,6 +1388,7 @@ namespace gargantuan {
 			});
 			std::array<std::shared_ptr<const RenderViewportScene>, MaximumRenderViewports> Next;
 			std::size_t Count = 0;
+			std::unordered_set<ObjectId> SampledDomains;
 			std::shared_ptr<AssetService> ViewportAssets;
 			for (const auto &Request : ViewportRequests) {
 				auto Object = std::dynamic_pointer_cast<ViewportFrame>(ObjectRegistry::Get().Lookup(Request.Viewport));
@@ -1392,6 +1396,12 @@ namespace gargantuan {
 				if (!std::isfinite(Request.Width) || !std::isfinite(Request.Height) ||
 					Request.Width <= 0.0f || Request.Height <= 0.0f) continue;
 				auto &Sample = ViewportSamples[Request.Viewport];
+				const auto Domain = Object->GetSpatialRegion().value_or(nullptr);
+				if (Domain) SampledDomains.insert(Domain->GetObjectId());
+				if (Sample.Scene && Sample.Scene->World != (Domain ? Domain->GetObjectId() : ObjectId{})) {
+					Sample.Scene.reset();
+					Sample.LastSample = Clock::time_point::min();
+				}
 				const auto Interval = std::chrono::duration<float>(1.0f / Object->GetMaxUpdateRate());
 				if (Sample.LastSample == Clock::time_point::min() || Now - Sample.LastSample >= Interval) {
 					if (!ViewportAssets) {
@@ -1404,7 +1414,11 @@ namespace gargantuan {
 					const auto Width = static_cast<std::uint32_t>(std::max(1.0f, std::round(Request.Width * Scale)));
 					const auto Height = static_cast<std::uint32_t>(std::max(1.0f, std::round(Request.Height * Scale)));
 					runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::ViewportExtract);
-					auto Scene = ExtractViewportScene(*Object, *ViewportAssets, Animation, Width, Height);
+					std::optional<RenderViewportScene> Scene;
+					if (Domain) {
+						try { Scene = DomainCaptures[Domain->GetObjectId()].Capture(*Object, *Domain, Animation, Width, Height); }
+						catch (const std::exception &) { DomainCaptures.erase(Domain->GetObjectId()); }
+					} else Scene = ExtractViewportScene(*Object, *ViewportAssets, Animation, Width, Height);
 					if (Scene) {
 						Scene->AssetRevision = ViewportAssetRevision;
 						if (!Sample.Scene || !SameViewportScene(*Sample.Scene, *Scene))
@@ -1417,6 +1431,7 @@ namespace gargantuan {
 				}
 				if (Sample.Scene) Next[Count++] = Sample.Scene;
 			}
+			std::erase_if(DomainCaptures, [&](const auto &Entry) { return !SampledDomains.contains(Entry.first); });
 			const auto Candidate = std::span(Next).first(Count);
 			if ((!ViewportScenes && Candidate.empty()) ||
 				(ViewportScenes && std::ranges::equal(*ViewportScenes, Candidate))) return false;

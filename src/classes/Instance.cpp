@@ -380,7 +380,7 @@ namespace gargantuan {
 		if (TerrainValue) {
 			const auto Owner = ParentReference.lock();
 			if (!Owner || !Owner->IsDestroying())
-				throw std::runtime_error("[Terrain:Ownership] Terrain retires with its Workspace");
+				throw std::runtime_error("[Terrain:Ownership] Terrain retires with its world");
 		}
 		if (const auto *WorkspaceValue = dynamic_cast<Workspace *>(this);
 			WorkspaceValue && WorkspaceValue->GetTerrain() &&
@@ -1228,8 +1228,11 @@ namespace gargantuan {
 		if (newParent && dynamic_cast<Terrain *>(newParent.get()))
 			throw std::runtime_error("[Terrain:Ownership] Terrain cannot contain Instances");
 		if (!DestroyingState) {
-			if (IsTerrain && (oldParent || !dynamic_cast<Workspace *>(newParent.get())))
-				throw std::runtime_error("[Terrain:Ownership] Terrain has one engine-owned Workspace parent");
+			if (IsTerrain) {
+				const auto *Owner = dynamic_cast<WorldRoot *>(newParent.get());
+				if (oldParent || !Owner || Owner->TerrainChild.lock().get() != this)
+					throw std::runtime_error("[Terrain:Ownership] Terrain requires its engine-owned world parent");
+			}
 			if (const auto *WorkspaceValue = dynamic_cast<Workspace *>(this);
 				WorkspaceValue && WorkspaceValue->GetTerrain())
 				throw std::runtime_error("[Terrain:Ownership] The terrain Workspace cannot be reparented");

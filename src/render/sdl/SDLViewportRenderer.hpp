@@ -1,6 +1,8 @@
 #pragma once
 
 #include "render/sdl/SDLRenderPass.hpp"
+#include "render/sdl/SDLMeshCache.hpp"
+#include <map>
 #include "render/sdl/SDLSkinPaletteCache.hpp"
 
 #include <array>
@@ -32,6 +34,9 @@ namespace gargantuan {
 			SDLRendererMetrics &Metrics);
 		static void ApplyPalettes(SDL_GPUDevice *Gpu, Target &Value, const RenderProjection &Scene,
 			SDLRendererMetrics &Metrics);
+		void UpdateDomainMeshes(SDL_GPUDevice *Gpu, SDLFrameContext &Frame, const RenderViewportScenes &Scenes);
+		std::unique_ptr<SDLMeshCache> DomainMeshes;
+		std::map<RenderMeshIdentity, std::uint64_t> InstalledMeshes;
 		std::array<Target, MaximumRenderViewports> Targets;
 		RenderProjection Projection;
 		std::unique_ptr<SDLRenderPass> Opaque;

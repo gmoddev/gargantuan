@@ -6,6 +6,7 @@
 #include "gargantuan/classes/Frame.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/ScreenGui.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/gui/GuiRuntime.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -85,6 +86,33 @@ namespace {
 		(void)Projection.Apply(*Publish());
 		Check(Projection.GetViewports().front() == Scene, "An unchanged viewport replaced its committed scene");
 
+		const auto A = std::make_shared<SpatialRegion>(), B = std::make_shared<SpatialRegion>();
+		A->SetParent(WorkspaceValue); B->SetParent(WorkspaceValue);
+		const auto InA = std::make_shared<Part>(), InB = std::make_shared<Part>();
+		InA->SetParent(A); InB->SetParent(B);
+		const auto Second = std::make_shared<ViewportFrame>();
+		Second->SetSize(UDim2::fromOffset(80, 60));
+		Second->SetParent(Screen);
+		const auto SecondaryCamera = std::make_shared<Camera>();
+		SecondaryCamera->SetCFrame(CFrame(0, 0, 8));
+		SecondaryCamera->SetParent(Second); Second->SetCurrentCamera(SecondaryCamera);
+		Viewport->SetSpatialRegion(A); Second->SetSpatialRegion(B);
+		(void)Gui.Reconcile(); (void)Projection.Apply(*Publish());
+		Check(Projection.GetViewports().size() == 2 && Projection.GetSize() == 0,
+			"simultaneous domain projections must stay out of the default world");
+		for (const auto &Scoped : Projection.GetViewports()) {
+			const bool FirstDomain = Scoped->Viewport == Viewport->GetObjectId();
+			Check(Scoped->World == (FirstDomain ? A : B)->GetObjectId() && Scoped->Objects.size() == 1 &&
+				Scoped->Objects.front().Visual.Item.Object == (FirstDomain ? InA : InB)->GetObjectId(),
+				"domain camera leaked a foreign object or its private presentation children");
+		}
+		Second->Destroy();
+		A->SetParent(nullptr);
+		(void)Gui.Reconcile(); (void)Projection.Apply(*Publish());
+		Check(!Viewport->GetSpatialRegion() && Projection.GetViewports().size() == 1 &&
+			Projection.GetViewports().front()->Objects.front().Visual.Item.Object == PartValue->GetObjectId(),
+			"a retired view domain must return to its local presentation subtree");
+		A->Destroy(); B->Destroy();
 		Viewport->SetVisible(false);
 		(void)Gui.Reconcile();
 		(void)Projection.Apply(*Publish());

@@ -596,6 +596,15 @@ namespace gargantuan {
 			if (Publication.Viewports) for (const auto &Scene : *Publication.Viewports) {
 				if (!Scene) continue;
 				Result = AddBounded(Result, sizeof(RenderViewportScene));
+				if (Scene->Geometry) {
+					for (const auto &Mesh : Scene->Geometry->Meshes) {
+						Result = AddBounded(Result, sizeof(RenderMeshCreate));
+						if (Mesh.Vertices) Result = AddBounded(Result, MultiplyBounded(Mesh.Vertices->size(), sizeof(RenderVertex)));
+						if (Mesh.Indices) Result = AddBounded(Result, MultiplyBounded(Mesh.Indices->size(), sizeof(std::uint32_t)));
+					}
+					if (Scene->Geometry->Terrain) Result = AddBounded(Result,
+						MultiplyBounded(Scene->Geometry->Terrain->size(), sizeof(RenderObjectCreate)));
+				}
 				for (const auto &Object : Scene->Objects) {
 					Result = AddBounded(Result, sizeof(RenderViewportObject));
 					if (Object.Visual.Primitives) Result = AddBounded(Result,
@@ -702,7 +711,7 @@ namespace gargantuan {
 	}
 
 	bool SameViewportScene(const RenderViewportScene &Left, const RenderViewportScene &Right) {
-		return Left.Viewport == Right.Viewport && Left.Camera == Right.Camera &&
+		return Left.Viewport == Right.Viewport && Left.World == Right.World && Left.Geometry == Right.Geometry && Left.Camera == Right.Camera &&
 			Left.Width == Right.Width && Left.Height == Right.Height && Left.AssetRevision == Right.AssetRevision &&
 			std::ranges::equal(Left.Objects, Right.Objects, [](const auto &A, const auto &B) {
 				const auto &First = A.Visual;

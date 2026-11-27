@@ -21,15 +21,23 @@ namespace gargantuan {
 		return {};
 	}
 
+	std::shared_ptr<Terrain> SpatialRegion::GetTerrain() const {
+		if (!GetOwnedTerrain() && !GetDestroyed() && !IsDestroying())
+			const_cast<SpatialRegion *>(this)->InitializeTerrain();
+		return GetOwnedTerrain();
+	}
+
 	void SpatialRegion::RefreshWorld() {
 		const auto Previous = RegisteredWorld.lock();
 		const auto Current = FindAttachedWorld(*this);
 		if (Previous == Current) return;
 		if (Previous) Previous->SpatialRegions.erase(GetObjectId());
-		if (Current)
+		if (Current) {
+			InitializeTerrain();
 			Current->SpatialRegions.insert_or_assign(
 				GetObjectId(), std::static_pointer_cast<SpatialRegion>(shared_from_this())
 			);
+		}
 		RegisteredWorld = Current;
 	}
 }

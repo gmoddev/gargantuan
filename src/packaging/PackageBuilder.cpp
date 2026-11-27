@@ -1677,22 +1677,43 @@ namespace gargantuan {
 			throw std::invalid_argument("Package snapshot source is invalid");
 		auto Terrain = terrain::CaptureSceneTerrain(*World, ProjectValue.Identity);
 		const auto TerrainManifest = Terrain ? std::optional(Terrain->ManifestDigest) : std::nullopt;
-		if (Terrain && (Audience != PackageAudience::Trusted ||
+		auto Domains = terrain::CaptureDocumentTerrain(World, ProjectValue.Identity, Terrain ? Terrain->ClosureBytes : 0);
+		const auto DomainBindings = terrain::GetDomainTerrainBindings(Domains);
+		if ((Terrain || !Domains.empty()) && (Audience != PackageAudience::Trusted ||
 			(RuntimeDistribution && RuntimeDistribution->Target != RuntimeDistributionTarget::OfflinePlayer)))
 			throw RuntimeDistributionError("UnsupportedTerrainTarget",
 				"Terrain requires a trusted package or a managed Offline Player.");
+		if (Audience != PackageAudience::Trusted || (RuntimeDistribution &&
+			RuntimeDistribution->Target != RuntimeDistributionTarget::OfflinePlayer)) {
+			try {
+				for (const auto &Node : World->GetDescendants()) DataModel::CheckDefaultNetworkSpatialParticipant(*Node);
+			} catch (const std::invalid_argument &Error) {
+				throw RuntimeDistributionError("UnsupportedSpatialTarget", Error.what());
+			}
+		}
+		bool Dirty = AuthoritativeRevision != PersistedRevision;
+		if (!Dirty && (Terrain || !Domains.empty())) {
+			terrain::DomainTerrainBindings Prior;
+			Dirty = ProjectValue.GetPersistedTerrainManifest(&Prior) != TerrainManifest || Prior != DomainBindings;
+		}
 		auto Assets = std::dynamic_pointer_cast<AssetService>(World->FindFirstChildOfClass("AssetService", false));
 		if (!Assets) throw std::runtime_error("Project has no canonical AssetService");
 		GamePayload Result{
 			.Identity = ProjectValue.Identity,
 			.DisplayName = World->GetName(),
 			.AuthoritativeRevision = AuthoritativeRevision,
-			.UnsavedChanges = AuthoritativeRevision != PersistedRevision ||
-				(Terrain && ProjectValue.GetPersistedTerrainManifest() != TerrainManifest),
+			.UnsavedChanges = Dirty,
 			.PreRunSource = ReadProjectPreRunSource(ProjectValue.Root),
 			.SchemaSnapshot = GetRuntimeSchemaLifecycle().GetActiveRegistry(),
 			.TerrainArtifacts = Terrain ? std::move(Terrain->Artifacts) : std::vector<terrain::TerrainArtifact>{},
 		};
+		if (!Domains.empty()) {
+			for (auto &[Node, Capture] : Domains)
+				for (auto &Artifact : Capture.Artifacts) Result.TerrainArtifacts.push_back(std::move(Artifact));
+			std::ranges::sort(Result.TerrainArtifacts, {}, &terrain::TerrainArtifact::Id);
+			const auto Extra = std::ranges::unique(Result.TerrainArtifacts, {}, &terrain::TerrainArtifact::Id);
+			Result.TerrainArtifacts.erase(Extra.begin(), Extra.end());
+		}
 		if (Result.DisplayName.empty() || Result.DisplayName.size() > MaximumDisplayNameBytes)
 			throw std::runtime_error("Project display name exceeds the package bound");
 		if (RuntimeDistribution) {
@@ -1735,7 +1756,7 @@ namespace gargantuan {
 		}
 		if (Audience != PackageAudience::Trusted) throw std::invalid_argument("Unknown package audience");
 		auto Root = std::static_pointer_cast<Instance>(World);
-		Result.ProjectJson = InstanceSerialization::Serialize(ProjectValue.InstanceFileFormat, Root, TerrainManifest);
+		Result.ProjectJson = InstanceSerialization::Serialize(ProjectValue.InstanceFileFormat, Root, TerrainManifest, DomainBindings);
 		if (Result.ProjectJson.size() > MaximumProjectSnapshotBytes)
 			throw std::length_error("Project snapshot exceeds the package byte limit");
 		Result.Assets = Assets->CaptureRuntimeAssets();
@@ -2352,6 +2373,7 @@ namespace gargantuan {
 		const bool Distributed = Manifest->Inspection.Audience == PackageAudience::DistributedPlayer;
 		const bool IsLoopbackClient = CanDeferTerrain(*Manifest, Mode);
 		std::optional<AssetContentId> TerrainDigest;
+		terrain::DomainTerrainBindings DomainBindings;
 		try {
 			if (Distributed) {
 				client_package::ValidateCode(ReadPinnedPackageFile(
@@ -2363,7 +2385,7 @@ namespace gargantuan {
 					!(*ProjectJson)["Version"].is_number_unsigned() || !ProjectJson->contains("ClassName") ||
 					!(*ProjectJson)["ClassName"].is_string() || (*ProjectJson)["ClassName"] != "DataModel")
 					throw std::runtime_error("Packaged project snapshot is malformed");
-				const auto Digest = InstanceSerialization::InspectTerrainManifest(ProjectText);
+				const auto Digest = InstanceSerialization::InspectTerrainManifest(ProjectText, &DomainBindings);
 				if (!Digest) throw std::runtime_error(Digest.error());
 				TerrainDigest = *Digest;
 			}
@@ -2376,8 +2398,8 @@ namespace gargantuan {
 				"The packaged project payload is malformed or exceeds its bounds."
 			);
 		}
-		if (TerrainDigest && Manifest->Inspection.Target &&
-			Manifest->Inspection.Target != RuntimeDistributionTarget::OfflinePlayer) {
+		if ((!DomainBindings.empty() && IsLoopbackClient) || ((TerrainDigest || !DomainBindings.empty()) &&
+			Manifest->Inspection.Target && Manifest->Inspection.Target != RuntimeDistributionTarget::OfflinePlayer)) {
 			AddDiagnostic(Diagnostics, PackageDiagnosticSeverity::Error, "Content", "UnsupportedTerrainTarget",
 				"Terrain requires a trusted package or a managed Offline Player.");
 			return Diagnostics;
@@ -2390,8 +2412,9 @@ namespace gargantuan {
 					auto Pin = PinClientTerrainManifest(PackageRoot, *Manifest, *TerrainDigest, DeferredChunks);
 					Admitted = DeferredChunks.size() + 1;
 					if (TerrainArtifacts) TerrainArtifacts->push_back(std::move(Pin));
-				} else if (TerrainDigest) {
-					const auto Reader = [&](const terrain::TerrainArtifactId &Id, std::size_t Maximum) ->
+				} else if (TerrainDigest || !DomainBindings.empty()) {
+					std::set<terrain::TerrainArtifactId> AdmittedIds;
+					const auto Reader = terrain::BudgetDocumentTerrainReads([&](const terrain::TerrainArtifactId &Id, std::size_t Maximum) ->
 						std::expected<std::vector<std::uint8_t>, terrain::TerrainPersistenceError> {
 						using enum terrain::TerrainPersistenceError;
 						const auto Relative = GetPackageTerrainPath(Id);
@@ -2405,12 +2428,14 @@ namespace gargantuan {
 						const auto Text = ReadBoundedText(*File, Maximum);
 						if (Text.size() != Entry->Size) return std::unexpected(CorruptArtifact);
 						std::vector<std::uint8_t> Bytes(Text.begin(), Text.end());
-						if (TerrainArtifacts)
+						if (AdmittedIds.insert(Id).second && TerrainArtifacts)
 							TerrainArtifacts->push_back({Id, std::make_shared<const std::vector<std::uint8_t>>(Bytes)});
-						++Admitted;
 						return Bytes;
-					};
-					(void)terrain::LoadSceneTerrain(Manifest->Inspection.Identity, *TerrainDigest, Reader);
+					});
+					if (TerrainDigest) (void)terrain::LoadSceneTerrain(Manifest->Inspection.Identity, *TerrainDigest, Reader);
+					for (const auto &[Node, Digest] : DomainBindings)
+						(void)terrain::LoadDomainTerrain(Manifest->Inspection.Identity, Node, Digest, Reader);
+					Admitted = AdmittedIds.size();
 				}
 				const auto Pinned = std::ranges::count_if(Manifest->Content, [](const ContentEntry &Entry) {
 					return Entry.Path.starts_with("content/.gargantuan/terrain/");
@@ -2562,11 +2587,12 @@ namespace gargantuan {
 	}
 
 	static std::shared_ptr<DataModel> LoadPackagedScene(const RuntimePackagePayload &Payload,
-		const std::filesystem::path &PackageRoot, const InstanceSerialization::TerrainSceneAdmission &AdmitTerrain) {
+		const std::filesystem::path &PackageRoot, const InstanceSerialization::TerrainSceneAdmission &AdmitTerrain,
+		const InstanceSerialization::DomainTerrainAdmission &AdmitDomains = {}) {
 		if (!PackageRoot.is_absolute() || !std::filesystem::is_directory(PackageRoot) || IsReparseOrLink(PackageRoot))
 			throw std::invalid_argument("Packaged runtime root is invalid");
 		std::stringstream Input(Payload.ProjectJson);
-		auto Parsed = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Input, AdmitTerrain);
+		auto Parsed = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Input, AdmitTerrain, AdmitDomains);
 		if (!Parsed.Ok || !Parsed.Instance || !Parsed.Instance->IsA("DataModel"))
 			throw std::runtime_error("The packaged project snapshot could not be loaded");
 		auto World = std::dynamic_pointer_cast<DataModel>(Parsed.Instance);
@@ -2586,10 +2612,12 @@ namespace gargantuan {
 			throw std::invalid_argument("A distributed Player package requires a replicated world");
 		if (Payload.LoadMode != PackageRuntimeLoadMode::Complete)
 			throw std::invalid_argument("[Package:Terrain] A complete payload is required to load a gameplay world");
-		auto World = LoadPackagedScene(Payload, PackageRoot, terrain::GetSceneTerrainAdmission(Payload.Inspection.Identity,
+		const auto Reader = terrain::BudgetDocumentTerrainReads(
 			[&Payload](const terrain::TerrainArtifactId &Id, std::size_t Maximum) {
 				return terrain::ReadCapturedTerrainArtifact(Payload.TerrainArtifacts, Id, Maximum);
-			}));
+			});
+		auto World = LoadPackagedScene(Payload, PackageRoot, terrain::GetSceneTerrainAdmission(Payload.Inspection.Identity, Reader),
+			terrain::GetDomainTerrainAdmission(Payload.Inspection.Identity, Reader));
 		if (Payload.Inspection.Target == RuntimeDistributionTarget::DedicatedServer)
 			World->PackagedClientCodeIdentity = Payload.ClientCodeIdentity;
 		if (Payload.RuntimeCode)

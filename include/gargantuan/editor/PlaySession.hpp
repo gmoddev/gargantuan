@@ -98,7 +98,8 @@ namespace gargantuan {
 			bool AudioEnabled = false,
 			std::shared_ptr<IPersistenceProvider> Persistence = {},
 			const InstanceSerialization::TerrainSceneAdmission &AdmitTerrain = {},
-			PlayScriptSources Sources = {}
+			PlayScriptSources Sources = {},
+			const InstanceSerialization::DomainTerrainAdmission &AdmitDomains = {}
 		);
 		~PlaySession();
 

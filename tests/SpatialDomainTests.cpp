@@ -2,6 +2,11 @@
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
+#include "gargantuan/classes/Terrain.hpp"
+#include "gargantuan/classes/Camera.hpp"
+#include "gargantuan/classes/ViewportFrame.hpp"
+#include "gargantuan/render/SpatialViewportCapture.hpp"
+#include "../src/terrain/ScenePersistence.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
@@ -9,6 +14,12 @@
 
 #include <iostream>
 #include <stdexcept>
+
+namespace gargantuan {
+	struct WorldRootTestAccess {
+		static void StartTerrain(WorldRoot &Owner) { Owner.InitializeTerrainRuntime(RuntimeMode::Offline); }
+	};
+}
 
 namespace {
 	using namespace gargantuan;
@@ -27,6 +38,86 @@ namespace {
 
 	auto Ray(WorldRoot &World, float X = 5.f) {
 		return World.ResolveRaycast({X, 10, 0}, {0, -16, 0});
+	}
+
+	std::unique_ptr<terrain::Field> MakeField(double Height, terrain::MaterialId Material) {
+		auto Field = std::make_unique<terrain::Field>();
+		const terrain::SphereBrush Brush{{8, Height, 8}, 2.7, terrain::BrushMode::Add, Material};
+		const auto Bounds = terrain::GetBrushBounds(Field->GetGrid(), Brush).value();
+		const auto Keys = terrain::GetRegionChunks(Bounds).value();
+		auto Candidate = terrain::Field::Prepare(Field->Capture(Keys).value(), Brush).value();
+		(void)Field->Commit(std::move(Candidate)).value();
+		return Field;
+	}
+
+	void TerrainDomains() {
+		const auto Game = std::make_shared<DataModel>();
+		const auto Space = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		const auto A = std::make_shared<SpatialRegion>(), B = std::make_shared<SpatialRegion>();
+		A->SetParent(Space); B->SetParent(Space);
+		Check(A->GetTerrain() && B->GetTerrain() && A->GetTerrain() != B->GetTerrain() &&
+			A->GetTerrain() != Space->GetTerrain(), "each physical domain owns its terrain shell");
+		A->RestoreTerrainField(MakeField(6., 3)); B->RestoreTerrainField(MakeField(12., 5));
+		const auto Project = ProjectId::New();
+		const auto SavedA = terrain::CaptureDomainTerrain(*A, Project, 7).value();
+		const auto SavedB = terrain::CaptureDomainTerrain(*B, Project, 9).value();
+		Check(!terrain::CaptureSceneTerrain(*Game, Project) && SavedA.Index.Dataset != SavedB.Index.Dataset,
+			"two non-default terrain closures must not populate Workspace");
+		const auto Read = [&](const terrain::TerrainArtifactId &Id, std::size_t Maximum) {
+			if (terrain::FindTerrainArtifact(SavedA.Artifacts, Id))
+				return terrain::ReadCapturedTerrainArtifact(SavedA.Artifacts, Id, Maximum);
+			return terrain::ReadCapturedTerrainArtifact(SavedB.Artifacts, Id, Maximum);
+		};
+		bool Denied = false;
+		try { (void)terrain::LoadDomainTerrain(Project, 9, SavedA.ManifestDigest, Read); }
+		catch (const std::runtime_error &) { Denied = true; }
+		Check(Denied, "domain terrain must reject a foreign addressed manifest");
+		const auto Reopened = std::make_shared<DataModel>();
+		const auto Default = std::dynamic_pointer_cast<Workspace>(Reopened->GetService("Workspace"));
+		const auto Low = std::make_shared<SpatialRegion>(), High = std::make_shared<SpatialRegion>();
+		Low->SetParent(Default); High->SetParent(Default);
+		Low->RestoreTerrainField(terrain::LoadDomainTerrain(Project, 7, SavedA.ManifestDigest, Read));
+		High->RestoreTerrainField(terrain::LoadDomainTerrain(Project, 9, SavedB.ManifestDigest, Read));
+		Check(Low->GetTerrain()->GetField().GetLifetime() != A->GetTerrain()->GetField().GetLifetime(),
+			"opening a domain terrain cannot inherit an old edit ticket lifetime");
+		WorldRootTestAccess::StartTerrain(*Default);
+		WorldRootTestAccess::StartTerrain(*Low); WorldRootTestAccess::StartTerrain(*High);
+		RaycastParams Params;
+		Params.IncludeTerrain = true;
+		const auto Cast = [&](WorldRoot &World) { return World.ResolveRaycast({8, 25, 8}, {0, -28, 0}, Params); };
+		const auto Below = Cast(*Low), Above = Cast(*High);
+		Check(Below.TerrainInstance == Low->GetTerrain() && Above.TerrainInstance == High->GetTerrain() &&
+			Above.Position.y > Below.Position.y + 4.f && !Cast(*Default).HasHit(), "native terrain collision leaks across domains");
+		RenderPublisher Pub;
+		RenderProjection Projection;
+		const auto Camera = MakeLookAtRenderCameraInput({8, 17, 25}, {8, 8, 8}, {0, 1, 0}, 55);
+		for (const auto &Scope : {Low, High}) {
+			Pub.SetTerrainRenderState(Scope->GetTerrainRenderState());
+			(void)Projection.Apply(*Pub.Publish(*Scope, Camera, 120, 90));
+			const auto &Draws = Projection.GetTerrainDraws();
+			Check(!Draws.empty() && std::ranges::all_of(Draws, [&](const auto &Draw) {
+				return Draw.Item.Object == Scope->GetTerrain()->GetObjectId();
+			}), "camera must publish only its selected terrain surface");
+		}
+		const auto View = std::make_shared<ViewportFrame>();
+		View->SetParent(Default);
+		const auto CameraObject = std::make_shared<gargantuan::Camera>();
+		CameraObject->SetCFrame(CFrame(8, 12, 25));
+		CameraObject->SetParent(View); View->SetCurrentCamera(CameraObject);
+		SpatialViewportCapture Capture;
+		for (const auto &Scope : {Low, High}) {
+			View->SetSpatialRegion(Scope);
+			const auto First = Capture.Capture(*View, *Scope, nullptr, 128, 96).value();
+			const auto Again = Capture.Capture(*View, *Scope, nullptr, 128, 96).value();
+			Check(First.World == Scope->GetObjectId() && First.Geometry && First.Geometry == Again.Geometry,
+				"unchanged live domain GUI view must reuse its immutable geometry");
+			RenderProjection Secondary, Empty;
+			Secondary.ApplyViewportScene(First, Empty);
+			Check(!Secondary.GetTerrainDraws().empty() && std::ranges::all_of(Secondary.GetTerrainDraws(),
+				[&](const auto &Draw) { return Draw.Item.Object == Scope->GetTerrain()->GetObjectId(); }),
+				"a secondary domain camera needs its own terrain resources even when the main world is empty");
+		}
+		Game->Destroy(); Reopened->Destroy();
 	}
 
 	void Run() {
@@ -139,6 +230,7 @@ namespace {
 int main() try {
 	gargantuan::BootstrapNativeRuntimeSchema();
 	Run();
+	TerrainDomains();
 	std::cout << "[Spatial:Domains] Native physics, render, membership and teardown passed.\n";
 	return 0;
 } catch (const std::exception &Error) {

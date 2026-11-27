@@ -14,6 +14,8 @@ Run the `gargantuan_blockgrid_field` CTest for signed addressing, bounded transa
 
 ## Creatable class and Main admission
 
+The nullable saved `SpatialRegion` reference uses the existing generation-aware membership mixin. A grid can remain parented to Workspace while participating in its assigned chart. Runtime block revisions include the effective WorldRoot identity. Changing the explicit assignment revokes previous guards even when the original chart is later restored.
+
 `Instance.new("BlockGrid")` creates an independent, empty grid with unit cells and identity pose. Configure `CellSize` to 0.5, 1 or 2 while empty. A proper rigid `CFrame` locates the local grid, and `Visible`, `CanCollide` and `CanQuery` govern the corresponding consumers. These five descriptor properties participate in ordinary persistence. The native cells have their own versioned codec. `BlockRevision` is a scoped read-only observation, excluded from saved and replicated properties.
 
 After adoption, an authoritative offline or server creator can call `SetBlock`, `RemoveBlock`, `Fill` and `Clear`. The typed synchronous mutation command checks the current Main domain, actor capability, generation and DataModel identity. A changed edit advances the world revision and publishes one committed BlockRevision notification. A duplicate write preserves its revision. `GetBlock` returns a fresh definition/orientation table or nil. `ReadRegion` checks up to 4,096 positions and returns the captured revision and occupied cells in X-fastest order. `CellToWorld` returns a center; `WorldToCell` floors the inverse rigid transform in double precision. Network client cell reads require a future verified data projection and currently report unavailability.

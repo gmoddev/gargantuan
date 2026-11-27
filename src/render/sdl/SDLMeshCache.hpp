@@ -14,8 +14,9 @@ namespace gargantuan {
 
 	class SDLMeshCache final {
 	  public:
-		explicit SDLMeshCache(SDL_GPUDevice *GpuDevice, SDLRendererMetrics *MetricsValue = nullptr)
-			: Gpu(GpuDevice), Metrics(MetricsValue) {}
+		explicit SDLMeshCache(SDL_GPUDevice *GpuDevice, SDLRendererMetrics *MetricsValue = nullptr,
+			const SDLMeshCache *SharedResources = nullptr)
+			: Gpu(GpuDevice), Metrics(MetricsValue), Shared(SharedResources) {}
 
 		SDLMeshCache(const SDLMeshCache &) = delete;
 		SDLMeshCache &operator=(const SDLMeshCache &) = delete;
@@ -29,6 +30,7 @@ namespace gargantuan {
 	  private:
 		SDL_GPUDevice *Gpu = nullptr;
 		SDLRendererMetrics *Metrics = nullptr;
+		const SDLMeshCache *Shared = nullptr;
 		bool Uploaded = false;
 		std::unordered_map<RenderGeometry, std::unique_ptr<SDLGpuMesh>> Meshes;
 		std::unordered_map<RenderMeshIdentity, std::unique_ptr<SDLGpuMesh>, RenderMeshIdentityHash> DynamicMeshes;

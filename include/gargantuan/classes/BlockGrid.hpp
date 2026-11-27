@@ -5,10 +5,11 @@
 #include "gargantuan/blockgrid/Field.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/generated/BlockGrid.hpp"
+#include "gargantuan/runtime/SpatialDomainMember.hpp"
 
 namespace gargantuan {
 	class MutationGateway;
-	class BlockGrid final : public Instance {
+	class BlockGrid final : public Instance, public SpatialDomainMember {
 		I_BlockGrid;
 	  public:
 		BlockGrid();

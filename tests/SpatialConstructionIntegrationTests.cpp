@@ -5,7 +5,9 @@
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
+#include "gargantuan/editor/EditorHost.hpp"
 #include "gargantuan/editor/EditorViewport.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
@@ -20,6 +22,7 @@
 #include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string_view>
 
@@ -264,6 +267,107 @@ namespace {
 			<< " DeletedResidual=" << Changed(Blank,Deleted) << '\n';
 		Game->Destroy();
 	}
+
+	void CheckAuthoring(const std::filesystem::path &Root) {
+		using Json = nlohmann::ordered_json;
+		Require(SDL_Init(0), SDL_GetError());
+		struct SdlLifetime { ~SdlLifetime() { SDL_Quit(); } } Sdl;
+		EditorHost Host("grid-history-test");
+		std::size_t Sequence = 0;
+		const auto Call = [&](const char *Method, const Json &Parameters) {
+			return Json::parse(Host.HandleRequest(Json{{"Version", EditorHostProtocolVersion},
+				{"RequestId", std::to_string(++Sequence)}, {"SessionToken", "grid-history-test"},
+				{"Method", Method}, {"Params", Parameters}}.dump()));
+		};
+		const auto Ok = [&](const char *Method, const Json &Parameters) {
+			auto Reply = Call(Method, Parameters);
+			if (!Reply.value("Ok", false)) throw std::runtime_error(std::string(Method) + " rejected: " + Reply.dump());
+			return Reply.at("Result");
+		};
+		const Json Open{{"Root",Root.generic_string()}};
+		const auto Empty = Json::object();
+		const auto Address = [&]() -> Json {
+			auto Snapshot = Ok("GetSnapshot",Empty).at("Snapshot");
+			for (const auto &Object : Snapshot.at("Objects"))
+				if (Object.value("Name","") == "WestGrid")
+					return {{"Scope",Snapshot.at("Cursor").at("Scope")}, {"Object",Object.at("Id")},
+						{"Cell",{Target.X,Target.Y,Target.Z}}};
+			throw std::runtime_error("authoring grid absent from snapshot");
+		};
+		Ok("Handshake",Empty);
+		Ok("OpenProject",Open);
+		const auto InitialAddress = Address();
+		auto Read = Ok("ReadBlockGridCell",InitialAddress);
+		Require(Read.at("Definition") == "Stone", "EditorHost opened the wrong field");
+		auto Edit = InitialAddress;
+		Edit["MaxExclusive"] = {Target.X+1,Target.Y+1,Target.Z+1};
+		Edit["Revision"] = Read.at("Revision");
+		Edit["Definition"] = "Brick";
+		Edit["Orientation"] = 7;
+		auto Receipt = Ok("EditBlockGridRegion",Edit);
+		Require(Receipt.at("Revision") != Read.at("Revision") && Receipt.at("Orientation") == 7,
+			"EditorHost omitted the edit revision or orientation");
+		Require(!Call("EditBlockGridRegion",Edit).at("Ok").get<bool>(), "EditorHost admitted a stale edit");
+		Ok("Undo",Empty);
+		Require(Ok("ReadBlockGridCell",InitialAddress).at("Definition") == "Stone", "EditorHost undo lost the prior cell");
+		Ok("Redo",Empty);
+		Read = Ok("ReadBlockGridCell",InitialAddress);
+		Require(Read.at("Definition") == "Brick" && Read.at("Orientation") == 7, "EditorHost redo lost the oriented cell");
+		Ok("SaveProject",Empty);
+		const auto Play = Ok("StartPlaySession",Empty);
+		Edit["Revision"] = Read.at("Revision");
+		Edit["Definition"] = "Air";
+		auto Denied = Call("EditBlockGridRegion",Edit);
+		Require(!Denied.at("Ok").get<bool>() && Denied.at("Error").at("Code") == "PlaySessionActive",
+			"EditorHost allowed an edit during Play");
+		Ok("StopPlaySession",{{"PlaySessionId",Play.at("PlaySessionId")}});
+		Require(Ok("ReadBlockGridCell",InitialAddress).at("Definition") == "Brick", "Play changed authoring state");
+		Ok("OpenProject",Open);
+		const auto NewAddress = Address();
+		Require(NewAddress.at("Scope") != InitialAddress.at("Scope") &&
+			!Call("ReadBlockGridCell",InitialAddress).at("Ok").get<bool>(), "EditorHost reused a replaced world scope");
+		Read = Ok("ReadBlockGridCell",NewAddress);
+		Require(Read.at("Definition") == "Brick" && Read.at("Orientation") == 7, "EditorHost reopen lost the authored edit");
+	}
+
+	void WritePackageProject(const std::filesystem::path &Root) {
+		Require(std::filesystem::create_directory(Root), "package fixture destination must be new");
+		DiskFilesystem Files(Root);
+		auto ProjectValue = Project::fromInit(&Files,"SpatialConstructionPackage");
+		auto Game = ProjectValue.DeserializeGame();
+		Game->InitializeLoadedProjectRevision();
+		auto Space = WorkspaceOf(Game);
+		auto Region = std::make_shared<SpatialRegion>();
+		Region->SetName("NestedRegion");
+		Region->SetParent(Space);
+		auto Pose = CFrame::Angles(0,1.57079632679f,0);
+		Pose.Position = {8,4,-6};
+		MakeGrid(Space,"WestGrid",{blockgrid::Stone,0},Pose);
+		MakeGrid(Region,"EastGrid",{blockgrid::Brick,1},Pose);
+		auto Proof = std::make_shared<Script>();
+		Proof->SetName("VerifyPackagedGrids");
+		Proof->SetRunContext(Enums::RunContext::Server);
+		Proof->SetSource(R"(
+			local World = game.Workspace
+			local Region = World.NestedRegion
+			local West = World.WestGrid
+			local East = Region.EastGrid
+			local Cell = Vector3.new(-2, 0, 3)
+			assert(West:GetBlock(Cell).Definition == "Stone" and East:GetBlock(Cell).Definition == "Brick")
+			local Params = RaycastParams.new()
+			Params.IncludeBlockGrids = true
+			local Origin = West:CellToWorld(Cell) + Vector3.new(0, 3, 0)
+			local Direction = Vector3.new(0, -6, 0)
+			local A = World:Raycast(Origin, Direction, Params)
+			local B = Region:Raycast(Origin, Direction, Params)
+			assert(A.Instance == West and B.Instance == East and A.GridHit.Cell == Cell and B.GridHit.Cell == Cell)
+			print("[Spatial:PackagedGrid] Two coincident charts restored and queried")
+		)");
+		Proof->SetParent(Space);
+		Game->MarkPersistenceSubtreeArchivable();
+		ProjectValue.PersistGameAtomically(ProjectValue.CaptureGame(Game,Game->GetAuthoritativeRevision()));
+		Game->Destroy();
+	}
 }
 
 int main(int Count, char **Arguments) {
@@ -274,7 +378,11 @@ int main(int Count, char **Arguments) {
 			CheckOffscreenPixels();
 			return 0;
 		}
-		Require(Count == 1, "optional mode is --vulkan");
+		if (Count == 3 && std::string_view(Arguments[1]) == "--write-project") {
+			WritePackageProject(Arguments[2]);
+			return 0;
+		}
+		Require(Count == 1, "supported modes are --vulkan and --write-project <new directory>");
 		ScratchProject Scratch;
 		DiskFilesystem Files(Scratch.Root);
 		auto ProjectValue = Project::fromInit(&Files,"SpatialConstruction");
@@ -310,7 +418,8 @@ int main(int Count, char **Arguments) {
 		const auto Removed = Region->ResolveRaycast(Center+glm::vec3(0,3,0), {0,-6,0}, GridQueries());
 		Require(Removed.Succeeded() && !Removed.HasHit(), "destroyed grid still had queryable geometry");
 		Game->Destroy();
-		std::cout << "[Spatial:ConstructionTest] Passed domain, query, motion, render and persistence checks\n";
+		CheckAuthoring(Scratch.Root);
+		std::cout << "[Spatial:ConstructionTest] Passed domain, query, motion, render, persistence and EditorHost checks\n";
 		return 0;
 	} catch (const std::exception &Error) {
 		std::cerr << "[Spatial:ConstructionTest] " << Error.what() << '\n';

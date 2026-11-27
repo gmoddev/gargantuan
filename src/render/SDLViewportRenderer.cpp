@@ -92,9 +92,39 @@ namespace gargantuan {
 			RenderAnimationPoseUpdate{});
 	}
 
+	void SDLViewportRenderer::UpdateDomainMeshes(SDL_GPUDevice *Gpu, SDLFrameContext &Frame, const RenderViewportScenes &Scenes) {
+		std::map<RenderMeshIdentity, const RenderMeshCreate *> Desired;
+		for (const auto &Scene : Scenes) {
+			if (!Scene->Geometry || std::find(ReferencedViewports.begin(), ReferencedViewports.begin() + ReferenceCount,
+				Scene->Viewport) == ReferencedViewports.begin() + ReferenceCount) continue;
+			for (const auto &Mesh : Scene->Geometry->Meshes)
+				if (!Frame.MeshResources.Find(Mesh.Mesh)) Desired.try_emplace(Mesh.Mesh, &Mesh);
+		}
+		if (Desired.empty()) {
+			if (DomainMeshes) DomainMeshes->Destroy();
+			DomainMeshes.reset(); InstalledMeshes.clear();
+			return;
+		}
+		if (!DomainMeshes) DomainMeshes = std::make_unique<SDLMeshCache>(Gpu, Frame.Metrics, &Frame.MeshResources);
+		RenderPublication Changes;
+		std::map<RenderMeshIdentity, std::uint64_t> Next;
+		for (const auto &[Id, Mesh] : Desired) {
+			Next.emplace(Id, Mesh->VertexRevision);
+			const auto Old = InstalledMeshes.find(Id);
+			if (Old == InstalledMeshes.end()) Changes.MeshCreates.push_back(*Mesh);
+			else if (Mesh->VertexRevision != Old->second)
+				Changes.MeshVertexUpdates.push_back({Id, Mesh->VertexRevision, 0, Mesh->Vertices, Mesh->Bounds});
+		}
+		for (const auto &[Id, Revision] : InstalledMeshes)
+			if (!Desired.contains(Id)) Changes.MeshRemoves.push_back({Id});
+		if (Changes.MeshCreates.empty() && Changes.MeshRemoves.empty() && Changes.MeshVertexUpdates.empty()) return;
+		DomainMeshes->ApplyPublication(Changes);
+		InstalledMeshes = std::move(Next);
+	}
+
 	void SDLViewportRenderer::Draw(SDL_GPUDevice *Gpu, SDLFrameContext &Frame) {
 		const auto &Scenes = Frame.Projection.GetViewports();
-		if (Scenes.empty() && TargetCount == 0) return;
+		if (Scenes.empty() && TargetCount == 0 && !DomainMeshes) return;
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::ViewportDraw);
 		auto &Metrics = *Frame.Metrics;
 		const auto Start = std::chrono::steady_clock::now();
@@ -117,8 +147,22 @@ namespace gargantuan {
 		const auto FindScene = [&](ObjectId Identity) {
 			return std::ranges::find_if(Scenes, [&](const auto &Scene) { return Scene->Viewport == Identity; });
 		};
+		try { UpdateDomainMeshes(Gpu, Frame, Scenes); }
+		catch (const std::exception &Error) {
+			if (DomainMeshes) DomainMeshes->Destroy();
+			DomainMeshes.reset(); InstalledMeshes.clear();
+			for (auto &Value : Targets) if (Value.Rendered && Value.Rendered->Geometry) {
+				Release(Gpu, Value, Metrics);
+				--TargetCount;
+			}
+			++Metrics.ViewportFailures;
+			LOG_WARN(App, "[Render:ViewportFrame] Domain mesh admission failed: %s", Error.what());
+			return;
+		}
 		for (auto &Value : Targets) {
-			if (Value.Viewport.IsValid() && (FindScene(Value.Viewport) == Scenes.end() || !Referenced(Value.Viewport))) {
+			const auto Found = FindScene(Value.Viewport);
+			if (Value.Viewport.IsValid() && (Found == Scenes.end() || !Referenced(Value.Viewport) ||
+				(Value.Rendered && Value.Rendered->World != (*Found)->World))) {
 				Release(Gpu, Value, Metrics);
 				--TargetCount;
 			}
@@ -151,7 +195,8 @@ namespace gargantuan {
 				Projection.ApplyViewportScene(*Scene, Frame.Projection);
 				ApplyPalettes(Gpu, Value, Projection, Metrics);
 				auto &Palettes = Value.Palettes ? *Value.Palettes : Frame.SkinPalettes;
-				SDLFrameContext View(Projection, Frame.MeshResources, Palettes, Frame.ShadowCache, Frame.ShadowPoseRevisions);
+				auto &Meshes = Scene->Geometry && DomainMeshes ? *DomainMeshes : Frame.MeshResources;
+				SDLFrameContext View(Projection, Meshes, Palettes, Frame.ShadowCache, Frame.ShadowPoseRevisions);
 				View.Commands = Frame.Commands;
 				View.Width = Scene->Width;
 				View.Height = Scene->Height;
@@ -197,6 +242,8 @@ namespace gargantuan {
 	}
 
 	void SDLViewportRenderer::Destroy(SDL_GPUDevice *Gpu, SDLRendererMetrics &Metrics) {
+		if (DomainMeshes) DomainMeshes->Destroy();
+		DomainMeshes.reset(); InstalledMeshes.clear();
 		for (auto &Value : Targets) Release(Gpu, Value, Metrics);
 		if (Opaque) Opaque->Destroy(Gpu);
 		Opaque.reset();

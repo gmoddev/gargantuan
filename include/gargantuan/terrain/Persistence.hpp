@@ -7,6 +7,7 @@
 #include "gargantuan/terrain/Manifest.hpp"
 
 #include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -69,6 +70,8 @@ namespace gargantuan::terrain {
         std::size_t ClosureBytes{};
         std::size_t ReusedChunks{};
     };
+
+    using DomainTerrainCaptures = std::map<std::uint32_t, TerrainCapture>;
 
     // The reader receives only a validated typed digest, purpose and read cap.
     // Project/package owners provide their confined and authorized implementation.

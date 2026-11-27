@@ -8,7 +8,21 @@
 #include <algorithm>
 #include <stdexcept>
 
+namespace gargantuan { class SpatialRegion; }
+
 namespace gargantuan::terrain {
+    [[nodiscard]] DomainTerrainCaptures CaptureDocumentTerrain(const std::shared_ptr<DataModel> &World,
+        ProjectId Identity, std::size_t WorkspaceClosureBytes);
+    [[nodiscard]] DomainTerrainBindings GetDomainTerrainBindings(const DomainTerrainCaptures &Captures);
+    [[nodiscard]] InstanceSerialization::DomainTerrainAdmission GetDomainTerrainAdmission(ProjectId Identity,
+        TerrainArtifactReader Reader);
+    [[nodiscard]] TerrainArtifactReader BudgetDocumentTerrainReads(TerrainArtifactReader Reader);
+    // The document-local owner ID identifies a GTMF inside one place capture.
+    [[nodiscard]] TerrainDatasetId GetDomainTerrainDatasetId(ProjectId Identity, std::uint32_t DocumentNodeId);
+    [[nodiscard]] std::optional<TerrainCapture> CaptureDomainTerrain(SpatialRegion &Region, ProjectId Identity,
+        std::uint32_t DocumentNodeId, const TerrainCaptureIndex *PriorDurable = nullptr);
+    [[nodiscard]] std::unique_ptr<Field> LoadDomainTerrain(ProjectId Identity, std::uint32_t DocumentNodeId,
+        const AssetContentId &Digest, const TerrainArtifactReader &Reader);
     [[nodiscard]] std::optional<TerrainCapture> CaptureSceneTerrain(DataModel &World, ProjectId Identity,
         const TerrainCaptureIndex *PriorDurable = nullptr);
 

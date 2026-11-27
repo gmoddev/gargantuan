@@ -427,24 +427,48 @@ namespace gargantuan::Gas {
 			Out.Raw(Place.Identity.Bytes);
 			Out.Put(static_cast<std::uint8_t>(Place.PreRunSource.has_value()));
 			if (Place.PreRunSource) Out.Text(*Place.PreRunSource, MaximumPreRunBytes);
+			if (!Place.Domains.empty()) Out.Put(static_cast<std::uint8_t>(Place.TerrainManifest.has_value()));
 			if (Place.TerrainManifest) {
 				Require(Place.TerrainManifest->IsValid(), "Invalid terrain manifest identity");
 				Out.Raw(Place.TerrainManifest->Bytes);
 			}
+			if (!Place.Domains.empty()) {
+				Out.Count(Place.Domains.size(), terrain::MaximumDomainTerrainBindings);
+				for (const auto &[Node, Digest] : Place.Domains) {
+					Require(Node > 0 && Node <= MaximumInstances && Digest.IsValid(), "Invalid domain terrain binding");
+					Out.Put(Node);
+					Out.Raw(Digest.Bytes);
+				}
+			}
 		}
 
-		PlaceMetadata ReadPlace(Reader In, bool HasTerrain) {
+		PlaceMetadata ReadPlace(Reader In, std::uint16_t Version) {
 			PlaceMetadata Place;
 			std::ranges::copy(In.Take(Place.Identity.Bytes.size()), Place.Identity.Bytes.begin());
 			Require(Place.Identity.IsValid(), "Invalid place identity");
 			const auto Present = In.U8();
 			Require(Present <= 1, "Invalid place source flag");
 			if (Present != 0) Place.PreRunSource = In.Text(MaximumPreRunBytes);
+			const unsigned HasTerrain = Version == DomainTerrainPlaceFormatVersion ? In.U8() : Version == TerrainPlaceFormatVersion;
+			Require(HasTerrain <= 1, "Invalid default terrain flag");
 			if (HasTerrain) {
 				AssetContentId Digest;
 				std::ranges::copy(In.Take(Digest.Bytes.size()), Digest.Bytes.begin());
 				Require(Digest.IsValid(), "Invalid terrain manifest identity");
 				Place.TerrainManifest = Digest;
+			}
+			if (Version == DomainTerrainPlaceFormatVersion) {
+				const auto Count = In.Count(terrain::MaximumDomainTerrainBindings, 36);
+				Require(Count > 0, "Missing domain terrain bindings");
+				std::uint32_t Prior = 0;
+				for (std::uint32_t I = 0; I < Count; ++I) {
+					const auto Node = In.U32();
+					AssetContentId Digest;
+					std::ranges::copy(In.Take(Digest.Bytes.size()), Digest.Bytes.begin());
+					Require(Node > Prior && Node <= MaximumInstances && Digest.IsValid(), "Invalid domain terrain binding");
+					Place.Domains.emplace(Node, Digest);
+					Prior = Node;
+				}
 			}
 			In.Finish();
 			return Place;
@@ -499,12 +523,12 @@ namespace gargantuan::Gas {
 			if (!std::ranges::equal(Header.Take(Magic.size()), Magic))
 				Fail(SerializationErrorCode::InvalidSyntax, "Invalid GAS magic");
 			const auto Version = Header.Get<std::uint16_t>();
-			if (Version != FormatVersion && Version != TerrainPlaceFormatVersion)
+			if (Version != FormatVersion && Version != TerrainPlaceFormatVersion && Version != DomainTerrainPlaceFormatVersion)
 				Fail(SerializationErrorCode::UnsupportedVersion, "Unsupported GAS format version");
 			Document Result;
 			Result.Kind = static_cast<DocumentKind>(Header.U8());
 			const bool Place = Result.Kind == DocumentKind::Place;
-			if (Version == TerrainPlaceFormatVersion && !Place)
+			if (Version != FormatVersion && !Place)
 				Fail(SerializationErrorCode::UnsupportedVersion, "Terrain format requires a GAS place");
 			Require(Result.Kind == DocumentKind::Model || Place, "Unknown document kind");
 			const auto Count = Header.U8();
@@ -527,7 +551,7 @@ namespace gargantuan::Gas {
 				"Document integrity digest does not match");
 			Result.Nodes = ReadGraph(Reader(Sections[0]), Result.Kind);
 			Result.Dependencies = ReadDependencies(Reader(Sections[1]));
-			if (Place) Result.Place = ReadPlace(Reader(Sections[2]), Version == TerrainPlaceFormatVersion);
+			if (Place) Result.Place = ReadPlace(Reader(Sections[2]), Version);
 			return Result;
 		} catch (SerializationError &Error) {
 			return std::unexpected(std::move(Error));
