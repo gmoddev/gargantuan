@@ -234,8 +234,11 @@ def RunYard(Options, Root):
     Run([sys.executable, "-B", Samples / "ConstructionYard" / "BuildProject.py",
          "--engine", Options.engine.resolve(), "--project", Project], Root)
     AddObserver(Options.engine.resolve(), Project)
-    Server, _ = Build(Options.packager, Project, Options.server_runtime, "DedicatedServer", Root, "Development")
-    Player, _ = Build(Options.packager, Project, Options.player_runtime, "DistributedPlayer", Root, "Development")
+    Policies = Samples / "ConstructionYard"
+    Server, _ = Build(Options.packager, Project, Options.server_runtime, "DedicatedServer", Root, "Development",
+                      Policies / "DedicatedServer.json")
+    Player, _ = Build(Options.packager, Project, Options.player_runtime, "DistributedPlayer", Root, "Development",
+                      Policies / "DistributedPlayer.json")
     Env = ManagedEnvironment()
     Exe = ".exe" if os.name == "nt" else ""
     Database = Root / "yard.sqlite"
