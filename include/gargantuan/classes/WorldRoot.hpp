@@ -253,6 +253,10 @@ namespace gargantuan {
 		void InitializeTerrainRuntime(RuntimeMode Mode, bool AdmitNetworkTerrain = false,
 			bool ExperimentalVisualDensity = false, std::shared_ptr<const terrain::TerrainMaterialPalette> Palette = {});
 		void PollTerrainWork();
+		void RetireDomainTerrainRuntime();
+		[[nodiscard]] bool IsSpatiallyAvailable() const;
+		std::uint64_t TerrainTicketBase{};
+		std::uint64_t LastTerrainTicket{};
 		[[nodiscard]] std::expected<std::uint64_t, terrain::EditStatus>
 		SubmitTerrainEdit(const Terrain &Owner, const terrain::TerrainMutation &Edit);
 		[[nodiscard]] bool CancelTerrainEdit(const Terrain &Owner, std::uint64_t Ticket) noexcept;

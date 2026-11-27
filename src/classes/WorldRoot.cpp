@@ -8,6 +8,7 @@
 #include "gargantuan/classes/LocalLight.hpp"
 #include "gargantuan/classes/ReflectionProbe.hpp"
 #include "gargantuan/classes/Terrain.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Workspace.hpp"
@@ -1156,7 +1157,7 @@ namespace gargantuan {
 
 	void WorldRoot::InitializeTerrainRuntime(RuntimeMode Mode, bool AdmitNetworkTerrain, bool ExperimentalVisualDensity,
 		std::shared_ptr<const terrain::TerrainMaterialPalette> Palette) {
-		if (TerrainRuntimeValue || ShuttingDownPhysics) return;
+		if (TerrainRuntimeValue || ShuttingDownPhysics || !IsSpatiallyAvailable()) return;
 		auto Owner = GetOwnedTerrain();
 		if (!Owner || !Owner->Field) return;
 		const bool Materialized = Owner->Field->GetStats().MaterializedPages != 0;
@@ -1198,6 +1199,16 @@ namespace gargantuan {
 		return TerrainRuntimeValue ? &TerrainRuntimeValue->GetPhysicsStage() : nullptr;
 	}
 
+	bool WorldRoot::IsSpatiallyAvailable() const {
+		return !dynamic_cast<const SpatialRegion *>(this) || bool(SpatialRegion::FindAttachedWorld(*this));
+	}
+
+	void WorldRoot::RetireDomainTerrainRuntime() {
+		TerrainRuntimeValue.reset();
+		TerrainEditTickets.reset();
+		TerrainTicketBase = LastTerrainTicket;
+	}
+
 	bool WorldRoot::HasTerrainRuntime() const noexcept {
 		const auto *TerrainPhysics = GetTerrainPhysics();
 		return TerrainPhysics && TerrainPhysics->IsHealthy() && !ShuttingDownPhysics;
@@ -1209,8 +1220,11 @@ namespace gargantuan {
 			return std::unexpected(terrain::EditStatus::Unavailable);
 		if (Edit.ExpectedRevision && *Edit.ExpectedRevision != Owner.GetField().GetRevision())
 			return std::unexpected(terrain::EditStatus::Stale);
+		if (LastTerrainTicket == std::numeric_limits<std::uint64_t>::max()) return std::unexpected(terrain::EditStatus::LimitExceeded);
 		auto Ticket = TerrainRuntimeValue->Submit(Edit.Request, Edit.ExpectedRevision);
 		if (Ticket) {
+			*Ticket += TerrainTicketBase;
+			LastTerrainTicket = *Ticket;
 			auto &Records = TerrainEditTickets->Records;
 			Records[*Ticket % Records.size()] = {*Ticket, std::nullopt};
 		}
@@ -1218,7 +1232,8 @@ namespace gargantuan {
 	}
 
 	bool WorldRoot::CancelTerrainEdit(const Terrain &Owner, std::uint64_t Ticket) noexcept {
-		return HasTerrainRuntime() && GetTerrainQueryOwner().get() == &Owner && TerrainRuntimeValue->Cancel(Ticket);
+		return Ticket > TerrainTicketBase && Ticket <= LastTerrainTicket && HasTerrainRuntime() &&
+			GetTerrainQueryOwner().get() == &Owner && TerrainRuntimeValue->Cancel(Ticket - TerrainTicketBase);
 	}
 
 	std::optional<WorldRoot::TerrainTicketInfo> WorldRoot::GetTerrainTicket(std::uint64_t Ticket) const noexcept {
@@ -1238,7 +1253,8 @@ namespace gargantuan {
 		if (!TerrainRuntimeValue || !TerrainEditTickets) return;
 		const auto *TerrainPhysics = GetTerrainPhysics();
 		auto &Records = TerrainEditTickets->Records;
-		for (const auto &Completion : TerrainRuntimeValue->Poll()) {
+		for (auto &Completion : TerrainRuntimeValue->Poll()) {
+			Completion.Ticket += TerrainTicketBase;
 			auto &Record = Records[Completion.Ticket % Records.size()];
 			if (Record.Ticket == Completion.Ticket) Record.Completion = Completion;
 		}
@@ -1253,6 +1269,8 @@ namespace gargantuan {
 	}
 
 	PhysicsKinematicMotionResult WorldRoot::ResolveKinematicMotion(const PhysicsKinematicMotionRequest &Request) {
+		if (!IsSpatiallyAvailable()) return {.Status = PhysicsOperationStatus::InvalidDescription,
+			.Message = "[Spatial:Motion] The destination domain is detached"};
 		const auto *TerrainPhysics = GetTerrainPhysics();
 		if (TerrainPhysics && (TerrainPhysics->IsStaging() || !TerrainPhysics->IsHealthy()))
 			return {.Status = PhysicsOperationStatus::BackendFailure, .Message = "[Terrain:Query] Terrain collision is unavailable"};
@@ -1264,6 +1282,8 @@ namespace gargantuan {
 
 	PhysicsOperationResult
 	WorldRoot::BuildRaycastFilter(const RaycastParams &Params, PhysicsQueryFilter &Filter) {
+		if (!IsSpatiallyAvailable())
+			return {PhysicsOperationStatus::InvalidDescription, "[Spatial:Query] The requested domain is detached"};
 		const auto *TerrainPhysics = GetTerrainPhysics();
 		if (TerrainPhysics && (TerrainPhysics->IsStaging() || !TerrainPhysics->IsHealthy()))
 			return {PhysicsOperationStatus::BackendFailure, "[Terrain:Query] Terrain collision is unavailable"};
@@ -1607,6 +1627,7 @@ namespace gargantuan {
 		if (SteppingPhysics)
 			throw std::logic_error("[Physics:Step] Cannot advance a world already stepping");
 		(void)Instances;
+		if (!IsSpatiallyAvailable()) return;
 		PollTerrainWork();
 		const auto *TerrainPhysics = GetTerrainPhysics();
 		if (TerrainPhysics && (TerrainPhysics->IsStaging() || !TerrainPhysics->IsHealthy())) return;

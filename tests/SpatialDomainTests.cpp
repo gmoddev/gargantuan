@@ -7,6 +7,7 @@
 #include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/render/SpatialViewportCapture.hpp"
 #include "../src/terrain/ScenePersistence.hpp"
+#include "../src/terrain/TerrainMutation.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
@@ -18,6 +19,11 @@
 namespace gargantuan {
 	struct WorldRootTestAccess {
 		static void StartTerrain(WorldRoot &Owner) { Owner.InitializeTerrainRuntime(RuntimeMode::Offline); }
+		static std::uint64_t Submit(WorldRoot &World) {
+			return World.SubmitTerrainEdit(*World.GetOwnedTerrain(), {terrain::SphereBrush{
+				{8, 9, 8}, 2., terrain::BrushMode::Add, 4}}).value();
+		}
+		static bool HasTicket(WorldRoot &World, std::uint64_t Ticket) { return World.GetTerrainTicket(Ticket).has_value(); }
 	};
 }
 
@@ -117,6 +123,13 @@ namespace {
 				[&](const auto &Draw) { return Draw.Item.Object == Scope->GetTerrain()->GetObjectId(); }),
 				"a secondary domain camera needs its own terrain resources even when the main world is empty");
 		}
+		const auto OldTicket = WorldRootTestAccess::Submit(*High);
+		High->SetParent(nullptr);
+		Check(!High->IsTerrainCollisionReady() && !Cast(*High).Succeeded(), "detached domain rejects physical queries and retires terrain");
+		High->SetParent(Default); WorldRootTestAccess::StartTerrain(*High);
+		const auto NewTicket = WorldRootTestAccess::Submit(*High);
+		Check(NewTicket > OldTicket && !WorldRootTestAccess::HasTicket(*High, OldTicket) &&
+			WorldRootTestAccess::HasTicket(*High, NewTicket), "reattachment cannot reuse an expired terrain edit ticket");
 		Game->Destroy(); Reopened->Destroy();
 	}
 
