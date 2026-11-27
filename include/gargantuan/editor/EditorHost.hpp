@@ -40,10 +40,17 @@ namespace gargantuan {
 	inline constexpr std::uint64_t EditorHostMaximumViewportPixels = 3840ull * 2160ull;
 	inline constexpr std::string_view EditorHostResponsePrefix = "GARGANTUAN_EDITOR/1 ";
 
+	struct EditorNodeDevelopmentPersistence final {
+		ProjectId Project;
+		std::filesystem::path ProjectRoot;
+		std::function<std::shared_ptr<IPersistenceProvider>()> Admit;
+	};
+
 	class EditorHost {
 	  public:
 		explicit EditorHost(std::string sessionToken);
-		EditorHost(std::string sessionToken, bool AudioEnabled);
+		EditorHost(std::string sessionToken, bool AudioEnabled,
+			std::optional<EditorNodeDevelopmentPersistence> NodeDevelopment = std::nullopt);
 		EditorHost(std::string sessionToken, ScriptSecurityContext studioSecurity);
 		~EditorHost();
 
@@ -90,6 +97,7 @@ namespace gargantuan {
 		MutationGateway Mutations;
 		ScriptSecurityContext StudioSecurity = ScriptSecurityContext::StudioCoreUi();
 		bool AudioEnabled = false;
+		std::optional<EditorNodeDevelopmentPersistence> NodeDevelopment;
 		std::optional<RenderCameraInput> ViewportCamera;
 		std::unique_ptr<RenderPublisher> ViewportPublisher = std::make_unique<RenderPublisher>();
 		std::shared_ptr<SemanticSpatialResolver> ViewportSpatial;

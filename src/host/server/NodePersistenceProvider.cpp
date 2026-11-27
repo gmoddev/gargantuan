@@ -2,6 +2,11 @@
 
 #include "common/v1/common.pb.h"
 #include "datastore/v1/datastore.grpc.pb.h"
+#if defined(GARGANTUAN_WITH_STUDIO_NODE_DEVELOPMENT)
+#include "datastore/development/v1/admission.grpc.pb.h"
+#include "gargantuan/assets/AssetTypes.hpp"
+#include <atomic>
+#endif
 
 #include <google/protobuf/any.pb.h>
 #include <google/protobuf/io/coded_stream.h>
@@ -24,6 +29,9 @@ namespace gargantuan::host {
 	namespace Wire = ::gargantuan::node::datastore::v1;
 	namespace Common = ::gargantuan::node::common::v1;
 	namespace Pb = ::google::protobuf;
+#if defined(GARGANTUAN_WITH_STUDIO_NODE_DEVELOPMENT)
+	namespace DevelopmentWire = ::gargantuan::node::datastore::development::v1;
+#endif
 
 	namespace {
 		constexpr std::size_t MaxTokenBytes = 4096;
@@ -331,8 +339,10 @@ namespace gargantuan::host {
 
 		class NodeCall final {
 		  public:
-			NodeCall(const PersistenceRequest &Request, const std::string &Token, std::stop_token Stop) : Request(Request), Stop(Stop) {
+			NodeCall(const PersistenceRequest &Request, const std::string &Token, std::stop_token Stop,
+				const std::string &Grant = {}) : Request(Request), Stop(Stop) {
 				Context.AddMetadata("authorization", "Bearer " + Token);
+				if (!Grant.empty()) Context.AddMetadata("x-gargantuan-development-grant", Grant);
 				// Reads can use their existing deadline to await a reconnect. A
 				// mutation never waits through transient channel failure.
 				Context.set_wait_for_ready(!IsPersistenceMutation(Request.Operation));
@@ -428,12 +438,63 @@ namespace gargantuan::host {
 			}
 			return WithStatus(PersistenceStatus::Unsupported);
 		}
+#if defined(GARGANTUAN_WITH_STUDIO_NODE_DEVELOPMENT)
+		struct NodeDevelopmentLease final {
+			std::unique_ptr<DevelopmentWire::DevelopmentAdmission::Stub> Admission;
+			std::string Credential;
+			std::string Grant;
+			std::atomic_bool Retired{false};
+
+			~NodeDevelopmentLease() {
+				if (Grant.empty()) return;
+				try {
+					grpc::ClientContext Context;
+					Context.AddMetadata("authorization", "Bearer " + Credential);
+					Context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(200));
+					DevelopmentWire::ReleaseRequest Request;
+					Request.set_grant(Grant);
+					DevelopmentWire::ReleaseResponse Reply;
+					(void)Admission->Release(&Context, Request, &Reply);
+				} catch (const std::exception &) {
+					// A stopped peer retires this lease locally. The private server bounds idle grants.
+				}
+			}
+		};
+
+		std::unique_ptr<NodeDevelopmentLease> AdmitDevelopment(const std::shared_ptr<grpc::Channel> &Channel,
+			const NodeDevelopmentBinding &Expected, const std::filesystem::path &TokenFile) {
+			auto Credential = ReadWorkloadToken(TokenFile);
+			if (!Credential) throw std::runtime_error("Private Node workload credential is unavailable");
+			auto Lease = std::make_unique<NodeDevelopmentLease>();
+			Lease->Admission = DevelopmentWire::DevelopmentAdmission::NewStub(Channel);
+			Lease->Credential = std::move(*Credential);
+			grpc::ClientContext Context;
+			Context.AddMetadata("authorization", "Bearer " + Lease->Credential);
+			Context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(2));
+			DevelopmentWire::AdmitRequest Request;
+			Request.set_version(1);
+			Request.set_project_id(Expected.Project.ToString());
+			Request.set_nonce(ProjectId::New().ToString());
+			DevelopmentWire::AdmitResponse Reply;
+			if (!Lease->Admission->Admit(&Context, Request, &Reply).ok() || !ProjectId::Parse(Reply.grant()))
+				throw std::runtime_error("Private Node development grant is unavailable");
+			Lease->Grant = Reply.grant();
+			if (Reply.version() != 1 || Reply.nonce() != Request.nonce() || Reply.project_id() != Request.project_id() ||
+				Reply.tenant_id() != Expected.Tenant || Reply.database() != Expected.Database ||
+				Reply.database_generation() != Expected.DatabaseGeneration || Reply.node_instance() != Expected.NodeInstance)
+				throw std::runtime_error("Private Node development grant did not match the expected binding");
+			return Lease;
+		}
+#endif
 	} // namespace
 
 	struct NodePersistenceProvider::Impl final {
 		std::filesystem::path WorkloadTokenFile;
 		std::unique_ptr<Wire::KeyValueStore::Stub> KeyValues;
 		std::unique_ptr<Wire::DocumentStore::Stub> Documents;
+#if defined(GARGANTUAN_WITH_STUDIO_NODE_DEVELOPMENT)
+		std::unique_ptr<NodeDevelopmentLease> Development;
+#endif
 	};
 
 	NodePersistenceProvider::NodePersistenceProvider(NodePersistenceProviderConfiguration Configuration) {
@@ -447,6 +508,15 @@ namespace gargantuan::host {
 			Certificate->find("-----BEGIN CERTIFICATE-----") == std::string::npos) {
 			throw std::invalid_argument("Node persistence root certificate is unavailable or invalid");
 		}
+#if defined(GARGANTUAN_WITH_STUDIO_NODE_DEVELOPMENT)
+		if (const auto &Expected = Configuration.Development) {
+			if ((!Configuration.Endpoint.starts_with("127.0.0.1:") && !Configuration.Endpoint.starts_with("[::1]:")) ||
+				!Expected->Project.IsValid() ||
+				AssetContentId::Hash(std::span(reinterpret_cast<const std::uint8_t *>(Certificate->data()),
+					Certificate->size())).ToString() != Expected->CertificateSha256)
+				throw std::invalid_argument("Private Node TLS identity did not match the expected local binding");
+		}
+#endif
 		grpc::SslCredentialsOptions TLS;
 		TLS.pem_root_certs = std::move(*Certificate);
 		grpc::ChannelArguments Arguments;
@@ -461,6 +531,10 @@ namespace gargantuan::host {
 		const auto Channel = grpc::CreateCustomChannel(Configuration.Endpoint, grpc::SslCredentials(TLS), Arguments);
 		State = std::make_unique<Impl>(Impl{std::move(Configuration.WorkloadTokenFile), Wire::KeyValueStore::NewStub(Channel),
 			Wire::DocumentStore::NewStub(Channel)});
+#if defined(GARGANTUAN_WITH_STUDIO_NODE_DEVELOPMENT)
+		if (Configuration.Development)
+			State->Development = AdmitDevelopment(Channel, *Configuration.Development, State->WorkloadTokenFile);
+#endif
 	}
 
 	NodePersistenceProvider::~NodePersistenceProvider() = default;
@@ -474,12 +548,28 @@ namespace gargantuan::host {
 			return WithStatus(PersistenceStatus::Invalid);
 		}
 		const auto Token = ReadWorkloadToken(State->WorkloadTokenFile);
-		if (!Token) return WithStatus(PersistenceStatus::Unavailable);
-		NodeCall Call(Request, *Token, Stop);
-		switch (Request.Kind) {
-			case PersistenceStoreKind::KeyValue: return CallKeyValue(*State->KeyValues, Call, Request);
-			case PersistenceStoreKind::Document: return CallDocument(*State->Documents, Call, Request);
+#if defined(GARGANTUAN_WITH_STUDIO_NODE_DEVELOPMENT)
+		auto *Development = State->Development.get();
+		if (Development && (Development->Retired || !Token || *Token != Development->Credential)) {
+			Development->Retired = true;
+			return WithStatus(PersistenceStatus::Denied);
 		}
-		return WithStatus(PersistenceStatus::Unsupported);
+#endif
+		if (!Token) return WithStatus(PersistenceStatus::Unavailable);
+#if defined(GARGANTUAN_WITH_STUDIO_NODE_DEVELOPMENT)
+		NodeCall Call(Request, *Token, Stop, Development ? Development->Grant : std::string{});
+#else
+		NodeCall Call(Request, *Token, Stop);
+#endif
+		PersistenceResult Result;
+		switch (Request.Kind) {
+			case PersistenceStoreKind::KeyValue: Result = CallKeyValue(*State->KeyValues, Call, Request); break;
+			case PersistenceStoreKind::Document: Result = CallDocument(*State->Documents, Call, Request); break;
+			default: return WithStatus(PersistenceStatus::Unsupported);
+		}
+#if defined(GARGANTUAN_WITH_STUDIO_NODE_DEVELOPMENT)
+		if (Development && Result.Status == PersistenceStatus::Denied) Development->Retired = true;
+#endif
+		return Result;
 	}
 } // namespace gargantuan::host

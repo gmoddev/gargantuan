@@ -654,3 +654,38 @@ bounded latest-state diagnostics, separately scoped from authoring identity.
 The next creator-loop increment may build a first playable vertical slice on that
 boundary; project revision remains separate from play identity, transaction identity,
 source version, and journal sequence.
+
+## Private Node-backed Play persistence
+
+Build with GARGANTUAN_WITH_NODE_PERSISTENCE and
+GARGANTUAN_WITH_STUDIO_NODE_DEVELOPMENT enabled against the opted-in Node
+development protocol. The private build cannot enable external distribution.
+The normal creator build uses its existing local storage modes.
+
+A trusted owner launches an exact numeric loopback TLS Node service and one
+disposable PostgreSQL tenant before starting EditorHost. It supplies
+GARGANTUAN_STUDIO_NODE_DEVELOPMENT_PROFILE with an absolute local path to a
+version 1 JSON profile outside the authored project. The required fields are
+Version, ProjectId, ProjectRoot, Endpoint, RootCertificateFile,
+RootCertificateSha256, WorkloadTokenFile, TenantId, Database,
+DatabaseGeneration and NodeInstance. The certificate SHA-256 pins the
+unique TLS root prepared by the launcher. The credential and certificate
+remain in private local files outside the project.
+
+The local owner handshake advertises PlayNodeDevelopmentPersistence
+with PlayNodeDevelopmentPersistenceVersion 1 and the allowed
+PlayNodeDevelopmentProjectId. StartPlaySession may select
+PersistenceMode NodeDevelopment only when the loaded project UUID and its
+local root match that binding. The native provider acquires a fresh opaque
+admission on the same certificate-pinned channel that will carry DataStore v1.
+It includes that grant on each call. Studio or project data cannot supply
+the endpoint, credentials or grant. An unavailable or mismatched binding
+returns PlayNodeDevelopmentUnavailable without selecting another provider.
+Team Create and debugger launch remain outside this private composition.
+
+The Play runtime owns the provider and its credential. Stop releases the
+matching Node grant after cancelling and retiring local persistence work.
+Failure to reach a stopped service during release leaves the server's
+bounded idle expiry in effect. A credential change or authority denial
+retires old local admission. Project replacement requires Stop and a
+matching fresh admission before a subsequent Play run can use Node.

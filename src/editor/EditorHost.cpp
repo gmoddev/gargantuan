@@ -1340,9 +1340,11 @@ namespace gargantuan {
 	EditorHost::EditorHost(std::string sessionToken) :
 		EditorHost(std::move(sessionToken), ScriptSecurityContext::StudioCoreUi()) {}
 
-	EditorHost::EditorHost(std::string sessionToken, bool AudioEnabledValue) :
+	EditorHost::EditorHost(std::string sessionToken, bool AudioEnabledValue,
+		std::optional<EditorNodeDevelopmentPersistence> NodeDevelopmentValue) :
 		EditorHost(std::move(sessionToken), ScriptSecurityContext::StudioCoreUi()) {
 		AudioEnabled = AudioEnabledValue;
+		NodeDevelopment = std::move(NodeDevelopmentValue);
 	}
 
 	EditorHost::EditorHost(std::string sessionToken, ScriptSecurityContext studioSecurity) :
@@ -1818,6 +1820,10 @@ namespace gargantuan {
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport",
 					"ViewportLatestFrame", "ViewportPresentationDiagnostics", "GuiPreview", "GuiPreviewLayout"
 				};
+				const bool PrivateNode = TeamAuthor == 0 && NodeDevelopment && NodeDevelopment->Admit &&
+					StudioSecurity.HasCapability(ScriptCapability::EditorCommands) &&
+					StudioSecurity.HasCapability(ScriptCapability::ReadDataModel);
+				if (PrivateNode) capabilities.push_back("PlayNodeDevelopmentPersistence");
 				const auto ExecutableDirectory = Paths::GetExecutableDirectory();
 				if (std::filesystem::is_regular_file(ExecutableDirectory / "RuntimeDistribution" /
 					"distributed-player-capability.json")) capabilities.push_back("DistributedPlayerPackages");
@@ -1844,27 +1850,29 @@ namespace gargantuan {
 						{"SlotCount", LatestFrameMailboxLayout::SlotCount},
 					});
 				}
-				return SerializeBoundedResponse(SuccessResponse(
-					requestId,
-					{
-						{"Engine", "Gargantuan"},
-						{"ProtocolVersion", EditorHostProtocolVersion},
-						{"PropertyBatchVersion", EditorHostPropertyBatchVersion},
-						{"StreamingDiagnosticsVersion", 1},
-						{"AnimationPreviewBlendVersion", 1},
-						{"CharacterCompositionVersion", 1},
-						{"PlayPersistenceVersion", 1},
-						{"PlayScriptFailureLocationVersion", 1},
-						{"PlayRootDebugVersion", 1},
-						{"PlayPersistentStorage", SupportsDurableLocalPersistence()},
-						{"Capabilities", std::move(capabilities)},
-						{"ViewportWireVersion", 2},
-						{"ViewportTransports", std::move(viewportTransports)},
-						{"ScriptSecurityVersion", ScriptSecurityVersion},
-						{"StudioExecutionDomain", StudioExecutionDomain},
-						{"StudioCapabilities", EncodeCapabilities(StudioSecurity.Capabilities)},
-					}
-				));
+				Json Handshake = {
+					{"Engine", "Gargantuan"},
+					{"ProtocolVersion", EditorHostProtocolVersion},
+					{"PropertyBatchVersion", EditorHostPropertyBatchVersion},
+					{"StreamingDiagnosticsVersion", 1},
+					{"AnimationPreviewBlendVersion", 1},
+					{"CharacterCompositionVersion", 1},
+					{"PlayPersistenceVersion", 1},
+					{"PlayScriptFailureLocationVersion", 1},
+					{"PlayRootDebugVersion", 1},
+					{"PlayPersistentStorage", SupportsDurableLocalPersistence()},
+					{"Capabilities", std::move(capabilities)},
+					{"ViewportWireVersion", 2},
+					{"ViewportTransports", std::move(viewportTransports)},
+					{"ScriptSecurityVersion", ScriptSecurityVersion},
+					{"StudioExecutionDomain", StudioExecutionDomain},
+					{"StudioCapabilities", EncodeCapabilities(StudioSecurity.Capabilities)},
+				};
+				if (PrivateNode) {
+					Handshake["PlayNodeDevelopmentPersistenceVersion"] = 1;
+					Handshake["PlayNodeDevelopmentProjectId"] = NodeDevelopment->Project.ToString();
+				}
+				return SerializeBoundedResponse(SuccessResponse(requestId, std::move(Handshake)));
 			}
 
 			if (method == "GetPreRunSource" || method == "SetPreRunSource" || method == "ValidatePreRun") {
@@ -2182,7 +2190,8 @@ namespace gargantuan {
 					(parameters.contains("IncludeScriptFailureLocations") && !parameters["IncludeScriptFailureLocations"].is_boolean()))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Invalid Play launch parameters"));
 				const auto PersistenceMode = parameters.value("PersistenceMode", std::string("Disabled"));
-				if (PersistenceMode != "Disabled" && PersistenceMode != "Disposable" && PersistenceMode != "Persistent")
+				const bool NodeMode = PersistenceMode == "NodeDevelopment";
+				if (PersistenceMode != "Disabled" && PersistenceMode != "Disposable" && PersistenceMode != "Persistent" && !NodeMode)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Unknown Play persistence mode"));
 				if (!StudioSecurity.HasCapability(ScriptCapability::EditorCommands) ||
 					!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
@@ -2214,7 +2223,21 @@ namespace gargantuan {
 					DebugSourceId = Target->GetSourceId();
 				}
 				std::shared_ptr<IPersistenceProvider> Persistence;
-				if (PersistenceMode != "Disabled") {
+				if (NodeMode) {
+					std::error_code Error;
+					if (!NodeDevelopment || !NodeDevelopment->Admit || NodeDevelopment->Project != CurrentProject->Identity ||
+						!std::filesystem::equivalent(CurrentProject->Root, NodeDevelopment->ProjectRoot, Error) || Error)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "PlayNodeDevelopmentUnavailable",
+							"The opened project has no approved private Node development binding"));
+					try {
+						Persistence = NodeDevelopment->Admit();
+					} catch (const std::exception &) {
+						// Suppress native profile details and credentials at the Studio boundary.
+					}
+					if (!Persistence)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "PlayNodeDevelopmentUnavailable",
+							"Private Node development persistence admission failed"));
+				} else if (PersistenceMode != "Disabled") {
 					try {
 						if (PersistenceMode == "Disposable")
 							Persistence = MakeMemoryPersistenceProvider();

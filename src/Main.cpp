@@ -5,6 +5,9 @@
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/datatypes/Vector2.hpp"
 #include "gargantuan/editor/EditorHost.hpp"
+#if defined(GARGANTUAN_WITH_STUDIO_NODE_DEVELOPMENT)
+#include "host/editor/NodeDevelopmentProfile.hpp"
+#endif
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/render/Renderer.hpp"
@@ -204,7 +207,17 @@ int main(int argc, char *argv[]) {
 		}
 		try {
 			Telemetry.SetPhase(telemetry::Phase::EditorHostLoop);
-			EditorHost host(EditorToken, true);
+			std::optional<EditorNodeDevelopmentPersistence> Development;
+#if defined(GARGANTUAN_WITH_STUDIO_NODE_DEVELOPMENT)
+			if (const auto *Profile = SDL_getenv("GARGANTUAN_STUDIO_NODE_DEVELOPMENT_PROFILE"); Profile && *Profile) {
+				try {
+					Development = host::LoadStudioNodeDevelopmentProfile(Profile);
+				} catch (const std::exception &) {
+					LOG_WARN(App, "[Studio:DevelopmentDataStore] Private launcher profile was denied");
+				}
+			}
+#endif
+			EditorHost host(EditorToken, true, std::move(Development));
 			return host.Run(std::cin, std::cout, [&Telemetry] { Telemetry.PollPerformance(); });
 		} catch (const std::exception &error) {
 			Telemetry.ReportControlledFatal(EditorHostFatalCode);

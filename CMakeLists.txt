@@ -274,6 +274,10 @@ option(GARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE "Build the private Glaze c
 option(GARGANTUAN_WITH_GNS "Build the optional GameNetworkingSockets transport adapter" OFF)
 option(GARGANTUAN_WITH_NODE_CONTENT "Build the trusted GargantuanServer Node ContentStreaming adapter" OFF)
 option(GARGANTUAN_WITH_NODE_PERSISTENCE "Build the trusted GargantuanServer Node DataStore adapter" OFF)
+option(GARGANTUAN_WITH_STUDIO_NODE_DEVELOPMENT "Compose the private Studio Node development provider" OFF)
+if(GARGANTUAN_WITH_STUDIO_NODE_DEVELOPMENT AND NOT GARGANTUAN_WITH_NODE_PERSISTENCE)
+	message(FATAL_ERROR "Private Studio Node development requires the existing Node DataStore adapter")
+endif()
 option(GARGANTUAN_WITH_LOCAL_SQLITE "Build durable SQLite storage for local development profiles" OFF)
 set(GARGANTUAN_NODE_PROTOCOL_ROOT "" CACHE PATH "Path to gargantuan-node/protocol/proto for official Server Node support")
 option(GARGANTUAN_RUN_GRAPHICAL_PACKAGE_SMOKE "Run the packaged player smoke on a GPU-capable test host" OFF)
@@ -357,6 +361,19 @@ if(GARGANTUAN_WITH_NODE_PERSISTENCE)
 		"${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}/datastore/v1/datastore.pb.h"
 		"${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}/datastore/v1/datastore.grpc.pb.h"
 		"${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}/common/v1/common.pb.h")
+	if(GARGANTUAN_WITH_STUDIO_NODE_DEVELOPMENT)
+		set(GARGANTUAN_STUDIO_NODE_DEVELOPMENT_PROTO
+			"${GARGANTUAN_NODE_PROTOCOL_ROOT}/datastore/development/v1/admission.proto")
+		if(NOT EXISTS "${GARGANTUAN_STUDIO_NODE_DEVELOPMENT_PROTO}")
+			message(FATAL_ERROR "Private Studio Node development requires the canonical development admission v1 protocol")
+		endif()
+		list(APPEND GARGANTUAN_NODE_PERSISTENCE_GENERATED_SOURCES
+			"${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}/datastore/development/v1/admission.pb.cc"
+			"${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}/datastore/development/v1/admission.grpc.pb.cc")
+		list(APPEND GARGANTUAN_NODE_PERSISTENCE_GENERATED_HEADERS
+			"${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}/datastore/development/v1/admission.pb.h"
+			"${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}/datastore/development/v1/admission.grpc.pb.h")
+	endif()
 	add_custom_command(
 		OUTPUT ${GARGANTUAN_NODE_PERSISTENCE_GENERATED_SOURCES} ${GARGANTUAN_NODE_PERSISTENCE_GENERATED_HEADERS}
 		COMMAND ${CMAKE_COMMAND} -E make_directory "${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}"
@@ -364,14 +381,14 @@ if(GARGANTUAN_WITH_NODE_PERSISTENCE)
 			--proto_path "${GARGANTUAN_NODE_PROTOCOL_ROOT}"
 			--proto_path "${GARGANTUAN_PROTOBUF_WELL_KNOWN_TYPES}"
 			--cpp_out "${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}"
-			"${GARGANTUAN_NODE_PERSISTENCE_PROTO}" "${GARGANTUAN_NODE_COMMON_PROTO}"
+			"${GARGANTUAN_NODE_PERSISTENCE_PROTO}" "${GARGANTUAN_NODE_COMMON_PROTO}" ${GARGANTUAN_STUDIO_NODE_DEVELOPMENT_PROTO}
 		COMMAND protobuf::protoc
 			--proto_path "${GARGANTUAN_NODE_PROTOCOL_ROOT}"
 			--proto_path "${GARGANTUAN_PROTOBUF_WELL_KNOWN_TYPES}"
 			--grpc_out "${GARGANTUAN_NODE_PERSISTENCE_GENERATED_ROOT}"
 			--plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
-			"${GARGANTUAN_NODE_PERSISTENCE_PROTO}"
-		DEPENDS "${GARGANTUAN_NODE_PERSISTENCE_PROTO}" "${GARGANTUAN_NODE_COMMON_PROTO}"
+			"${GARGANTUAN_NODE_PERSISTENCE_PROTO}" ${GARGANTUAN_STUDIO_NODE_DEVELOPMENT_PROTO}
+		DEPENDS "${GARGANTUAN_NODE_PERSISTENCE_PROTO}" "${GARGANTUAN_NODE_COMMON_PROTO}" ${GARGANTUAN_STUDIO_NODE_DEVELOPMENT_PROTO}
 		VERBATIM
 	)
 endif()
@@ -516,6 +533,12 @@ if(GARGANTUAN_WITH_NODE_PERSISTENCE)
 		PRIVATE gRPC::grpc++ protobuf::libprotobuf)
 	target_link_libraries(gargantuan_server_host PRIVATE gargantuan_node_persistence_provider)
 	target_compile_definitions(gargantuan_server_host PRIVATE GARGANTUAN_WITH_NODE_PERSISTENCE=1)
+	if(GARGANTUAN_WITH_STUDIO_NODE_DEVELOPMENT)
+		target_compile_definitions(gargantuan_node_persistence_provider PUBLIC GARGANTUAN_WITH_STUDIO_NODE_DEVELOPMENT=1)
+		target_link_libraries(gargantuan PRIVATE gargantuan_node_persistence_provider nlohmann_json)
+		target_sources(gargantuan PRIVATE "src/host/editor/NodeDevelopmentProfile.cpp")
+		target_include_directories(gargantuan PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+	endif()
 endif()
 add_executable(gargantuan_server "src/server/ServerMain.cpp")
 set_target_properties(gargantuan_server PROPERTIES OUTPUT_NAME "GargantuanServer")
@@ -657,6 +680,9 @@ set(GARGANTUAN_COVERED_SOURCE_INSTRUCTIONS "" CACHE FILEPATH
 set(GARGANTUAN_COVERED_SOURCE_ARCHIVE "" CACHE FILEPATH "Reviewed matching source ZIP to embed in each export")
 set(GARGANTUAN_RUNTIME_SOURCE_REVISION "" CACHE STRING "Full Engine build revision recorded in the reviewed ZIP")
 option(GARGANTUAN_EXTERNAL_DISTRIBUTION "Require a release-specific source route when staging runtimes" OFF)
+if(GARGANTUAN_WITH_STUDIO_NODE_DEVELOPMENT AND GARGANTUAN_EXTERNAL_DISTRIBUTION)
+	message(FATAL_ERROR "The private Studio Node development composition cannot be staged for external distribution")
+endif()
 add_custom_target(gargantuan_runtime_distribution ALL
 	COMMAND ${CMAKE_COMMAND}
 		-DGARGANTUAN_RUNTIME_DISTRIBUTION_ROOT=$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
