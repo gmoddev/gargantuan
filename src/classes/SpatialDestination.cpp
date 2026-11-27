@@ -356,8 +356,10 @@ namespace gargantuan {
 		} catch (const std::exception &Error) {
 			if (!NativeMoved()) {Restore();return {BackendFailure,Error.what()};}
 		}
-		if (Actor) {
-			Actor->NotifyPropertyCommitted("CFrame"); Actor->NotifyPropertyCommitted("Position");
+		if (Actor && !Actor->GetDestroyed() && !Actor->IsDestroying()) {
+			Actor->NotifyPropertyCommitted("CFrame");
+			if (!Actor->GetDestroyed() && !Actor->IsDestroying() && Actor->GetRootPart().value_or(nullptr) == Member)
+				Actor->NotifyPropertyCommitted("Position");
 		}
 		return {};
 	}

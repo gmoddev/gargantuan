@@ -231,6 +231,7 @@ namespace gargantuan::network {
 		};
 
 		struct SessionSpatialTransfer {
+			enum class CheckpointState { Waiting, Publishing, Installed };
 			struct Request {
 				SpatialTransferScope Scope;
 				SpatialDestinationBounds Bounds;
@@ -241,7 +242,8 @@ namespace gargantuan::network {
 				SpatialResidencyAudience Issuer;
 				std::shared_ptr<SpatialTransferStatus> Observation;
 				const char *OfferPendingReason{};
-				bool Started{}, Committed{}, SourceCheckpointConsumed{};
+				bool Started{}, Committed{}, Applying{};
+				CheckpointState Checkpoint{CheckpointState::Waiting};
 			};
 			std::uint64_t LastSerial{};
 			std::optional<Request> Pending;
@@ -291,7 +293,7 @@ namespace gargantuan::network {
 			NetworkLimits Limits;
 			ObjectId PlayerObject;
 			ObjectId AuthorizedSpatialRegion;
-			std::unique_ptr<SessionSpatialTransfer> SpatialTransfer;
+			std::shared_ptr<SessionSpatialTransfer> SpatialTransfer;
 			std::uint64_t TransferFocusRevision{1};
 			std::unique_ptr<BlockGridPeer> Grids;
 			std::unique_ptr<TransferDomain> Staging;
@@ -2859,7 +2861,10 @@ namespace gargantuan::network {
 			if (Configuration.TerrainBootstrap || Configuration.SpatialContent)
 				SaturatingAdd(TerrainTick, SimulationTick > CurrentTick ? SimulationTick - CurrentTick : std::uint64_t{1});
 			CurrentTick = SimulationTick;
-			if (Configuration.SpatialContent) PumpSpatialTransfers();
+			if (Configuration.SpatialContent) {
+				PumpSpatialTransfers();
+				if (Status == GameSessionStatus::Closing || Status == GameSessionStatus::Closed || Status == GameSessionStatus::Failed) return;
+			}
 			// Residency consumes committed server Character facts, independently of
 			// 3E relevance and 3J accepted materialization. Full Player ObjectId
 			// generations scope focus lifetime across disconnect/session replacement.

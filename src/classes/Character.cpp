@@ -125,19 +125,44 @@ namespace gargantuan {
 			!IsFinite(Value) || !IsFinite(Velocity) || !IsFinite(FloorNormal)) return false;
 		const auto Realm = GetDataModel();
 		const auto Guard = Realm ? Realm->GetSpatialTransferProtection() : nullptr;
-		if (!Guard || !Guard->Controls(*Root) || !Guard->AllowsSimulationPose(*Root, Value)) return false;
+		const auto Source = WorldRoot::GetEffectiveWorld(*Root);
+		if (!Source || !Guard || !Guard->Controls(*Root) || !Guard->AllowsSimulationPose(*Root, Value) ||
+			!Source->CanHoldSpatialSubject(Root->GetObjectId())) return false;
+		const glm::vec3 Capsule(Controller->GetCapsuleRadius(), Controller->GetCapsuleHeight() * .5f, Controller->GetCapsuleRadius());
+		if (!Guard->AllowsMotion(*Root, *Source, {glm::min(Transform.Position, Value.Position) - Capsule,
+			glm::max(Transform.Position, Value.Position) + Capsule})) return false;
+		const auto Body = Source->PartBodies.at(Root->GetObjectId());
+		const auto State = Source->Physics.GetBodyState(Body);
+		if (!State) return false;
+		const auto &OldPose = State->Transform;
+		if (OldPose.Position != Value.Position || OldPose.Rotation != Value.Rotation) {
+			auto Description = State->Description;
+			Description.Transform = Value;
+			if (!Source->Physics.UpdateBody(Body, Description).Succeeded()) return false;
+		}
 		const bool Changed = Transform.Position != Value.Position || Transform.Rotation != Value.Rotation;
-		// Observers of either transform see one complete controller checkpoint.
+		// A source-world raycast from the first callback must already see the corrected native body.
 		Controller->ApplyRuntimeControllerFacts(Velocity, FloorNormal, Grounded);
 		Transform = Value;
 		Root->SetSimulationCFrame(Value, true);
-		if (GetDestroyed() || IsDestroying() || Root != RootPartValue) return false;
+		const auto Current = [&] {
+			return !GetDestroyed() && !IsDestroying() && GetRootPart().value_or(nullptr) == Root &&
+				WorldRoot::GetEffectiveWorld(*Root) == Source && Transform.Position == Value.Position &&
+				Transform.Rotation == Value.Rotation && Root->GetCFrame().Position == Value.Position &&
+				Root->GetCFrame().Rotation == Value.Rotation && Controller->GetVelocity() == Velocity &&
+				Controller->GetFloorNormal() == FloorNormal && Controller->GetGrounded() == Grounded;
+		};
 		if (Changed) {
-			if (const auto It=PropertyChangedSignals.find("CFrame"); It!=PropertyChangedSignals.end() && It->second) It->second->Fire({});
-			if (const auto It=PropertyChangedSignals.find("Position"); It!=PropertyChangedSignals.end() && It->second) It->second->Fire({});
+			for (const char *Property : {"CFrame", "Position"}) {
+				if (!Current()) return false;
+				const auto It = PropertyChangedSignals.find(Property);
+				if (It != PropertyChangedSignals.end() && It->second) {
+					const auto Signal = It->second;
+					Signal->Fire({});
+				}
+			}
 		}
-		return Root == RootPartValue && Transform.Position == Value.Position && Transform.Rotation == Value.Rotation &&
-			Root->GetCFrame().Position == Value.Position && Root->GetCFrame().Rotation == Value.Rotation;
+		return Current();
 	}
 
 	void Character::ApplyRuntimePresentationOffset(std::optional<CFrame> Value) {

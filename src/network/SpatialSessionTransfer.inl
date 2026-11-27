@@ -4,8 +4,14 @@ using SessionTransferRequest = SessionSpatialTransfer::Request;
 static bool HasTransfer(const Peer &Value) {
 	return Value.SpatialTransfer && Value.SpatialTransfer->Pending.has_value();
 }
+Peer *FindTransfer(ConnectionId Connection, const SessionSpatialTransfer &Lane, const SpatialTransferScope &Scope, std::uint64_t Serial) {
+	const auto It = Peers.find(Connection);
+	if (It == Peers.end() || It->second.SpatialTransfer.get() != &Lane || !HasTransfer(It->second)) return nullptr;
+	const auto &Request = *Lane.Pending;
+	return Request.Scope == Scope && Request.Serial == Serial ? &It->second : nullptr;
+}
 static bool HasCommittedTransfer(const Peer &Value) {
-	return HasTransfer(Value) && Value.SpatialTransfer->Pending->Committed;
+	return HasTransfer(Value) && (Value.SpatialTransfer->Pending->Committed || Value.SpatialTransfer->Pending->Applying);
 }
 bool IsTransferSubject(ObjectId Object) const {
 	return !TransferPoseSubjects.empty() && TransferPoseSubjects.contains(Object);
@@ -118,6 +124,14 @@ SpatialTransferAdapters SessionTransferAdapters(ConnectionId Connection) {
 						TransferScopeCurrent(Connection, Found->second, *Found->second.SpatialTransfer->Pending) &&
 						HasTransferDomain(Connection, Scope.Destination, Bounds, Serial);
 				});
+		},
+		// Only the active receiver publishing its original authenticated offer can reconcile the source.
+		.AuthorizeControllerCheckpoint = [this, Connection](const SpatialTransferFrame &Offer) {
+			const auto Found = Peers.find(Connection);
+			if (Configuration.Role != GameSessionRole::Client || Found == Peers.end() || !HasTransfer(Found->second)) return false;
+			const auto &Pending = *Found->second.SpatialTransfer->Pending;
+			return Pending.Checkpoint == SessionSpatialTransfer::CheckpointState::Publishing && Pending.WaitingOffer == Offer &&
+				TransferScopeCurrent(Connection, Found->second, Pending) && HasTransferDomain(Connection, Offer.Scope.Destination, Offer.Bounds, Offer.Serial);
 		}
 	};
 }
@@ -167,7 +181,8 @@ void RetireSessionTransfer(ConnectionId Connection, Peer &Value) {
 		Value.SpatialTransfer->Server.Reset();
 		Value.SpatialTransfer->Replica.Reset();
 		FenceTransferMotion(Connection, Value, Request.Scope, false);
-		if (Request.Observation) *Request.Observation = Request.Committed ? SpatialTransferStatus::CommittedUnconfirmed : SpatialTransferStatus::Canceled;
+		const auto Status = Request.Committed || Request.Applying ? SpatialTransferStatus::CommittedUnconfirmed : SpatialTransferStatus::Canceled;
+		if (Request.Observation) *Request.Observation = Status;
 		// TearDownPeer removes the structural audience and retires both content subscriptions locally.
 		Value.SpatialTransfer->Pending.reset();
 	}
@@ -251,8 +266,9 @@ SpatialTransferStatus StartSpatialTransfer(ConnectionId Connection, ObjectId Des
 		Subject->GetCFrame(), Pose};
 	const auto Native = Destination->PrepareSpatialDestination(Bounds);
 	if (!Native || !Destination->CheckSpatialLanding(Subject, Movement, *Native).Succeeded()) return SpatialTransferStatus::Denied;
-	if (!Value.SpatialTransfer) Value.SpatialTransfer = std::make_unique<SessionSpatialTransfer>();
-	auto &Lane = *Value.SpatialTransfer;
+	if (!Value.SpatialTransfer) Value.SpatialTransfer = std::make_shared<SessionSpatialTransfer>();
+	const auto Keep = Value.SpatialTransfer;
+	auto &Lane = *Keep;
 	if (Lane.LastSerial == std::numeric_limits<std::uint64_t>::max()) return SpatialTransferStatus::Denied;
 	const auto Serial = ++Lane.LastSerial;
 	Lane.Pending.emplace(SessionTransferRequest{
@@ -309,7 +325,7 @@ void ReceiveSpatialTransfer(const ReceivedMessageEvent &Message, Peer &Value) {
 		if (!PlayerValue || TransferIdentity(GetSpatialTransferSubject(*PlayerValue)) != Scope.Subject ||
 			TransferIdentity(LegacyCharacter(PlayerValue)) != Scope.Controller ||
 			!HasTransferDomain(Connection, Scope.Destination, Frame->Bounds, Frame->Serial)) return;
-		if (!Value.SpatialTransfer) Value.SpatialTransfer = std::make_unique<SessionSpatialTransfer>();
+		if (!Value.SpatialTransfer) Value.SpatialTransfer = std::make_shared<SessionSpatialTransfer>();
 		auto &Lane = *Value.SpatialTransfer;
 		if (Frame->Serial <= Lane.LastSerial) return;
 		const auto Origin = std::dynamic_pointer_cast<WorldRoot>(ResolveTransferObject(Scope.Source));
@@ -327,7 +343,8 @@ void ReceiveSpatialTransfer(const ReceivedMessageEvent &Message, Peer &Value) {
 		return;
 	}
 	if (!HasTransfer(Value)) return;
-	auto &Lane = *Value.SpatialTransfer;
+	const auto Keep = Value.SpatialTransfer;
+	auto &Lane = *Keep;
 	auto &Request = *Lane.Pending;
 	if (Request.Scope != Scope || Request.Serial != Frame->Serial || Request.Bounds != Frame->Bounds) return;
 	if (!TransferScopeCurrent(Connection, Value, Request)) { (void)CancelTransfer(Connection, Value); return; }
@@ -337,15 +354,38 @@ void ReceiveSpatialTransfer(const ReceivedMessageEvent &Message, Peer &Value) {
 	}
 	const auto Adapters = SessionTransferAdapters(Connection);
 	const auto Destination = std::dynamic_pointer_cast<WorldRoot>(ResolveTransferObject(Scope.Destination));
-	const auto Step = Server ? Lane.Server.Receive(Connection, Scope, *Frame, Adapters, SpatialTransferClock::now()) :
-		Lane.Replica.Receive(Scope, *Frame, Destination, Adapters,
-			[this](const auto &F, const auto &Receipt, const auto &Lease) { return ApplyReplicaTransfer(F, Receipt, Lease); });
-	AdvanceTransfer(Connection, Value, Step);
+	if (Request.Applying) return;
+	Request.Applying = Server ? Frame->Phase == SpatialTransferPhase::Held : Frame->Phase == SpatialTransferPhase::Commit;
+	SpatialTransferStep Step;
+	try {
+		Step = Server ? Lane.Server.Receive(Connection, Scope, *Frame, Adapters, SpatialTransferClock::now()) :
+			Lane.Replica.Receive(Scope, *Frame, Destination, Adapters,
+				[this](const auto &F, const auto &Receipt, const auto &Lease) { return ApplyReplicaTransfer(F, Receipt, Lease); });
+	} catch (const std::exception &) {
+		if (auto *Current = FindTransfer(Connection, Lane, Scope, Frame->Serial))
+			FinishTransfer(Connection, *Current, Lane.Pending->Applying ? SpatialTransferStatus::CommittedUnconfirmed : SpatialTransferStatus::Denied);
+		return;
+	}
+	// Commit may have run game callbacks that retired the connection, subject, or chart.
+	if (auto *Current = FindTransfer(Connection, Lane, Scope, Frame->Serial)) {
+		Lane.Pending->Applying = false;
+		if (Step.Reply && (Step.Reply->Phase == SpatialTransferPhase::Commit || Step.Reply->Phase == SpatialTransferPhase::Applied)) {
+			Lane.Pending->Committed = true;
+			if (!TransferScopeCurrent(Connection, *Current, *Lane.Pending) ||
+				!HasTransferDomain(Connection, Scope.Destination, Frame->Bounds, Frame->Serial)) {
+				FinishTransfer(Connection, *Current, SpatialTransferStatus::CommittedUnconfirmed);
+				return;
+			}
+		}
+		AdvanceTransfer(Connection, *Current, Step);
+	}
 }
 void PumpSessionTransfer(ConnectionId Connection, Peer &Value) {
 	if (!HasTransfer(Value)) return;
-	auto &Lane = *Value.SpatialTransfer;
+	const auto Keep = Value.SpatialTransfer;
+	auto &Lane = *Keep;
 	auto &Request = *Lane.Pending;
+	if (Request.Checkpoint == SessionSpatialTransfer::CheckpointState::Publishing || Request.Applying) return;
 	const auto Now = SpatialTransferClock::now();
 	const bool Server = Configuration.Role == GameSessionRole::Server;
 	if (!Server && Request.Committed && !HasTransferDomain(Connection, Request.Scope.Destination, Request.Bounds, Request.Serial)) {
@@ -379,18 +419,25 @@ void PumpSessionTransfer(ConnectionId Connection, Peer &Value) {
 	if (!Request.DestinationActivation) Request.DestinationActivation = Destination->GetSpatialActivation();
 	if (!Server) {
 		if (!Request.WaitingOffer) return;
-		if (Request.Scope.Controller.IsValid() && !Request.SourceCheckpointConsumed) {
-			// Ordinary snapshots quantize rotation and velocity and may still be in flight. The authenticated
-			// reliable offer establishes the final source state once while the old control epoch is fenced.
+		if (Request.Scope.Controller.IsValid() && Request.Checkpoint == SessionSpatialTransfer::CheckpointState::Waiting) {
 			const auto Offer = *Request.WaitingOffer;
-			Request.SourceCheckpointConsumed = true;
-			const auto Reason = InstallSpatialControllerCheckpoint(Offer, *Destination, Adapters);
-			if (!HasTransfer(Value) || Lane.Pending->Scope != Offer.Scope || Lane.Pending->Serial != Offer.Serial) return;
-			if (Reason) {
-				Lane.Pending->OfferPendingReason = Reason;
-				(void)CancelTransfer(Connection, Value, SpatialTransferStatus::Denied);
-				return;
+			Request.Checkpoint = SessionSpatialTransfer::CheckpointState::Publishing;
+			const char *Reason{};
+			try {
+				Reason = InstallSpatialControllerCheckpoint(Offer, *Destination, Adapters);
+			} catch (const std::exception &) {
+				Reason = "source checkpoint callback failed";
 			}
+			if (auto *Current = FindTransfer(Connection, Lane, Offer.Scope, Offer.Serial)) {
+				if (Reason) {
+					Lane.Pending->OfferPendingReason = Reason;
+					(void)CancelTransfer(Connection, *Current, SpatialTransferStatus::Denied);
+				} else {
+					Lane.Pending->Checkpoint = SessionSpatialTransfer::CheckpointState::Installed;
+				}
+			}
+			// The next pump checks the live scope, lease, and native state again before sending Ready.
+			return;
 		}
 		Request.OfferPendingReason = GetSpatialOfferPendingReason(*Request.WaitingOffer, *Destination, Adapters);
 		if (Request.OfferPendingReason) return;
@@ -429,7 +476,12 @@ void BindCreatorTransfers() {
 	};
 }
 void PumpSpatialTransfers() {
-	for (auto &[Connection, Value] : Peers) if (HasTransfer(Value) && !PendingPeerFailures.contains(Connection))
-		PumpSessionTransfer(Connection, Value);
+	std::vector<ConnectionId> Pending;
+	for (const auto &[Connection, Value] : Peers)
+		if (HasTransfer(Value) && !PendingPeerFailures.contains(Connection)) Pending.push_back(Connection);
+	for (const auto Connection : Pending) {
+		const auto Found = Peers.find(Connection);
+		if (Found != Peers.end() && !PendingPeerFailures.contains(Connection)) PumpSessionTransfer(Connection, Found->second);
+	}
 }
 

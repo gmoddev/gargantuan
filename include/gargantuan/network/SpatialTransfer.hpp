@@ -44,6 +44,7 @@ namespace gargantuan::network {
 		AssetContentId Collision, SubjectGeometry;
 		glm::vec3 ControllerVelocity{}, FloorNormal{};
 		bool Grounded{};
+		bool operator==(const SpatialTransferFrame &) const = default;
 	};
 
 	inline constexpr std::size_t MaximumSpatialTransferProviders = 64;
@@ -72,6 +73,7 @@ namespace gargantuan::network {
 		std::function<std::optional<ObjectId>(SpatialWireProvider)> Resolve;
 		std::function<std::optional<ObjectId>(WireObjectId)> ResolveObject;
 		std::function<SpatialTransferLease(const SpatialTransferFrame &, const SpatialDestinationReceipt &)> Reserve;
+		std::function<bool(const SpatialTransferFrame &)> AuthorizeControllerCheckpoint;
 	};
 
 	// Portable collision evidence for an already authorized ordinary movement area.

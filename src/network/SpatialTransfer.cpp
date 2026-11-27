@@ -264,13 +264,14 @@ namespace gargantuan::network {
 	const char *InstallSpatialControllerCheckpoint(const SpatialTransferFrame &Offer, WorldRoot &Destination,
 		const SpatialTransferAdapters &Adapters) {
 		if (Offer.Phase != SpatialTransferPhase::Offer || !Offer.Scope.Controller.IsValid() || !Valid(Offer)) return "controller offer";
+		if (!Adapters.AuthorizeControllerCheckpoint || !Adapters.AuthorizeControllerCheckpoint(Offer)) return "controller authority";
 		TransferSource Source;
 		if (const auto Reason = ReadSource(Offer, Destination, Adapters, Source)) return Reason;
 		const auto Actor=std::dynamic_pointer_cast<KinematicCharacter>(ObjectRegistry::Get().Lookup(Source.Profile.Controller));
-		if (!Actor || Actor->GetRootPart().value_or(nullptr)!=Source.Member || !Source.World->CanHoldSpatialSubject(Source.Member->GetObjectId()))
-			return "controller root";
+		if (!Actor || Actor->GetRootPart().value_or(nullptr) != Source.Member) return "controller root";
 		if (!Actor->ApplyRuntimeSourceCheckpoint(LocalPose(Offer.SourcePose), Offer.ControllerVelocity, Offer.FloorNormal, Offer.Grounded))
 			return "source correction";
+		if (!Adapters.AuthorizeControllerCheckpoint(Offer)) return "retired controller offer";
 		return SourceMismatch(Offer, Destination, Adapters);
 	}
 
