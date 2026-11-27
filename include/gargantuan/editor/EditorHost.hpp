@@ -127,6 +127,7 @@ namespace gargantuan {
 		};
 		// A small history tolerates the normal lag between compositor admission and a pointer press.
 		std::array<PresentedEditFrame, 32> PresentedEditFrames{};
+		std::uint64_t PresentedEditEpoch = 0;
 		std::uint64_t ViewportGeneration = 1;
 		std::uint64_t ViewportCameraRevision = 0;
 		std::uint64_t ViewportProducedFrames = 0;
@@ -153,6 +154,7 @@ namespace gargantuan {
 		std::uint64_t NextPackageJobId = 1;
 
 		void AdvanceViewportGeneration();
+		void RetirePresentedEditFrames();
 		bool HasNodeDevelopmentPersistence() const;
 		bool MatchesNodeDevelopmentProject(const std::optional<Project> &Candidate) const;
 		void ResetAuthoringCursors();

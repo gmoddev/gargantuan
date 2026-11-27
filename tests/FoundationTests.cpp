@@ -7326,6 +7326,35 @@ namespace {
 					"returning to Workspace cannot revive a receipt from either past view");
 				auto Returned = call("PickPresentedViewportV1", NewFrame(), "test-token");
 				Check(Returned["Ok"] == true && Returned["Result"]["Object"] != Grid, "Workspace picks exclude the coincident room grid");
+				const auto SetGui = [&](bool Enabled) {
+					return call("SetGuiPreview", {{"Enabled", Enabled}, {"Width", 320}, {"Height", 200}}, "test-token")["Ok"] == true;
+				};
+				const auto StaleScenePick = [&](const Json &Frame) {
+					return call("PickPresentedViewportV1", Frame, "test-token")["Error"]["Code"] == "StaleFrame";
+				};
+				const auto BeforeGui = NewFrame();
+				Check(SetGui(true), "GUI preview enters on the same edit mailbox");
+				const auto GuiFrame = NewFrame();
+				Check(call("PickPresentedViewportV1", GuiFrame, "test-token")["Error"]["Code"] == "GuiPreviewActive",
+					"scene picking is unavailable while the GUI bitmap is displayed");
+				Check(SetGui(false) && StaleScenePick(BeforeGui) && StaleScenePick(GuiFrame),
+					"the former scene and GUI bitmaps cannot pick a 3D object after returning to the scene");
+				const auto FreshScene = NewFrame();
+				Check(SetGui(false) && call("PickPresentedViewportV1", FreshScene, "test-token")["Ok"] == true,
+					"an idempotent preview setting retains the current scene receipt");
+
+				bool SwitchedDuringCapture = false;
+				host.SetViewportPresentationCheckpointForTesting([&](std::string_view Stage) {
+					if (Stage == "BeforePublish" && !SwitchedDuringCapture) {
+						SwitchedDuringCapture = true;
+						Check(SetGui(true) && SetGui(false), "a local view changes after native scene capture");
+					}
+				});
+				const auto Crossed = NewFrame();
+				host.SetViewportPresentationCheckpointForTesting({});
+				Check(SwitchedDuringCapture && StaleScenePick(Crossed) && StaleScenePick(FreshScene) &&
+					call("PickPresentedViewportV1", NewFrame(), "test-token")["Ok"] == true,
+					"publishing an in-flight captured bitmap cannot revive a retired receipt");
 				Check(call("DestroyInstance", {{"Object", Room}}, "test-token")["Ok"] == true, "regional pick fixture retires");
 			}
 			(void)CameraCommand({1,2,10}, {0,0,0});
