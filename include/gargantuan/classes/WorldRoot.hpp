@@ -174,6 +174,8 @@ namespace gargantuan {
 		[[nodiscard]] const SoftBodyStepProfile &GetLastSoftBodyProfile() const { return LastSoftBodyProfile; }
 		[[nodiscard]] const std::map<ObjectId, std::weak_ptr<LocalLight>> &GetLocalLights() const { return LocalLights; }
 		[[nodiscard]] const std::map<ObjectId, std::weak_ptr<ReflectionProbe>> &GetReflectionProbes() const { return ReflectionProbes; }
+		[[nodiscard]] std::shared_ptr<Terrain> GetOwnedTerrain() const;
+		void RestoreTerrainField(std::unique_ptr<terrain::Field> Restored);
 		[[nodiscard]] std::shared_ptr<const terrain::RenderState> GetTerrainRenderState() const noexcept;
 		[[nodiscard]] bool IsTerrainCollisionReady() const noexcept { return HasTerrainRuntime(); }
 
@@ -190,6 +192,11 @@ namespace gargantuan {
 		friend class MutationGateway;
 		friend class Terrain;
 		friend class Workspace;
+		friend class SpatialRegion;
+		friend class Instance;
+		void InitializeTerrain();
+		std::weak_ptr<Terrain> TerrainChild;
+		bool TerrainRestored = false;
 		friend class network::GameSession;
 		// A Main-owned session may bound motion to its installed collision coverage.
 		using TerrainMotionGuard = std::function<bool(ObjectId, glm::vec3, glm::vec3)>;

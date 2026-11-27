@@ -8,6 +8,7 @@
 #include "gargantuan/classes/LocalLight.hpp"
 #include "gargantuan/classes/ReflectionProbe.hpp"
 #include "gargantuan/classes/Terrain.hpp"
+#include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
@@ -1127,13 +1128,36 @@ namespace gargantuan {
 
 	WorldRoot::~WorldRoot() {
 		ShutdownPhysics();
+		if (auto Child = TerrainChild.lock()) Child->RetireField();
+	}
+
+	std::shared_ptr<Terrain> WorldRoot::GetOwnedTerrain() const {
+		const auto Child = TerrainChild.lock();
+		if (!Child || Child->GetDestroyed() || Child->IsDestroying()) return {};
+		return Child->ParentReference.lock().get() == this ? Child : nullptr;
+	}
+
+	void WorldRoot::InitializeTerrain() {
+		if (GetOwnedTerrain()) return;
+		auto Child = std::shared_ptr<Terrain>(new Terrain());
+		TerrainChild = Child;
+		Child->SetParent(shared_from_this());
+	}
+
+	void WorldRoot::RestoreTerrainField(std::unique_ptr<terrain::Field> Restored) {
+		AssertAuthoritativeMutation("RestoreTerrainField");
+		const auto Child = GetOwnedTerrain();
+		if (!Restored || !Child || !Child->Field || TerrainRestored || TerrainRuntimeValue ||
+			Child->Field->GetRevision() != 0 || GetDestroyed() || IsDestroying())
+			throw std::runtime_error("[Terrain:Persistence] The world cannot admit a terrain field");
+		Child->Field = std::move(Restored);
+		TerrainRestored = true;
 	}
 
 	void WorldRoot::InitializeTerrainRuntime(RuntimeMode Mode, bool AdmitNetworkTerrain, bool ExperimentalVisualDensity,
 		std::shared_ptr<const terrain::TerrainMaterialPalette> Palette) {
 		if (TerrainRuntimeValue || ShuttingDownPhysics) return;
-		auto *Space = dynamic_cast<Workspace *>(this);
-		auto Owner = Space ? Space->GetTerrain() : nullptr;
+		auto Owner = GetOwnedTerrain();
 		if (!Owner || !Owner->Field) return;
 		const bool Materialized = Owner->Field->GetStats().MaterializedPages != 0;
 		if (Mode == RuntimeMode::NetworkClient && !AdmitNetworkTerrain) {
@@ -1351,8 +1375,7 @@ namespace gargantuan {
 
 	std::shared_ptr<Terrain> WorldRoot::GetTerrainQueryOwner() const {
 		if (!GetTerrainPhysics()) return {};
-		const auto *Space = dynamic_cast<const Workspace *>(this);
-		return Space ? Space->GetTerrain() : nullptr;
+		return GetOwnedTerrain();
 	}
 
 	std::shared_ptr<gargantuan::Instance> WorldRaycastResult::GetHitInstance() const {

@@ -13,15 +13,14 @@ namespace gargantuan {
 
 		Workspace();
 		~Workspace() override;
-		void RestoreTerrainField(std::unique_ptr<terrain::Field> Restored);
+
 
 	  private:
 		friend class ServiceProvider;
 
 		void InitializeTerrain();
-		std::weak_ptr<Terrain> TerrainChild;
 		std::weak_ptr<SpatialRegion> ViewRegion;
 		SignalConnection::Pointer ViewRegionAncestry;
-		bool TerrainRestored = false;
+
 	};
 }
