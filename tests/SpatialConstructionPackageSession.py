@@ -47,10 +47,11 @@ def Run(Arguments, Directory, Environment=None, Expected=0):
     return Output
 
 
-def Build(Packager, Project, Distribution, Target, Directory, Configuration):
-    Request = Directory / f"{Target}.json"
-    WriteJson(Request, {"Version": 1, "Target": Target, "Preset": "Open",
-                        "PublisherTrust": "DigestOnly", "ModLoading": "Disabled"})
+def Build(Packager, Project, Distribution, Target, Directory, Configuration, Request=None):
+    if Request is None:
+        Request = Directory / f"{Target}.json"
+        WriteJson(Request, {"Version": 1, "Target": Target, "Preset": "Open",
+                            "PublisherTrust": "DigestOnly", "ModLoading": "Disabled"})
     Staged = Directory / f"staging-{Target}"
     Run([Packager, "build", "--project", Project, "--output", Staged,
          "--runtime", Distribution, "--configuration", Configuration, "--distribution", Request], Directory)

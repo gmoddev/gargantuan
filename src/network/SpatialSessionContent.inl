@@ -38,7 +38,7 @@ std::unique_ptr<Peer::TransferDomain> MakeTransferDomain(const SpatialAudienceFr
 	Result->Expires=SpatialTransferClock::now()+std::chrono::seconds(15);
 	const auto Region=Frame.Destination==*WorkspaceId ? ObjectId{} : Frame.Destination;
 	Result->Grant=std::make_shared<const SpatialStagingGrant>(SpatialStagingGrant{Region,Frame.Serial,Frame.Objects});
-	Result->Grids=std::make_unique<BlockGridPeer>(Configuration.Role==GameSessionRole::Server,Frame.Epoch,Region,Configuration.SharedGridAssets,Frame.Serial);
+	Result->Grids=std::make_shared<BlockGridPeer>(Configuration.Role==GameSessionRole::Server,Frame.Epoch,Region,Configuration.SharedGridAssets,Frame.Serial);
 	if (Frame.EmptyTerrain) {
 		const auto Bytes=EncodeSpatialAudience(Frame);
 		Result->EmptyTerrainPin=AssetContentId::Hash({reinterpret_cast<const std::uint8_t*>(Bytes.data()),Bytes.size()});
@@ -111,6 +111,8 @@ bool StageTransferDomain(ConnectionId Connection, WireObjectId Destination, cons
 }
 
 void FinishTransferDomain(Peer &Value,bool Promote) {
+	// Publish retirement after current and staged subscriptions have reached their final state.
+	ScopedSignalDeferral Signals;
 	if (Promote) {
 		RetireBootstrapTerrain(Value);
 		RetireDomainTerrain(Value.NamedTerrain);
@@ -124,6 +126,7 @@ void FinishTransferDomain(Peer &Value,bool Promote) {
 		Value.Staging->Grids->Retire();
 	}
 	Value.Staging.reset();
+	Signals.Commit();
 }
 bool ReleaseTransferDomain(ConnectionId Connection,std::uint64_t Serial,bool Promote=false) {
 	const auto It=Peers.find(Connection);

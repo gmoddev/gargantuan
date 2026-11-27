@@ -34,17 +34,23 @@ namespace gargantuan::network {
 		std::size_t Occupied{};
 		const bool LimitOccupancy=Field.GetLeafCount()>MaximumReplicaPages;
 		if (Required) {
-			const auto R=GridLocalBounds(Pose,Size,*Required);
-			if (!R) return Result;
-			const auto A=LeafOrigin(R->Min),B=LeafOrigin({R->MaxExclusive.X-1,R->MaxExclusive.Y-1,R->MaxExclusive.Z-1});
-			constexpr int Side=LeafSide;
-			const auto Count=std::uint64_t(1+(B.X-A.X)/Side)*(1+(B.Y-A.Y)/Side)*(1+(B.Z-A.Z)/Side);
-			if (Count>MaximumReplicaRectanglePages) return Result;
-			Result.Rectangle=Region{A,{B.X+Side,B.Y+Side,B.Z+Side}};
+			if (const auto R=GridLocalBounds(Pose,Size,*Required)) {
+				const auto A=LeafOrigin(R->Min),B=LeafOrigin({R->MaxExclusive.X-1,R->MaxExclusive.Y-1,R->MaxExclusive.Z-1});
+				constexpr int Side=LeafSide;
+				const auto Count=std::uint64_t(1+(B.X-A.X)/Side)*(1+(B.Y-A.Y)/Side)*(1+(B.Z-A.Z)/Side);
+				if (Count<=MaximumReplicaRectanglePages)
+					Result.Rectangle=Region{A,{B.X+Side,B.Y+Side,B.Z+Side}};
+			}
 			if (Interest.Destination || !Interest.Count) return Result;
-			if (LimitOccupancy) {
-				for (int Z=A.Z;Z<=B.Z;Z+=Side) for (int Y=A.Y;Y<=B.Y;Y+=Side) for (int X=A.X;X<=B.X;X+=Side)
-					if (Field.HasOccupiedPage({X,Y,Z}) && ++Occupied>MaximumReplicaPages) return Result;
+			if (Result.Rectangle && LimitOccupancy) {
+				const auto [A,End]=*Result.Rectangle;
+				constexpr int Side=LeafSide;
+				for (int Z=A.Z;Z<End.Z && Occupied<=MaximumReplicaPages;Z+=Side)
+					for (int Y=A.Y;Y<End.Y && Occupied<=MaximumReplicaPages;Y+=Side)
+						for (int X=A.X;X<End.X && Occupied<=MaximumReplicaPages;X+=Side)
+							Occupied+=Field.HasOccupiedPage({X,Y,Z});
+				// A refused motion footprint still permits the peer's independent camera pages.
+				if (Occupied>MaximumReplicaPages) Result.Rectangle.reset();
 			}
 		}
 		if (!Interest.Count && !Required) {

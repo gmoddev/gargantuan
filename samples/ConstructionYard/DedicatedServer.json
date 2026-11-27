@@ -1,0 +1,7 @@
+{
+  "Version": 1,
+  "Target": "DedicatedServer",
+  "Preset": "Open",
+  "PublisherTrust": "DigestOnly",
+  "ModLoading": "Disabled"
+}

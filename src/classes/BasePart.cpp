@@ -128,8 +128,10 @@ namespace gargantuan {
 		CFrame = Value;
 		RenderDirtyAccumulator::Get().Mark(
 			GetReplicationScopeId(), GetObjectId(), RenderUpdateDomain::Transform);
-		if (auto Found = PropertyChangedSignals.find("CFrame"); Found != PropertyChangedSignals.end() && Found->second)
-			Found->second->Fire({});
+		if (auto Found = PropertyChangedSignals.find("CFrame"); Found != PropertyChangedSignals.end() && Found->second) {
+			const auto Signal = Found->second;
+			Signal->Fire({});
+		}
 	}
 
 	gargantuan::CFrame BasePart::GetRenderCFrame() const {

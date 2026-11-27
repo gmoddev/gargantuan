@@ -608,6 +608,16 @@ namespace gargantuan::network {
 		}
 	}
 
+	ReplicaApplyResult ReplicaApplier::ApplyFrameWithDeferredSignals(const ReplicationFrame &Frame, const BeforePublish &Prepare) {
+		ScopedSignalDeferral Signals;
+		auto Result=ApplyFrame(Frame,Prepare);
+		if (Result.Succeeded()) {
+			ScopedChangeJournalSuppression SuppressReplicaJournal(Receiver.Root ? Receiver.Root->GetObjectId() : ObjectId{});
+			Signals.Commit();
+		}
+		return Result;
+	}
+
 	void ReplicaApplier::Reset() {
 		SemanticState = {};
 		Receiver = {};

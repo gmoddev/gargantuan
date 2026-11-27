@@ -542,7 +542,26 @@ script:SetAttribute("Isolated", true)
 				SpectatorRuntime->Workspace->GetTerrain()->GetField().GetStats().MaterializedPages==0,
 				"returning controller failed to reacquire Workspace terrain exclusively");
 			const auto FormerTerrain = OwnerRuntime->Workspace->GetTerrain();
-			Owner.Stop();
+			Wait([&] { return Owner.GetSpatialTransferStatus(*Owner.GetPrimaryConnection())==SpatialTransferStatus::Applied; },
+				"Workspace return audience was not promoted");
+			const auto ClosedInCallback = std::make_shared<bool>(false);
+			const auto StopAtLanding = LocalAvatar->GetPropertyChangedSignal("CFrame")->Connect(
+				[&Owner, ClosedInCallback, Weak=std::weak_ptr(LocalAvatar), Target](std::monostate) {
+					const auto Character = Weak.lock();
+					if (*ClosedInCallback || !Character || !Character->GetCFrame().FuzzyEq(Target)) return;
+					const auto Subject = Character->GetRootPart().value_or(nullptr);
+					const auto Domain = Subject ? WorldRoot::GetEffectiveWorld(*Subject) : nullptr;
+					if (!Domain || Domain->GetName()!="LandingRoom") return;
+					*ClosedInCallback = true;
+					Owner.Stop();
+				});
+			Require(Server.RequestSpatialTransfer(*Connection,Room->GetObjectId(),Target,Bounds)==SpatialTransferStatus::Progress,
+				"disconnect callback fixture could not stage the final trip");
+			Wait([&] { return *ClosedInCallback && !Server.GetSpatialTransferStatus(*Connection); },
+				"stopping the receiver inside its landed CFrame callback retained a grant");
+			StopAtLanding->Disconnect();
+			Require(Owner.GetStatus()==GameSessionStatus::Closed && Spectator.GetStatus()==GameSessionStatus::Ready,
+				"a callback retired a different connection");
 			bool Readable = true;
 			try { (void)FormerTerrain->GetField(); } catch (const std::runtime_error &) { Readable = false; }
 			Require(!Readable && !OwnerRuntime->Workspace->IsTerrainCollisionReady(),

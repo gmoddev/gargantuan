@@ -103,6 +103,37 @@ void CheckControllerGridStream() {
 	const auto Fresh=In.GetBinding(IdA,*RA,false,Bounds);
 	Require(Replacement && Old && Fresh && Old->Content==Fresh->Content && Old->Content!=OriginalA,
 		"fresh controller geometry failed to replace the previous footprint");
+	const auto Populate=std::make_shared<EditRequest>();
+	for (int Z=0;Z<4;++Z) for (int Y=0;Y<3;++Y) for (int X=0;X<10;++X)
+		Populate->Writes.push_back({SingleCell({2048+8*X,8*Y,8*Z}),{Stone,0}});
+	constexpr std::array<Cell,3> ViewCells{{{-1024,0,0},{-2048,0,0},{-3072,0,0}}};
+	for (const auto P:ViewCells) Populate->Writes.push_back({SingleCell(P),{Brick,0}});
+	Require(MutationGateway{}.Apply(SubmitBlockGridEditCommand{IdB,World->GetObjectId(),Populate},
+		ScriptSecurityContext::CoreTrusted()).Succeeded(),"camera fallback source edits");
+	const std::array<SpatialDestinationBounds,3> Refused{{
+		{{4097,1,1},{4241,33,49}},     // 120 occupied pages in a legal rectangle.
+		{{0,0,0},{6400,6400,6400}},   // Exceeds the rectangle address limit.
+		{{3000000,0,0},{3000001,1,1}} // Outside the grid coordinate range.
+	}};
+	for (std::size_t I=0;I<Refused.size();++I) {
+		Interest.ControlledMotion=Refused[I];
+		const auto P=ViewCells[I];
+		Interest.Centers[0]=glm::vec3(2*P.X+1,1,1);
+		const auto Coverage=SelectGridCoverage(B->GetField(),B->GetCFrame(),B->GetCellSize(),Interest);
+		Require(!Coverage.Whole && !Coverage.Rectangle && Coverage.Contains(SingleCell(P)),
+			"refused controller footprint suppressed an authorized camera selection");
+		auto Stage=Interest;Stage.Destination=Refused[I];
+		const auto Staged=SelectGridCoverage(B->GetField(),B->GetCFrame(),B->GetCellSize(),Stage);
+		Require(Staged.Origins.empty() && (!Staged.Rectangle || !B->GetField().CapturePages(Staged,{})),
+			"refused staged landing substituted camera pages");
+		for (std::uint64_t Tick=101+30*I;Tick<131+30*I;++Tick) {
+			In.Pump(Shells,[&](const GridStreamMessage& M){Out.Receive(M,Sources,Tick);return true;},Tick);
+			Out.Pump(Sources,[&](const GridStreamMessage& M){In.Receive(M,Shells,Tick);return true;},Tick,Interest);
+		}
+		Require(RB->HasReplicaField() && RB->GetField().Get(P).Definition==Brick &&
+			!In.GetBinding(IdB,*RB,false,Refused[I]) && !Out.GetBinding(IdB,*B,false,Refused[I]),
+			"camera content or controller denial failed at a rectangular limit");
+	}
 	A->SetParent(nullptr);A->SetParent(Workspace);
 	Require(!Out.GetBinding(IdA,*A,false,Bounds),"stale native membership authorized movement after reattachment");
 	std::cout<<"[BlockGrid:ControllerStream] initialFragments="<<CoreFragments<<" secondaryOffers="<<SecondaryOffers

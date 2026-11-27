@@ -231,6 +231,7 @@ namespace gargantuan::network {
 		};
 
 		struct SessionSpatialTransfer {
+			enum class CheckpointState { Waiting, Publishing, Installed };
 			struct Request {
 				SpatialTransferScope Scope;
 				SpatialDestinationBounds Bounds;
@@ -241,7 +242,8 @@ namespace gargantuan::network {
 				SpatialResidencyAudience Issuer;
 				std::shared_ptr<SpatialTransferStatus> Observation;
 				const char *OfferPendingReason{};
-				bool Started{}, Committed{}, SourceCheckpointConsumed{};
+				bool Started{}, Committed{}, Applying{};
+				CheckpointState Checkpoint{CheckpointState::Waiting};
 			};
 			std::uint64_t LastSerial{};
 			std::optional<Request> Pending;
@@ -273,7 +275,7 @@ namespace gargantuan::network {
 			struct TransferDomain {
 				SpatialAudienceFrame Frame;
 				std::shared_ptr<const SpatialStagingGrant> Grant;
-				std::unique_ptr<BlockGridPeer> Grids;
+				std::shared_ptr<BlockGridPeer> Grids;
 				SpatialTransferClock::time_point Expires;
 				AssetContentId EmptyTerrainPin;
 				std::shared_ptr<DomainTerrainDelivery> Terrain;
@@ -291,9 +293,9 @@ namespace gargantuan::network {
 			NetworkLimits Limits;
 			ObjectId PlayerObject;
 			ObjectId AuthorizedSpatialRegion;
-			std::unique_ptr<SessionSpatialTransfer> SpatialTransfer;
+			std::shared_ptr<SessionSpatialTransfer> SpatialTransfer;
 			std::uint64_t TransferFocusRevision{1};
-			std::unique_ptr<BlockGridPeer> Grids;
+			std::shared_ptr<BlockGridPeer> Grids;
 			std::unique_ptr<TransferDomain> Staging;
 			std::shared_ptr<DomainTerrainDelivery> NamedTerrain;
 			std::uint64_t CurrentGrantGeneration{}, LastStagingSerial{};
@@ -371,6 +373,12 @@ namespace gargantuan::network {
 		std::optional<detail::ReliableByteAdmission> ByteAdmission;
 		Engine *Runtime = nullptr;
 		GameSessionStatus Status = GameSessionStatus::Created;
+		bool Dispatching{};
+		struct DispatchScope {
+			bool &Active;
+			explicit DispatchScope(bool &Value) : Active(Value) { Active=true; }
+			~DispatchScope() { Active=false; }
+		};
 		std::string Failure;
 		GameSessionMetrics Metrics;
 		std::uint64_t CurrentTick = 0;
@@ -865,7 +873,7 @@ namespace gargantuan::network {
 					static_cast<std::uint32_t>(Reason)});
 		}
 		void FailSession(DisconnectInfo Information) {
-			if (Status == GameSessionStatus::Failed || Status == GameSessionStatus::Closed) return;
+			if (Status == GameSessionStatus::Closing || Status == GameSessionStatus::Failed || Status == GameSessionStatus::Closed) return;
 			RecordPooledLifecycle(detail::PooledLifecyclePoint::FailSession, PrimaryConnection.value_or(ConnectionId{}), Information.Reason);
 			const auto Diagnostic = Information.Diagnostic.size() <= 512 ? Information.Diagnostic
 																		 : Information.Diagnostic.substr(0, 512);
@@ -877,7 +885,7 @@ namespace gargantuan::network {
 		}
 
 		void Stop() {
-			if (Status == GameSessionStatus::Closed || Status == GameSessionStatus::Failed) return;
+			if (Status == GameSessionStatus::Closing || Status == GameSessionStatus::Closed || Status == GameSessionStatus::Failed) return;
 			RecordPooledLifecycle(detail::PooledLifecyclePoint::LocalStop, PrimaryConnection.value_or(ConnectionId{}), DisconnectReason::LocalShutdown);
 			const bool TransportStarted = Status != GameSessionStatus::Created;
 			Status = GameSessionStatus::Closing;
@@ -1026,35 +1034,55 @@ namespace gargantuan::network {
 		}
 
 #include "BlockGridInterest.inl"
-		void PumpGrids(ConnectionId Connection, Peer &Value) {
-			if (!Value.Grids || Value.Phase != PeerPhase::Ready || PendingPeerFailures.contains(Connection)) return;
-			try {
-				const auto Send = [&](const GridStreamMessage &Frame) {
-					return QueueTerrainFrame(Connection, Value, EncodeGridStream(Frame));
-				};
-				PumpSpatialMotion(Connection,Value);
-				PumpDomainTerrain(Connection, Value, Value.NamedTerrain, Value.AuthorizedSpatialRegion, Value.CurrentGrantGeneration, nullptr);
-				Value.Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, false); }, Send, TerrainTick,
-					GetGridInterest(Connection,Value,false));
-				if (Value.Staging) {
-					const auto Now = SpatialTransferClock::now();
-					if (Now < Value.Staging->Expires) {
-						PumpDomainTerrain(Connection, Value, Value.Staging->Terrain, Value.Staging->Grant->Region,
-							Value.Staging->Frame.Serial, &Value.Staging->Frame.Bounds);
-						Value.Staging->Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, true); }, Send, TerrainTick,
-							GetGridInterest(Connection,Value,true));
-					} else if (Configuration.Role == GameSessionRole::Server) {
-						if (!ReleaseTransferDomain(Connection, Value.Staging->Frame.Serial))
-							throw std::runtime_error("[Spatial:Network] Expired audience could not be released");
-					} else if (Now >= Value.Staging->Expires + std::chrono::seconds(2)) {
-						throw std::runtime_error("[Spatial:Network] Expired audience awaiting disposition");
-					}
-				}
-			} catch (const std::exception &Error) {
-				PendingPeerFailures.try_emplace(Connection,DisconnectInfo{DisconnectReason::ResourceExhaustion,Error.what()});
-			}
+		Peer *FindGridPeer(ConnectionId Connection, const std::shared_ptr<BlockGridPeer> &Lane, bool Staged) {
+			const auto It=Peers.find(Connection);
+			if (!Lane || It==Peers.end() || It->second.Phase!=PeerPhase::Ready || PendingPeerFailures.contains(Connection)) return nullptr;
+			auto &Value=It->second;
+			if (Staged) return Value.Staging && Value.Staging->Grids==Lane ? &Value : nullptr;
+			return Value.Grids==Lane ? &Value : nullptr;
 		}
 
+		void PumpGridLane(ConnectionId Connection, Peer &Value, bool Staged) {
+			const auto Lane=Staged ? Value.Staging->Grids : Value.Grids;
+			const auto Find=[&](ObjectId Id) -> std::shared_ptr<BlockGrid> {
+				const auto PeerValue=FindGridPeer(Connection,Lane,Staged);
+				return PeerValue ? ResolveGrid(Connection,*PeerValue,Id,Staged) : nullptr;
+			};
+			const auto Send=[&](const GridStreamMessage &Frame) {
+				auto PeerValue=FindGridPeer(Connection,Lane,Staged);
+				return PeerValue && QueueTerrainFrame(Connection,*PeerValue,EncodeGridStream(Frame));
+			};
+			Lane->Pump(Find,Send,TerrainTick,GetGridInterest(Connection,Value,Staged));
+		}
+
+		void PumpGrids(ConnectionId Connection) {
+			const auto It=Peers.find(Connection);
+			if (It==Peers.end()) return;
+			const auto Lane=It->second.Grids;
+			auto *Value=FindGridPeer(Connection,Lane,false);
+			if (!Value) return;
+			try {
+				PumpSpatialMotion(Connection,*Value);
+				PumpDomainTerrain(Connection,*Value,Value->NamedTerrain,Value->AuthorizedSpatialRegion,Value->CurrentGrantGeneration,nullptr);
+				PumpGridLane(Connection,*Value,false);
+				Value=FindGridPeer(Connection,Lane,false);
+				if (!Value || !Value->Staging) return;
+				const auto Now=SpatialTransferClock::now();
+				if (Now<Value->Staging->Expires) {
+					PumpDomainTerrain(Connection,*Value,Value->Staging->Terrain,Value->Staging->Grant->Region,
+						Value->Staging->Frame.Serial,&Value->Staging->Frame.Bounds);
+					PumpGridLane(Connection,*Value,true);
+				} else if (Configuration.Role==GameSessionRole::Server) {
+					if (!ReleaseTransferDomain(Connection,Value->Staging->Frame.Serial))
+						throw std::runtime_error("[Spatial:Network] Expired audience could not be released");
+				} else if (Now>=Value->Staging->Expires+std::chrono::seconds(2)) {
+					throw std::runtime_error("[Spatial:Network] Expired audience awaiting disposition");
+				}
+			} catch (const std::exception &Error) {
+				if (FindGridPeer(Connection,Lane,false))
+					PendingPeerFailures.try_emplace(Connection,DisconnectInfo{DisconnectReason::ResourceExhaustion,Error.what()});
+			}
+		}
 		void ReceiveGrid(const ReceivedMessageEvent &Message, Peer &Value) {
 			if (!Value.Grids || Value.Phase != PeerPhase::Ready || Message.Delivery != DeliveryMode::ReliableOrdered ||
 				Message.Traffic != TrafficClass::Control || !std::holds_alternative<std::monostate>(Message.Order)) {
@@ -1071,8 +1099,11 @@ namespace gargantuan::network {
 					if (Generation <= Value.LastStagingSerial) return;
 					throw std::invalid_argument("[BlockGrid:Network] Unissued audience generation");
 				}
-				auto &Lane = Staged ? Value.Staging->Grids : Value.Grids;
-				Lane->Receive(*Parsed, [&](ObjectId Id) { return ResolveGrid(Message.Connection, Value, Id, Staged); }, TerrainTick);
+				const auto Lane=Staged ? Value.Staging->Grids : Value.Grids;
+				Lane->Receive(*Parsed,[&](ObjectId Id) -> std::shared_ptr<BlockGrid> {
+					const auto PeerValue=FindGridPeer(Message.Connection,Lane,Staged);
+					return PeerValue ? ResolveGrid(Message.Connection,*PeerValue,Id,Staged) : nullptr;
+				},TerrainTick);
 			} catch (const std::exception &Error) {
 				Reject(Message.Connection,DisconnectReason::ProtocolViolation,Error.what());
 			}
@@ -1535,7 +1566,7 @@ namespace gargantuan::network {
 					if (Configuration.ResolveInitialSpatialAudience)
 						PeerValue.AuthorizedSpatialRegion = Configuration.ResolveInitialSpatialAudience(*PeerValue.PlayerValue);
 
-					PeerValue.Grids = std::make_unique<BlockGridPeer>(true,PeerValue.SessionEpoch,PeerValue.AuthorizedSpatialRegion,Configuration.SharedGridAssets);
+					PeerValue.Grids = std::make_shared<BlockGridPeer>(true,PeerValue.SessionEpoch,PeerValue.AuthorizedSpatialRegion,Configuration.SharedGridAssets);
 				}
 			} catch (const std::exception &) {
 				++Metrics.RejectedHandshakes;
@@ -1627,7 +1658,7 @@ namespace gargantuan::network {
 			PeerValue.SessionEpoch = Accepted.SessionEpoch;
 			PeerValue.AuthorizedSpatialRegion = Accepted.AuthorizedSpatialRegion;
 			if (Configuration.SpatialContent)
-				PeerValue.Grids = std::make_unique<BlockGridPeer>(false,PeerValue.SessionEpoch,PeerValue.AuthorizedSpatialRegion);
+				PeerValue.Grids = std::make_shared<BlockGridPeer>(false,PeerValue.SessionEpoch,PeerValue.AuthorizedSpatialRegion);
 			PeerValue.Replication = Accepted.Replication;
 			PeerValue.Limits = Accepted.NegotiatedLimits;
 			PeerValue.PlayerObject = Accepted.Player;
@@ -1687,7 +1718,11 @@ namespace gargantuan::network {
 						throw std::runtime_error("Managed PlayerGui script binding is incompatible");
 				};
 			}
-			auto Result = Replica.ApplyFrame(*Frame, Prepare);
+			// Configuration callbacks may stop the session. Dispatch only after the applier
+			// has published its receiver, semantic snapshot and next sequence together.
+			const bool DeferSignals=Configuration.SpatialContent && ClientRuntimeAttached && Frame->Kind==ReplicationMessageKind::Incremental;
+			auto Result=DeferSignals ? Replica.ApplyFrameWithDeferredSignals(*Frame,Prepare) : Replica.ApplyFrame(*Frame,Prepare);
+			if (DeferSignals && !Peers.contains(Message.Connection)) return;
 			Metrics.ClientStructuralApplyNanoseconds += static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - ApplyStarted).count());
 			if (!Result.Succeeded()) {
@@ -1708,6 +1743,8 @@ namespace gargantuan::network {
 			bool CharacterProjected = false;
 			const bool SpatialReplica = ClientRuntimeAttached && LocalPeer != Peers.end() && LocalPeer->second.Grids;
 			bool GridMembershipChanged = false;
+			std::optional<ScopedSignalDeferral> GridRetirements;
+			if (SpatialReplica) GridRetirements.emplace();
 			for (const auto &Operation : Frame->Operations) {
 				const auto Object = ReplicationObject(Operation.Intent);
 				const auto *Property = std::get_if<PropertyReplicationUpdate>(&Operation.Intent);
@@ -1805,6 +1842,10 @@ namespace gargantuan::network {
 				ClientRemoteObjects.erase(*Iterator);
 				PendingClientGuiCode.erase(*Iterator);
 				Iterator = ClientKnownObjects.erase(Iterator);
+			}
+			if (GridRetirements) {
+				GridRetirements->Commit();
+				if (!Peers.contains(Message.Connection)) return;
 			}
 			BaselineApplied = BaselineApplied || Frame->Kind == ReplicationMessageKind::Baseline;
 			if (ClientRuntimeAttached && !SynchronizeClientGraph()) {
@@ -2103,6 +2144,8 @@ namespace gargantuan::network {
 		}
 
 		std::size_t Poll() {
+			if (Dispatching || Status==GameSessionStatus::Closing || Status==GameSessionStatus::Closed || Status==GameSessionStatus::Failed) return 0;
+			DispatchScope Dispatch(Dispatching);
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::SessionPoll);
 			std::array<TransportEvent, MaximumGameSessionPollEventsPerCall> Buffer;
 			const auto Count = runtime_detail::MeasureWork(runtime_detail::WorkPhase::TransportPoll,
@@ -2760,6 +2803,8 @@ namespace gargantuan::network {
 			RetireSessionTransfer(Connection, Iterator->second);
 			auto PeerValue = std::move(Iterator->second);
 			Peers.erase(Iterator);
+			std::optional<ScopedSignalDeferral> GridRetirements;
+			if (PeerValue.Grids && Configuration.Role==GameSessionRole::Client) GridRetirements.emplace();
 			if (Configuration.SpatialContent && Configuration.Role==GameSessionRole::Client && Runtime && ClientRuntimeAttached)
 				RetireBootstrapTerrain(PeerValue,true);
 			RetireDomainTerrain(PeerValue.NamedTerrain,true);
@@ -2821,6 +2866,7 @@ namespace gargantuan::network {
 				ClientGuiCharacter = {};
 				PrimaryConnection.reset();
 			}
+			if (GridRetirements) GridRetirements->Commit();
 		}
 
 		void ObserveOrdinaryQueue(ConnectionId Connection, Peer &PeerValue, std::uint64_t Now) {
@@ -2849,6 +2895,8 @@ namespace gargantuan::network {
 			}
 		}
 		void Step(std::uint64_t SimulationTick) {
+			if (Dispatching) return;
+			DispatchScope Dispatch(Dispatching);
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::SessionStep);
 			if (Status == GameSessionStatus::Created || Status == GameSessionStatus::Starting ||
 				Status == GameSessionStatus::Closing || Status == GameSessionStatus::Closed ||
@@ -2859,7 +2907,10 @@ namespace gargantuan::network {
 			if (Configuration.TerrainBootstrap || Configuration.SpatialContent)
 				SaturatingAdd(TerrainTick, SimulationTick > CurrentTick ? SimulationTick - CurrentTick : std::uint64_t{1});
 			CurrentTick = SimulationTick;
-			if (Configuration.SpatialContent) PumpSpatialTransfers();
+			if (Configuration.SpatialContent) {
+				PumpSpatialTransfers();
+				if (Status == GameSessionStatus::Closing || Status == GameSessionStatus::Closed || Status == GameSessionStatus::Failed) return;
+			}
 			// Residency consumes committed server Character facts, independently of
 			// 3E relevance and 3J accepted materialization. Full Player ObjectId
 			// generations scope focus lifetime across disconnect/session replacement.
@@ -3648,7 +3699,16 @@ namespace gargantuan::network {
 				}
 			}
 			if (Configuration.Role == GameSessionRole::Server && Configuration.TerrainBootstrap) PumpServerTerrain();
-			if (Configuration.SpatialContent) for (auto &[Connection,Value] : Peers) PumpGrids(Connection,Value);
+			if (Configuration.SpatialContent) {
+				std::optional<ConnectionId> Previous;
+				for (;;) {
+					const auto Next=Previous ? Peers.upper_bound(*Previous) : Peers.begin();
+					if (Next==Peers.end()) break;
+					Previous=Next->first;
+					if (Next->second.Grids) PumpGrids(*Previous);
+				}
+				if (Status==GameSessionStatus::Closing || Status==GameSessionStatus::Closed) return;
+			}
 			if (Status == GameSessionStatus::Failed) return;
 			if (!DrainFailures()) return;
 			if (Remotes) (void)Remotes->Pump(Configuration.Limits.MaximumMessagesPerTick);

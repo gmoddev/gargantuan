@@ -22,4 +22,15 @@ The Yard server Script chooses the destination and landing position. It calls `P
 
 For player-built courses and excavations to survive a fresh Play session, select Persistent Play storage on a build with local SQLite support. The Yard script stores up to 128 edits in a versioned document under `ConstructionYard/YardV1`. On startup it replays those edits over the authored scene and waits for excavation collision to commit. An already applied edit is part of the stored prefix. Concurrent writers use the document revision, and a conflict reloads the authoritative document. With disabled storage, changes last for the current session.
 
-For multiplayer, the builder writes a shared session identity and an empty shared-asset list into the saved project's `.gargantuan` directory. Export a **Development Dedicated Server** and a **Development Distributed Player** from that same project with Studio's runtime-distribution workflow. Start the relocated Server with `--bind 127.0.0.1:36790` and each Player with `--connect 127.0.0.1:36790`. A SQLite-enabled Server accepts `--persistence-provider sqlite --persistence-local-db <absolute path>`. Reuse the database and project identity when restarting the Server. Two players can extend the same wall or dig at their own feet. The server queues up to 16 pending edits and casts against the outdoor terrain before recording an excavation.
+## Package a multiplayer Yard
+
+The builder writes the common session identity and shared-asset policy under the project's `.gargantuan` directory. Use the Engine packager from the same build as the Player and Server runtimes. From the repository root, replace the project and runtime paths below and choose fresh output directories.
+
+```sh
+gargantuan-packager build --project /path/to/ConstructionYard --runtime /path/to/ServerRuntimeDistribution --output /path/to/YardServer --configuration Development --distribution samples/ConstructionYard/DedicatedServer.json
+gargantuan-packager build --project /path/to/ConstructionYard --runtime /path/to/RuntimeDistribution --output /path/to/YardPlayer --configuration Development --distribution samples/ConstructionYard/DistributedPlayer.json
+gargantuan-packager validate /path/to/YardServer
+gargantuan-packager validate /path/to/YardPlayer
+```
+
+Run `GargantuanServer --bind 127.0.0.1:36790 --persistence-provider sqlite --persistence-local-db /absolute/path/yard.sqlite` from the Server output and `GargantuanPlayer --connect 127.0.0.1:36790` from the Player output for each local player. Use the `.exe` executables on Windows. Reuse the database and project identity when restarting. Two players can extend the same wall or dig at their own feet. The server queues up to 16 pending edits, casts against the outdoor terrain before recording an excavation and retries a temporarily busy read within a bounded startup window.

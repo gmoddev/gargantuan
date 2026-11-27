@@ -14,6 +14,7 @@
 
 #include <array>
 #include <iostream>
+#include <source_location>
 #include <stdexcept>
 
 namespace {
@@ -194,8 +195,13 @@ namespace {
 			);
 		}
 	};
-	SpatialTransferFrame Packet(const SpatialTransferStep &Step, SpatialTransferPhase Phase) {
-		Check(Step.Reply && Step.Reply->Phase == Phase, "unexpected transfer phase");
+	SpatialTransferFrame Packet(const SpatialTransferStep &Step, SpatialTransferPhase Phase,
+		const std::source_location Location = std::source_location::current()) {
+		if (!Step.Reply || Step.Reply->Phase != Phase)
+			throw std::runtime_error("unexpected transfer phase at test line " + std::to_string(Location.line()) +
+				": expected " + std::to_string(static_cast<int>(Phase)) + ", received " +
+				(Step.Reply ? std::to_string(static_cast<int>(Step.Reply->Phase)) : "no frame") +
+				", status " + std::to_string(static_cast<int>(Step.Status)));
 		const auto Bytes = EncodeSpatialTransfer(*Step.Reply);
 		Check(
 			!Bytes.empty() && Bytes.size() <= MaximumSpatialTransferBytes && IsSpatialTransfer(Bytes), "wire envelope"
@@ -361,7 +367,7 @@ namespace {
 			P.Scope.Controller = ControllerKey;
 			P.Authority.Protect();
 			P.Replica.Protect();
-			const auto AuthorityPose = CFrame(10.25f,3,0)*CFrame::Angles(.13f,.31f,-.22f);
+			const auto AuthorityPose = CFrame(12.25f,3,0)*CFrame::Angles(.13f,.31f,-.22f);
 			const glm::vec3 Velocity(1.007f,-3.270000219f,.083f), Floor = glm::normalize(glm::vec3(.035f,1.f,-.093f));
 			P.Authority.Avatar->ApplyRuntimeTransform(AuthorityPose);
 			P.Authority.Avatar->ApplyRuntimeControllerFacts(Velocity,Floor,true);
@@ -369,14 +375,59 @@ namespace {
 			const auto OfferPacket = Packet(P.Begin(),Offer);
 			Check(OfferPacket.ControllerVelocity==Velocity && OfferPacket.FloorNormal==Floor && OfferPacket.Grounded,
 				"reliable controller source facts did not survive the transfer codec");
+			Check(InstallSpatialControllerCheckpoint(OfferPacket,*P.Replica.Destination,P.Replica.Adapters) &&
+				P.Replica.Actor->GetCFrame().Position!=AuthorityPose.Position, "an unbound native caller published a checkpoint");
+			P.Replica.Adapters.AuthorizeControllerCheckpoint = [&](const SpatialTransferFrame &Frame) {
+				return P.Replica.Permission && Frame.Scope == P.Scope && Frame.Serial == OfferPacket.Serial;
+			};
 			auto WrongGeometry = OfferPacket;
 			WrongGeometry.SubjectGeometry = WrongGeometry.Collision;
 			Check(InstallSpatialControllerCheckpoint(WrongGeometry,*P.Replica.Destination,P.Replica.Adapters) &&
 				P.Replica.Actor->GetCFrame().Position!=AuthorityPose.Position,"a different subject geometry received a source correction");
-			Check(!InstallSpatialControllerCheckpoint(OfferPacket,*P.Replica.Destination,P.Replica.Adapters) &&
+			const SpatialDestinationBounds Headroom{{9.8f,4.15f,-.75f},{11.2f,5.4f,.75f}};
+			const SpatialWireProvider SourceTerrain{SourceKey, SpatialCollisionProvider::Terrain};
+			const auto Terrain = P.Replica.Source->GetTerrain();
+			constexpr WireObjectId NeighbourKey{16,1};
+			const auto OtherPart = std::make_shared<Part>();
+			OtherPart->SetAnchored(true);
+			OtherPart->SetSize({1,1,1});
+			OtherPart->SetCFrame(CFrame(20,3,0));
+			OtherPart->SetParent(P.Replica.Source);
+			OtherPart->SetSpatialRegion(P.Replica.Destination);
+			auto SecondAdapters = P.Replica.Adapters;
+			SecondAdapters.ResolveObject = [&](WireObjectId Id) -> std::optional<ObjectId> {
+				return Id == NeighbourKey ? OtherPart->GetObjectId() : P.Replica.Adapters.ResolveObject(Id);
+			};
+			SecondAdapters.Resolve = [&](SpatialWireProvider Key) -> std::optional<ObjectId> {
+				return Key == SourceTerrain ? std::optional(Terrain->GetObjectId()) : std::nullopt;
+			};
+			SecondAdapters.Project = [&](const SpatialProviderReceipt &Native, const SpatialDestinationBounds &) -> std::optional<SpatialAppliedBinding> {
+				if (Native.Owner != Terrain->GetObjectId() || !Native.AuthoritativeEmpty) return {};
+				return SpatialAppliedBinding{SourceTerrain, AssetContentId::Hash(std::array<std::uint8_t,1>{7}), 1, 1, true, true};
+			};
+			SecondAdapters.Reserve = [&](const SpatialTransferFrame &Frame, const SpatialDestinationReceipt &Receipt) {
+				return P.Replica.Protection->Reservations.Reserve(OtherPart->GetObjectId(), Frame, Receipt, [] { return true; });
+			};
+			SpatialTransferServer Second;
+			const SpatialMovementRequest Neighbour{OtherPart->GetObjectId(), P.Replica.Destination->GetObjectId(),
+				P.Replica.Destination->GetSpatialActivation(), OtherPart->GetCFrame(), CFrame(10.5f,4.75f,0)};
+			(void)Packet(Second.Begin(OtherPeer, {6,7,12,10,NeighbourKey,DestinationKey,SourceKey}, OtherPart,
+				P.Replica.Source, Neighbour, Headroom, {}, SecondAdapters, P.Now), Offer);
+			Check(InstallSpatialControllerCheckpoint(OfferPacket,*P.Replica.Destination,P.Replica.Adapters) &&
+				P.Replica.Actor->GetCFrame().Position==glm::vec3(10,3,0), "source correction crossed another capsule reservation");
+			(void)Packet(Second.Cancel(), Cancel);
+			bool Observed{};
+			const auto Observation = P.Replica.Actor->GetPropertyChangedSignal("CFrame")->Connect([&](std::monostate) {
+				const auto Hit = P.Replica.Source->ResolveRaycast(AuthorityPose.Position + glm::vec3(0,3,0),{0,-6,0});
+				Observed = Hit.Instance==P.Replica.Actor && !P.Replica.Source->ResolveRaycast({10,6,0},{0,-6,0}).HasHit() &&
+					P.Replica.Avatar->GetCFrame().Rotation==AuthorityPose.Rotation && P.Replica.Avatar->GetVelocity()==Velocity &&
+					P.Replica.Avatar->GetFloorNormal()==Floor && P.Replica.Avatar->GetGrounded();
+			});
+			Check(!InstallSpatialControllerCheckpoint(OfferPacket,*P.Replica.Destination,P.Replica.Adapters) && Observed &&
 				P.Replica.Actor->GetCFrame().Rotation==AuthorityPose.Rotation && P.Replica.Actor->GetCFrame().Position==AuthorityPose.Position &&
 				P.Replica.Avatar->GetVelocity()==Velocity && P.Replica.Avatar->GetFloorNormal()==Floor,
 				"fenced source checkpoint failed to recover a delayed pose and compact controller facts");
+			Observation->Disconnect();
 			const auto ReadyPacket = Packet(P.ClientReceive(OfferPacket),Ready);
 			auto Changed = ReadyPacket;
 			Changed.ControllerVelocity.x += .001f;
@@ -385,6 +436,13 @@ namespace {
 			P.Replica.Avatar->ApplyRuntimeControllerFacts(Velocity+glm::vec3(.001f,0,0),Floor,true);
 			(void)Packet(P.ClientReceive(Reserved),Cancel);
 			Check(!P.Replica.AtDestination(),"a later local change within the same compact velocity bin went undetected");
+			P.Replica.Avatar->ApplyRuntimeTransform(CFrame(10,3,0));
+			const auto Revoke = P.Replica.Actor->GetPropertyChangedSignal("CFrame")->Connect([&](std::monostate) {
+				P.Replica.Permission = false;
+			});
+			Check(InstallSpatialControllerCheckpoint(OfferPacket,*P.Replica.Destination,P.Replica.Adapters) &&
+				!P.Replica.Permission && !P.Replica.AtDestination(), "a checkpoint callback retired its grant and still produced readiness");
+			Revoke->Disconnect();
 		}
 		{
 			Pair P;
@@ -459,6 +517,24 @@ namespace {
 	}
 	void Failures() {
 		using enum SpatialTransferPhase;
+		{
+			Pair P;
+			auto &Local = P.Authority;
+			const CFrame Redirect(6,3,0);
+			unsigned Published{};
+			const auto PoseSignal = Local.Actor->GetPropertyChangedSignal("CFrame")->Connect([&](std::monostate) {
+				if (Local.Actor->GetCFrame().Position == Redirect.Position) ++Published;
+			});
+			const auto DomainSignal = Local.Actor->GetPropertyChangedSignal("SpatialRegion")->Connect([&](std::monostate) {
+				Local.Actor->SetCFrame(Redirect);
+			});
+			const auto Receipt = Local.Destination->PrepareSpatialDestination(Bounds);
+			Check(Receipt && Local.Destination->CommitSpatialTransfer(Local.Actor, Local.Movement(), *Receipt).Succeeded() &&
+				Local.AtDestination() && Local.Actor->GetCFrame().Position == Redirect.Position && Published == 1,
+				"a domain callback superseded the pose but the old transfer still published it");
+			DomainSignal->Disconnect();
+			PoseSignal->Disconnect();
+		}
 		{
 			Pair P;
 			const auto OfferPacket = Packet(P.Begin(), Offer);

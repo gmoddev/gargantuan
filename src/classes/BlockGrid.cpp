@@ -234,6 +234,7 @@ namespace gargantuan {
 	void BlockGrid::RetireReplicaContent() {
 		AssertCanMutate();
 		if (!IsReplicaMaterialization()) throw std::logic_error("[BlockGrid:Replica] Expected a replica");
+		ScopedSignalDeferral Signals;
 		if (ReplicaFieldAvailable) {
 			Cells.InstallReplica(blockgrid::Field{}, Admission);
 			LastAssetService.reset();
@@ -244,6 +245,7 @@ namespace gargantuan {
 			NotifyPropertyCommitted("BlockRevision");
 		}
 		ClearReplicaAssemblyProjection();
+		Signals.Commit();
 	}
 	std::string BlockGrid::GetBlockRevision() const { return RevisionToken(Cells.GetRevision()); }
 	std::string BlockGrid::GetPublicBlockRevision() const { return RevisionToken(Cells.GetPublicRevision())+"/peers"; }
@@ -355,8 +357,10 @@ namespace gargantuan {
 	}
 	void BlockGrid::NotifyConfiguration(std::string_view Property) {
 		++ConfigurationRevision;
+		ScopedSignalDeferral Signals;
 		NotifyPropertyCommitted(Property);
 		NotifyPropertyCommitted("BlockRevision");
+		Signals.Commit();
 	}
 	float BlockGrid::GetCellSize() const { return Size; }
 	void BlockGrid::SetCellSize(float Value) {
@@ -364,8 +368,10 @@ namespace gargantuan {
 		if (Size==Value) return;
 		if ((!IsReplicaMaterialization() && Cells.GetOccupiedCount()) || (Value!=0.5f && Value!=1.f && Value!=2.f))
 			throw std::invalid_argument("[BlockGrid:CellSize] Choose 0.5, 1, or 2 while the grid is empty");
+		ScopedSignalDeferral Signals;
 		if (ReplicaFieldAvailable) RetireReplicaContent();
 		Size=Value; NotifyConfiguration("CellSize");
+		Signals.Commit();
 	}
 	CFrame BlockGrid::GetCFrame() const { return Transform; }
 	void BlockGrid::SetCFrame(gargantuan::CFrame Value) {

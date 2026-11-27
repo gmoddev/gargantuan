@@ -124,6 +124,8 @@ To reuse a group of cells, select its source grid and enter the two corners in t
 
 For a custom mesh, import it into the project's asset catalog. Use the inspector's asset picker to choose the visual mesh, its companion collision when needed, and a material. Give the definition a project key, place a cell and save. On reopen, the grid resolves those project assets again.
 
+Select **Workspace** or a **SpatialRegion** in Explorer to inspect its Parts, grids, terrain collision and active collision requests. **Show in viewport** switches the edit camera to that coordinate space. To hold local collision during startup, enter minimum and maximum coordinates and a duration, then choose **Add collision preload Script** and save. The generated server Script calls the public `RequestCollisionArea` method. During Play, **Inspect Play view** shows the live camera's domain and how many requests are ready. Stop restores the Edit world and its own counters.
+
 ## Enter a room through a door
 
 In a running server Script, choose the room and a clear landing position after checking the player's permission and distance to the door. Pass the authenticated Player received from your interaction handler. The corners below are in the room's coordinates and enclose the arriving character.

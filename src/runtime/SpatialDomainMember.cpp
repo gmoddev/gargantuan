@@ -134,7 +134,11 @@ namespace gargantuan {
 			throw;
 		}
 		Owner.NotifyPropertyCommitted("SpatialRegion");
-		if (DestinationPose) Owner.NotifyPropertyCommitted("CFrame");
+		if (DestinationPose && !Owner.GetDestroyed() && !Owner.IsDestroying() && WorldRoot::GetEffectiveWorld(Owner) == Destination) {
+			const auto *Part = dynamic_cast<const BasePart *>(&Owner);
+			if (Part && Part->GetCFrame().Position == DestinationPose->Position && Part->GetCFrame().Rotation == DestinationPose->Rotation)
+				Owner.NotifyPropertyCommitted("CFrame");
+		}
 	}
 
 	void WorldRoot::MoveSpatialMembers(

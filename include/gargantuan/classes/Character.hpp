@@ -9,6 +9,11 @@
 
 namespace gargantuan {
 	class WorldRoot;
+	namespace network {
+		struct SpatialTransferFrame;
+		struct SpatialTransferAdapters;
+		const char *InstallSpatialControllerCheckpoint(const SpatialTransferFrame &, WorldRoot &, const SpatialTransferAdapters &);
+	}
 
 	enum class CharacterMotionSource : std::uint8_t {
 		Script,
@@ -52,6 +57,11 @@ namespace gargantuan {
 		void SynchronizeRootPart(bool Simulation = false);
 		void CommitSimulationTransform(const CFrame &Value);
 
+	  private:
+		friend const char *network::InstallSpatialControllerCheckpoint(const network::SpatialTransferFrame &, WorldRoot &,
+			const network::SpatialTransferAdapters &);
+		[[nodiscard]] bool ApplyRuntimeSourceCheckpoint(const CFrame &Pose, glm::vec3 Velocity, glm::vec3 FloorNormal, bool Grounded);
+
 	  public:
 		static constexpr float MaximumMotionTranslation = 16.0f;
 		static constexpr float MaximumMotionYawRadians = 1.57079632679489661923f;
@@ -61,7 +71,6 @@ namespace gargantuan {
 			const CharacterMotionRequest &Request
 		);
 		void ApplyRuntimeTransform(const CFrame &Value);
-		[[nodiscard]] bool ApplyRuntimeSourceCheckpoint(const CFrame &Pose, glm::vec3 Velocity, glm::vec3 FloorNormal, bool Grounded);
 		void ApplyRuntimePresentationOffset(std::optional<CFrame> Value);
 		[[nodiscard]] CFrame GetPresentationCFrame() const;
 	};

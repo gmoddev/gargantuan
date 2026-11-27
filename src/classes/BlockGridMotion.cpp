@@ -60,8 +60,10 @@ namespace gargantuan {
 		const bool Moved=Transform.Position!=P.Pose.Position || Transform.Rotation!=P.Pose.Rotation;
 		*AssemblyState=P;
 		Transform=P.Pose;
+		ScopedSignalDeferral Signals;
 		if (Moved) NotifyPropertyCommitted("CFrame");
 		if (Changed) NotifyPropertyCommitted("MotionMode");
+		Signals.Commit();
 		return true;
 	}
 	void BlockGrid::ClearReplicaAssemblyProjection() {

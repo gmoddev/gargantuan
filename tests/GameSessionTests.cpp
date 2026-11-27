@@ -705,11 +705,13 @@ namespace {
 			GameSessionClientHello Spatial{.Nonce=77, .AdvertisedLimits=Limits,
 				.RuntimeDistributionIdentity=Managed ? std::string(64, 'a') : std::string{}, .SpatialContent=true};
 			auto Hello = EncodeGameSessionMessage(Spatial);
-			Check(Hello && (*Hello)[4] == (Managed ? std::byte{16} : std::byte{15}) && DecodeGameSessionMessage(*Hello),
-				"spatial GSES negotiates the controller checkpoint profile");
+			Check(Hello && (*Hello)[4] == (Managed ? std::byte{18} : std::byte{17}) && DecodeGameSessionMessage(*Hello),
+				"spatial GSES negotiates the controller checkpoint and rectangular field profile");
 			if (!Hello) continue;
-			(*Hello)[4] = Managed ? std::byte{14} : std::byte{13};
-			Check(!DecodeGameSessionMessage(*Hello), "older spatial peers require a matching profile");
+			for (const auto Version : {13, 15}) {
+				(*Hello)[4] = static_cast<std::byte>(Version + (Managed ? 1 : 0));
+				Check(!DecodeGameSessionMessage(*Hello), "older spatial peers require a matching profile");
+			}
 		}
 		for (std::size_t Size = 0; Size < Encoded->size(); ++Size)
 			Check(

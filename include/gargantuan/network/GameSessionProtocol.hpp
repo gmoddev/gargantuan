@@ -20,8 +20,8 @@ namespace gargantuan::network {
 	inline constexpr std::uint16_t GameSessionProtocolVersion = 2;
 	inline constexpr std::uint16_t GameSessionDistributionProtocolVersion = 3;
 	inline constexpr std::uint16_t GameSessionTerrainProtocolVersion = 4;
-	inline constexpr std::uint16_t GameSessionSpatialProtocolVersion = 15;
-	inline constexpr std::uint16_t GameSessionManagedSpatialProtocolVersion = 16;
+	inline constexpr std::uint16_t GameSessionSpatialProtocolVersion = 17;
+	inline constexpr std::uint16_t GameSessionManagedSpatialProtocolVersion = 18;
 	inline constexpr std::size_t MaximumGameSessionFrameBytes = 256;
 
 	enum class GameSessionMessageKind : std::uint8_t {

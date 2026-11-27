@@ -24,7 +24,7 @@ local Lo, Hi = Vector3.new(-8,-6,-8), Vector3.new(9,6,9)
 local function Signature(Bytes)
 	local Sum=0
 	for I=1,#Bytes do Sum=(Sum*131+string.byte(Bytes,I))%4294967291 end
-	return string.format("%.0f",Sum)
+	return Sum
 end
 local function Surface()
 	local Space=game.Workspace
@@ -234,8 +234,11 @@ def RunYard(Options, Root):
     Run([sys.executable, "-B", Samples / "ConstructionYard" / "BuildProject.py",
          "--engine", Options.engine.resolve(), "--project", Project], Root)
     AddObserver(Options.engine.resolve(), Project)
-    Server, _ = Build(Options.packager, Project, Options.server_runtime, "DedicatedServer", Root, "Development")
-    Player, _ = Build(Options.packager, Project, Options.player_runtime, "DistributedPlayer", Root, "Development")
+    Policies = Samples / "ConstructionYard"
+    Server, _ = Build(Options.packager, Project, Options.server_runtime, "DedicatedServer", Root, "Development",
+                      Policies / "DedicatedServer.json")
+    Player, _ = Build(Options.packager, Project, Options.player_runtime, "DistributedPlayer", Root, "Development",
+                      Policies / "DistributedPlayer.json")
     Env = ManagedEnvironment()
     Exe = ".exe" if os.name == "nt" else ""
     Database = Root / "yard.sqlite"
@@ -250,6 +253,7 @@ def RunYard(Options, Root):
         with ExitStack() as Processes:
             Host = Processes.enter_context(Launch(ServerArgs,Root,Env,f"server-{Round}"))
             Await(Host,"[Runtime:Server] StartupWallMilliseconds=")
+            Await(Host,"[Spatial:ConstructionYard] ready edits=")
             First = Processes.enter_context(Launch(ClientArgs,Root,Env,f"first-{Round}"))
             if Round == 2:
                 Await(First,"[Spatial:YardProcess] Fresh Server replayed both constructions",(Host,))

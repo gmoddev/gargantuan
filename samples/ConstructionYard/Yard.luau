@@ -78,7 +78,12 @@ local function ApplyEvent(Event)
 end
 
 local function LoadProgress()
-	local Read = Await(Progress:GetAsync(ProgressKey))
+	local Read
+	for Attempt = 1, 3 do
+		Read = Await(Progress:GetAsync(ProgressKey, 2000))
+		if Read.Status ~= "Busy" and Read.Status ~= "Deadline" and Read.Status ~= "UnknownOutcome" then break end
+		if Attempt < 3 then task.wait(0.1 * Attempt) end
+	end
 	if Read.Status == "Missing" and #History == 0 then return end
 	if Read.Status ~= "Ok" then error("could not read yard history (" .. Read.Status .. ")") end
 	local Document = Read.Record.Value
@@ -111,8 +116,8 @@ local function Record(Event)
 	if Durable then
 		local Next = table.clone(History)
 		table.insert(Next, Event)
-		local Write = Await(Progress:PutAsync(ProgressKey, {Version = 1, Events = Next}, Revision))
-		if Write.Status == "Conflict" or Write.Status == "UnknownOutcome" then
+		local Write = Await(Progress:PutAsync(ProgressKey, {Version = 1, Events = Next}, Revision, 2000))
+		if Write.Status == "Conflict" or Write.Status == "UnknownOutcome" or Write.Status == "Deadline" then
 			LoadProgress()
 			return
 		end

@@ -147,6 +147,19 @@ namespace {
 		In.Pump(ResolveShell, Send, 10);
 		Out.Receive(Read(), ResolveSource, 10);
 		Require(Out.IsInstalled(Id, *Source), "collision-only update did not install");
+		bool Removed{};
+		const auto RemoveAtPose=Shell->GetPropertyChangedSignal("CFrame")->Once([&](auto) {
+			Removed=true;
+			In.Forget(Id);
+		});
+		Source->SetCFrame(CFrame(4,2,0));
+		Out.Pump(ResolveSource,Send,11);
+		In.Receive(Read(),ResolveShell,11);
+		Packet.clear();
+		In.Pump(ResolveShell,Send,12);
+		Require(Removed && Packet.empty() && !Shell->HasReplicaField() && !Shell->GetAssemblyProjection(),
+			"retiring a moving shell from its pose callback retained content or acknowledged its installation");
+		RemoveAtPose->Disconnect();
 		Out.Forget(Id);
 		Require(!Out.IsInstalled(Id, *Source), "retirement retained the installation");
 		ReplicaRuntime.Destroy();
@@ -374,8 +387,26 @@ namespace {
 		Outside->SetSpatialRegion(std::nullopt);
 		Wait([&] { return Received(*ClientA,"ExteriorGrid",blockgrid::Brick) && !Find(*ClientB->DataModel,"ExteriorGrid"); },
 			"returning grid shell did not acquire a fresh subscription");
-		A.Stop();
-		B.Stop();
+		const auto Returning=Find(*ClientA->DataModel,"ExteriorGrid");
+		const auto CloseOnField=Returning->GetPropertyChangedSignal("BlockRevision")->Once([&](auto) {
+			A.Stop();
+		});
+		Request=std::make_shared<blockgrid::EditRequest>();
+		Request->Writes.push_back({blockgrid::SingleCell({-3,0,1}),{blockgrid::Stone,0}});
+		Require(Gateway.Apply(SubmitBlockGridEditCommand{Outside->GetObjectId(),World->GetObjectId(),Request},
+			ScriptSecurityContext::CoreTrusted()).Succeeded(),"final exterior edit failed");
+		Wait([&] { return A.GetStatus()==GameSessionStatus::Closed; },"field publication did not close its session");
+		Require(!Returning->HasReplicaField() && B.GetStatus()==GameSessionStatus::Ready && Received(*ClientB,"InteriorGrid",blockgrid::Brick),
+			"field callback retained a retired installation or interrupted the other player");
+		CloseOnField->Disconnect();
+		const auto InteriorReplica=Find(*ClientB->DataModel,"InteriorGrid");
+		const auto CloseOnConfiguration=InteriorReplica->GetPropertyChangedSignal("Visible")->Once([&](auto) {
+			B.Stop();
+		});
+		Inside->SetVisible(false);
+		Wait([&] { return B.GetStatus()==GameSessionStatus::Closed; },"configuration publication did not close its session");
+		Require(!InteriorReplica->HasReplicaField(),"configuration callback retained a retired installation");
+		CloseOnConfiguration->Disconnect();
 		Server.Stop();
 		ClientA->Destroy();
 		ClientB->Destroy();

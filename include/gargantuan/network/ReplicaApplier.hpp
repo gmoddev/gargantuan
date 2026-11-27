@@ -49,6 +49,7 @@ namespace gargantuan::network {
 		using BeforePublish = std::function<void(ObjectId, const std::shared_ptr<Instance> &)>;
 		[[nodiscard]] ReplicaApplyResult ApplyBytes(std::span<const std::byte> Bytes);
 		[[nodiscard]] ReplicaApplyResult ApplyFrame(const ReplicationFrame &Frame, const BeforePublish &Prepare = {});
+		[[nodiscard]] ReplicaApplyResult ApplyFrameWithDeferredSignals(const ReplicationFrame &Frame, const BeforePublish &Prepare);
 		void Reset();
 
 		[[nodiscard]] std::shared_ptr<Instance> GetReplicaRoot() const {
