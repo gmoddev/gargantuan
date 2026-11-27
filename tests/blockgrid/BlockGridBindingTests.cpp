@@ -29,9 +29,18 @@ namespace {
 		std::size_t Size=0;
 		auto* Code=luau_compile(Text.data(),Text.size(),&Engine.CompileOptions,&Size);
 		Check(Code!=nullptr,"compile failed");
-		auto Status=luau_load(Engine.L,"BlockGridNative",Code,Size,0);
+		auto Status=luau_load(Engine.L,"=BlockGridNative",Code,Size,0);
 		std::free(Code);
-		if (!Status) Status=lua_pcall(Engine.L,0,0,0);
+		if (!Status) {
+			lua_pushcfunction(Engine.L,[](lua_State *L) {
+				const char *Message=lua_tostring(L,1);
+				const char *Trace=lua_debugtrace(L);
+				lua_pushfstring(L,"%s\n%s",Message?Message:"VM error",Trace?Trace:"");
+				return 1;
+			},"BlockGridTestTrace");
+			lua_insert(Engine.L,-2);
+			Status=lua_pcall(Engine.L,0,0,lua_gettop(Engine.L)-1);
+		}
 		if (Status) throw std::runtime_error(lua_tostring(Engine.L,-1));
 	}
 	void TestAssetDefinitions() {
