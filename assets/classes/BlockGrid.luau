@@ -6,6 +6,11 @@ end
 const Rotation = '{ Up: string, Front: string }'
 const Block = '{ Definition: string, Orientation: ' .. Rotation .. ' }'
 const Definition = '{ Shape: ("Cube" | "Slab" | "Wedge" | "Stairs")?, Color: Color3?, Collision: ("Shape" | "None")?, Queryable: boolean?, Ports: {string}? }'
+const Bounds = '{ Min: Vector3, MaxExclusive: Vector3 }'
+const Filter = '{ Definitions: {string}?, Where: { Channel: string, Equals: boolean | number }? }'
+const Packed = '{ Size: Vector3, Bindings: {[string]: string}, Palette: {' .. Block .. '}, Cells: buffer }'
+const Edit = '{ SetBlock: (unknown, Vector3, string, ' .. Rotation .. '?) -> (), RemoveBlock: (unknown, Vector3) -> (), Fill: (unknown, Vector3, Vector3, string, ' .. Rotation .. '?) -> (), Clear: (unknown, Vector3, Vector3) -> (), SetValue: (unknown, Vector3, string, boolean | number) -> (), CopyRegion: (unknown, Vector3, Vector3, Vector3) -> (), MoveRegion: (unknown, Vector3, Vector3, Vector3) -> (), WritePacked: (unknown, Vector3, Vector3, ' .. Packed .. ') -> (), Commit: (unknown) -> string, Cancel: (unknown) -> () }'
+const Cursor = '{ Step: (unknown, number) -> { Status: "More" | "Complete" | "Found" | "Limit" | "Unavailable" | "Expired" | "Cancelled", Cells: {Vector3}, Revision: string, Match: Vector3? }, Cancel: (unknown) -> () }'
 return c({
 	name = "BlockGrid",
 	description = "A discrete construction grid with native, automatically partitioned cells.",
@@ -37,7 +42,13 @@ return c({
 		GetBlock = Native("(self: BlockGrid, Cell: Vector3) -> " .. Block .. "?", "Reads an occupied cell, or nil for air."),
 		Fill = Native("(self: BlockGrid, Min: Vector3, MaxExclusive: Vector3, Definition: string, Rotation: " .. Rotation .. "?) -> string", "Fills a half-open grid-local box atomically.", true),
 		Clear = Native("(self: BlockGrid, Min: Vector3, MaxExclusive: Vector3) -> string", "Clears a half-open grid-local box atomically.", true),
-		ReadRegion = Native("(self: BlockGrid, Min: Vector3, MaxExclusive: Vector3) -> { Revision: string, Cells: {{ Position: Vector3, Block: " .. Block .. " }} }", "Returns occupied cells in Z, Y, X order with X varying fastest."),
+		ReadRegion = Native("(self: BlockGrid, Min: Vector3, MaxExclusive: Vector3, Selector: " .. Filter .. "?) -> { Revision: string, Cells: {{ Position: Vector3, Block: " .. Block .. " }} }", "Returns matching occupied cells in Z, Y, X order with X varying fastest."),
+		DefineChannel = Native('(self: BlockGrid, Name: string, Spec: { Kind: "Bool" | "UInt8" | "Int32" | "Float32", Default: boolean | number, Persistent: boolean?, Audience: ("Server" | "RelevantPeers")?, Indexed: boolean?, OnCopy: ("Default" | "Value")? }) -> string', "Declares a typed channel with an implicit shared default.", true),
+		GetValue = Native("(self: BlockGrid, Cell: Vector3, Channel: string) -> (boolean | number)", "Reads a typed value from an occupied cell."),
+		BeginEdit = Native("(self: BlockGrid, Expected: string?) -> " .. Edit, "Starts a bounded edit guarded by the current or supplied revision.", true),
+		ReadPacked = Native("(self: BlockGrid, Min: Vector3, MaxExclusive: Vector3) -> (" .. Packed .. " & { Revision: string })", "Reads a bounded X-fastest uint16 palette buffer with pinned definition digests."),
+		FindConnected = Native('(self: BlockGrid, Starts: {Vector3}, Options: {Bounds: ' .. Bounds .. ', Filter: ' .. Filter .. '?, Adjacency: ("Face" | "Edge" | "Corner")?, UsePorts: boolean?, StopAt: {string}?, MaxVisited: number?}) -> ' .. Cursor, "Starts incremental native traversal of a pinned grid view."),
+		FindActive = Native("(self: BlockGrid, Channel: string, Bounds: " .. Bounds .. ") -> " .. Cursor, "Traverses nondefault members of an indexed channel."),
 		CellToWorld = Native("(self: BlockGrid, Cell: Vector3) -> Vector3", "Returns the world position of a cell center."),
 		WorldToCell = Native("(self: BlockGrid, Position: Vector3) -> Vector3", "Returns the local cell containing the world point."),
 		Raycast = Native("(self: BlockGrid, Origin: Vector3, Direction: Vector3) -> { Cell: Vector3, Block: " .. Block .. ", Position: Vector3, Normal: Vector3, Revision: string }?", "Returns the closest exact current cell hit on the world segment."),

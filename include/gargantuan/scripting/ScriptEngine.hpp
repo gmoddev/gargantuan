@@ -21,6 +21,7 @@
 #include <utility>
 
 namespace gargantuan {
+	namespace blockgrid::binding { struct HandleSet; }
 	class IPersistenceProvider;
 	class PersistenceRuntime;
 	class Script;
@@ -78,6 +79,7 @@ namespace gargantuan {
 		std::function<void(std::string, std::string)> RuntimeDiagnostic;
 		std::vector<std::weak_ptr<SignalConnection>> SignalConnections;
 		std::vector<std::weak_ptr<RemoteFunction>> RemoteFunctions;
+		std::unique_ptr<blockgrid::binding::HandleSet> BlockGridHandles;
 		RuntimeMode Mode = RuntimeMode::Offline;
 		[[nodiscard]] bool IsStopping() const { return Stopping; }
 		std::shared_ptr<Instance> FindRequiredInstanceByPath(const char *path);

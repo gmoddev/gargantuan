@@ -17,6 +17,7 @@ namespace gargantuan {
 		[[nodiscard]] const blockgrid::Field& GetField() const;
 		[[nodiscard]] const std::optional<blockgrid::CellDelta>& GetLastCellEdit() const { return LastCellEdit; }
 		[[nodiscard]] std::string GetPublicBlockRevision() const;
+		[[nodiscard]] std::uint64_t GetConfigurationRevision() const noexcept { return ConfigurationRevision; }
 		// Trusted asset materialization, before adoption or publication.
 		void RestoreField(blockgrid::Field Value);
 		// Used only after the authenticated content receiver resolves the live structural shell.

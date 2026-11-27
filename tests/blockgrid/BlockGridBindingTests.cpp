@@ -7,6 +7,7 @@
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include <luacode.h>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 
@@ -29,6 +30,10 @@ int main() try {
 	using namespace gargantuan;
 	BootstrapNativeRuntimeSchema();
 	auto World=std::make_shared<DataModel>();
+	std::ifstream Example(GARGANTUAN_BLOCKGRID_EXAMPLE,std::ios::binary);
+	Check(Example.good(),"could not load PoweredGate creator example");
+	const std::string Source{std::istreambuf_iterator<char>(Example),std::istreambuf_iterator<char>()};
+	Run(World,RuntimeMode::Offline,ScriptSecurityContext::ServerRuntime(),Source);
 	Run(World,RuntimeMode::Offline,ScriptSecurityContext::ServerRuntime(),R"(
 		local G=Instance.new("BlockGrid")
 		assert(G.CellSize==1 and G.Visible and G.CanQuery and G.CanCollide)
@@ -129,6 +134,67 @@ int main() try {
 		assert(Ray(20.5,0.5).Instance==Legacy)
 		local Mixed=Room:GetPartsInSphere(Vector3.new(20.5,0.5,0.5),0.2,Params,1)
 		assert(Mixed.Parts[1]==Legacy and #Mixed.GridCells==0 and Mixed.Truncated)
+	)");
+	Run(World,RuntimeMode::Offline,ScriptSecurityContext::ServerRuntime(),R"(
+		local Grid=Instance.new("BlockGrid")
+		Grid.Parent=game.Workspace
+		Grid:DefineChannel("damage",{Kind="UInt8",Default=0,Persistent=true})
+		Grid:DefineChannel("active",{Kind="Bool",Default=false,Indexed=true,OnCopy="Value"})
+		local A,B,C=Vector3.zero,Vector3.new(1,0,0),Vector3.new(2,0,0)
+		local Site={Min=A,MaxExclusive=Vector3.new(6,1,1)}
+		local Prior=Grid:GetRevision()
+		local Edit=Grid:BeginEdit(Prior)
+		Edit:Fill(A,Vector3.new(3,1,1),"Stone")
+		Edit:SetValue(A,"active",true)
+		Edit:SetValue(A,"damage",42)
+		assert(Grid:GetBlock(A)==nil and Edit:Commit()~=Prior)
+		assert(not pcall(function() Edit:Commit() end))
+		local Read=Grid:ReadRegion(Site.Min,Site.MaxExclusive,{Where={Channel="active",Equals=true}})
+		assert(#Read.Cells==1 and Read.Cells[1].Position==A)
+		assert(#Grid:ReadRegion(Site.Min,Site.MaxExclusive,{Definitions={}}).Cells==0)
+		local Copy=Grid:BeginEdit(Read.Revision)
+		Copy:CopyRegion(A,Vector3.new(1,1,1),B)
+		Copy:MoveRegion(B,Vector3.new(2,1,1),C)
+		Copy:Commit()
+		assert(not Grid:GetBlock(B) and Grid:GetValue(C,"damage")==0 and Grid:GetValue(C,"active"))
+		local Active=Grid:FindActive("active",Site)
+		local Search=Grid:FindConnected({A},{Bounds=Site,MaxVisited=1})
+		local Seen=Grid:GetRevision()
+		Grid:SetBlock(B,"Brick")
+		local function Drain(Cursor)
+			local Cells={}
+			while true do
+				local Page=Cursor:Step(1)
+				assert(Page.Revision==Seen and #Page.Cells<=1)
+				for _,P in Page.Cells do assert(not Cells[P]);Cells[P]=true end
+				if Page.Status~="More" then return Page.Status,Cells end
+			end
+		end
+		local Status,Members=Drain(Active)
+		assert(Status=="Complete" and Members[A] and Members[C] and not Members[B])
+		assert(Drain(Search)=="Complete" and Search:Step(1).Status=="Complete")
+		local Limited=Grid:FindConnected({A},{Bounds=Site,MaxVisited=1})
+		local Page=Limited:Step(32)
+		assert(Page.Status=="Limit")
+		local Image=Grid:ReadPacked(A,Vector3.new(3,1,1))
+		assert(buffer.len(Image.Cells)==6 and #Image.Palette==2 and Image.Bindings.Stone==Grid:GetDefinitionDigest("Stone"))
+		local Paste=Grid:BeginEdit()
+		Paste:WritePacked(Vector3.new(3,0,0),Site.MaxExclusive,Image)
+		buffer.writeu16(Image.Cells,0,0)
+		Paste:Commit()
+		assert(Grid:GetBlock(Vector3.new(3,0,0)).Definition=="Stone")
+		local Bad=Grid:BeginEdit()
+		Bad:SetBlock(B,"Brick")
+		assert(not pcall(function() Bad:SetValue(B,"damage",256) end))
+		assert(not pcall(function() Bad:Commit() end))
+		local Stale=Grid:BeginEdit()
+		Grid:RemoveBlock(B)
+		assert(not pcall(function() Stale:Commit() end))
+		local Pool={}
+		for I=1,4 do Pool[I]=Grid:BeginEdit() end
+		assert(not pcall(function() Grid:BeginEdit() end))
+		for _,T in Pool do T:Cancel();T:Cancel() end
+		Grid:BeginEdit():Cancel()
 	)");
 	Run(World,RuntimeMode::NetworkClient,ScriptSecurityContext::ClientRuntime(),R"(
 		local G=game.Workspace:FindFirstChild("Construction")
