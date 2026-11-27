@@ -21,7 +21,7 @@ namespace gargantuan {
 
 	std::optional<std::shared_ptr<SpatialRegion>> Workspace::GetCurrentSpatialRegion() const {
 		const auto Region = ViewRegion.lock();
-		if (!Region || Region->GetDestroyed() || Region->IsDestroying() || Region->GetDataModel() != GetDataModel())
+		if (!Region || !SpatialRegion::FindAttachedWorld(*Region) || SpatialRegion::FindAttachedWorld(*Region) != GetDataModel())
 			return std::nullopt;
 		return Region;
 	}
@@ -30,7 +30,7 @@ namespace gargantuan {
 		AssertCanMutate();
 		ValidatePropertyMutation("CurrentSpatialRegion", Value);
 		const auto Region = Value.value_or(nullptr);
-		if (Region && (!GetDataModel() || Region->GetDataModel() != GetDataModel() || Region->GetDestroyed() || Region->IsDestroying()))
+		if (Region && (!GetDataModel() || SpatialRegion::FindAttachedWorld(*Region) != GetDataModel()))
 			throw std::invalid_argument("[Spatial:View] The view must belong to this live DataModel");
 		if (Region == ViewRegion.lock()) return;
 		SignalConnection::Pointer Next;

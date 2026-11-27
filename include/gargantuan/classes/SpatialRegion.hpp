@@ -9,6 +9,7 @@ namespace gargantuan {
 
 		SpatialRegion();
 		~SpatialRegion() override;
+		[[nodiscard]] static std::shared_ptr<DataModel> FindAttachedWorld(const Instance &Object);
 
 	  private:
 		void RefreshWorld();

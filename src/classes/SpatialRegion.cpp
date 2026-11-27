@@ -1,5 +1,6 @@
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/ViewportFrame.hpp"
 
 namespace gargantuan {
 	SpatialRegion::SpatialRegion() {
@@ -11,9 +12,18 @@ namespace gargantuan {
 		if (auto World = RegisteredWorld.lock()) World->SpatialRegions.erase(GetObjectId());
 	}
 
+	std::shared_ptr<DataModel> SpatialRegion::FindAttachedWorld(const Instance &Object) {
+		if (Object.GetDestroyed() || Object.IsDestroying()) return {};
+		for (auto Parent = Object.ParentReference.lock(); Parent; Parent = Parent->ParentReference.lock()) {
+			if (Parent->GetDestroyed() || Parent->IsDestroying() || dynamic_cast<ViewportFrame *>(Parent.get())) return {};
+			if (auto Realm = std::dynamic_pointer_cast<DataModel>(Parent)) return Realm;
+		}
+		return {};
+	}
+
 	void SpatialRegion::RefreshWorld() {
 		const auto Previous = RegisteredWorld.lock();
-		const auto Current = GetDestroyed() || IsDestroying() ? nullptr : GetDataModel();
+		const auto Current = FindAttachedWorld(*this);
 		if (Previous == Current) return;
 		if (Previous) Previous->SpatialRegions.erase(GetObjectId());
 		if (Current)

@@ -31,8 +31,8 @@ namespace gargantuan {
 	std::shared_ptr<WorldRoot> SpatialDomainMember::ResolveAssignedWorld(const Instance &Root) const {
 		auto Target = GetAssignedRegion().value_or(nullptr);
 		if (!Target || Root.GetDestroyed() || Root.IsDestroying()) return {};
-		const auto World = Root.GetDataModel();
-		if (!World || World != Target->GetDataModel() || ViewportFrame::FindContaining(Root)) return {};
+		const auto World = SpatialRegion::FindAttachedWorld(Root);
+		if (!World || World != SpatialRegion::FindAttachedWorld(*Target)) return {};
 		return Target;
 	}
 
@@ -68,6 +68,8 @@ namespace gargantuan {
 		if (Region && (Region->GetDestroyed() || Region->IsDestroying() ||
 					   (Realm && Region->GetDataModel() && Region->GetDataModel() != Realm)))
 			throw std::invalid_argument("[Spatial:Membership] A region must be live and in the same DataModel");
+		if (Region && SpatialRegion::FindAttachedWorld(Owner) && !SpatialRegion::FindAttachedWorld(*Region))
+			throw std::invalid_argument("[Spatial:Membership] The target region must be attached to this DataModel");
 		if ((!Binding && !Region) || (Binding && Region && Binding->Region.lock() == Region)) return;
 		const auto Root = Owner.shared_from_this();
 		const auto Before = Binding ? Binding->Active.lock() : WorldRoot::GetEffectiveWorld(Owner);
@@ -96,8 +98,11 @@ namespace gargantuan {
 					const auto R = Weak.lock();
 					if (!R) return;
 					auto &Assigned = dynamic_cast<SpatialDomainMember &>(*R);
-					if (Assigned.Binding)
-						if (auto W = Assigned.Binding->Active.lock()) W->RemoveSpatialMember(Child);
+					if (Assigned.Binding) {
+						const auto W = Assigned.Binding->Active.lock();
+						if (W && (Child->GetDestroyed() || Child->IsDestroying() || WorldRoot::GetEffectiveWorld(*Child) != W))
+							W->RemoveSpatialMember(Child);
+					}
 				})
 			);
 		}

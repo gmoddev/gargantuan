@@ -98,6 +98,11 @@ namespace {
 		Check(
 			Ray(*A, 40).Instance == Nested && !Ray(*Space, 40).HasHit(), "new submember inherits explicit affiliation"
 		);
+		const auto Independent = MakePart(Wide, {1, 1, 1}, {44, 2, 0});
+		Independent->SetSpatialRegion(A);
+		Independent->SetParent(Common);
+		Check(Ray(*A, 44).Instance == Independent && !Ray(*Space, 44).HasHit(), "removing an explicit child from a bound ancestor keeps its owner");
+		Independent->SetSpatialRegion(std::nullopt);
 		Wide->SetSpatialRegion(B);
 		Check(
 			!Ray(*A).HasHit() && Ray(*B, 6.3f).Instance == Wide && Wide->GetObjectId() == WideId &&
@@ -112,7 +117,10 @@ namespace {
 		A->SetParent(nullptr);
 		Check(!Space->GetCurrentSpatialRegion() && Game->GetSpatialRegions().size() == 1, "detached view reset");
 		B->SetParent(nullptr);
-		Check(!Ray(*Space, 6.3f).HasHit(), "detached explicitly named target does not leak into Workspace");
+		Denied = false;
+		try { Tall->SetSpatialRegion(B); } catch (const std::invalid_argument &) { Denied = true; }
+		Check(Denied && !Ray(*Space, 6.3f).HasHit() && !Ray(*B, 6.3f).HasHit(),
+			"a detached target cannot accept assignments or retain explicitly routed bodies");
 		B->SetParent(Space);
 		Check(
 			Ray(*B, 6.3f).Instance == Wide && !Ray(*Space, 6.3f).HasHit(),
