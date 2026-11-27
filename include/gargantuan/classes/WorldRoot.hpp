@@ -88,6 +88,9 @@ namespace gargantuan {
 		[[nodiscard]] bool ValidateSpatialDestination(const SpatialDestinationReceipt &Receipt);
 		[[nodiscard]] bool CanHoldSpatialCollision(ObjectId Subject) const;
 		[[nodiscard]] bool CanHoldSpatialSubject(ObjectId Subject);
+		[[nodiscard]] static std::optional<SpatialMovementProfile> DescribeSpatialMovement(const std::shared_ptr<BasePart> &Subject);
+		[[nodiscard]] PhysicsOperationResult CheckSpatialLanding(const std::shared_ptr<BasePart> &Member,
+			const SpatialMovementRequest &Movement,const SpatialDestinationReceipt &Receipt);
 		[[nodiscard]] std::uint64_t GetSpatialActivation() const noexcept { return SpatialActivation; }
 		[[nodiscard]] std::expected<std::shared_ptr<SpatialCollisionLease>,SpatialRequestFailure> RequestSpatialCollision(
 			SpatialResidencyAudience Audience,const SpatialDestinationBounds &Bounds,std::span<const ObjectId> RequiredOwners,

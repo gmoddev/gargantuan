@@ -17,6 +17,15 @@ namespace gargantuan {
 		bool operator==(const SpatialDestinationBounds &) const = default;
 	};
 
+	struct SpatialMovementProfile {
+		ObjectId Controller;
+		glm::vec3 Size{}, ControllerVelocity{};
+		PhysicsShapeKind Shape{};
+		std::uint16_t CollisionGroup{}, CollisionMask{};
+		float CapsuleRadius{}, CapsuleHeight{};
+		bool Collidable{}, Anchored{}, Kinematic{};
+	};
+
 	struct SpatialMovementRequest {
 		ObjectId Member, SourceDomain;
 		std::uint64_t SourceActivation{};

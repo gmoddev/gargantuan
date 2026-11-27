@@ -14,7 +14,7 @@
 namespace gargantuan::network {
 	namespace {
 		constexpr std::uint32_t Magic = 0x32545347;
-		constexpr std::uint8_t Version = 1;
+		constexpr std::uint8_t Version = 2;
 		constexpr auto Lifetime = std::chrono::seconds(3);
 
 		void Put(GameBinaryWriter &Out, WireObjectId Id) {
@@ -66,13 +66,15 @@ namespace gargantuan::network {
 		}
 		bool Valid(const SpatialTransferScope &Scope) {
 			return Scope.SessionEpoch && Scope.WorldEpoch && Scope.FocusEpoch && Scope.PlayerId &&
-				   Scope.Subject.IsValid() && Scope.Source.IsValid() && Scope.Destination.IsValid();
+				   Scope.Subject.IsValid() && Scope.Source.IsValid() && Scope.Destination.IsValid() &&
+				   (Scope.Controller == WireObjectId{} || Scope.Controller.IsValid());
 		}
 		bool Valid(const SpatialTransferFrame &Frame) {
 			if (Frame.Phase < SpatialTransferPhase::Offer || Frame.Phase > SpatialTransferPhase::Cancel ||
-				!Valid(Frame.Scope) || !Frame.Serial || !Frame.Collision.IsValid() || !ValidPose(Frame.SourcePose) ||
-				!ValidPose(Frame.DestinationPose) || Frame.Owners.empty() ||
-				Frame.Owners.size() > MaximumSpatialTransferProviders || !std::ranges::is_sorted(Frame.Owners) ||
+				!Valid(Frame.Scope) || !Frame.Serial || !Frame.Collision.IsValid() ||
+				!Frame.SubjectGeometry.IsValid() || !ValidPose(Frame.SourcePose) || !ValidPose(Frame.DestinationPose) ||
+				Frame.Owners.empty() || Frame.Owners.size() > MaximumSpatialTransferProviders ||
+				!std::ranges::is_sorted(Frame.Owners) ||
 				std::adjacent_find(Frame.Owners.begin(), Frame.Owners.end()) != Frame.Owners.end())
 				return false;
 			for (int I = 0; I < 3; ++I)
@@ -86,9 +88,9 @@ namespace gargantuan::network {
 		}
 		bool Same(const SpatialTransferFrame &A, const SpatialTransferFrame &B) {
 			return A.Scope == B.Scope && A.Serial == B.Serial && A.Bounds == B.Bounds && A.Collision == B.Collision &&
-				   A.SourcePose == B.SourcePose && A.DestinationPose == B.DestinationPose &&
-				   A.LinearVelocity == B.LinearVelocity && A.AngularVelocity == B.AngularVelocity &&
-				   A.Owners == B.Owners;
+				   A.SubjectGeometry == B.SubjectGeometry && A.SourcePose == B.SourcePose &&
+				   A.DestinationPose == B.DestinationPose && A.LinearVelocity == B.LinearVelocity &&
+				   A.AngularVelocity == B.AngularVelocity && A.Owners == B.Owners;
 		}
 
 		struct Evidence {
@@ -160,6 +162,28 @@ namespace gargantuan::network {
 			return Result;
 		}
 
+		AssetContentId SubjectGeometry(const SpatialMovementProfile &Profile) {
+			GameBinaryWriter Out(128);
+			Put(Out, Profile.Size);
+			Out.Integer(std::uint8_t(Profile.Shape));
+			Out.Integer(Profile.CollisionGroup);
+			Out.Integer(Profile.CollisionMask);
+			Out.Integer(std::uint8_t(Profile.Collidable));
+			Out.Integer(std::uint8_t(Profile.Anchored));
+			Out.Integer(std::uint8_t(Profile.Kinematic));
+			Out.Integer(std::uint8_t(Profile.Controller.IsValid()));
+			Out.Float(Profile.CapsuleRadius);
+			Out.Float(Profile.CapsuleHeight);
+			Put(Out, Profile.ControllerVelocity);
+			return AssetContentId::Hash({reinterpret_cast<const std::uint8_t *>(Out.Bytes.data()), Out.Bytes.size()});
+		}
+		CFrame LocalPose(const WireCFrame &Pose) {
+			glm::mat3 Rotation;
+			for (unsigned I = 0; I < 3; ++I)
+				for (unsigned J = 0; J < 3; ++J)
+					Rotation[I][J] = Pose.Components[3 + I * 3 + J];
+			return CFrame(glm::vec3{Pose.Components[0], Pose.Components[1], Pose.Components[2]}, Rotation);
+		}
 		struct HeldState {
 			SpatialTransferFrame Frame;
 			std::shared_ptr<WorldRoot> Destination;
@@ -168,13 +192,34 @@ namespace gargantuan::network {
 			bool Committing{};
 		};
 		bool LocalSource(
-			const SpatialTransferFrame &Frame, const WorldRoot &Destination, const SpatialTransferAdapters &Adapters
+			const SpatialTransferFrame &Frame,
+			WorldRoot &Destination,
+			const SpatialTransferAdapters &Adapters,
+			const SpatialDestinationReceipt *Landing = nullptr
 		) {
 			if (!Adapters.ResolveObject || Adapters.ResolveObject(Frame.Scope.Destination) != Destination.GetObjectId())
 				return false;
 			const auto Id = Adapters.ResolveObject(Frame.Scope.Subject);
 			const auto Native = Id ? std::dynamic_pointer_cast<BasePart>(ObjectRegistry::Get().Lookup(*Id)) : nullptr;
 			const auto Source = Native ? WorldRoot::GetEffectiveWorld(*Native) : nullptr;
+			const auto Profile = WorldRoot::DescribeSpatialMovement(Native);
+			if (!Profile || SubjectGeometry(*Profile) != Frame.SubjectGeometry ||
+				Profile->Controller.IsValid() != Frame.Scope.Controller.IsValid() ||
+				(Profile->Controller.IsValid() &&
+				 Adapters.ResolveObject(Frame.Scope.Controller) != Profile->Controller))
+				return false;
+			if (Landing && (!Source || !Destination
+											.CheckSpatialLanding(
+												Native,
+												{Native->GetObjectId(),
+												 Source->GetObjectId(),
+												 Source->GetSpatialActivation(),
+												 LocalPose(Frame.SourcePose),
+												 LocalPose(Frame.DestinationPose)},
+												*Landing
+											)
+											.Succeeded()))
+				return false;
 			return Source && Source->GetDataModel() == Destination.GetDataModel() &&
 				   Adapters.ResolveObject(Frame.Scope.Source) == Source->GetObjectId() &&
 				   WirePose(Native->GetCFrame()) == Frame.SourcePose &&
@@ -182,8 +227,7 @@ namespace gargantuan::network {
 				   Native->GetAngularVelocity() == Frame.AngularVelocity;
 		}
 		bool EvidenceIsCurrent(const HeldState &State, const SpatialTransferAdapters &Adapters) {
-			if (!State.Destination || !LocalSource(State.Frame, *State.Destination, Adapters) ||
-				!State.Destination->ValidateSpatialDestination(State.Receipt))
+			if (!State.Destination || !LocalSource(State.Frame, *State.Destination, Adapters, &State.Receipt))
 				return false;
 			const auto Proof = Project(State.Receipt, Adapters);
 			return Proof && Proof->Digest == State.Frame.Collision && Proof->Owners == State.Frame.Owners &&
@@ -218,6 +262,7 @@ namespace gargantuan::network {
 		Put(Out, Scope.Subject);
 		Put(Out, Scope.Source);
 		Put(Out, Scope.Destination);
+		Put(Out, Scope.Controller);
 		Out.Integer(Frame.Serial);
 		Put(Out, Frame.Bounds.Minimum);
 		Put(Out, Frame.Bounds.Maximum);
@@ -228,6 +273,7 @@ namespace gargantuan::network {
 		Put(Out, Frame.LinearVelocity);
 		Put(Out, Frame.AngularVelocity);
 		Put(Out, Frame.Collision);
+		Put(Out, Frame.SubjectGeometry);
 		Out.Integer(std::uint8_t(Frame.Owners.size()));
 		for (const auto &Key : Frame.Owners)
 			Put(Out, Key);
@@ -243,7 +289,8 @@ namespace gargantuan::network {
 		if (!In.Integer(Tag) || Tag != Magic || !In.Integer(V) || V != Version || !In.Integer(Phase) ||
 			!In.Integer(Scope.SessionEpoch) || !In.Integer(Scope.WorldEpoch) || !In.Integer(Scope.FocusEpoch) ||
 			!In.Integer(Scope.PlayerId) || !Get(In, Scope.Subject) || !Get(In, Scope.Source) ||
-			!Get(In, Scope.Destination) || !In.Integer(Frame.Serial) || !Get(In, Frame.Bounds.Minimum) ||
+			!Get(In, Scope.Destination) || !In.Integer(Scope.Controller.Slot) ||
+			!In.Integer(Scope.Controller.Generation) || !In.Integer(Frame.Serial) || !Get(In, Frame.Bounds.Minimum) ||
 			!Get(In, Frame.Bounds.Maximum))
 			return {};
 		Frame.Phase = static_cast<SpatialTransferPhase>(Phase);
@@ -252,8 +299,8 @@ namespace gargantuan::network {
 		for (auto &F : Frame.DestinationPose.Components)
 			if (!In.Float(F)) return {};
 		if (!Get(In, Frame.LinearVelocity) || !Get(In, Frame.AngularVelocity) || !Get(In, Frame.Collision) ||
-			!In.Integer(Count) || !Count || Count > MaximumSpatialTransferProviders ||
-			In.Remaining() != std::size_t(Count) * 9)
+			!Get(In, Frame.SubjectGeometry) || !In.Integer(Count) || !Count ||
+			Count > MaximumSpatialTransferProviders || In.Remaining() != std::size_t(Count) * 9)
 			return {};
 		Frame.Owners.resize(Count);
 		for (auto &Owner : Frame.Owners) {
@@ -463,6 +510,8 @@ namespace gargantuan::network {
 		Next->Movement = Movement;
 		Next->Receipt = std::move(*Native);
 		Next->Deadline = Now + Lifetime;
+		const auto Profile = WorldRoot::DescribeSpatialMovement(Subject);
+		if (!Profile) return {SpatialTransferStatus::Denied, {}};
 		Next->Frame = {
 			SpatialTransferPhase::Offer,
 			Scope,
@@ -473,7 +522,8 @@ namespace gargantuan::network {
 			Subject->GetLinearVelocity(),
 			Subject->GetAngularVelocity(),
 			std::move(Proof->Owners),
-			Proof->Digest
+			Proof->Digest,
+			SubjectGeometry(*Profile)
 		};
 		if (!Valid(Next->Frame) || !LocalSource(Next->Frame, *Destination, Adapters))
 			return {SpatialTransferStatus::Denied, {}};
@@ -622,7 +672,7 @@ namespace gargantuan::network {
 				Owners.push_back(*Local);
 			}
 			auto Native = Destination->PrepareSpatialDestination(Frame.Bounds, Owners);
-			if (!Native) return Reject();
+			if (!Native || !LocalSource(Frame, *Destination, Adapters, &*Native)) return Reject();
 			const auto Projected = Project(*Native, Adapters);
 			if (!Projected || Projected->Owners != Frame.Owners || Projected->Digest != Frame.Collision)
 				return Reject();
