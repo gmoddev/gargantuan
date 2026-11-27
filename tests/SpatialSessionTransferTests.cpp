@@ -192,9 +192,18 @@ namespace {
 		for (const auto &Identity : Server.GetPeerIdentities())
 			if (Identity.Ready) Connection = Identity.Connection;
 		Require(Connection.has_value(), "accepted controlling connection missing");
+		const std::array SourceFocus{SourcePose.Position};
+		Require(Server.SetTrustedReplicationFocus(*Connection, SourceFocus), "owner source interest unavailable");
 		SpectatorStarted = true;
 		Require(Spectator.Start().Succeeded(), "spectator startup failed");
 		Attach(Spectator, SpectatorView, SpectatorRuntime);
+		Wait([&] { return Server.GetMetrics().ReadyPeers == 2; }, "spectator handshake not ready");
+		std::optional<ConnectionId> GalleryConnection;
+		for (const auto &Identity : Server.GetPeerIdentities())
+			if (Identity.Ready && Identity.Connection != *Connection) GalleryConnection = Identity.Connection;
+		const std::array GalleryFocus{glm::vec3(-5, 30, 0)};
+		Require(GalleryConnection && Server.SetTrustedReplicationFocus(*GalleryConnection, GalleryFocus),
+			"spectator gallery interest unavailable");
 		Wait(
 			[&] { return Server.GetMetrics().ReadyPeers == 2 && Find(*SpectatorRuntime, "GalleryWall"); },
 			"spectator not independently ready"
