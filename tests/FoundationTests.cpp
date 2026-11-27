@@ -2232,6 +2232,45 @@ namespace {
 		}
 	}
 
+	void TestViewportPickClipPlanes() {
+		using namespace gargantuan;
+		auto CheckBox = [](float PixelX, float CenterX, float Depth, float DepthSize,
+			std::optional<float> Expected, const char *Message) {
+			RenderSnapshot Snapshot;
+			Snapshot.Id = 1;
+			Snapshot.ViewportWidth = Snapshot.ViewportHeight = 100;
+			Snapshot.Camera.VerticalFieldOfView = 90.0f;
+			Snapshot.Camera.NearPlane = 1.0f;
+			Snapshot.Camera.FarPlane = 10.0f;
+			RenderItem Item;
+			Item.Object = {1, 1};
+			Item.ModelMatrix[2][2] = DepthSize;
+			Item.ModelMatrix[3] = {CenterX, 0.0f, -Depth, 1.0f};
+			Item.InverseModelMatrix = glm::inverse(Item.ModelMatrix);
+			Snapshot.Items.push_back(Item);
+			RenderPublication Publication;
+			Publication.Id = 1;
+			Publication.FullResync = true;
+			Publication.Frame.ViewportWidth = Publication.Frame.ViewportHeight = 100;
+			Publication.Frame.Camera = Snapshot.Camera;
+			Publication.Creates.push_back({Item});
+			RenderProjection Projection;
+			(void)Projection.Apply(Publication);
+			for (const auto &Pick : {PickEditorViewport(Snapshot, PixelX, 49.5f), PickEditorViewport(Projection, PixelX, 49.5f)}) {
+				Check(Expected ? Pick && Pick->Object == Item.Object && std::abs(Pick->Distance - *Expected) < 0.001f :
+					!Pick, Message);
+			}
+		};
+		CheckBox(49.5f, 0, 0.6f, 0.2f, std::nullopt, "geometry clipped before the near plane cannot be picked");
+		CheckBox(49.5f, 0, 1.0f, 0.4f, 1.0f, "bounds straddling the near plane start at the visible ray interval");
+		CheckBox(49.5f, 0, 11.0f, 0.4f, std::nullopt, "geometry beyond the far plane cannot be picked");
+		CheckBox(49.5f, 0, 10.1f, 0.6f, 9.8f, "geometry straddling the far plane remains pickable");
+		CheckBox(89.5f, 7.2f, 9.0f, 0.5f, 8.75f * std::sqrt(1.64f),
+			"off-center picks reach the far plane along the oblique ray");
+		CheckBox(89.5f, 0.68f, 0.85f, 0.16f, std::nullopt,
+			"off-center geometry before the near plane stays clipped even beyond its radial distance");
+	}
+
 	void TestRenderSnapshotExtraction() {
 		using namespace gargantuan;
 		auto game = std::make_shared<DataModel>();
@@ -9242,6 +9281,7 @@ int main() {
 	TestClassExtensionSchema();
 	TestCustomClassSchema();
 	TestRenderSnapshotExtraction();
+	TestViewportPickClipPlanes();
 	TestRenderBackendBoundary();
 	TestScriptSecurityModel();
 	TestMutationGateway();

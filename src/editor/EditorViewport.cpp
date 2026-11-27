@@ -36,12 +36,34 @@ namespace gargantuan {
 			SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_METALLIB | SDL_GPU_SHADERFORMAT_MSL
 		);
 
-		std::optional<float> IntersectItem(const RenderItem &Item, const glm::vec3 &Origin, const glm::vec3 &Direction) {
-			const auto LocalOrigin = glm::vec3(Item.InverseModelMatrix * glm::vec4(Origin, 1.0f));
-			const auto LocalDirection = glm::vec3(Item.InverseModelMatrix * glm::vec4(Direction, 0.0f));
+		struct PickRay {
+			glm::vec3 Origin, Direction;
+			float Minimum, Maximum;
+		};
+
+		std::optional<PickRay> MakePickRay(const RenderCameraSnapshot &Camera, std::uint32_t Width,
+			std::uint32_t Height, float X, float Y) {
+			if (!Width || !Height || !std::isfinite(X) || !std::isfinite(Y) || X < 0.0f || Y < 0.0f ||
+				X >= Width || Y >= Height || !std::isfinite(Camera.NearPlane) || !std::isfinite(Camera.FarPlane) ||
+				Camera.NearPlane <= 0.0f || Camera.FarPlane <= Camera.NearPlane) return std::nullopt;
+			const float Tangent = std::tan(glm::radians(Camera.VerticalFieldOfView) * 0.5f);
+			const float NormalizedX = ((X + 0.5f) / static_cast<float>(Width)) * 2.0f - 1.0f;
+			const float NormalizedY = 1.0f - ((Y + 0.5f) / static_cast<float>(Height)) * 2.0f;
+			const auto Direction = glm::normalize(Camera.LookDirection +
+				Camera.RightDirection * (NormalizedX * Tangent * Width / Height) +
+				Camera.UpDirection * (NormalizedY * Tangent));
+			// Camera clipping is planar. At off-center pixels, eye depth is shorter than ray distance.
+			const float Forward = glm::dot(Direction, Camera.LookDirection);
+			if (!std::isfinite(Forward) || Forward <= 0.0f) return std::nullopt;
+			return PickRay{Camera.Position, Direction, Camera.NearPlane / Forward, Camera.FarPlane / Forward};
+		}
+
+		std::optional<float> IntersectItem(const RenderItem &Item, const PickRay &Ray) {
+			const auto LocalOrigin = glm::vec3(Item.InverseModelMatrix * glm::vec4(Ray.Origin, 1.0f));
+			const auto LocalDirection = glm::vec3(Item.InverseModelMatrix * glm::vec4(Ray.Direction, 0.0f));
 			constexpr glm::vec3 HalfSize(0.5f);
-			float Minimum = 0.0f;
-			float Maximum = std::numeric_limits<float>::infinity();
+			float Minimum = Ray.Minimum;
+			float Maximum = Ray.Maximum;
 			for (int Axis = 0; Axis < 3; ++Axis) {
 				if (std::abs(LocalDirection[Axis]) < 1e-6f) {
 					if (LocalOrigin[Axis] < -HalfSize[Axis] || LocalOrigin[Axis] > HalfSize[Axis]) return std::nullopt;
@@ -59,22 +81,13 @@ namespace gargantuan {
 	}
 
 	std::optional<EditorViewportPick> PickEditorViewport(const RenderSnapshot &Snapshot, float X, float Y) {
-		if (Snapshot.Id == InvalidRenderSnapshotId || Snapshot.ViewportWidth == 0 || Snapshot.ViewportHeight == 0 ||
-			!std::isfinite(X) || !std::isfinite(Y) || X < 0.0f || Y < 0.0f ||
-			X >= Snapshot.ViewportWidth || Y >= Snapshot.ViewportHeight) return std::nullopt;
-		const auto &Camera = Snapshot.Camera;
-		const float Tangent = std::tan(glm::radians(Camera.VerticalFieldOfView) * 0.5f);
-		const float NormalizedX = ((X + 0.5f) / static_cast<float>(Snapshot.ViewportWidth)) * 2.0f - 1.0f;
-		const float NormalizedY = 1.0f - ((Y + 0.5f) / static_cast<float>(Snapshot.ViewportHeight)) * 2.0f;
-		const float Aspect = static_cast<float>(Snapshot.ViewportWidth) / static_cast<float>(Snapshot.ViewportHeight);
-		const auto Direction = glm::normalize(
-			Camera.LookDirection + Camera.RightDirection * (NormalizedX * Tangent * Aspect) +
-			Camera.UpDirection * (NormalizedY * Tangent)
-		);
+		if (Snapshot.Id == InvalidRenderSnapshotId) return std::nullopt;
+		const auto Ray = MakePickRay(Snapshot.Camera, Snapshot.ViewportWidth, Snapshot.ViewportHeight, X, Y);
+		if (!Ray) return std::nullopt;
 
 		std::optional<EditorViewportPick> Closest;
 		for (const auto &Item : Snapshot.Items) {
-			auto Distance = IntersectItem(Item, Camera.Position, Direction);
+			auto Distance = IntersectItem(Item, *Ray);
 			if (!Distance || (Closest && *Distance >= Closest->Distance)) continue;
 			Closest = EditorViewportPick{Item.Object, *Distance};
 		}
@@ -83,24 +96,15 @@ namespace gargantuan {
 
 	std::optional<EditorViewportPick> PickEditorViewport(const RenderProjection &Projection, float X, float Y) {
 		const auto &Frame = Projection.GetFrame();
-		if (Projection.GetLastPublicationId() == InvalidRenderPublicationId || Frame.ViewportWidth == 0 ||
-			Frame.ViewportHeight == 0 || !std::isfinite(X) || !std::isfinite(Y) || X < 0.0f || Y < 0.0f ||
-			X >= Frame.ViewportWidth || Y >= Frame.ViewportHeight) return std::nullopt;
-		const auto &Camera = Frame.Camera;
-		const float Tangent = std::tan(glm::radians(Camera.VerticalFieldOfView) * 0.5f);
-		const float NormalizedX = ((X + 0.5f) / static_cast<float>(Frame.ViewportWidth)) * 2.0f - 1.0f;
-		const float NormalizedY = 1.0f - ((Y + 0.5f) / static_cast<float>(Frame.ViewportHeight)) * 2.0f;
-		const float Aspect = static_cast<float>(Frame.ViewportWidth) / static_cast<float>(Frame.ViewportHeight);
-		const auto Direction = glm::normalize(
-			Camera.LookDirection + Camera.RightDirection * (NormalizedX * Tangent * Aspect) +
-			Camera.UpDirection * (NormalizedY * Tangent)
-		);
+		if (Projection.GetLastPublicationId() == InvalidRenderPublicationId) return std::nullopt;
+		const auto Ray = MakePickRay(Frame.Camera, Frame.ViewportWidth, Frame.ViewportHeight, X, Y);
+		if (!Ray) return std::nullopt;
 
 		std::optional<EditorViewportPick> Closest;
 		for (const auto &[Object, Projected] : Projection.GetObjects()) {
 			(void)Object;
 			if (!Projected.Visible) continue;
-			auto Distance = IntersectItem(Projected.Item, Camera.Position, Direction);
+			auto Distance = IntersectItem(Projected.Item, *Ray);
 			if (!Distance || (Closest && *Distance >= Closest->Distance)) continue;
 			Closest = EditorViewportPick{Projected.Item.Object, *Distance};
 		}
