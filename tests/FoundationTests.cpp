@@ -7179,6 +7179,19 @@ namespace {
 				"latest-frame presentation replaces frames monotonically without a capture request"
 			);
 			bool InjectViewportFailure = true;
+			const auto &Visible = FirstPresentationState["Result"];
+			Json PresentedPick{{"X", 159.5}, {"Y", 99.5}, {"Mailbox", LatestTransport["Result"]["Name"]},
+				{"FrameNumber", Visible["LatestSequence"]}, {"Generation", Visible["Generation"]},
+				{"CameraRevision", Visible["CameraRevision"]}};
+			Check(call("PickPresentedViewportV1", PresentedPick, "test-token")["Ok"] == true,
+				"presented pick accepts a recent frame when world and camera are unchanged");
+			for (const auto &Field : {"Mailbox", "FrameNumber", "Generation", "CameraRevision"}) {
+				auto Stale = PresentedPick;
+				if (std::string_view(Field) == "Mailbox") Stale[Field] = "retired-engine-mailbox";
+				else Stale[Field] = std::numeric_limits<std::uint64_t>::max();
+				Check(call("PickPresentedViewportV1", Stale, "test-token")["Error"]["Code"] == "StaleFrame",
+					"presented pick rejects a foreign transport or superseded frame identity");
+			}
 			host.SetViewportPresentationCheckpointForTesting([&](std::string_view Stage) {
 				if (InjectViewportFailure && Stage == "BeforePublish") {
 					InjectViewportFailure = false;

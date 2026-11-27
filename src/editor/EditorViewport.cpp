@@ -35,7 +35,6 @@ namespace gargantuan {
 		constexpr SDL_GPUShaderFormat ShaderFormats = static_cast<SDL_GPUShaderFormat>(
 			SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_METALLIB | SDL_GPU_SHADERFORMAT_MSL
 		);
-		constexpr SDL_GPUTextureFormat ColorFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 
 		std::optional<float> IntersectItem(const RenderItem &Item, const glm::vec3 &Origin, const glm::vec3 &Direction) {
 			const auto LocalOrigin = glm::vec3(Item.InverseModelMatrix * glm::vec4(Origin, 1.0f));
@@ -109,6 +108,7 @@ namespace gargantuan {
 	}
 
 	struct EditorViewportRenderer::Backend final {
+		SDL_GPUTextureFormat ColorFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 		bool OwnsVideoSubsystem = false;
 		std::uint32_t Width = 0;
 		std::uint32_t Height = 0;
@@ -241,11 +241,16 @@ namespace gargantuan {
 			throw std::runtime_error(std::format("Failed to create viewport GPU device: {}", SDL_GetError()));
 		}
 		State->HdrSceneEnabled = EnableHdrScene && SupportsSDLHdrScene(State->Gpu);
+		// Match the mailbox byte order at the final render target when the driver supports it.
+		const auto *ForceRgba = SDL_getenv("GARGANTUAN_VIEWPORT_FORCE_RGBA");
+		if (!(ForceRgba && std::strcmp(ForceRgba, "1") == 0) && SDL_GPUTextureSupportsFormat(State->Gpu,
+			SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET))
+			State->ColorFormat = SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM;
 		State->EnableInstancing = EnableInstancing;
 		State->EnableSceneEnvelope = EnableSceneEnvelope;
 		State->UseContiguousInstancing = UseContiguousInstancing;
 		if (EnableInstancing) {
-			const auto SceneFormat = State->HdrSceneEnabled ? SDLHdrSceneFormat : ColorFormat;
+			const auto SceneFormat = State->HdrSceneEnabled ? SDLHdrSceneFormat : State->ColorFormat;
 			const float OutputMode = SceneFormat == SDLHdrSceneFormat ? 2.0f :
 				SDLTargetEncodesSrgb(SceneFormat) ? 0.0f : 1.0f;
 			State->InstanceResources = std::make_unique<SDLInstanceGpuCache>(State->Gpu, OutputMode);
@@ -278,7 +283,7 @@ namespace gargantuan {
 			for (const auto &Definition : GetSDLRenderPassConstructors()) {
 				if (Definition.Target == SDLPassTarget::Resolve && !State->HdrSceneEnabled) continue;
 				const auto Format = State->HdrSceneEnabled && Definition.Target == SDLPassTarget::Scene
-					? SDLHdrSceneFormat : ColorFormat;
+					? SDLHdrSceneFormat : State->ColorFormat;
 				State->RenderPasses.push_back(Definition.Construct(State->Gpu, Format, nullptr));
 			}
 		} catch (...) {
@@ -290,6 +295,11 @@ namespace gargantuan {
 	EditorViewportRenderer::~EditorViewportRenderer() { if (State) State->Destroy(); }
 
 	bool EditorViewportRenderer::UsesHdrScene() const { return State && State->HdrSceneEnabled; }
+	bool EditorViewportRenderer::UsesNativeBgra() const { return State->ColorFormat == SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM; }
+	const char *EditorViewportRenderer::GetGpuBackend() const { return SDL_GetGPUDeviceDriver(State->Gpu); }
+	const char *EditorViewportRenderer::GetGpuAdapter() const {
+		return SDL_GetStringProperty(SDL_GetGPUDeviceProperties(State->Gpu), SDL_PROP_GPU_DEVICE_NAME_STRING, "Unknown");
+	}
 
 	void EditorViewportRenderer::Resize(std::uint32_t Width, std::uint32_t Height) {
 		if (!State || (Width == State->Width && Height == State->Height)) return;
@@ -440,7 +450,9 @@ namespace gargantuan {
 			SDL_ReleaseGPUFence(State->Gpu, Fence);
 			throw std::runtime_error(std::format("Failed to map viewport frame: {}", SDL_GetError()));
 		}
-		for (std::size_t Index = 0; Index < State->BgraPixels.size(); Index += 4) {
+		if (UsesNativeBgra()) {
+			std::memcpy(State->BgraPixels.data(), Rgba, State->BgraPixels.size());
+		} else for (std::size_t Index = 0; Index < State->BgraPixels.size(); Index += 4) {
 			State->BgraPixels[Index] = Rgba[Index + 2];
 			State->BgraPixels[Index + 1] = Rgba[Index + 1];
 			State->BgraPixels[Index + 2] = Rgba[Index];

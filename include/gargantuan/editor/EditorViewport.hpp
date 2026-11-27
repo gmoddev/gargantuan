@@ -66,6 +66,9 @@ namespace gargantuan {
 		[[nodiscard]] EditorViewportCaptureView CaptureBgra(RenderPublicationPtr Publication);
 		[[nodiscard]] EditorViewportFrame Capture(RenderPublicationPtr Publication);
 		[[nodiscard]] bool UsesHdrScene() const;
+		[[nodiscard]] bool UsesNativeBgra() const;
+		[[nodiscard]] const char *GetGpuBackend() const;
+		[[nodiscard]] const char *GetGpuAdapter() const;
 		[[nodiscard]] std::optional<EditorViewportPick> Pick(float X, float Y) const;
 
 	  private:
