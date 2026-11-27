@@ -10,6 +10,8 @@
 #include "gargantuan/physics/PhysicsBackend.hpp"
 #include "gargantuan/physics/SoftBodyBackend.hpp"
 #include "gargantuan/runtime/RuntimeMode.hpp"
+#include "gargantuan/runtime/SpatialDestination.hpp"
+#include <span>
 
 #include <cstdint>
 #include <expected>
@@ -80,6 +82,9 @@ namespace gargantuan {
 		WorldRoot();
 		~WorldRoot() override;
 		[[nodiscard]] static std::shared_ptr<WorldRoot> GetEffectiveWorld(const Instance &Member);
+		[[nodiscard]] std::expected<SpatialDestinationReceipt, PhysicsOperationStatus> PrepareSpatialDestination(
+			const SpatialDestinationBounds &Bounds, std::span<const ObjectId> RequiredOwners = {});
+		[[nodiscard]] bool ValidateSpatialDestination(const SpatialDestinationReceipt &Receipt);
 		[[nodiscard]] const std::map<ObjectId, std::weak_ptr<Instance>> &GetExplicitSpatialRoots() const { return ExplicitSpatialRoots; }
 
 		PhysicsWorld Physics;
@@ -259,6 +264,7 @@ namespace gargantuan {
 		void PollTerrainWork();
 		void RetireDomainTerrainRuntime();
 		[[nodiscard]] bool IsSpatiallyAvailable() const;
+		std::uint64_t SpatialActivation{1};
 		std::uint64_t TerrainTicketBase{};
 		std::uint64_t LastTerrainTicket{};
 		[[nodiscard]] std::expected<std::uint64_t, terrain::EditStatus>

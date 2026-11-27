@@ -33,6 +33,7 @@ namespace gargantuan {
 		if (Previous == Current) return;
 		if (Previous) {
 			Previous->SpatialRegions.erase(GetObjectId());
+			if (SpatialActivation) ++SpatialActivation;
 			RetireDomainTerrainRuntime();
 		}
 		if (Current) {

@@ -4,6 +4,7 @@
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/classes/Camera.hpp"
+#include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/render/SpatialViewportCapture.hpp"
 #include "../src/terrain/ScenePersistence.hpp"
@@ -133,6 +134,45 @@ namespace {
 		Game->Destroy(); Reopened->Destroy();
 	}
 
+	void DestinationReadiness() {
+		const auto Game = std::make_shared<DataModel>();
+		const auto Default = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		const auto A = std::make_shared<SpatialRegion>(), B = std::make_shared<SpatialRegion>();
+		A->SetParent(Default); B->SetParent(Default);
+		const SpatialDestinationBounds Bounds{{-3,-3,-3}, {3,3,3}};
+		const auto Empty = A->PrepareSpatialDestination(Bounds).value();
+		Check(Empty.Providers.size() == 1 && Empty.Providers.front().AuthoritativeEmpty &&
+			A->ValidateSpatialDestination(Empty) && !B->ValidateSpatialDestination(Empty),
+			"a held empty destination belongs only to its attached world");
+		const auto Near = MakePart(A, {1,1,1}, {0,0,0});
+		const auto Far = MakePart(A, {1,1,1}, {80,50,60});
+		const auto Foreign = MakePart(B, {1,1,1}, {0,0,0});
+		const std::array Missing{Foreign->GetObjectId()};
+		Check(!A->ValidateSpatialDestination(Empty) && !A->PrepareSpatialDestination(Bounds, Missing),
+			"a newly participating body or a missing required provider prevents handoff");
+		const auto Held = A->PrepareSpatialDestination(Bounds).value();
+		Far->SetCFrame(CFrame(100,50,60));
+		Check(A->ValidateSpatialDestination(Held), "an unrelated ordinary body outside the footprint invalidated the transfer");
+		Near->SetCFrame(CFrame(0,1,0));
+		Check(!A->ValidateSpatialDestination(Held), "pose change inside the footprint must invalidate the transfer");
+		const auto Grid = std::make_shared<BlockGrid>();
+		blockgrid::Field Cells;
+		const std::array<blockgrid::Write,1> Writes{{{blockgrid::SingleCell({0,0,0}), {blockgrid::Stone,0}}}};
+		Check(Cells.Apply(Writes), "grid fixture did not change");
+		Grid->RestoreField(std::move(Cells)); Grid->SetParent(A);
+		const std::array Required{Grid->GetObjectId(), A->GetTerrain()->GetObjectId()};
+		const auto WithGrid = A->PrepareSpatialDestination(Bounds, Required).value();
+		const auto Provider = std::ranges::find(WithGrid.Providers, Grid->GetObjectId(), &SpatialProviderReceipt::Owner);
+		Check(Provider != WithGrid.Providers.end() && Provider->Provider == SpatialCollisionProvider::BlockGrid &&
+			!Provider->Installed.empty() && !Provider->AuthoritativeEmpty, "grid receipt must bind installed native bodies");
+		Grid->SetCFrame(CFrame(0,2,0));
+		Check(!A->ValidateSpatialDestination(WithGrid), "moving grid owner must invalidate a held destination");
+		const auto Previous = A->PrepareSpatialDestination(Bounds).value();
+		A->SetParent(nullptr); A->SetParent(Default);
+		Check(!A->ValidateSpatialDestination(Previous), "reactivation changed the semantic domain epoch");
+		Game->Destroy();
+	}
+
 	void Run() {
 		auto Game = std::make_shared<DataModel>();
 		auto Space = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
@@ -244,6 +284,7 @@ int main() try {
 	gargantuan::BootstrapNativeRuntimeSchema();
 	Run();
 	TerrainDomains();
+	DestinationReadiness();
 	std::cout << "[Spatial:Domains] Native physics, render, membership and teardown passed.\n";
 	return 0;
 } catch (const std::exception &Error) {
