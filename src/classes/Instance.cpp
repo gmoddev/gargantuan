@@ -6,6 +6,8 @@
 #include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/PlayerGui.hpp"
 #include "gargantuan/classes/Terrain.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
+#include "terrain/ScenePersistence.hpp"
 #include "gargantuan/gui/PlayerGuiScope.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/Workspace.hpp"
@@ -599,12 +601,10 @@ namespace gargantuan {
 				throw std::invalid_argument(std::format("Cannot clone {} '{}': Archivable is false", Source->GetClassName(), Source->GetName()));
 			SourceNodes.push_back(Source);
 			for (auto Child = Source->Children.rbegin(); Child != Source->Children.rend(); ++Child)
-				Pending.emplace_back(*Child, Depth + 1);
+				if (!dynamic_cast<Terrain *>(Child->get())) Pending.emplace_back(*Child, Depth + 1);
 		}
 
-		std::string Encoded = InstanceSerialization::Serialize(
-			InstanceSerialization::InstanceFormat::Json, SourceRoot
-		);
+		std::string Encoded = InstanceSerialization::SerializeClone(SourceRoot);
 		if (Encoded.size() > MaximumProtocolDocumentBytes)
 			throw std::length_error(std::format("Cannot clone {}: semantic state exceeds its byte limit", GetClassName()));
 		std::istringstream Input(std::move(Encoded));
@@ -621,6 +621,7 @@ namespace gargantuan {
 		auto CloneRoot = State.Instance;
 		std::vector<std::shared_ptr<Instance>> CloneNodes{CloneRoot};
 		CloneRoot->CollectDescendants(CloneNodes);
+		std::erase_if(CloneNodes, [](const auto &Node) { return dynamic_cast<Terrain *>(Node.get()) != nullptr; });
 		if (CloneNodes.size() != SourceNodes.size()) {
 			CloneRoot->Destroy();
 			throw std::runtime_error(std::format("Cannot clone {}: reconstructed subtree is inconsistent", GetClassName()));
@@ -632,9 +633,29 @@ namespace gargantuan {
 
 		try {
 			ScopedChangeJournalSuppression Suppression;
+			std::optional<ProjectId> CloneTerrainIdentity;
+			std::size_t TerrainBytes = 0, TerrainOwners = 0;
 			for (std::size_t Index = 0; Index < SourceNodes.size(); ++Index) {
 				auto &Source = SourceNodes[Index];
 				auto &Copy = CloneNodes[Index];
+				if (auto *Region = dynamic_cast<SpatialRegion *>(Source.get())) {
+					const auto Owner = Region->GetTerrain();
+					if (Owner && (Owner->GetField().GetRevision() || Owner->GetField().GetGrid() != terrain::GridSpec{})) {
+						if (!CloneTerrainIdentity) CloneTerrainIdentity = ProjectId::New();
+						const auto Id = static_cast<std::uint32_t>(Index + 1);
+						const auto Capture = terrain::CaptureDomainTerrain(*Region, *CloneTerrainIdentity, Id);
+						if (!Capture || ++TerrainOwners > terrain::MaximumDomainTerrainBindings ||
+							Capture->ClosureBytes > terrain::MaximumTerrainClosureBytes - TerrainBytes)
+							throw std::length_error("[Spatial:Clone] Domain terrain exceeds the clone budget");
+						TerrainBytes += Capture->ClosureBytes;
+						auto &NewRegion = static_cast<SpatialRegion &>(*Copy);
+						(void)NewRegion.GetTerrain();
+						NewRegion.RestoreTerrainField(terrain::LoadDomainTerrain(*CloneTerrainIdentity, Id, Capture->ManifestDigest,
+							[&](const terrain::TerrainArtifactId &Artifact, std::size_t Bound) {
+								return terrain::ReadCapturedTerrainArtifact(Capture->Artifacts, Artifact, Bound);
+							}));
+					}
+				}
 				auto *Definition = InstanceClassRegistry::GetDefinition(Source.get());
 				std::vector<std::string> PropertyNames;
 				PropertyNames.reserve(Definition->AllProperties.size());
