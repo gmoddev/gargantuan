@@ -24,7 +24,7 @@ The `gargantuan_blockgrid_persistence` CTest covers a 393,216-cell grid, project
 
 ## Creatable class and Main admission
 
-The nullable saved `SpatialRegion` reference uses the existing generation-aware membership mixin. A grid can remain parented to Workspace while participating in its assigned chart. Runtime block revisions include the effective WorldRoot identity. Changing the explicit assignment revokes previous guards even when the original chart is later restored.
+The nullable saved `SpatialRegion` reference uses the existing generation-aware membership mixin. A grid can remain parented to Workspace while participating in its assigned chart. Runtime block revisions and work handles bind to the effective WorldRoot, its activation and the grid's own native registration lifetime. Leaving and returning to the same chart invalidates earlier work, including a handle opened while the region was detached. Reparenting inside the same effective chart preserves the registration and a dynamic grid's body and velocity.
 
 `Instance.new("BlockGrid")` creates an independent, empty grid with unit cells and identity pose. Configure `CellSize` to 0.5, 1 or 2 while empty. A proper rigid `CFrame` locates the local grid, and `Visible`, `CanCollide` and `CanQuery` govern the corresponding consumers. These five descriptor properties participate in ordinary persistence. The native cells have their own versioned codec. `BlockRevision` is a scoped read-only observation, excluded from saved and replicated properties.
 

@@ -248,11 +248,12 @@ namespace gargantuan {
 	std::string BlockGrid::GetBlockRevision() const { return RevisionToken(Cells.GetRevision()); }
 	std::string BlockGrid::GetPublicBlockRevision() const { return RevisionToken(Cells.GetPublicRevision())+"/peers"; }
 	std::string BlockGrid::RevisionToken(std::uint64_t SourceRevision) const {
+		if (!DomainMembershipRevision) throw std::overflow_error("[BlockGrid:Revision] Domain membership lifetime exhausted");
 		const auto Scope=GetReplicationScopeId(), Id=GetObjectId();
 		const auto World=WorldRoot::GetEffectiveWorld(*this);
 		const auto Domain=World?World->GetObjectId():ObjectId{};
-		return std::format("{}.{}:{}.{}:{}.{}:{}:{}:{}",Scope.Slot,Scope.Generation,Id.Slot,Id.Generation,Domain.Slot,Domain.Generation,
-			World ? World->GetSpatialActivation() : 0,ConfigurationRevision,SourceRevision);
+		return std::format("{}.{}:{}.{}:{}.{}:{}:{}:{}:{}",Scope.Slot,Scope.Generation,Id.Slot,Id.Generation,Domain.Slot,Domain.Generation,
+			World ? World->GetSpatialActivation() : 0,DomainMembershipRevision,ConfigurationRevision,SourceRevision);
 	}
 	std::string BlockGrid::ApplyEdit(const blockgrid::EditRequest& Edit,const blockgrid::Patch* Prepared) {
 		AssertCanMutate();

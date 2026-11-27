@@ -1,4 +1,5 @@
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/classes/BlockGrid.hpp"
 #include "BlockGridWorldState.hpp"
 #include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -1091,6 +1092,9 @@ namespace gargantuan {
 		});
 
 		DescendantRemovedConnection = DescendantRemoved->Connect([this](std::shared_ptr<Instance> Value) {
+			// Reparent emits removed/added notifications even for shared ancestors.
+			// A construction that stayed in this chart keeps its registration and body.
+			if (dynamic_cast<const BlockGrid*>(Value.get()) && IsSpatiallyAvailable() && GetEffectiveWorld(*Value).get()==this) return;
 			if (!ShuttingDownPhysics && !SpatialDomainMember::GetAssignmentRoot(*Value)) RemoveSpatialMember(Value);
 		});
 	}

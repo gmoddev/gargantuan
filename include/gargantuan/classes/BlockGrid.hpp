@@ -33,6 +33,7 @@ namespace gargantuan {
 		[[nodiscard]] std::uint64_t GetAssetPublicationRevision() const noexcept { return AssetPublicationRevision; }
 		[[nodiscard]] std::string GetPublicBlockRevision() const;
 		[[nodiscard]] std::uint64_t GetConfigurationRevision() const noexcept { return ConfigurationRevision; }
+		[[nodiscard]] std::uint64_t GetDomainMembershipRevision() const noexcept { return DomainMembershipRevision; }
 		[[nodiscard]] bool IsDynamicAssembly() const noexcept { return DynamicAssembly; }
 		[[nodiscard]] bool IsTransferParked() const noexcept { return !ParkedBy.expired(); }
 		[[nodiscard]] static bool HasParkedTransfers() noexcept;
@@ -77,6 +78,8 @@ namespace gargantuan {
 		std::uint64_t AssemblyRevision{1};
 		std::unique_ptr<blockgrid::AssemblyProjection> AssemblyState;
 		std::uint64_t ConfigurationRevision{1};
+		// Local registration lifetime. Zero is a permanently exhausted token namespace.
+		std::uint64_t DomainMembershipRevision{1};
 		mutable std::weak_ptr<AssetService> LastAssetService;
 		mutable std::uint64_t AssetSequence{},AssetPublicationRevision{};
 		mutable bool AssetsReady{};
