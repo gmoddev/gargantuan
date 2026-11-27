@@ -516,10 +516,14 @@ script:SetAttribute("Isolated", true)
 				!Spectator.GetClientDataModel() && !Spectator.GetPrimaryConnection(),
 				"local observer failure retained a session binding or was reported as a protocol rejection");
 			Actor->SetName("ControllerAfterObserver");
-			for (unsigned I = 0; I < 800 && (Server.GetMetrics().ReadyPeers != 1 || ReplicaActor->GetName() != Actor->GetName()); ++I)
-				Exchange();
-			Require(Server.GetMetrics().ReadyPeers == 1 && Owner.GetStatus() == GameSessionStatus::Ready &&
-				ReplicaActor->GetName() == Actor->GetName() && WorldRoot::GetEffectiveWorld(*ReplicaActor) == ReplicaRoom,
+			const auto OwnerUpdated = [&] {
+				const auto Active = Server.GetPeerIdentities();
+				return Active.size() == 1 && Active.front().Ready && Active.front().Connection == *Connection &&
+					Owner.GetStatus() == GameSessionStatus::Ready && ReplicaActor->GetName() == Actor->GetName() &&
+					Find(*OwnerRuntime, "ControllerAfterObserver") == ReplicaActor && WorldRoot::GetEffectiveWorld(*ReplicaActor) == ReplicaRoom;
+			};
+			for (unsigned I = 0; I < 800 && !OwnerUpdated(); ++I) Exchange();
+			Require(OwnerUpdated(),
 				"observer failure affected structural updates or domain membership on another connection");
 		}
 		if (Avatar) {

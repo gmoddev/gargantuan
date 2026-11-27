@@ -260,7 +260,9 @@ namespace gargantuan::network {
 			})) {
 			auto Encoded = EncodeReplicationFrame(Frame);
 			if (!Encoded) return {ReplicaApplyStatus::MalformedFrame, 0, Encoded.error().Format()};
-			return ApplyBytes(*Encoded);
+			auto Decoded = DecodeReplicationFrame(*Encoded);
+			if (!Decoded) return {ReplicaApplyStatus::MalformedFrame, 0, Decoded.error().Format()};
+			return ApplyFrame(*Decoded, Prepare);
 		}
 		if (!Frame.IsValid()) return {ReplicaApplyStatus::MalformedFrame, 0, "Replication frame is invalid"};
 		if (Frame.Kind == ReplicationMessageKind::Baseline) {
