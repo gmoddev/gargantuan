@@ -1015,10 +1015,12 @@ namespace gargantuan::network {
 			const bool Server = Configuration.Role == GameSessionRole::Server;
 			if (Server && (!Replication || !Replication->CanDeliverSpatialContent(Connection,Id))) return {};
 			auto Grid = std::dynamic_pointer_cast<BlockGrid>(Server ? ObjectRegistry::Get().Lookup(Id) : Replica.Resolve(Id));
-			if (!Grid || !Runtime || Grid->GetDataModel() != Runtime->DataModel || Grid->IsDestroying() || Grid->GetDestroyed()) return {};
+			if (!Grid || !Runtime || Grid->IsDestroying() || Grid->GetDestroyed() ||
+				SpatialRegion::FindAttachedWorld(*Grid) != Runtime->DataModel) return {};
 			auto Owner = WorldRoot::GetEffectiveWorld(*Grid);
 			if (Owner == Runtime->Workspace) return Region == ObjectId{} ? Grid : nullptr;
-			if (!Owner || !std::dynamic_pointer_cast<SpatialRegion>(Owner)) return {};
+			if (!Owner || !std::dynamic_pointer_cast<SpatialRegion>(Owner) ||
+				SpatialRegion::FindAttachedWorld(*Owner) != Runtime->DataModel) return {};
 			const auto Source = Server ? std::optional(Owner->GetObjectId()) : Replica.GetSourceObject(*Owner);
 			return Source && *Source == Region ? Grid : nullptr;
 		}
