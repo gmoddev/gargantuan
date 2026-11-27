@@ -206,6 +206,12 @@ namespace {
 		);
 		RemoteRuntime->ProcessService->Alive = true;
 		Require(Client.AttachClientRuntime(*RemoteRuntime), "runtime attachment failed");
+		Wait([&] { return Server.GetMetrics().ReadyPeers == 1; });
+		const auto Accepted = Server.GetPeerIdentities();
+		const auto Connection = Client.GetPrimaryConnection();
+		Require(Accepted.size() == 1 && Connection, "missing single admitted peer");
+		const std::array Focus{glm::vec3(0, 4, 0)};
+		Require(Server.SetTrustedReplicationFocus(Accepted.front().Connection, Focus), "construction interest failed");
 		auto ReplicaSpace = std::dynamic_pointer_cast<Workspace>(RemoteRuntime->DataModel->GetService("Workspace"));
 		std::shared_ptr<Instance> Replica;
 		auto Ready = [&](bool Edited) {
@@ -219,9 +225,6 @@ namespace {
 				   Grid->GetField().Get(Removed).Definition == (Edited ? blockgrid::Air : blockgrid::Stone);
 		};
 		Wait([&] { return Ready(false); });
-		const auto Accepted = Server.GetPeerIdentities();
-		const auto Connection = Client.GetPrimaryConnection();
-		Require(Accepted.size() == 1 && Connection, "missing single admitted peer");
 		Stamp ServerStart, ClientStart;
 		ServerStart.HasPacketObservation = ClientStart.HasPacketObservation = true;
 		auto Finish = [&](std::string_view Phase) {
