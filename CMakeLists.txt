@@ -235,17 +235,14 @@ add_subdirectory(vendor/sdl_ttf SYSTEM)
 # Shipped dependency diagnostics retain source-relative file names.
 function(GargantuanMapRuntimeSourcePaths Target)
 	if(MSVC)
-		target_compile_options(${Target} PRIVATE
-			/experimental:deterministic
-			"/pathmap:${CMAKE_CURRENT_SOURCE_DIR}=."
-			"/pathmap:${CMAKE_CURRENT_BINARY_DIR}=."
-		)
+		target_compile_options(${Target} PRIVATE /experimental:deterministic)
+		set(Prefix "/pathmap:")
 	else()
-		target_compile_options(${Target} PRIVATE
-			"-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=."
-			"-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=."
-		)
+		set(Prefix "-ffile-prefix-map=")
 	endif()
+	foreach(Mapping IN ITEMS "${CMAKE_CURRENT_SOURCE_DIR}=." "${CMAKE_CURRENT_BINARY_DIR}=." ${ARGN})
+		target_compile_options(${Target} PRIVATE "${Prefix}${Mapping}")
+	endforeach()
 endfunction()
 GargantuanMapRuntimeSourcePaths(SDL3-shared)
 
@@ -1350,6 +1347,10 @@ if(BUILD_TESTING)
 		GARGANTUAN_PACKAGE_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}"
 		GARGANTUAN_PACKAGE_BUILD_ROOT="${CMAKE_CURRENT_BINARY_DIR}"
 	)
+	if(GARGANTUAN_WITH_GNS)
+		target_compile_definitions(gargantuan_packaging_tests PRIVATE
+			GARGANTUAN_PACKAGE_GNS_ROOT="${gamenetworkingsockets_SOURCE_DIR}")
+	endif()
 	add_dependencies(gargantuan_packaging_tests gargantuan_packager gargantuan_runtime_distribution)
 	add_executable(gargantuan_blockgrid_persistence_tests "tests/blockgrid/BlockGridPersistenceTests.cpp")
 	target_link_libraries(gargantuan_blockgrid_persistence_tests PRIVATE gargantuan_core)

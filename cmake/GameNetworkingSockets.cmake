@@ -48,8 +48,9 @@ include("${CMAKE_CURRENT_LIST_DIR}/gns/ApplyPreciseSenderWake.cmake")
 if(NOT TARGET GameNetworkingSockets::static)
 	message(FATAL_ERROR "Pinned GameNetworkingSockets source did not provide GameNetworkingSockets::static")
 endif()
-# The socket-thread translation unit includes the Engine's NativeEgressWorker.inc.
-GargantuanMapRuntimeSourcePaths(GameNetworkingSockets_s)
+# The socket thread includes Engine sources, and FetchContent can supply the
+# pinned dependency from a checkout outside both the Engine and its build tree.
+GargantuanMapRuntimeSourcePaths(GameNetworkingSockets_s "${gamenetworkingsockets_SOURCE_DIR}=./GameNetworkingSockets")
 
 if(GARGANTUAN_NATIVE_EGRESS_TEST_HOOKS)
 	# This option is explicitly off for production packages. The hooks are

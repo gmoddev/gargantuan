@@ -112,6 +112,17 @@ namespace {
 		}
 		std::istringstream Siblings(R"(C:\project/AuthorRoot-extra\file C:/PROJECT/AuthorRoot2/x vendor\src\file .\project\authorroot\file)");
 		Require(!FindPackagePath(Siblings, Drive, PackagePathStyle::Windows), "matched a sibling or relative Windows path");
+		for (const auto Style : {PackagePathStyle::Windows, PackagePathStyle::Posix}) {
+			const std::string Volume = Style == PackagePathStyle::Windows ? "c:" : "";
+			const std::array GnsRoots{Volume + "/build/_deps/gamenetworkingsockets-src", Volume + "/external checkout/gns"};
+			for (std::size_t I = 0; I < GnsRoots.size(); ++I) {
+				std::istringstream Absolute(GnsRoots[I] + "/src/steamnetworkingsockets/diagnostic.cpp");
+				const auto Hit = FindPackagePath(Absolute, GnsRoots, Style);
+				Require(Hit && Hit->RootIndex == I && Hit->Offset == 0, "missed the populated GNS source checkout");
+			}
+			std::istringstream RelativeGns("./GameNetworkingSockets/src/steamnetworkingsockets/diagnostic.cpp");
+			Require(!FindPackagePath(RelativeGns, GnsRoots, Style), "relative GNS diagnostic matched a private checkout");
+		}
 	}
 
 	void RequirePublicPackagePaths(const std::filesystem::path &File, std::span<const std::string> Roots) {
@@ -824,8 +835,14 @@ int main() {
 				Loaded->Assets.Artifacts.size() == Payload.Assets.Artifacts.size(),
 			"validated package payload did not load with its stable identity/assets"
 		);
-		const std::array PrivateRoots{test::PackagePathRoot(Workspace.ProjectRoot),
-			test::PackagePathRoot(GARGANTUAN_PACKAGE_SOURCE_ROOT), test::PackagePathRoot(GARGANTUAN_PACKAGE_BUILD_ROOT)};
+		const std::array PrivateRoots{
+			test::PackagePathRoot(Workspace.ProjectRoot),
+			test::PackagePathRoot(GARGANTUAN_PACKAGE_SOURCE_ROOT),
+			test::PackagePathRoot(GARGANTUAN_PACKAGE_BUILD_ROOT),
+#ifdef GARGANTUAN_PACKAGE_GNS_ROOT
+			test::PackagePathRoot(GARGANTUAN_PACKAGE_GNS_ROOT),
+#endif
+		};
 		std::filesystem::remove_all(Workspace.ProjectRoot);
 		BootstrapPackagedRuntimeSchema(Loaded->PreRunSource);
 		auto PackagedWorld = PackageBuilder::LoadWorld(*Loaded, ReleaseA);

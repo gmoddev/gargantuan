@@ -179,7 +179,9 @@ the staged dedicated-server distribution in 64 KiB chunks. An absolute Engine
 source, build or authoring project path fails the test with the file and byte
 offset. A source-relative diagnostic such as `./vendor/sdl/src/video/...` retains
 its provenance when the Engine checkout is mounted at `/src`. SDL and the
-qualified GNS target map compiler source and build prefixes privately.
+qualified GNS target map compiler source and build prefixes privately. GNS
+builds also map and check the populated dependency source root, including an
+operator-provided FetchContent checkout outside the Engine and build trees.
 On Linux, Player and Server search beside the executable first and use
 origin-relative entries for build-tree libraries such as SDL.
 
