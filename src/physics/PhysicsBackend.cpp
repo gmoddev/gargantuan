@@ -83,6 +83,9 @@ namespace gargantuan {
 	std::optional<PhysicsBodyState> PhysicsWorld::GetBodyState(PhysicsBodyId Body) const {
 		return Backend ? Backend->GetBodyState(Body) : std::nullopt;
 	}
+	std::optional<PhysicsMassProperties> PhysicsWorld::GetMassProperties(PhysicsBodyId Body) const {
+		return Backend?Backend->GetMassProperties(Body):std::nullopt;
+	}
 	PhysicsCollisionResidency PhysicsWorld::GetCollisionResidency() const {
 		return Backend ? Backend->GetCollisionResidency() : PhysicsCollisionResidency{};
 	}

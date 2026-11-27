@@ -33,6 +33,7 @@ namespace gargantuan {
 		virtual PhysicsOperationResult SetAwake(PhysicsBodyId, bool) { return {PhysicsOperationStatus::BackendFailure, "Sleep control is unsupported"}; }
 		virtual PhysicsOperationResult SetGravity(glm::vec3 Gravity) = 0;
 		[[nodiscard]] virtual std::optional<PhysicsBodyState> GetBodyState(PhysicsBodyId Body) const = 0;
+		[[nodiscard]] virtual std::optional<PhysicsMassProperties> GetMassProperties(PhysicsBodyId) const { return {}; }
 		[[nodiscard]] virtual PhysicsCollisionResidency GetCollisionResidency() const { return {}; }
 		[[nodiscard]] virtual PhysicsKinematicMotionResult
 		MoveKinematicCapsule(const PhysicsKinematicMotionRequest &Request) const = 0;
@@ -74,6 +75,7 @@ namespace gargantuan {
 		PhysicsOperationResult SetAwake(PhysicsBodyId Body, bool Awake);
 		PhysicsOperationResult SetGravity(glm::vec3 Gravity);
 		[[nodiscard]] std::optional<PhysicsBodyState> GetBodyState(PhysicsBodyId Body) const;
+		[[nodiscard]] std::optional<PhysicsMassProperties> GetMassProperties(PhysicsBodyId Body) const;
 		[[nodiscard]] PhysicsCollisionResidency GetCollisionResidency() const;
 		[[nodiscard]] PhysicsKinematicMotionResult
 		MoveKinematicCapsule(const PhysicsKinematicMotionRequest &Request) const;

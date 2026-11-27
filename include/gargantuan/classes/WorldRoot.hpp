@@ -200,10 +200,17 @@ namespace gargantuan {
 
 	  private:
 		friend class Engine;
+		friend class BlockGrid;
 		std::unique_ptr<BlockGridWorldState> BlockGridState;
 		void AddBlockGrid(const std::shared_ptr<Instance> &Value);
 		void RemoveBlockGrid(const std::shared_ptr<Instance> &Value);
 		bool SyncBlockGridCollision();
+		[[nodiscard]] bool SetGridMotion(BlockGrid& Grid,bool Dynamic);
+		[[nodiscard]] bool SetGridVelocity(BlockGrid& Grid,glm::vec3 Linear,glm::vec3 Angular);
+		[[nodiscard]] std::pair<PhysicsBodyState,PhysicsMassProperties> GetGridAssemblyState(const BlockGrid& Grid);
+		void ReadGridMotion();
+		void RefreshGridAssembly(BlockGrid& Grid);
+		void SetGridPose(BlockGrid& Grid,const CFrame& Pose);
 		bool AppendBlockGridFilter(ObjectId Object, std::vector<PhysicsBodyId> &Bodies) const;
 		std::shared_ptr<BlockGrid> ResolveBlockGrid(PhysicsBodyId Body) const;
 		std::optional<glm::ivec3> ResolveBlockCell(PhysicsBodyId Body, glm::vec3 Position) const;

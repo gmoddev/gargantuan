@@ -93,6 +93,15 @@ namespace gargantuan {
 		}
 
 		[[nodiscard]] bool IsValidBodyDescription(const PhysicsBodyDesc &Description) {
+			if (Description.Shape.Kind==PhysicsShapeKind::ConvexAssembly) {
+				const auto& Hulls=Description.Shape.Hulls;
+				if (!Hulls || Hulls->empty() || Hulls->size()>MaximumPhysicsAssemblyHulls || Description.Shape.Mesh ||
+					Description.Shape.Size!=glm::vec3(1) || !IsRigidRotation(Description.Transform) || Description.Density<=0) return false;
+				for (const auto& H:*Hulls)
+					if ((H.Kind!=PhysicsShapeKind::Box && H.Kind!=PhysicsShapeKind::Wedge) || !IsFinite(H.Local) ||
+						!IsRigidRotation(H.Local) || glm::length(H.Local.Position)>256 || !IsFinite(H.Size) ||
+						glm::any(glm::lessThan(H.Size,glm::vec3(.01f))) || glm::any(glm::greaterThan(H.Size,glm::vec3(128)))) return false;
+			} else if (Description.Shape.Hulls) return false;
 			if (Description.Shape.Kind == PhysicsShapeKind::StaticTriangleMesh &&
 				(!Description.Anchored || Description.Kinematic || !Description.Shape.Mesh ||
 				Description.Shape.Size.x < 0.01f || Description.Shape.Size.y < 0.01f ||
@@ -278,6 +287,7 @@ namespace gargantuan {
 				const bool RebuildShape = Previous.Shape.Kind != Description.Shape.Kind ||
 					!SameSize(Previous.Shape.Size, Description.Shape.Size) ||
 					!SameMesh(Previous.Shape.Mesh, Description.Shape.Mesh) ||
+					Previous.Shape.Hulls!=Description.Shape.Hulls ||
 					Previous.CanCollide != Description.CanCollide || Previous.CanTouch != Description.CanTouch ||
 					Previous.Density != Description.Density;
 				if (RebuildShape) {
@@ -585,6 +595,13 @@ namespace gargantuan {
 					.Awake = b3Body_IsAwake(Record->Body),
 					.Description = Record->Description,
 				};
+			}
+			[[nodiscard]] std::optional<PhysicsMassProperties> GetMassProperties(PhysicsBodyId Body) const override {
+				const auto* R=FindBody(Body);
+				if (!R) return {};
+				const auto M=b3Body_GetMassData(R->Body);
+				return PhysicsMassProperties{M.mass,Box3DConversions::FromBox3(M.center),glm::mat3(
+					Box3DConversions::FromBox3(M.inertia.cx),Box3DConversions::FromBox3(M.inertia.cy),Box3DConversions::FromBox3(M.inertia.cz))};
 			}
 
 			[[nodiscard]] PhysicsCollisionResidency GetCollisionResidency() const override {
@@ -1315,6 +1332,26 @@ namespace gargantuan {
 				};
 				try {
 				switch (Description.Shape.Kind) {
+				case PhysicsShapeKind::ConvexAssembly: {
+					const auto& Hulls=*Description.Shape.Hulls;
+					AdditionalShapes.reserve(Hulls.size()-1);
+					ShapeOwners.reserve(ShapeOwners.size()+Hulls.size());
+					ShapeDefinition.updateBodyMass=false;
+					const auto Cube=b3MakeBoxHull(.5f,.5f,.5f);
+					const b3Vec3 Ramp[]={{-.5f,-.5f,-.5f},{.5f,-.5f,-.5f},{.5f,-.5f,.5f},{-.5f,-.5f,.5f},{.5f,.5f,-.5f},{-.5f,.5f,-.5f}};
+					std::unique_ptr<b3HullData,decltype(&b3DestroyHull)> Wedge(nullptr,&b3DestroyHull);
+					for (const auto& C:Hulls) {
+						if (C.Kind==PhysicsShapeKind::Wedge && !Wedge) Wedge.reset(b3CreateHull(Ramp,6,6));
+						const auto* Hull=C.Kind==PhysicsShapeKind::Box?&Cube.base:Wedge.get();
+						if (!Hull) { Rollback(); return {}; }
+						const auto New=b3CreateTransformedHullShape(Body,&ShapeDefinition,Hull,ToLocalFrame(C.Local),Box3DConversions::ToBox3(C.Size));
+						if (!b3Shape_IsValid(New)) { Rollback(); return {}; }
+						if (!b3Shape_IsValid(Shape)) Shape=New; else AdditionalShapes.push_back(New);
+						ShapeOwners.emplace(b3StoreShapeId(New),Owner);
+					}
+					if (UpdateMass) b3Body_ApplyMassFromShapes(Body);
+					break;
+				}
 				case PhysicsShapeKind::StaticTriangleMesh: {
 					LastMeshAdmissionFailure.clear();
 					if (ActiveMeshConsumers >= CollisionConsumerLimit) {

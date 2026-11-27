@@ -1678,6 +1678,7 @@ namespace gargantuan {
 			++Steps;
 			if (Steps == MAX_STEPS_PER_FRAME) StepAccumulator = 0.0f;
 			ReadbackDynamicBodies();
+			if (BlockGridState && !BlockGridState->Assemblies.empty()) ReadGridMotion();
 			{
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::PhysicsEvents);
 			if (Result.EventsTruncated)

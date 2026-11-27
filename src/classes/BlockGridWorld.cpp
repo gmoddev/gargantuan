@@ -2,8 +2,10 @@
 #include "gargantuan/blockgrid/Assets.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "../physics/Box3DShapeQuery.hpp"
+#include "gargantuan/classes/ViewportFrame.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <type_traits>
@@ -13,6 +15,7 @@ namespace gargantuan {
 		constexpr unsigned Side = blockgrid::LeafSide;
 		constexpr std::size_t MaximumGridBoxes = MaximumRaycastFilterBodies;
 		constexpr std::size_t MaximumWorldBoxes = MaximumPhysicsCollisionConsumers;
+		std::atomic_size_t LiveAssemblies{}; // Optional hierarchy fast path across independently owned Main runtimes.
 
 		std::uint8_t Participation(bool Collide,bool Query) {
 			return static_cast<std::uint8_t>(unsigned(Collide)|(unsigned(Query)<<1));
@@ -31,6 +34,40 @@ namespace gargantuan {
 			if (!(Length<=100'000.f)) return false;
 			const auto R=Pose.Rotation*Rotation(Orientation);
 			return std::ranges::all_of(*Mesh.Positions,[&](auto P){return glm::length(Center+R*(P*Unit))<=100'000.f;});
+		}
+		std::uint8_t QueryProxyMask(const BlockGrid& Grid) {
+			return Participation(Grid.GetCanCollide() && !Grid.IsDynamicAssembly(),Grid.GetCanQuery());
+		}
+		template<class Snapshot>
+		std::shared_ptr<const std::vector<PhysicsConvexChild>> AssemblyHulls(const BlockGrid& Grid,const Snapshot& Source) {
+			if (!Grid.GetCanCollide() || !Source.GetOccupiedCount() || Source.GetOccupiedCount()>MaximumPhysicsAssemblyHulls)
+				throw std::length_error("[BlockGrid:Motion] A dynamic assembly requires 1 to 128 occupied cells with collision enabled");
+			auto Result=std::make_shared<std::vector<PhysicsConvexChild>>();
+			Result->reserve(Source.GetOccupiedCount());
+			const auto V=[](const blockgrid::Point& P){return glm::vec3(P[0],P[1],P[2]);};
+			const float Size=Grid.GetCellSize();
+			Source.ForEachLeaf([&](blockgrid::Cell Base,const blockgrid::Leaf& Page) {
+				Page.ForEachOccupied([&](unsigned X,unsigned Y,unsigned Z,blockgrid::Block B) {
+					const auto& D=Source.GetDefinition(B.Definition);
+					const glm::vec3 Min(Base.X+int(X),Base.Y+int(Y),Base.Z+int(Z));
+					if (D.Geometry==blockgrid::Shape::Mesh || glm::any(glm::greaterThan(glm::abs(Min),glm::vec3(64.f))))
+						throw std::invalid_argument("[BlockGrid:Motion] Dynamic cells require built-in convex geometry within 64 cells of the grid origin");
+					if (!D.CanCollide) return;
+					for (const auto& P:blockgrid::GetGeometry(D.Geometry,B.Orientation).Collision) {
+						if (Result->size()>=MaximumPhysicsAssemblyHulls) throw std::length_error("[BlockGrid:Motion] Assembly hull capacity exhausted");
+						Result->push_back({P.Kind==blockgrid::PieceKind::Box?PhysicsShapeKind::Box:PhysicsShapeKind::Wedge,
+							CFrame((Min+V(P.Center))*Size,Rotation(P.Orientation)),V(P.Size)*Size});
+					}
+				});
+			});
+			if (Result->empty()) throw std::invalid_argument("[BlockGrid:Motion] Assembly has no physical hulls");
+			return Result;
+		}
+		PhysicsBodyDesc AssemblyBody(const BlockGrid& Grid,const std::shared_ptr<const std::vector<PhysicsConvexChild>>& Hulls) {
+			PhysicsBodyDesc D;
+			D.Transform=Grid.GetCFrame(); D.Shape={PhysicsShapeKind::ConvexAssembly,glm::vec3(1),{},Hulls};
+			D.Density=1.f; D.CanQuery=false; D.CanTouch=false; D.RequiresBlockGridQuery=true;
+			return D;
 		}
 		template<class Snapshot>
 		std::vector<BlockGridBox> LeafBoxes(blockgrid::Cell Origin,const blockgrid::Leaf& Leaf,const Snapshot& Cells,
@@ -95,8 +132,9 @@ namespace gargantuan {
 		}
 
 		template <typename Snapshot>
-		bool PrepareTopology(BlockGridWorldState &State, BlockGridParticipant &Member, const Snapshot &Cells) {
-			const auto Mask=Participation(Member.Grid->GetCanCollide(),Member.Grid->GetCanQuery());
+		bool PrepareTopology(BlockGridWorldState &State, BlockGridParticipant &Member, const Snapshot &Cells,
+			const std::function<bool()>& AdmitMotion={}) {
+			const auto Mask=QueryProxyMask(*Member.Grid);
 			const bool Patch = Mask && Member.TopologyCurrent && Member.TopologyMask==Mask &&
 				std::is_same_v<Snapshot, blockgrid::Field::Candidate>;
 			BlockGridLeafBoxes Changed;
@@ -123,6 +161,7 @@ namespace gargantuan {
 			const auto Count = (Patch ? Member.DesiredCount - OldCount : 0) + NewCount;
 			if (!Available || Count > MaximumGridBoxes || Count > MaximumWorldBoxes - (State.ReservedBoxes - Member.DesiredCount))
 				return false;
+			if (AdmitMotion && !AdmitMotion()) return false;
 			if (Patch) for (auto Origin : Replaced) Member.Desired.erase(Origin);
 			else Member.Desired.clear();
 			Member.Desired.merge(Changed);
@@ -160,6 +199,38 @@ namespace gargantuan {
 			return Result;
 		}
 	}
+	void ValidateBlockGridReparent(const Instance& Moving,const std::shared_ptr<Instance>& NewParent,
+		std::span<const std::shared_ptr<Instance>> Subtree) {
+		if (!LiveAssemblies.load(std::memory_order_relaxed) || !NewParent || Moving.IsDestroying()) return;
+		const auto Old=WorldRoot::GetEffectiveWorld(Moving);
+		if (!Old || Old==WorldRoot::GetEffectiveWorld(*NewParent)) return;
+		for (const auto& Node:Subtree) {
+			const auto* Grid=dynamic_cast<const BlockGrid*>(Node.get());
+			if (!Grid || !Grid->IsDynamicAssembly() || WorldRoot::GetEffectiveWorld(*Grid)!=Old) continue;
+			const Instance* Current=Grid;
+			while (Current) {
+				if (const auto* Scope=dynamic_cast<const SpatialDomainMember*>(Current); Scope && Scope->HasAssignedRegion()) break;
+				if (dynamic_cast<const WorldRoot*>(Current) || dynamic_cast<const ViewportFrame*>(Current)) break;
+				if (Current==&Moving) throw std::domain_error("[BlockGrid:Motion] Freeze the assembly before reparenting it to another world");
+				const auto Parent=Current->GetParent();
+				Current=Parent && *Parent?Parent->get():nullptr;
+			}
+		}
+	}
+	void ValidateBlockGridDomainChange(const Instance& Moving,const WorldRoot* Destination) {
+		if (!LiveAssemblies.load(std::memory_order_relaxed)) return;
+		const auto Old=WorldRoot::GetEffectiveWorld(Moving);
+		if (!Old || Old.get()==Destination) return;
+		Old->ForEachBlockGrid([&](const BlockGrid& G) {
+			if (!G.IsDynamicAssembly()) return;
+			for (const Instance* Current=&G;Current;) {
+				if (Current==&Moving) throw std::domain_error("[BlockGrid:Motion] Freeze the assembly before changing its world");
+				if (const auto* Scope=dynamic_cast<const SpatialDomainMember*>(Current);Scope && Scope->HasAssignedRegion()) break;
+				if (dynamic_cast<const WorldRoot*>(Current) || dynamic_cast<const ViewportFrame*>(Current)) break;
+				const auto Parent=Current->GetParent(); Current=Parent && *Parent?Parent->get():nullptr;
+			}
+		});
+	}
 
 	void WorldRoot::AddBlockGrid(const std::shared_ptr<Instance> &Value) {
 		auto Grid = std::dynamic_pointer_cast<BlockGrid>(Value);
@@ -174,7 +245,17 @@ namespace gargantuan {
 			if (!World || !World->BlockGridState) return true;
 			auto &State = *World->BlockGridState;
 			const auto It = State.Members.find(Id);
-			return It == State.Members.end() || PrepareTopology(State, It->second, Next);
+			if (It==State.Members.end()) return true;
+			auto& Member=It->second;
+			if (!Member.Assembly) return PrepareTopology(State,Member,Next);
+			bool Dirty=false;
+			Next.ForEachChangedLeaf([&](auto,const auto*){Dirty=true;});
+			if (!Dirty) return PrepareTopology(State,Member,Next);
+			const auto Updated=AssemblyHulls(*Member.Grid,Next);
+			return PrepareTopology(State,Member,Next,[&] {
+				if (!World->Physics.UpdateBody(Member.Assembly->Body,AssemblyBody(*Member.Grid,Updated)).Succeeded()) return false;
+				Member.Assembly->Hulls=Updated; Member.Assembly->Pose=Member.Grid->GetCFrame(); return true;
+			});
 		});
 	}
 
@@ -184,6 +265,16 @@ namespace gargantuan {
 		if (It == BlockGridState->Members.end()) return;
 		if (!Value->GetDestroyed() && !Value->IsDestroying()) It->second.Grid->SetAdmission({});
 		BlockGridState->ReservedBoxes -= It->second.DesiredCount;
+		const auto Leaving=It->second.Grid;
+		const bool WasDynamic=bool(It->second.Assembly);
+		if (const auto& Assembly=It->second.Assembly) {
+			--LiveAssemblies;
+			BlockGridState->Assemblies.erase(Assembly->Body);
+			if (Physics.IsBodyValid(Assembly->Body) && !Physics.DestroyBody(Assembly->Body).Succeeded())
+				BlockGridState->Retiring.insert(Assembly->Body);
+			Leaving->DynamicAssembly=false;
+			Leaving->RetireAssemblyState();
+		}
 		for (const auto &[Box, Body] : It->second.Bodies) {
 			if (Physics.IsBodyValid(Body) && !Physics.DestroyBody(Body).Succeeded())
 				BlockGridState->Retiring.insert(Body);
@@ -191,11 +282,111 @@ namespace gargantuan {
 		}
 		BlockGridState->Members.erase(It);
 		if (BlockGridState->Members.empty() && BlockGridState->Retiring.empty()) BlockGridState.reset();
+		if (WasDynamic && !ShuttingDownPhysics && !Leaving->GetDestroyed() && !Leaving->IsDestroying()) Leaving->NotifyConfiguration("MotionMode");
 	}
 
 	void WorldRoot::ForEachBlockGrid(const std::function<void(const BlockGrid &)> &Visit) const {
 		if (BlockGridState)
 			for (const auto &[Id, Member] : BlockGridState->Members) Visit(*Member.Grid);
+	}
+	bool WorldRoot::SetGridMotion(BlockGrid& Grid,bool Dynamic) {
+		if (SteppingPhysics || ShuttingDownPhysics || !BlockGridState) throw std::runtime_error("[BlockGrid:Motion] Simulation world is unavailable");
+		const auto Id=Grid.GetObjectId();
+		const auto It=BlockGridState->Members.find(Id);
+		if (It==BlockGridState->Members.end() || !SyncBlockGridCollision()) throw std::runtime_error("[BlockGrid:Motion] Grid collision is unavailable");
+		auto& Member=It->second;
+		if (Dynamic==Grid.DynamicAssembly) return false;
+		if (Dynamic) {
+			if (BlockGridState->Assemblies.size()>=64) throw std::length_error("[BlockGrid:Motion] World assembly limit exhausted");
+			auto Next=std::make_unique<BlockGridAssembly>();
+			Next->Hulls=AssemblyHulls(Grid,Grid.GetField()); Next->Pose=Grid.GetCFrame();
+			Next->Body=Physics.CreateBody(AssemblyBody(Grid,Next->Hulls));
+			if (!Next->Body.IsValid()) throw std::runtime_error("[BlockGrid:Motion] Dynamic body admission failed");
+			try { BlockGridState->Assemblies.emplace(Next->Body,Id); }
+			catch (...) { (void)Physics.DestroyBody(Next->Body); throw; }
+			Member.Assembly=std::move(Next);
+		}
+		const auto Retire=[&] {
+			const auto Body=Member.Assembly->Body;
+			if (!Physics.DestroyBody(Body).Succeeded()) return false;
+			BlockGridState->Assemblies.erase(Body); Member.Assembly.reset(); return true;
+		};
+		Grid.DynamicAssembly=Dynamic;
+		Member.TopologyCurrent=false;
+		try {
+			if (!SyncBlockGridCollision() || (!Dynamic && !Retire())) throw std::runtime_error("[BlockGrid:Motion] Collision transition failed");
+		} catch (...) {
+			Grid.DynamicAssembly=!Dynamic;
+			if (Dynamic && !Retire()) {
+				const auto Body=Member.Assembly->Body;
+				BlockGridState->Assemblies.erase(Body); BlockGridState->Retiring.insert(Body); Member.Assembly.reset();
+			}
+			Member.TopologyCurrent=false;
+			(void)SyncBlockGridCollision();
+			throw;
+		}
+		if (Dynamic) { ++LiveAssemblies; RefreshGridAssembly(Grid); }
+		else { --LiveAssemblies; Grid.RetireAssemblyState(); }
+		return true;
+	}
+	std::pair<PhysicsBodyState,PhysicsMassProperties> WorldRoot::GetGridAssemblyState(const BlockGrid& Grid) {
+		if (!BlockGridState || !Grid.IsDynamicAssembly() || !SyncBlockGridCollision())
+			throw std::runtime_error("[BlockGrid:Motion] Dynamic body unavailable");
+		const auto& Assembly=BlockGridState->Members.at(Grid.GetObjectId()).Assembly;
+		const auto Body=Physics.GetBodyState(Assembly->Body);
+		const auto Mass=Physics.GetMassProperties(Assembly->Body);
+		if (!Body || !Mass) throw std::runtime_error("[BlockGrid:Motion] Native mass properties unavailable");
+		return {*Body,*Mass};
+	}
+	bool WorldRoot::SetGridVelocity(BlockGrid& Grid,glm::vec3 Linear,glm::vec3 Angular) {
+		if (SteppingPhysics || !(glm::length(Linear)<=512.f) || !(glm::length(Angular)<=64.f))
+			throw std::invalid_argument("[BlockGrid:Motion] Velocity must be finite and within the construction limits");
+		const auto [State,Mass]=GetGridAssemblyState(Grid);
+		if (State.LinearVelocity==Linear && State.AngularVelocity==Angular) return false;
+		const auto Body=BlockGridState->Members.at(Grid.GetObjectId()).Assembly->Body;
+		if (!Physics.SetLinearVelocity(Body,Linear).Succeeded()) throw std::runtime_error("[BlockGrid:Motion] Native velocity update failed");
+		if (!Physics.SetAngularVelocity(Body,Angular).Succeeded()) {
+			(void)Physics.SetLinearVelocity(Body,State.LinearVelocity);
+			throw std::runtime_error("[BlockGrid:Motion] Native angular velocity update failed");
+		}
+		RefreshGridAssembly(Grid);
+		return true;
+	}
+	void WorldRoot::RefreshGridAssembly(BlockGrid& Grid) {
+		const auto& A=BlockGridState->Members.at(Grid.GetObjectId()).Assembly;
+		const auto S=Physics.GetBodyState(A->Body);
+		const auto M=Physics.GetMassProperties(A->Body);
+		if (!S || !M) throw std::runtime_error("[BlockGrid:Motion] Missing native assembly state");
+		A->Pose=S->Transform;
+		blockgrid::AssemblyProjection P;
+		P.Dynamic=true; P.Pose=S->Transform; P.LinearVelocity=S->LinearVelocity; P.AngularVelocity=S->AngularVelocity;
+		P.Mass=M->Mass; P.LocalCenterOfMass=M->LocalCenter; P.LocalInertia=M->LocalInertia;
+		Grid.PublishAssemblyState(P);
+		if (Grid.Transform.Position==P.Pose.Position && Grid.Transform.Rotation==P.Pose.Rotation) return;
+		Grid.Transform=P.Pose;
+		Grid.NotifyPropertyCommitted("CFrame");
+	}
+	void WorldRoot::SetGridPose(BlockGrid& Grid,const CFrame& Pose) {
+		if (!BlockGridState || SteppingPhysics) throw std::runtime_error("[BlockGrid:Motion] Cannot move the assembly during a physics step");
+		const auto& A=BlockGridState->Members.at(Grid.GetObjectId()).Assembly;
+		if (!A) throw std::runtime_error("[BlockGrid:Motion] Missing native body");
+		auto D=AssemblyBody(Grid,A->Hulls); D.Transform=Pose;
+		if (!Physics.UpdateBody(A->Body,D).Succeeded()) throw std::runtime_error("[BlockGrid:Motion] Body pose update failed");
+		A->Pose=Pose;
+		auto P=*Grid.GetAssemblyProjection(); P.Pose=Pose; Grid.PublishAssemblyState(P);
+	}
+	void WorldRoot::ReadGridMotion() {
+		// A property observer may remove another assembly. Pin identities before notifying any observer.
+		std::array<ObjectId,64> Members{};
+		std::size_t Count=0;
+		for (const auto& [Body,Id]:BlockGridState->Assemblies) Members[Count++]=Id;
+		for (std::size_t I=0;I<Count && BlockGridState;++I) {
+			const auto It=BlockGridState->Members.find(Members[I]);
+			if (It!=BlockGridState->Members.end() && It->second.Assembly) {
+				const auto Grid=It->second.Grid;
+				RefreshGridAssembly(*Grid);
+			}
+		}
 	}
 
 	bool WorldRoot::SyncBlockGridCollision() {
@@ -214,8 +405,14 @@ namespace gargantuan {
 			const bool ConfigChanged = Member.Pose.Position != Pose.Position || Member.Pose.Rotation != Pose.Rotation ||
 				Member.CellSize != Grid.GetCellSize() || Member.Collidable != Grid.GetCanCollide() ||
 				Member.Queryable != Grid.GetCanQuery();
-			if (!ConfigChanged && Member.Revision == Field.GetGeometryRevision() && Member.Ready) continue;
-			const auto Mask=Participation(Grid.GetCanCollide(),Grid.GetCanQuery());
+			if (Member.Assembly && Grid.IsDynamicAssembly() && (Member.Assembly->Pose.Position!=Pose.Position || Member.Assembly->Pose.Rotation!=Pose.Rotation)) {
+				if (!Physics.UpdateBody(Member.Assembly->Body,AssemblyBody(Grid,Member.Assembly->Hulls)).Succeeded()) {
+					Member.Ready=false; Ready=false; continue;
+				}
+				Member.Assembly->Pose=Pose;
+			}
+			const auto Mask=QueryProxyMask(Grid);
+			if (!ConfigChanged && Member.TopologyCurrent && Member.TopologyMask==Mask && Member.Revision == Field.GetGeometryRevision() && Member.Ready) continue;
 			if ((!Member.TopologyCurrent || Member.TopologyMask != Mask) && !PrepareTopology(State, Member, Field)) {
 				Member.Ready = false;
 				Ready = false;

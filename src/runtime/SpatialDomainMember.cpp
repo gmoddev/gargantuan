@@ -1,4 +1,5 @@
 #include "gargantuan/runtime/SpatialDomainMember.hpp"
+#include "gargantuan/blockgrid/Assembly.hpp"
 #include "gargantuan/classes/BasePart.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
@@ -77,6 +78,10 @@ namespace gargantuan {
 		if (Region && SpatialRegion::FindAttachedWorld(Owner) && !SpatialRegion::FindAttachedWorld(*Region))
 			throw std::invalid_argument("[Spatial:Membership] The target region must be attached to this DataModel");
 		if ((!Binding && !Region) || (Binding && Region && Binding->Region.lock() == Region)) return;
+		const auto Parent=Owner.GetParent();
+		const auto Destination=Region?std::static_pointer_cast<WorldRoot>(Region):
+			Parent && *Parent?WorldRoot::GetEffectiveWorld(**Parent):nullptr;
+		ValidateBlockGridDomainChange(Owner,Destination.get());
 		const auto Root = Owner.shared_from_this();
 		const auto Before = Binding ? Binding->Active.lock() : WorldRoot::GetEffectiveWorld(Owner);
 		auto Next = Region ? std::make_unique<State>() : nullptr;

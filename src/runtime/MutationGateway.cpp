@@ -333,7 +333,9 @@ namespace gargantuan {
 						try {
 							const auto& Edit = *CommandValue.Edit;
 							const auto Categories=unsigned(!Edit.Writes.empty())+unsigned(!Edit.Commands.empty())+
-								unsigned(Edit.Binding.has_value())+unsigned(Edit.Channel.has_value())+unsigned(bool(Edit.Replay));
+								unsigned(Edit.Binding.has_value())+unsigned(Edit.Channel.has_value())+unsigned(bool(Edit.Replay))+unsigned(Edit.Motion.has_value());
+							if (Edit.Motion && (!Gameplay || !Edit.ExpectedRevision))
+								return {MutationStatus::Unauthorized,{},"[BlockGrid:Motion] A guarded authoritative simulation command is required"};
 							if (Categories>1 || (Edit.Binding && Edit.Binding->Replace && !Edit.ExpectedRevision) ||
 								(!Edit.Materials.empty() && (!Edit.ExpectedRevision || (Edit.Writes.empty() && Edit.Commands.empty()) ||
 									Edit.Materials.size()>blockgrid::MaximumNewMaterials)))
