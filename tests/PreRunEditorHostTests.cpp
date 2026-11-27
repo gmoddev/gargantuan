@@ -299,8 +299,9 @@ Schema:RegisterClass({Namespace="Game",Name="PreRunFolder",Version=1,Base="Engin
 		);
 		auto ReplacedSchema = Call("GetPreRunSource", Json::object());
 		Check(
-			ReplacedSchema["Ok"] && ReplacedSchema["Result"]["SchemaGeneration"] > Current["SchemaGeneration"],
-			"Project reopen publishes a fresh schema generation after destroying the old world"
+			ReplacedSchema["Ok"] && ReplacedSchema["Result"]["SchemaGeneration"] == Current["SchemaGeneration"] &&
+				ReplacedSchema["Result"]["ProjectRoot"] != Current["ProjectRoot"],
+			"Reopening an unchanged PreRun source reuses the active schema and replaces the old world"
 		);
 		auto RetiredBuffer = Call("ValidatePreRun", Parameters(Current, ValidSource));
 		Check(
@@ -346,6 +347,7 @@ Schema:RegisterClass({Namespace="Game",Name="PreRunFolder",Version=1,Base="Engin
 		Check(Call("SaveProjectAs", {{"Destination", OrderedCopy.generic_string()}})["Ok"] &&
 			ReadProjectPreRunSource(OrderedCopy) == Ordered, "Save As preserves every ordered entry");
 		const auto GasPlace = Call("ExportGasPlace", Json::object());
+		Check(Call("GetSnapshot", Json::object())["Ok"], "Attach an authoring cursor to the saved project before GAS import");
 		const auto GasState = Call("GetProjectState", Json::object());
 		Check(GasPlace["Ok"] && Call("OpenGasPlace", {{"ExpectedRevision", GasState["Result"]["AuthoritativeRevision"]},
 			{"DataBase64", GasPlace["Result"]["DataBase64"]}})["Ok"] &&
