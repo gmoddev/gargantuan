@@ -852,6 +852,12 @@ namespace gargantuan::network {
 		return !SpatialParticipant || !Granted.IsValid() || InsideGrant;
 	}
 
+	bool ReplicationCoordinator::HidesPlayerCharacter(ObjectId Referrer, std::string_view Property, ObjectId Target, ObjectId Peer) const {
+		if (!Configuration.ScopeSpatialDomains || Property != "Character") return false;
+		const auto Owner = Catalog.find(Referrer);
+		return Owner != Catalog.end() && Owner->second->Publication.ClassSchemaId == SpatialPlayerId && !IsVisibleToPeer(Target,Peer);
+	}
+
 	bool ReplicationCoordinator::BuildDependencyClosure(
 		const PeerRelevanceSelection &Selection, std::set<ObjectId> &Closure, std::string &Error
 	) {
@@ -926,7 +932,8 @@ namespace gargantuan::network {
 			}
 			for (const auto &[Name, Value] : Publication.Properties) {
 				const auto *Reference = std::get_if<WireObjectReference>(&Value);
-				if (Reference && IsHardReference(Publication, Name)) {
+				if (Reference && IsHardReference(Publication, Name) &&
+					!HidesPlayerCharacter(Object,Name,Reference->Object.ToObjectId(),Selection.LocalPlayer)) {
 					runtime_detail::CountWork(runtime_detail::WorkCounter::DependencyEdges);
 					Pending.push_back({Reference->Object.ToObjectId(), Depth + 1});
 				}
@@ -1379,6 +1386,7 @@ namespace gargantuan::network {
 				const auto *Reference = std::get_if<WireObjectReference>(&Value);
 				if (!Reference || !IsHardReference(Publication, Name)) continue;
 				const auto Target = Reference->Object.ToObjectId();
+				if (HidesPlayerCharacter(Object,Name,Target,Peer.LocalPlayer)) continue;
 				auto Dependency = Peer.PendingTransitions.find(Target);
 				if (Dependency != Peer.PendingTransitions.end() &&
 					Dependency->second.Kind == PendingTransitionKind::Leave)
@@ -1420,12 +1428,13 @@ namespace gargantuan::network {
 			SaturatingAdd(CandidateMetrics.StructuralTemplateHits, 1);
 			SaturatingAdd(CandidateMetrics.StructuralBytesReused, Found->second->RetainedBytes);
 		}
-		if (AllowSoftReferencePatches)
+		if (AllowSoftReferencePatches || Configuration.ScopeSpatialDomains)
 			for (const auto &[Name, Value] : Found->second->Publication.Properties) {
 				const auto *Reference = std::get_if<WireObjectReference>(&Value);
 				if (Reference && (!Known.contains(Reference->Object.ToObjectId()) ||
 					!IsVisibleToPeer(Reference->Object.ToObjectId(), LocalPlayer)) &&
-					!IsHardReference(Found->second->Publication, Name))
+					((AllowSoftReferencePatches && !IsHardReference(Found->second->Publication, Name)) ||
+						HidesPlayerCharacter(Object,Name,Reference->Object.ToObjectId(),LocalPlayer)))
 					Publish.NilProperties.Add(Name);
 			}
 		SaturatingAdd(CandidateMetrics.PeerPatchOperations, 1);
@@ -1459,7 +1468,8 @@ namespace gargantuan::network {
 			const auto Target = Reference->Object.ToObjectId();
 			const bool KnownAfterFrame = IsVisibleToPeer(Target, LocalPlayer) &&
 				((View.Knows(Target) && !Leaving.contains(Target)) || Entering.contains(Target));
-			if (!KnownAfterFrame && !IsHardReference(Found->second->Publication, Name)) Publish.NilProperties.Add(Name);
+			if (!KnownAfterFrame && (!IsHardReference(Found->second->Publication, Name) ||
+				HidesPlayerCharacter(Object,Name,Target,LocalPlayer))) Publish.NilProperties.Add(Name);
 		}
 		SaturatingAdd(CandidateMetrics.PeerPatchOperations, 1);
 		SaturatingAdd(CandidateMetrics.ReferencePatchOperations, Publish.NilProperties.Size());
@@ -1650,6 +1660,7 @@ namespace gargantuan::network {
 					if (const auto References = RemovalReferences.find(Object); References != RemovalReferences.end())
 						for (const auto &Reference : References->second)
 							if ((!Reference.Property->Nullable || Reference.Property->MaterializationDependencyPolicy == InstanceProperty::MaterializationDependency::Hard) &&
+								!HidesPlayerCharacter(Reference.Referrer,Reference.Property->Name,Object,CurrentPeer.LocalPlayer) &&
 								!Enqueue(Reference.Referrer)) return false;
 					continue;
 				}
@@ -1661,6 +1672,7 @@ namespace gargantuan::network {
 				for (const auto &[Name, Value] : Publication.Properties) {
 					const auto *Reference = std::get_if<WireObjectReference>(&Value);
 					if (Reference && IsHardReference(Publication, Name) &&
+						!HidesPlayerCharacter(Object,Name,Reference->Object.ToObjectId(),CurrentPeer.LocalPlayer) &&
 						!CurrentPeer.View.Knows(Reference->Object.ToObjectId()))
 						if (!Enqueue(Reference->Object.ToObjectId())) return false;
 				}
@@ -1703,7 +1715,8 @@ namespace gargantuan::network {
 						if (References == RemovalReferences.end()) continue;
 						for (const auto &Reference : References->second) {
 							if (Leaving.contains(Reference.Referrer) || std::ranges::binary_search(Group, Reference.Referrer)) continue;
-							const bool Hard = !Reference.Property->Nullable || Reference.Property->MaterializationDependencyPolicy == InstanceProperty::MaterializationDependency::Hard;
+							const bool Hard = (!Reference.Property->Nullable || Reference.Property->MaterializationDependencyPolicy == InstanceProperty::MaterializationDependency::Hard) &&
+								!HidesPlayerCharacter(Reference.Referrer,Reference.Property->Name,Object,CurrentPeer.LocalPlayer);
 							if (Hard && Reference.CurrentTarget.IsValid() &&
 								((!CurrentPeer.View.Knows(Reference.CurrentTarget) && !Entering.contains(Reference.CurrentTarget)) ||
 								 Leaving.contains(Reference.CurrentTarget) || std::ranges::binary_search(Group, Reference.CurrentTarget)))
@@ -2472,6 +2485,9 @@ namespace gargantuan::network {
 								if (CurrentValue != CurrentObject->second->Publication.Properties.end())
 									Value = CurrentValue->second;
 							}
+							if (const auto *Target = std::get_if<WireObjectReference>(&Value); Target &&
+								HidesPlayerCharacter(Record.Object,Change.PropertyName,Target->Object.ToObjectId(),Peer->second.LocalPlayer))
+								Value = std::monostate{};
 							if (!ReferencesKnown(ReadView(), Value)) {
 								if (PolicyManaged && CurrentObject != Catalog.end()) {
 									if (!IsHardReference(CurrentObject->second->Publication, Change.PropertyName)) {
