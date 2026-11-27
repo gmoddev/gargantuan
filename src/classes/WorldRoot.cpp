@@ -1218,6 +1218,8 @@ namespace gargantuan {
 
 	std::expected<std::uint64_t, terrain::EditStatus>
 	WorldRoot::SubmitTerrainEdit(const Terrain &Owner, const terrain::TerrainMutation &Edit) {
+		if (dynamic_cast<SpatialRegion *>(this))
+			if (auto Realm = GetDataModel(); Realm && Realm->SupportsNetworkSpatialContent()) return std::unexpected(terrain::EditStatus::Unavailable);
 		if (!HasTerrainRuntime() || !TerrainEditTickets || GetTerrainQueryOwner().get() != &Owner || SteppingPhysics)
 			return std::unexpected(terrain::EditStatus::Unavailable);
 		if (Edit.ExpectedRevision && *Edit.ExpectedRevision != Owner.GetField().GetRevision())

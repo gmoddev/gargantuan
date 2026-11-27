@@ -20,6 +20,7 @@ namespace gargantuan::network {
 	inline constexpr std::uint16_t GameSessionProtocolVersion = 2;
 	inline constexpr std::uint16_t GameSessionDistributionProtocolVersion = 3;
 	inline constexpr std::uint16_t GameSessionTerrainProtocolVersion = 4;
+	inline constexpr std::uint16_t GameSessionSpatialProtocolVersion = 5;
 	inline constexpr std::size_t MaximumGameSessionFrameBytes = 256;
 
 	enum class GameSessionMessageKind : std::uint8_t {
@@ -37,6 +38,7 @@ namespace gargantuan::network {
 		NetworkLimits AdvertisedLimits;
 		AssetContentId TerrainBinding;
 		std::string RuntimeDistributionIdentity;
+		bool SpatialContent{};
 	};
 
 	struct GameSessionServerAccepted {
@@ -49,6 +51,8 @@ namespace gargantuan::network {
 		NetworkLimits NegotiatedLimits;
 		AssetContentId TerrainBinding;
 		std::string RuntimeDistributionIdentity;
+		bool SpatialContent{};
+		ObjectId AuthorizedSpatialRegion;
 	};
 
 	struct GameSessionClientReady {
@@ -56,6 +60,7 @@ namespace gargantuan::network {
 		ReplicationEpoch Replication;
 		ObjectId Player;
 		AssetContentId TerrainBinding;
+		bool SpatialContent{};
 	};
 
 	using GameSessionMessage = std::variant<GameSessionClientHello, GameSessionServerAccepted, GameSessionClientReady>;

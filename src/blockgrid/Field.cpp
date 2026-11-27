@@ -187,6 +187,20 @@ namespace gargantuan::blockgrid {
 			}
 		}
 	}
+	void Field::InstallReplica(Field Value, const Admission &BeforeCommit) {
+		if (Revision == std::numeric_limits<std::uint64_t>::max() || GeometryRevision == std::numeric_limits<std::uint64_t>::max() ||
+			PublicRevision == std::numeric_limits<std::uint64_t>::max()) throw std::overflow_error("[BlockGrid:Replica] Local revision exhausted");
+		std::vector<Cell> Removed;
+		for (const auto &[Origin, Page] : Leaves)
+			if (!Value.Leaves.contains(Origin)) Removed.push_back(Origin);
+		const Candidate Next(*this,Value.Definitions.get(),Value.Leaves,Removed,Value.Leaves.size(),Value.Occupied);
+		if (BeforeCommit && !BeforeCommit(Next,{})) throw std::length_error("[BlockGrid:Replica] Collision capacity denied");
+		Value.Revision = Revision + 1;
+		Value.GeometryRevision = GeometryRevision + 1;
+		Value.PublicRevision = PublicRevision + 1;
+		*this = std::move(Value);
+	}
+
 	bool Field::Apply(std::span<const Write> Writes, std::optional<std::uint64_t> Expected, const Admission& BeforeCommit) {
 		if (Expected && *Expected != Revision) throw std::domain_error("[BlockGrid:Conflict] Grid revision changed");
 		if (Writes.size() > MaximumCommands) throw std::length_error("[BlockGrid:Limit] Too many edit commands");

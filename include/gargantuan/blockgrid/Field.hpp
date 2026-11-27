@@ -171,6 +171,7 @@ namespace gargantuan::blockgrid {
 		void ForEachOccupied(const std::function<void(Cell, Block)>& Visit) const;
 		// All commands share a single commit. Unchanged data preserves the revision.
 		using Admission = std::function<bool(const Candidate&, std::span<const Write>)>;
+		void InstallReplica(Field Value, const Admission &BeforeCommit);
 		[[nodiscard]] bool Define(Definition Spec,bool Replace=false,const Admission& BeforeCommit={});
 		void UndoDefinitionInsertion(const Definition& Expected,const Admission& BeforeCommit={});
 		[[nodiscard]] bool Apply(std::span<const Write> Writes, std::optional<std::uint64_t> Expected = {},

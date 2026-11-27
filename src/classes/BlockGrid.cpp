@@ -30,7 +30,7 @@ namespace gargantuan {
 				!Security.HasCapability(ScriptCapability::ReadDataModel) || Object->GetDestroyed() || Object->IsDestroying() ||
 				Object->GetDataModel()!=Script->DataModel)
 				throw std::runtime_error("[BlockGrid:Access] Grid must be live in the current DataModel");
-			if (Script->Mode==RuntimeMode::NetworkClient)
+			if (Script->Mode==RuntimeMode::NetworkClient && (Edit || !static_cast<BlockGrid&>(*Object).HasReplicaField()))
 				throw std::runtime_error("[BlockGrid:Unavailable] No verified BlockGrid replica data");
 			if (Edit && (Security.Domain!=ScriptExecutionDomain::Server || !Security.HasCapability(ScriptCapability::MutateDataModel)))
 				throw std::runtime_error("[BlockGrid:Access] Authoritative server gameplay context required");
@@ -176,6 +176,14 @@ namespace gargantuan {
 		AssertCanMutate();
 		if (Editing) throw std::logic_error("[BlockGrid:Admission] Cannot replace an active admission hook");
 		Admission=std::move(BeforeCommit);
+	}
+	void BlockGrid::InstallReplicaField(blockgrid::Field Value) {
+		AssertCanMutate();
+		if (!GetDataModel() || Editing) throw std::logic_error("[BlockGrid:Replica] Shell is unavailable");
+		Cells.InstallReplica(std::move(Value), Admission);
+		LastCellEdit.reset();
+		ReplicaFieldAvailable = true;
+		NotifyPropertyCommitted("BlockRevision");
 	}
 	std::string BlockGrid::GetBlockRevision() const { return RevisionToken(Cells.GetRevision()); }
 	std::string BlockGrid::GetPublicBlockRevision() const { return RevisionToken(Cells.GetPublicRevision())+"/peers"; }

@@ -19,6 +19,9 @@ namespace gargantuan {
 		[[nodiscard]] std::string GetPublicBlockRevision() const;
 		// Trusted asset materialization, before adoption or publication.
 		void RestoreField(blockgrid::Field Value);
+		// Used only after the authenticated content receiver resolves the live structural shell.
+		void InstallReplicaField(blockgrid::Field Value);
+		[[nodiscard]] bool HasReplicaField() const { return ReplicaFieldAvailable; }
 		void SetAdmission(blockgrid::Field::Admission BeforeCommit);
 		void PushGridHit(lua_State* L, blockgrid::Cell Cell, glm::vec3 Position, glm::vec3 Normal) const;
 	  private:
@@ -33,6 +36,7 @@ namespace gargantuan {
 		gargantuan::CFrame Transform;
 		float Size{1.0f};
 		bool IsVisible{true}, Collides{true}, Queryable{true}, Editing{};
+		bool ReplicaFieldAvailable{};
 		std::uint64_t ConfigurationRevision{1};
 	};
 }
