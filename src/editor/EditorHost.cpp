@@ -1845,7 +1845,7 @@ namespace gargantuan {
 					"AdvancedMaterialMetadata",
 					"AnimationRig", "AnimationPreview", "AnimationPreviewBlend", "CharacterComposition",
 					"PackageBuild", "PackageBuildProgress", "PackageBuildCancellation", "RuntimeDistributionPolicy",
-					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport", "PickPresentedViewportV1",
+					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport",
 					"ViewportLatestFrame", "ViewportPresentationDiagnostics", "GuiPreview", "GuiPreviewLayout"
 				};
 				const bool PrivateNode = HasNodeDevelopmentPersistence();
@@ -1869,6 +1869,7 @@ namespace gargantuan {
 				}
 				if (LatestFrameMailbox::IsSupported()) {
 					capabilities.push_back("SharedMemoryViewportV2");
+					capabilities.push_back("PickPresentedViewportV1");
 					viewportTransports.push_back({
 						{"Name", "LatestFrameMailbox"},
 						{"Version", LatestFrameMailboxLayout::Version},

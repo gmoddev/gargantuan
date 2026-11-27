@@ -5430,6 +5430,9 @@ namespace {
 		Check(!unauthorized["Ok"].get<bool>() && unauthorized["Error"]["Code"] == "Unauthorized", "EditorHost rejects the wrong launch token");
 		auto handshake = call("Handshake", Json::object(), "test-token");
 		Check(handshake["Ok"].get<bool>() && handshake["Result"]["ProtocolVersion"] == 1, "EditorHost negotiates protocol version 1");
+		Check(std::ranges::contains(handshake["Result"]["Capabilities"], "PickPresentedViewportV1") ==
+				LatestFrameMailbox::IsSupported(),
+			"frame-bound scene picking is offered only on a producing mailbox transport");
 		Check(
 			handshake["Result"]["StudioExecutionDomain"] == "Studio" &&
 				handshake["Result"]["StudioCapabilities"] == Json::array({
