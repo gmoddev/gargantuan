@@ -23,6 +23,13 @@ pre-step replacement. Endpoints are resolved to generation-safe neutral body
 IDs; detached, destroyed, cross-world and identical endpoints cannot create a
 joint.
 
+`Constraint.Active` requires the constraint and both attachment Parts to
+resolve to the same available world. Detaching a named SpatialRegion makes
+the joint inactive even when all three still inherit that chart. Reattaching
+the region restores participation when its endpoints still qualify. An active
+joint spanning two Parts must be disabled before moving just one endpoint to
+another chart. Moving the whole constrained assembly together is also supported.
+
 `JointType` accepts the exact strings `BallSocket`, `Hinge`, `Slider` and
 `Distance`; an unsupported value is rejected at the reflected setter before
 the authored property changes. A ball socket fixes the two frame origins and permits free

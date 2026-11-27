@@ -1,5 +1,6 @@
 #include "gargantuan/classes/Constraint.hpp"
 #include "gargantuan/classes/BasePart.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include <memory>
 
@@ -24,6 +25,8 @@ namespace gargantuan {
 
 		auto [part0, part1] = GetActiveParts();
 		const auto World = WorldRoot::GetEffectiveWorld(*this);
-		return World && part0 && part1 && WorldRoot::GetEffectiveWorld(*part0) == World && WorldRoot::GetEffectiveWorld(*part1) == World;
+		const auto *Region = dynamic_cast<const SpatialRegion *>(World.get());
+		return World && part0 && part1 && (!Region || SpatialRegion::FindAttachedWorld(*Region)) &&
+			WorldRoot::GetEffectiveWorld(*part0) == World && WorldRoot::GetEffectiveWorld(*part1) == World;
 	}
 }

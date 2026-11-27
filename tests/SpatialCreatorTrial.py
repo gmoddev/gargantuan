@@ -47,7 +47,7 @@ def Create(Host, Project, Sources, Network=False):
 
 def Play(Engine, Project, Doors, Masonry=False):
     Names = ("TransferDoor.server", "TransferView.client") if Doors else (
-        "Platform.server", "OverlappingDomains.server", "ReusableBlocks.server")
+        "Platform.server", "OverlappingDomains.server", "ReusableBlocks.server", "JointDomains.server")
     Sources = [Scripts / (Name + ".luau") for Name in Names]
     if Masonry:
         Example = Scripts.parents[2] / "samples" / "BlockGridGameplay"
@@ -73,7 +73,7 @@ def Play(Engine, Project, Doors, Masonry=False):
                     raise RuntimeError(f"Missing {Marker}. Play diagnostics: {Messages[-22:]}")
                 time.sleep(.04)
                 Collect(Host.Call("PollPlayDiagnostics", PlaySessionId=Session))
-            print(Marker, flush=True)
+            print(next(Message for Message in Messages if Marker in Message), flush=True)
 
         try:
             Collect(Started)
@@ -91,7 +91,7 @@ def Play(Engine, Project, Doors, Masonry=False):
             elif Masonry:
                 Wait("[BlockGrid:Masonry] Built the workshop")
             else:
-                for Tag in ("Platform", "Reuse", "Domains"):
+                for Tag in ("Platform", "Reuse", "Domains", "Joints"):
                     Wait(f"[Reader:{Tag}] PASS")
         finally:
             Host.Call("StopPlaySession", PlaySessionId=Session)
