@@ -44,6 +44,7 @@ int main() {
 			std::error_code Ignored;
 			std::filesystem::remove_all(Root, Ignored);
 			std::filesystem::remove_all(std::filesystem::path(Root.string() + "-copy"), Ignored);
+			std::filesystem::remove_all(std::filesystem::path(Root.string() + "-ordered"), Ignored);
 			std::filesystem::remove(std::filesystem::path(Root.string() + "-external.luau"), Ignored);
 			SDL_Quit();
 		}
@@ -306,6 +307,50 @@ Schema:RegisterClass({Namespace="Game",Name="PreRunFolder",Version=1,Base="Engin
 			!RetiredBuffer["Ok"] && RetiredBuffer["Error"]["Code"] == "StaleProject",
 			"Old schema/project buffers cannot validate against a replacement world"
 		);
+		auto Frame = [](std::string_view Id, std::string_view Name, std::string_view Source) {
+			return std::string(Id) + "\t" + std::string(Name) + "\t" + std::to_string(Source.size()) + "\n" + std::string(Source);
+		};
+		const std::string Header = "!Gantria.PreRun/1\n";
+		const auto Default = Frame("default", "Default", "local Private = 5");
+		const auto First = Frame("s1", "First", "error('first fault')");
+		const auto Second = Frame("s2", "Second", "error('second fault')");
+		auto CollectionParameters = [&](const Json &State, std::string_view Text) {
+			auto Request = Parameters(State, Text);
+			Request["CollectionVersion"] = 1;
+			return Request;
+		};
+		const auto State = ReplacedSchema["Result"];
+		for (bool Reverse : {false, true}) {
+			const auto Order = Reverse ? Second + First : First + Second;
+			const auto Result = Call("ValidatePreRun", CollectionParameters(State, Header + Default + Order));
+			Check(Result["Ok"] && !Result["Result"]["Validated"] &&
+				Result["Result"]["Diagnostics"][0]["Message"].get<std::string>().starts_with(Reverse ? "PreRun/Second:" : "PreRun/First:"),
+				"Validation stops at the first failing named script in authored order");
+		}
+		auto Ordered = Header + Default + Frame("s1", "CustomScriptHere", "assert(Private == nil)\n" + ValidSource);
+		Check(Call("ValidatePreRun", CollectionParameters(State, Ordered))["Result"]["Validated"],
+			"Each entry has independent locals and contributes to one disposable schema");
+		Check(!Call("SetPreRunSource", Parameters(State, Ordered))["Ok"] &&
+			!Call("SetPreRunSource", CollectionParameters(State, Header + First + Default))["Ok"] &&
+			!Call("SetPreRunSource", CollectionParameters(State, Header + Default + First + First))["Ok"],
+			"An unaware writer, misplaced Default and duplicate script are rejected");
+		Check(Call("SetPreRunSource", CollectionParameters(State, Ordered))["Ok"] && ReadProjectPreRunSource(CopyRoot)==Ordered,
+			"Collection saves source bytes, names and order together");
+		Check(Call("GetPreRunSource", Json::object())["Error"]["Code"]=="UnsupportedPreRunCollection" &&
+			!Call("SetPreRunSource", Parameters(State, "-- legacy"))["Ok"], "Legacy clients cannot overwrite a collection");
+		Check(Call("OpenProject", {{"Root",CopyRoot.generic_string()}})["Ok"] &&
+			!Call("GetPreRunSource", {{"CollectionVersion",1}})["Result"]["ReloadRequired"] &&
+			GetRuntimeSchemaLifecycle().GetActiveRegistry()->FindEnumByName("Game.Quality") != nullptr,
+			"Explicit reopen activates the named child and preserves its declarations");
+		const auto OrderedCopy = std::filesystem::path(Root.string() + "-ordered");
+		Check(Call("SaveProjectAs", {{"Destination", OrderedCopy.generic_string()}})["Ok"] &&
+			ReadProjectPreRunSource(OrderedCopy) == Ordered, "Save As preserves every ordered entry");
+		const auto GasPlace = Call("ExportGasPlace", Json::object());
+		const auto GasState = Call("GetProjectState", Json::object());
+		Check(GasPlace["Ok"] && Call("OpenGasPlace", {{"ExpectedRevision", GasState["Result"]["AuthoritativeRevision"]},
+			{"DataBase64", GasPlace["Result"]["DataBase64"]}})["Ok"] &&
+			Call("GetPreRunSource", {{"CollectionVersion", 1}})["Result"]["SourceBase64"] == Encode(Ordered),
+			"GAS place roundtrip preserves ordered PreRun source bytes");
 		EditorHost Denied("denied", ScriptSecurityContext::ClientRuntime());
 		auto Unauthorized = Json::parse(Denied.HandleRequest(
 			Json{

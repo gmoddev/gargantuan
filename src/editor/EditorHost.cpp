@@ -31,6 +31,7 @@
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/reflection/PreRunRegistration.hpp"
+#include "gargantuan/reflection/PreRunCollection.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/Snapshot.hpp"
 #include "gargantuan/runtime/SemanticSpatialResolver.hpp"
@@ -1857,7 +1858,7 @@ namespace gargantuan {
 					"AuthoritativeTransactions",
 					"Undo", "Redo", "AuthoritativeHistoryStatus",
 					"OptimisticProjectRevision", "CreateInstanceInitialProperties", "CreateScriptWithSource",
-					"ReadScriptSource", "WriteScriptSource", "ScriptDocumentBinding", "PreRunSource", "ValidatePreRun",
+					"ReadScriptSource", "WriteScriptSource", "ScriptDocumentBinding", "PreRunSource", "PreRunCollectionV1", "ValidatePreRun",
 					"CustomServiceDeclarations", "ReplicatedStorage",
 					"PlaySession", "DiagnosticStream", "PlayScriptFailureLocation", "PlayRootDebug", "SendPlayInput", "StreamingDiagnostics", "PlayInputInspection", "PlayPersistence",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
@@ -1926,14 +1927,18 @@ namespace gargantuan {
 					!StudioSecurity.HasCapability(Write ? ScriptCapability::MutateDataModel : ScriptCapability::ReadDataModel))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "PreRun authoring requires explicit EditorCommands and read/write authority"));
 				if (!World || !CurrentProject) return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectRequired", "Open a project first"));
-				if (!HasOnlyFields(parameters, Read ? std::initializer_list<std::string_view>{} :
-					std::initializer_list<std::string_view>{"ProjectRoot", "ExpectedSourceRevision", "SourceBase64"}) ||
+				if (!HasOnlyFields(parameters, Read ? std::initializer_list<std::string_view>{"CollectionVersion"} :
+					std::initializer_list<std::string_view>{"ProjectRoot", "ExpectedSourceRevision", "SourceBase64", "CollectionVersion"}) ||
+					(parameters.contains("CollectionVersion") && (!parameters["CollectionVersion"].is_number_integer() || parameters["CollectionVersion"] != 1)) ||
 					(!Read && (!parameters.contains("ProjectRoot") || !parameters.contains("ExpectedSourceRevision") ||
 						!parameters["ExpectedSourceRevision"].is_string() || !parameters.contains("SourceBase64"))))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Invalid PreRun authoring fields"));
 				if (ActivePreRunSchemaGeneration != GetRuntimeSchemaLifecycle().GetActiveGeneration())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleSchema", "Reopen the project after schema replacement"));
 				const auto Saved = ReadProjectPreRunSource(CurrentProject->Root);
+				const bool CollectionClient = parameters.contains("CollectionVersion");
+				if (Saved && Saved->starts_with(PreRunCollectionPrefix) && !CollectionClient)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "UnsupportedPreRunCollection", "This project requires a collection-aware PreRun editor"));
 				const auto Location = EncodeProjectPath(CurrentProject->Root);
 				const auto LocationRevision = AssetContentId::Hash(std::span(reinterpret_cast<const std::uint8_t *>(Location.data()), Location.size())).ToString();
 				const auto Revision = PreRunRevision(Saved) + "@" + LocationRevision;
@@ -1955,7 +1960,13 @@ namespace gargantuan {
 				if (World->Transactions.GetOpenCount() != 0 || (ActivePackageJob && !ActivePackageJob->Complete.load()))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "LifecycleConflict", "Finish the active transaction or package job first"));
 				std::string Source;
-				try { Source = DecodePreRunSource(parameters["SourceBase64"]); }
+				try {
+					Source = DecodePreRunSource(parameters["SourceBase64"]);
+					if (Source.starts_with(PreRunCollectionPrefix)) {
+						if (!CollectionClient) throw std::invalid_argument("PreRun collection support is required");
+						(void)ReadPreRunChunks(Source);
+					}
+				}
 				catch (const std::invalid_argument &Error) { return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidSource", Error.what())); }
 				if (Write) {
 					try {
@@ -1974,7 +1985,9 @@ namespace gargantuan {
 				Result["ValidatedSourceRevision"] = PreRunRevision(Source);
 				Result["Diagnostics"] = Json::array();
 				if (Diagnostic) {
-					auto Message = Diagnostic->Message.substr(0, 4096);
+					auto Message = Diagnostic->Message;
+					if (Diagnostic->Source.starts_with("PreRun/")) Message = Diagnostic->Source + ": " + Message;
+					Message = Message.substr(0, 4096);
 					while (!Message.empty() && !IsValidProtocolUtf8(Message)) Message.pop_back();
 					Result["Diagnostics"].push_back({{"Code", GetPreRunDiagnosticCodeName(Diagnostic->Code)},
 						{"Source", ".gargantuan/prerun.luau"}, {"Definition", Diagnostic->Definition.substr(0, 256)}, {"Message", Message}});

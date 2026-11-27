@@ -263,6 +263,8 @@ snapshot/journal version 6, and the authoritative mutation gateway. Project defi
 by the engine's bounded PreRun candidate lifecycle. Studio receives neither
 the `DefineSchema` capability nor the registration facade.
 
+Studio exposes PreRun as a top-level Explorer service for local projects. Default runs first, followed by custom scripts in authored order. A collection-aware EditorHost advertises `PreRunCollectionV1`. Its read, save and validate commands accept `CollectionVersion: 1` and the existing source revision covers the complete collection. Save commits the drafts and their order together. Explicit reopen activates the saved declarations.
+
 Script Source is saved in the current project Instance format (v5) but is not an ordinary replicated
 property. `GetScriptSource` and token-checked `SetScriptSource` require the
 trusted EditorHost grant and a live project-scoped ObjectId. Journal/snapshot
