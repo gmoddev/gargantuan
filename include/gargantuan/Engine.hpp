@@ -111,6 +111,7 @@ namespace gargantuan {
 		std::chrono::steady_clock::time_point LastTick{};
 		std::function<std::chrono::steady_clock::time_point()> DevelopmentClock;
 		bool Destroyed = false;
+		std::shared_ptr<const gargantuan::DataModel::DefaultNetworkSpatialProfile> NetworkSpatialProfile;
 		bool ResidencyPolicyEnabled = false;
 		bool StreamingDiagnosticsEnabled = false;
 		bool ResidencyPreparationFailed = false;

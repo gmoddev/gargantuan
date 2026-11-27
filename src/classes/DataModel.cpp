@@ -1,3 +1,6 @@
+#include "gargantuan/classes/BlockGrid.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
+#include "gargantuan/runtime/SpatialDomainMember.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/Terrain.hpp"
@@ -52,6 +55,21 @@ namespace gargantuan {
 	void DataModel::EnsureAuthoritativeRevisionAvailable() const {
 		if (AuthoritativeRevision == std::numeric_limits<std::uint64_t>::max())
 			throw std::overflow_error("Authoritative project revision is exhausted");
+	}
+
+	void DataModel::CheckDefaultNetworkSpatialParticipant(const Instance &Node) {
+		const auto *Assigned = dynamic_cast<const SpatialDomainMember *>(&Node);
+		if (dynamic_cast<const SpatialRegion *>(&Node) || dynamic_cast<const BlockGrid *>(&Node) ||
+			(Assigned && Assigned->HasAssignedRegion()))
+			throw std::invalid_argument("[Spatial:Network] This session protocol cannot materialize independent domains or native BlockGrid cells");
+	}
+
+	std::shared_ptr<const DataModel::DefaultNetworkSpatialProfile> DataModel::AcquireDefaultNetworkSpatialProfile() {
+		if (auto Existing = NetworkSpatialProfile.lock()) return Existing;
+		for (const auto &Child : GetDescendants()) CheckDefaultNetworkSpatialParticipant(*Child);
+		auto Profile = std::make_shared<const DefaultNetworkSpatialProfile>();
+		NetworkSpatialProfile = Profile;
+		return Profile;
 	}
 
 	bool DataModel::HasDeferredRevision() const noexcept {

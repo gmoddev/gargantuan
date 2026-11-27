@@ -2,6 +2,7 @@
 #include "gargantuan/assets/GasInstanceSerialization.hpp"
 #include "assets/PreparedInstanceSerialization.hpp"
 #include "gargantuan/classes/Instance.hpp"
+#include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/LuaSourceContainer.hpp"
 #include "gargantuan/classes/Sound.hpp"
@@ -84,6 +85,53 @@ namespace gargantuan::InstanceSerialization {
 
 	namespace {
 		using DocumentNodeIds = std::unordered_map<const Instance *, std::uint32_t>;
+		constexpr char BlockCellsKey[] = "NativeBlockCellsV1";
+		// Existing v5 worlds encode the default spatial domain by omission.
+		bool IsOptionalSpatialMembership(std::string_view Name, const InstanceProperty &Property) {
+			return Name == "SpatialRegion" && Property.Nullable &&
+				Property.ObjectReferenceClassSchemaId == SchemaId::FromNativeName("Engine", "SpatialRegion");
+		}
+
+		json ProjectCellBytes(std::span<const std::uint8_t> Bytes) {
+			if (Bytes.empty() || Bytes.size() > Gas::MaximumBinaryBytes)
+				throw std::length_error("[BlockGrid:Save] Cell payload exceeds the native GAS record limit");
+			constexpr char Digits[] = "0123456789abcdef";
+			constexpr std::size_t ChunkBytes = MaximumProtocolStringBytes / 2;
+			auto Result = json::array();
+			for (std::size_t Offset = 0; Offset < Bytes.size(); Offset += ChunkBytes) {
+				const auto Chunk = Bytes.subspan(Offset, std::min(ChunkBytes, Bytes.size() - Offset));
+				std::string Text(Chunk.size() * 2, '0');
+				for (std::size_t I = 0; I < Chunk.size(); ++I) {
+					Text[2*I] = Digits[Chunk[I] >> 4];
+					Text[2*I+1] = Digits[Chunk[I] & 15];
+				}
+				Result.push_back(std::move(Text));
+			}
+			return Result;
+		}
+
+		blockgrid::Field ReadCellBytes(const json &Chunks) {
+			if (!Chunks.is_array() || Chunks.empty() ||
+				Chunks.size() > (Gas::MaximumBinaryBytes * 2 + MaximumProtocolStringBytes - 1) / MaximumProtocolStringBytes)
+				throw std::invalid_argument("[BlockGrid:Load] Invalid cell payload length");
+			const auto Nibble = [](char Digit) -> unsigned {
+				if (Digit >= '0' && Digit <= '9') return Digit - '0';
+				if (Digit >= 'a' && Digit <= 'f') return Digit - 'a' + 10;
+				throw std::invalid_argument("[BlockGrid:Load] Invalid cell payload encoding");
+			};
+			std::vector<std::uint8_t> Bytes;
+			for (const auto &Chunk : Chunks) {
+				if (!Chunk.is_string()) throw std::invalid_argument("[BlockGrid:Load] Expected cell bytes");
+				const auto &Text = Chunk.get_ref<const std::string &>();
+				if (Text.empty() || Text.size() % 2 || Text.size() > MaximumProtocolStringBytes ||
+					(&Chunk != &Chunks.back() && Text.size() != MaximumProtocolStringBytes) ||
+					Text.size() / 2 > Gas::MaximumBinaryBytes - Bytes.size())
+					throw std::invalid_argument("[BlockGrid:Load] Invalid cell byte count");
+				for (std::size_t I = 0; I < Text.size(); I += 2)
+					Bytes.push_back(static_cast<std::uint8_t>((Nibble(Text[I]) << 4) | Nibble(Text[I+1])));
+			}
+			return blockgrid::Decode(Bytes);
+		}
 
 		template <class Visit>
 		void CollectDocumentNodes(std::span<const std::shared_ptr<Instance>> Roots, DocumentNodeIds &Ids,
@@ -250,6 +298,7 @@ namespace gargantuan::InstanceSerialization {
 				}
 				if (property.ReadObjectReference) {
 					auto Referenced = property.ReadObjectReference(instance.get());
+					if (!Referenced && IsOptionalSpatialMembership(key, property)) return;
 					if (!Referenced) properties[key] = json::object({{"InstanceReference", nullptr}});
 					else if (auto Found = state.NodeIds.find(Referenced.get()); Found != state.NodeIds.end())
 						properties[key] = json::object({{"InstanceReference", Found->second}});
@@ -289,6 +338,8 @@ namespace gargantuan::InstanceSerialization {
 			serialized["ClassDefinitionVersion"] = definition->DefinitionVersion;
 			serialized["NodeId"] = state.NodeIds.at(instance.get());
 			serialized["Properties"] = properties;
+			if (auto Grid = dynamic_cast<const BlockGrid *>(instance.get()))
+				serialized[BlockCellsKey] = ProjectCellBytes(blockgrid::Encode(Grid->GetField()));
 			serialized["Attributes"] = json::object();
 			for (const auto &[name, value] : instance->GetAttributeValues(ScriptSecurityContext::CoreTrusted()))
 				serialized["Attributes"][name] = JsonCodec::EncodeWireValue(value);
@@ -386,6 +437,11 @@ namespace gargantuan::InstanceSerialization {
 				if (++ValueCount > Gas::MaximumValues)
 					throw std::length_error("GAS document exceeds its value-count limit");
 				AddText(Name);
+				if (const auto *Binary = std::get_if<Gas::Binary>(&Value)) {
+					if (Binary->size() > Gas::MaximumBinaryBytes || Binary->size() > Gas::MaximumDocumentBytes - TextBytes)
+						throw std::length_error("[BlockGrid:Save] Native binary record exceeds document budget");
+					TextBytes += Binary->size();
+				}
 				const auto *Wire = std::get_if<WireValue>(&Value);
 				if (!Wire) return;
 				if (const auto *Text = std::get_if<std::string>(Wire)) AddText(*Text);
@@ -437,7 +493,12 @@ namespace gargantuan::InstanceSerialization {
 			Node.DefinitionVersion = Definition->DefinitionVersion;
 			Node.Name = Object.GetName();
 			Budget.AddText(Node.Name);
+			if (auto Grid = dynamic_cast<const BlockGrid *>(&Object)) {
+				auto Entry = Node.SavedProperties.emplace(BlockCellsKey, blockgrid::Encode(Grid->GetField())).first;
+				Budget.AddValue(Entry->first, Entry->second);
+			}
 			VisitSavedProperties(*Definition, [&](const std::string &Name, const InstanceProperty &Property) {
+				if (IsOptionalSpatialMembership(Name, Property) && !Property.ReadObjectReference(&Object)) return;
 				auto Value = CaptureGasProperty(Object, Name, Property, Ids);
 				Budget.AddValue(Name, Value);
 				Node.SavedProperties.insert_or_assign(Name, std::move(Value));
@@ -908,7 +969,8 @@ namespace gargantuan::InstanceSerialization {
 			if (state.FormatVersion >= 5 && key != "Parent" &&
 				property->PersistencePolicy == InstanceProperty::Persistence::Saved &&
 				property->SemanticType == InstanceProperty::DataType::ObjectReference &&
-				property->ReadObjectReference && property->WriteObjectReference && !properties.contains(key)) {
+				property->ReadObjectReference && property->WriteObjectReference && !properties.contains(key) &&
+				!IsOptionalSpatialMembership(key, *property)) {
 				instance->Destroy();
 				return state.ReturnError("Reference property '{}' is missing in {}", key, state.FormatCurrentPath());
 			}
@@ -1000,6 +1062,16 @@ namespace gargantuan::InstanceSerialization {
 			} catch (...) {
 				instance->Destroy();
 				return state.ReturnError("Unknown error setting property '{}' in {}", key, state.FormatCurrentPath());
+			}
+		}
+		if (const auto Payload = contents.find(BlockCellsKey); Payload != contents.end()) {
+			try {
+				auto *Grid = dynamic_cast<BlockGrid *>(instance.get());
+				if (!Grid) throw std::invalid_argument("Unexpected native cell record on another class");
+				Grid->RestoreField(ReadCellBytes(*Payload));
+			} catch (const std::exception &Error) {
+				instance->Destroy();
+				return state.ReturnError("Invalid BlockGrid data in {}: {}", state.FormatCurrentPath(), Error.what());
 			}
 		}
 		if (auto Script = std::dynamic_pointer_cast<LuaSourceContainer>(instance)) {
@@ -1369,7 +1441,15 @@ namespace gargantuan::InstanceSerialization {
 				!InstanceClassRegistry::IsConstructible(*Definition))
 				throw std::invalid_argument("GAS Instance class or definition version is unavailable");
 			auto Properties = json::object();
+			std::optional<json> Cells;
 			for (const auto &[Name, Value] : Node.SavedProperties) {
+				if (Name == BlockCellsKey) {
+					const auto *Bytes = std::get_if<Gas::Binary>(&Value);
+					if (Node.Class != SchemaId::FromNativeName("Engine", "BlockGrid") || !Bytes)
+						throw std::invalid_argument("GAS native cell record has invalid owner or type");
+					Cells = ProjectCellBytes(*Bytes);
+					continue;
+				}
 				const auto Property = Definition->AllProperties.find(Name);
 				if (Property == Definition->AllProperties.end() || !IsNativeSavedProperty(Name, *Property->second))
 					throw std::invalid_argument("GAS property is unknown or no longer saved: " + Name);
@@ -1384,7 +1464,7 @@ namespace gargantuan::InstanceSerialization {
 				if (!Text || !ProjectId::Parse(*Text) || !SourceIds.insert(*Text).second)
 					throw std::invalid_argument("GAS Script SourceId is missing, invalid or duplicated");
 			}
-			return json{
+			auto EncodedNode = json{
 				{"Name", Node.Name},
 				{"ClassName", Definition->ConstructionKind == SchemaClassConstructionKind::CustomData
 					? Definition->CanonicalName : Definition->ClassName},
@@ -1398,6 +1478,8 @@ namespace gargantuan::InstanceSerialization {
 				{"Tags", Node.Tags},
 				{"Children", json::array()},
 			};
+			if (Cells) EncodedNode[BlockCellsKey] = std::move(*Cells);
+			return EncodedNode;
 		}
 
 		std::vector<json> ProjectGasForest(const Gas::Document &Document) {
@@ -1516,6 +1598,7 @@ namespace gargantuan::InstanceSerialization {
 					if (Name != "Parent" && Property->PersistencePolicy == InstanceProperty::Persistence::Saved &&
 						Property->SemanticType == InstanceProperty::DataType::ObjectReference &&
 						Property->ReadObjectReference && Property->WriteObjectReference &&
+						(Properties.contains(Name) || !IsOptionalSpatialMembership(Name, *Property)) &&
 						(!Properties.contains(Name) || !Properties[Name].is_object() ||
 							Properties[Name].size() != 1 || !Properties[Name].contains("InstanceReference")))
 						return std::unexpected("Version 5 content omits or mistypes a saved InstanceReference property");

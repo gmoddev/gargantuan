@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -96,6 +97,9 @@ namespace gargantuan {
 		bool MovingBodyCCD = false;
 		float Friction = 0.6f;
 		float Restitution = 0.0f;
+		// An omitted query override follows the existing rigid-body collision policy.
+		std::optional<bool> CanQuery;
+		bool RequiresBlockGridQuery = false;
 	};
 
 	enum class PhysicsConstraintKind : std::uint8_t {
@@ -202,6 +206,7 @@ namespace gargantuan {
 		std::vector<PhysicsBodyId> Bodies;
 		std::uint16_t CollisionGroup = 0;
 		std::uint16_t CollisionMask = MaximumPhysicsCollisionMask;
+		bool IncludeBlockGrids = false;
 	};
 
 	struct PhysicsRaycastRequest {

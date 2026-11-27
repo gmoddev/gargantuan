@@ -63,6 +63,8 @@ namespace gargantuan {
 		Owner.ValidatePropertyMutation("SpatialRegion", Value);
 		auto Region = Value.value_or(nullptr);
 		const auto Realm = Owner.GetDataModel();
+		if (Region && Realm && Realm->HasDefaultNetworkSpatialProfile())
+			throw std::invalid_argument("[Spatial:Network] This session protocol requires default-domain membership");
 		if (Region && (Region->GetDestroyed() || Region->IsDestroying() ||
 					   (Realm && Region->GetDataModel() && Region->GetDataModel() != Realm)))
 			throw std::invalid_argument("[Spatial:Membership] A region must be live and in the same DataModel");

@@ -1,4 +1,5 @@
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "gargantuan/scripting/StackValue.hpp"
@@ -48,13 +49,19 @@ namespace gargantuan {
         for (auto Id:BackendResult.Bodies) {
             auto Part=ResolvePart(Id);
             if (Part) Result.Parts.push_back(std::move(Part));
+            else if (auto Grid = ResolveBlockGrid(Id)) Result.BlockGrids.push_back(std::move(Grid));
             else if (CandidateTerrain && TerrainPhysics->FindOwner(Id))
                 Result.TerrainInstance = CandidateTerrain;
             else return {.Status=PhysicsOperationStatus::BackendFailure, .Message="Overlap has no live semantic owner"};
         }
         std::ranges::sort(Result.Parts, {}, [](const auto &Part) { return Part->GetObjectId(); });
-        Result.Truncated=Result.Parts.size()>MaxResults;
-        if (Result.Truncated) Result.Parts.resize(MaxResults);
+        std::ranges::sort(Result.BlockGrids, {}, [](const auto &Grid) { return Grid->GetObjectId(); });
+        const auto Repeated = std::ranges::unique(Result.BlockGrids);
+        Result.BlockGrids.erase(Repeated.begin(), Repeated.end());
+        Result.Truncated = Result.Parts.size() + Result.BlockGrids.size() > MaxResults;
+        if (Result.Parts.size() > MaxResults) Result.Parts.resize(MaxResults);
+        const auto GridLimit = MaxResults - Result.Parts.size();
+        if (Result.BlockGrids.size() > GridLimit) Result.BlockGrids.resize(GridLimit);
         return Result;
     }
 
@@ -96,6 +103,16 @@ namespace gargantuan {
             }
             lua_setreadonly(L,-1,true);
             lua_setfield(L,-2,"Parts");
+            if (!Result.BlockGrids.empty()) {
+                lua_createtable(L, static_cast<int>(Result.BlockGrids.size()), 0);
+                int GridIndex = 1;
+                for (const auto &Grid : Result.BlockGrids) {
+                    StackValue<std::shared_ptr<Instance>>::Push(L, Grid);
+                    lua_rawseti(L, -2, GridIndex++);
+                }
+                lua_setreadonly(L, -1, true);
+                lua_setfield(L, -2, "BlockGrids");
+            }
             lua_pushboolean(L,Result.Truncated);
             lua_setfield(L,-2,"Truncated");
             if (Result.TerrainInstance) {
@@ -108,6 +125,10 @@ namespace gargantuan {
             if (!Result.HasHit()) { lua_pushnil(L); return 1; }
             lua_createtable(L,0,4);
             StackValue<std::shared_ptr<Instance>>::Push(L,Result.GetHitInstance()); lua_setfield(L,-2,"Instance");
+            if (Result.Cell) {
+                Result.GridInstance->PushGridHit(L, {Result.Cell->x, Result.Cell->y, Result.Cell->z}, Result.Position, Result.Normal);
+                lua_setfield(L, -2, "GridHit");
+            }
             StackValue<glm::vec3>::Push(L,Result.Position); lua_setfield(L,-2,"Position");
             StackValue<glm::vec3>::Push(L,Result.Normal); lua_setfield(L,-2,"Normal");
             lua_pushnumber(L,Result.Distance); lua_setfield(L,-2,"Distance");

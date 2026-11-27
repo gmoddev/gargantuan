@@ -92,6 +92,8 @@ namespace gargantuan {
 			bool Complete = false;
 			~ConstructionLifetime() { if (!Complete) Runtime.Destroy(); }
 		} Construction{*this};
+		if (ProviderConfiguration.Mode != RuntimeMode::Offline)
+			NetworkSpatialProfile = DataModel->AcquireDefaultNetworkSpatialProfile();
 		std::shared_ptr<const terrain::TerrainMaterialPalette> TerrainPalette;
 		bool TerrainVisualDensity = ProviderConfiguration.ExperimentalTerrainVisualDensity;
 		if (ProviderConfiguration.Mode != RuntimeMode::NetworkServer) {
@@ -230,6 +232,7 @@ namespace gargantuan {
 	void Engine::Destroy() {
 		if (Destroyed) return;
 		Destroyed = true;
+		NetworkSpatialProfile.reset();
 		LOG_INFO(App, "Destroying engine");
 		if (DataModelDestroyingConnection) {
 			DataModelDestroyingConnection->Disconnect();

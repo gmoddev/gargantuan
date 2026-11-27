@@ -1,4 +1,5 @@
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "BlockGridWorldState.hpp"
 #include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
@@ -977,6 +978,9 @@ namespace gargantuan {
 	void WorldRoot::ShutdownPhysics() {
 		if (ShuttingDownPhysics) return;
 		ShuttingDownPhysics = true;
+		while (BlockGridState && !BlockGridState->Members.empty())
+			RemoveBlockGrid(BlockGridState->Members.begin()->second.Grid);
+		BlockGridState.reset();
 		TerrainRuntimeValue.reset();
 		TerrainEditTickets.reset();
 		Deformables.Shutdown();
@@ -1079,6 +1083,7 @@ namespace gargantuan {
 	}
 
 	void WorldRoot::AdmitSpatialMember(const std::shared_ptr<Instance> &Instance) {
+			AddBlockGrid(Instance);
 		if (auto Part = std::dynamic_pointer_cast<BasePart>(Instance)) {
 			if (TrackedParts.contains(Part->GetObjectId())) return;
 			TrackPart(Part);
@@ -1103,6 +1108,7 @@ namespace gargantuan {
 	}
 
 	void WorldRoot::RemoveSpatialMember(const std::shared_ptr<Instance> &Instance) {
+			RemoveBlockGrid(Instance);
 		if (auto Part = std::dynamic_pointer_cast<BasePart>(Instance)) {
 			if (TrackedParts.contains(Part->GetObjectId())) RemovePart(Part);
 		} else if (auto Body = std::dynamic_pointer_cast<DeformableBody>(Instance))
@@ -1227,6 +1233,8 @@ namespace gargantuan {
 		if (TerrainPhysics && (TerrainPhysics->IsStaging() || !TerrainPhysics->IsHealthy()))
 			return {.Status = PhysicsOperationStatus::BackendFailure, .Message = "[Terrain:Query] Terrain collision is unavailable"};
 		ApplyPendingPhysicsChanges();
+		if (!SyncBlockGridCollision())
+			return {.Status = PhysicsOperationStatus::ResourceLimit, .Message = "[BlockGrid:Motion] Collision is unavailable"};
 		return Physics.MoveKinematicCapsule(Request);
 	}
 
@@ -1236,6 +1244,9 @@ namespace gargantuan {
 		if (TerrainPhysics && (TerrainPhysics->IsStaging() || !TerrainPhysics->IsHealthy()))
 			return {PhysicsOperationStatus::BackendFailure, "[Terrain:Query] Terrain collision is unavailable"};
 		ApplyPendingPhysicsChanges();
+		Filter.IncludeBlockGrids = Params.IncludeBlockGrids;
+		if (Filter.IncludeBlockGrids && !SyncBlockGridCollision())
+			return {PhysicsOperationStatus::ResourceLimit, "[BlockGrid:Query] Collision is unavailable"};
 		if (Params.CollisionGroup < 0 || Params.CollisionGroup > MaximumPhysicsCollisionGroup ||
 			Params.CollisionMask < 0 || Params.CollisionMask > MaximumPhysicsCollisionMask)
 			return {PhysicsOperationStatus::InvalidDescription, "RaycastParams collision filter is outside the 16-group bound"};
@@ -1293,6 +1304,8 @@ namespace gargantuan {
 				return {PhysicsOperationStatus::InvalidDescription, "RaycastParams descendant traversal limit reached"};
 			if (Value == CandidateTerrain && !AppendTerrainBodies())
 				return {PhysicsOperationStatus::InvalidDescription, "RaycastParams collider limit reached"};
+			if (Params.IncludeBlockGrids && !AppendBlockGridFilter(Value->GetObjectId(), Filter.Bodies))
+				return {PhysicsOperationStatus::InvalidDescription, "RaycastParams collider limit reached"};
 			if (auto Part = std::dynamic_pointer_cast<BasePart>(Value)) {
 				auto Found = PartBodies.find(Part->GetObjectId());
 				if (Found != PartBodies.end() && Physics.IsBodyValid(Found->second)) {
@@ -1344,6 +1357,7 @@ namespace gargantuan {
 
 	std::shared_ptr<gargantuan::Instance> WorldRaycastResult::GetHitInstance() const {
 		if (Instance) return Instance;
+		if (GridInstance) return GridInstance;
 		return TerrainInstance;
 	}
 
@@ -1363,6 +1377,8 @@ namespace gargantuan {
 		);
 		const PhysicsRaycastHit *SelectedHit = nullptr;
 		std::shared_ptr<BasePart> SelectedPart;
+		std::shared_ptr<BlockGrid> SelectedGrid;
+		std::optional<glm::ivec3> SelectedCell;
 		const auto *TerrainPhysics = GetTerrainPhysics();
 		const auto CandidateTerrain = IncludeTerrain ? GetTerrainQueryOwner() : nullptr;
 		std::optional<terrain::ChunkKey> SelectedChunk;
@@ -1370,9 +1386,12 @@ namespace gargantuan {
 		for (const auto &Candidate : BackendResult.Candidates) {
 			if (Candidate.Distance - NearestDistance > TieEpsilon) break;
 			auto CandidatePart = ResolvePart(Candidate.Body);
+			auto CandidateGrid = CandidatePart ? nullptr : ResolveBlockGrid(Candidate.Body);
+			const auto Cell = CandidateGrid ? ResolveBlockCell(Candidate.Body, Candidate.Position) : std::nullopt;
 			std::optional<terrain::ChunkKey> CandidateChunk;
 			ObjectId CandidateObject{};
 			if (CandidatePart) CandidateObject = CandidatePart->GetObjectId();
+			else if (CandidateGrid) CandidateObject = CandidateGrid->GetObjectId();
 			else if (CandidateTerrain) {
 				if (const auto Owner = TerrainPhysics->FindOwner(Candidate.Body)) {
 					CandidateObject = CandidateTerrain->GetObjectId();
@@ -1382,9 +1401,13 @@ namespace gargantuan {
 			if (!CandidateObject.IsValid())
 				return Fail(PhysicsOperationStatus::BackendFailure, "Physics raycast hit has no live semantic owner");
 			if (!SelectedHit || CandidateObject < SelectedObject ||
-				(CandidateObject == SelectedObject && CandidateChunk < SelectedChunk)) {
+				(CandidateObject == SelectedObject && (CandidateChunk < SelectedChunk ||
+					(Cell && SelectedCell && std::tie(Cell->x, Cell->y, Cell->z) <
+						std::tie(SelectedCell->x, SelectedCell->y, SelectedCell->z))))) {
 				SelectedHit = &Candidate;
 				SelectedPart = std::move(CandidatePart);
+				SelectedGrid = std::move(CandidateGrid);
+				SelectedCell = Cell;
 				SelectedChunk = CandidateChunk;
 				SelectedObject = CandidateObject;
 			}
@@ -1397,6 +1420,8 @@ namespace gargantuan {
 			.Normal = SelectedHit->Normal,
 			.Distance = SelectedHit->Distance,
 			.TerrainInstance = SelectedChunk ? CandidateTerrain : nullptr,
+			.GridInstance = std::move(SelectedGrid),
+			.Cell = SelectedCell,
 		};
 	}
 
@@ -1418,6 +1443,10 @@ namespace gargantuan {
 		lua_createtable(L, 0, 4);
 		StackValue<std::shared_ptr<Instance>>::Push(L, Result.GetHitInstance());
 		lua_setfield(L, -2, "Instance");
+		if (Result.Cell) {
+			Result.GridInstance->PushGridHit(L, {Result.Cell->x, Result.Cell->y, Result.Cell->z}, Result.Position, Result.Normal);
+			lua_setfield(L, -2, "GridHit");
+		}
 		StackValue<glm::vec3>::Push(L, Result.Position);
 		lua_setfield(L, -2, "Position");
 		StackValue<glm::vec3>::Push(L, Result.Normal);
@@ -1569,6 +1598,7 @@ namespace gargantuan {
 		SteppingPhysics = true;
 		const StepGuard Guard{SteppingPhysics};
 		runtime_detail::MeasureWork(runtime_detail::WorkPhase::PhysicsUpdate, [&] { ApplyPendingPhysicsChanges(); });
+		if (!SyncBlockGridCollision()) return;
 		constexpr auto MaximumAccumulatedTime = static_cast<double>(MAX_STEPS_PER_FRAME) * STEP_INTERVAL;
 		StepAccumulator = static_cast<float>(std::min(
 			static_cast<double>(StepAccumulator) + DeltaTime, MaximumAccumulatedTime));

@@ -275,6 +275,7 @@ namespace gargantuan::network {
 		std::unique_ptr<terrain::Field> ReceivedTerrain;
 		std::shared_ptr<TerrainReceiveWork> ClientTerrainWork;
 		std::shared_ptr<const WorldRoot::TerrainMotionGuard> TerrainMotionAdmission;
+		std::shared_ptr<const DataModel::DefaultNetworkSpatialProfile> NetworkSpatialProfile;
 		NetworkScheduler Scheduler;
 		GameplayInputServer ServerPossessionInput{Scheduler};
 		GameplayInputClient ClientPossessionInput{Scheduler};
@@ -674,6 +675,8 @@ namespace gargantuan::network {
 			if (Configuration.Role == GameSessionRole::Server) {
 				try {
 					const auto Owner = Runtime && Runtime->Workspace ? Runtime->Workspace->GetTerrain() : nullptr;
+					if (Runtime && Runtime->DataModel)
+						NetworkSpatialProfile = Runtime->DataModel->AcquireDefaultNetworkSpatialProfile();
 					if ((Configuration.TerrainBootstrap && (!Owner || !Runtime->Workspace->IsTerrainCollisionReady())) ||
 						(!Configuration.TerrainBootstrap && Owner && Owner->GetField().GetStats().MaterializedPages))
 						throw std::runtime_error("[Terrain:Network] Server terrain lacks collision or a delivery binding");
@@ -720,6 +723,7 @@ namespace gargantuan::network {
 		}
 
 		void ReleaseSessionResources() {
+			NetworkSpatialProfile.reset();
 			TerrainMotionAdmission.reset();
 			if (ClientTerrainWork) ClientTerrainWork->Stop.request_stop();
 			ClientTerrainWork.reset();

@@ -1311,6 +1311,7 @@ namespace gargantuan {
 			VisualIncomplete = false;
 			if (Scope.IsValid()) Dirty->ReleaseConsumer(DirtyConsumer, Scope);
 			PublishedWorld = &World;
+			PublishedGrids.clear();
 			Scope = CurrentScope;
 			FullResyncRequested = true;
 			PublishedItems.clear();
@@ -1508,12 +1509,17 @@ namespace gargantuan {
 			std::ranges::sort(OrderedTextures, {}, &std::pair<RenderTextureIdentity, PublishedTexture>::first);
 			for (const auto &[Texture, State] : OrderedTextures)
 				Result->TextureCreates.push_back({Texture, State.Revision, State.Width, State.Height, State.Format, State.Pixels});
+			const auto Limit = Dirty->GetLimits().MaximumPublicationBytes;
+			auto Grids = World.HasBlockGrids() ? PrepareBlockGrids(World, *Result,
+				Limit - std::min(Limit, EstimatePublicationBytes(*Result))) : GridMeshes{};
+			for (const auto &[Object, Grid] : Grids) Replacement.emplace(Object, Grid.Item);
 			auto Terrain = PrepareTerrain(*Result);
 			if (!Terrain) {
 				Dirty->RequestFullResync(Scope, "Render full-resync publication exceeds its byte limit");
 				throw std::length_error("Render full-resync publication exceeds its byte limit");
 			}
 			PublishedItems = std::move(Replacement);
+			PublishedGrids = std::move(Grids);
 			PublishedDeformables = std::move(DeformableReplacement);
 			CommittedAnimationPoses = AnimationPoses;
 			PublishedEnvironment = Environment;
@@ -1651,6 +1657,7 @@ namespace gargantuan {
 		for (const auto &[Object, Domains] : DirtyObjects) {
 			const auto ExtractionStart = ProfilingEnabled ? ProfileClock::now() : ProfileClock::time_point{};
 			auto Previous = PublishedItems.find(Object);
+			if (PublishedGrids.contains(Object)) continue;
 			auto InstanceValue = ObjectRegistry::Get().Lookup(Object);
 			auto PartValue = std::dynamic_pointer_cast<Part>(InstanceValue);
 			auto MeshPartValue = std::dynamic_pointer_cast<MeshPart>(InstanceValue);
@@ -1881,6 +1888,9 @@ namespace gargantuan {
 		Result->TextureCreates = PendingTextureCreates;
 		Result->TextureUpdates = PendingTextureUpdates;
 		Result->TextureRemoves = PendingTextureRemoves;
+		const auto Limit = Dirty->GetLimits().MaximumPublicationBytes;
+		auto Grids = World.HasBlockGrids() || !PublishedGrids.empty() ? PrepareBlockGrids(World, *Result,
+			Limit - std::min(Limit, EstimatePublicationBytes(*Result))) : GridMeshes{};
 		auto Terrain = PrepareTerrain(*Result);
 		if (!Terrain) {
 			Dirty->RequestFullResync(Scope, "Incremental render publication exceeds its byte limit");
@@ -1895,6 +1905,7 @@ namespace gargantuan {
 			for (const auto &Remove : Result->Removes) PublishedItems.erase(Remove.Object);
 			for (const auto &Create : Result->Creates) PublishedItems.emplace(Create.Item.Object, Create.Item);
 			for (const auto &Update : Result->Updates) PublishedItems.at(Update.Object) = Update.Item;
+			PublishedGrids = std::move(Grids);
 			for (const auto Object : DeformableCacheRemoves) PublishedDeformables.erase(Object);
 			for (const auto &[Object, State] : DeformableCacheUpdates)
 				PublishedDeformables.insert_or_assign(Object, State);

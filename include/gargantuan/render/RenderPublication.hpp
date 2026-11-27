@@ -50,7 +50,7 @@ namespace gargantuan {
 		return (static_cast<std::uint32_t>(Value) & static_cast<std::uint32_t>(Domain)) != 0;
 	}
 
-	enum class RenderMeshDomain : std::uint8_t { Scene, Terrain };
+	enum class RenderMeshDomain : std::uint8_t { Scene, Terrain, BlockGrid };
 
 	struct RenderMeshIdentity {
 		std::uint64_t Slot = 0;
@@ -59,7 +59,8 @@ namespace gargantuan {
 		auto operator<=>(const RenderMeshIdentity &) const = default;
 		[[nodiscard]] bool IsValid() const {
 			return Slot != 0 && Generation != 0 &&
-				(Domain == RenderMeshDomain::Scene || Domain == RenderMeshDomain::Terrain);
+				(Domain == RenderMeshDomain::Scene || Domain == RenderMeshDomain::Terrain ||
+				 Domain == RenderMeshDomain::BlockGrid);
 		}
 	};
 

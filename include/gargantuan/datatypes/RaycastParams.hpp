@@ -32,5 +32,6 @@ namespace gargantuan {
 		int CollisionGroup = 0;
 		int CollisionMask = 65535;
 		bool IncludeTerrain = false;
+		bool IncludeBlockGrids = false;
 	)
 }
