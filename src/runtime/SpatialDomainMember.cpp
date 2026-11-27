@@ -190,7 +190,11 @@ namespace gargantuan {
 					const auto It = W->PartBodies.find(Part->GetObjectId());
 					if (It == W->PartBodies.end())
 						throw std::runtime_error("[Spatial:Membership] Rigid body admission failed");
-					if (Entry.Body && !Entry.Body->Description.Anchored) {
+					auto Admitted = W->Physics.GetBodyState(It->second);
+					if (!Admitted) throw std::runtime_error("[Spatial:Membership] Rigid body state is unavailable");
+					// A structural publish can set Anchored and membership before the old provider's
+					// deferred physics update. Only two live dynamic bodies share velocity/sleep state.
+					if (Entry.Body && !Entry.Body->Description.Anchored && !Admitted->Description.Anchored) {
 						if (!W->Physics.SetLinearVelocity(It->second, Entry.Body->LinearVelocity).Succeeded() ||
 							!W->Physics.SetAngularVelocity(It->second, Entry.Body->AngularVelocity).Succeeded() ||
 							!W->Physics.SetAwake(It->second, Entry.Body->Awake).Succeeded())

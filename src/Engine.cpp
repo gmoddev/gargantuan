@@ -159,7 +159,8 @@ namespace gargantuan {
 				Region->RequiresSpatialMotionProof = WorldRoot->RequiresSpatialMotionProof;
 				Region->SpatialMotionAdmission = WorldRoot->SpatialMotionAdmission;
 				(void)Region->GetTerrain();
-				Region->InitializeTerrainRuntime(Mode, false, TerrainVisualDensity, TerrainPalette);
+				Region->InitializeTerrainRuntime(Mode, Mode != RuntimeMode::Offline && DataModel->SupportsNetworkSpatialContent(),
+					TerrainVisualDensity, TerrainPalette);
 			}
 			if (auto script = std::dynamic_pointer_cast<gargantuan::Script>(inst)) {
 				this->Script->ScriptQueue.insert(script);

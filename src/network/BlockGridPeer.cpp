@@ -59,18 +59,63 @@ namespace gargantuan::network {
 	}
 	bool BlockGridPeer::IsInstalled(ObjectId Source, const BlockGrid &Grid) const {
 		const auto Found = Grids.find(Source);
-		return Server && Found != Grids.end() && Found->second.Known.Bytes &&
-			   Found->second.Revision == Grid.GetField().GetPublicRevision() &&
-			   Found->second.Configuration == Grid.GetConfigurationRevision() && Grid.EnsureAssetBindings() &&
-			   Found->second.MotionRevision == Grid.GetAssemblyRevision();
+		return Server && Found!=Grids.end() && Found->second.Owner.lock().get()==&Grid && Grid.EnsureAssetBindings() && FencesInstalled(Source);
+	}
+	GridTransferFence BlockGridPeer::CurrentFence(ObjectId Id,const BlockGrid& Grid,const Resolve& Find) const {
+		const auto Stamp=Grid.GetPublicationTransfer();
+		if (!Stamp) return {};
+		const auto Other=Stamp->Grids[Stamp->Grids[0]==Id?1:0];
+		// A withheld participant never discloses its ID. The known grid may render, but cannot attest the paired landing.
+		return {Stamp->WorldRevision,Grids.contains(Other) && Find(Other)?Other:ObjectId{}};
+	}
+	bool BlockGridPeer::FencesInstalled(ObjectId Source) const {
+		std::array<ObjectId,MaximumGrids> Seen{};
+		std::size_t Count{};
+		auto Id=Source;
+		for (;;) {
+			if (std::find(Seen.begin(),Seen.begin()+Count,Id)!=Seen.begin()+Count) return true;
+			const auto It=Grids.find(Id);
+			if (It==Grids.end() || !It->second.Known.Bytes || It->second.Unavailable || Count==Seen.size() ||
+				(Active && (Active->Offer.Scope.Grid==Id || Active->Offer.Fence.Other==Id))) return false;
+			const auto& E=It->second;
+			if (Server) {
+				const auto Grid=E.Owner.lock();
+				if (!Grid || E.SourceRevision!=Grid->GetField().GetPublicRevision() || E.Configuration!=Grid->GetConfigurationRevision() ||
+					E.MotionRevision!=Grid->GetAssemblyRevision()) return false;
+				const auto Stamp=Grid->GetPublicationTransfer();
+				if ((Stamp?Stamp->WorldRevision:0)!=E.Fence.Generation) return false;
+			} else if (const auto Grid=E.Replica.lock(); !Grid || !Grid->HasReplicaField() ||
+				!Grid->GetAssemblyProjection() || Grid->GetAssemblyProjection()->Revision!=E.MotionRevision ||
+				PlacementDigest(*Grid,Grid->GetCFrame())!=E.Placement) return false;
+			for (const auto& [Other,Peer]:Grids)
+				if (Peer.Fence.Other==Id && Peer.Fence.Generation>E.Fence.Generation) return false;
+			Seen[Count++]=Id;
+			if (!E.Fence.Generation) return true;
+			if (!E.Fence.Other.IsValid()) return false;
+			const auto Other=Grids.find(E.Fence.Other);
+			if (Other==Grids.end() || Other->second.Fence.Generation<E.Fence.Generation) return false;
+			Id=E.Fence.Other;
+		}
 	}
 	std::optional<SpatialAppliedBinding> BlockGridPeer::GetBinding(ObjectId Source, const BlockGrid &Grid, bool Empty) const {
+		return Binding(Source,Grid,Empty,nullptr);
+	}
+	std::optional<SpatialAppliedBinding> BlockGridPeer::GetBinding(ObjectId Source,const BlockGrid& Grid,bool Empty,
+		const SpatialDestinationBounds& Bounds) const {
+		return Binding(Source,Grid,Empty,&Bounds);
+	}
+	std::optional<SpatialAppliedBinding> BlockGridPeer::Binding(ObjectId Source,const BlockGrid& Grid,bool Empty,
+		const SpatialDestinationBounds* Bounds) const {
 		const auto Found = Grids.find(Source);
 		if (Found == Grids.end() || (Active && Active->Offer.Scope.Grid == Source)) return {};
 		const auto &Entry = Found->second;
-		if (!Entry.Known.Bytes || Entry.Unavailable || !Grid.EnsureAssetBindings()) return {};
+		if (!Entry.Known.Coverage || !FencesInstalled(Source) || !Grid.EnsureAssetBindings()) return {};
+		if (!Entry.Known.Coverage->Whole) {
+			const auto Local=Bounds?GridLocalBounds(Grid.GetCFrame(),Grid.GetCellSize(),*Bounds):std::nullopt;
+			if (!Local || !Entry.Known.Coverage->Contains(*Local)) return {};
+		}
 		if (Server) {
-			if (!IsInstalled(Source,Grid)) return {};
+			if (Entry.Owner.lock().get()!=&Grid) return {};
 		} else {
 			const auto Motion = Grid.GetAssemblyProjection();
 			if (Entry.Replica.lock().get()!=&Grid || !Grid.HasReplicaField() || !Motion || Motion->Revision!=Entry.MotionRevision ||
@@ -113,7 +158,7 @@ namespace gargantuan::network {
 		if (!Active || !Active->Offered || Active->Offer.Scope != M.Scope || Active->Offer.Serial != M.Serial ||
 			Active->Offer.Revision != M.Revision || Active->Offer.Target != M.Target ||
 			Active->Offer.Configuration != M.Configuration || Active->Offer.Placement != M.Placement ||
-			Active->Offer.MotionRevision != M.MotionRevision ||
+			Active->Offer.MotionRevision != M.MotionRevision || Active->Offer.Fence!=M.Fence ||
 			Active->Cursor != Active->Offer.Size - Active->Offer.Suffix)
 			throw std::invalid_argument("[BlockGrid:Network] Invalid installation acknowledgment");
 		Found->second.Known = std::move(Active->Content);
@@ -122,6 +167,8 @@ namespace gargantuan::network {
 		Found->second.MotionRevision = M.MotionRevision;
 		Found->second.Placement = M.Placement;
 		Found->second.LastSerial = M.Serial;
+		Found->second.Fence=M.Fence;
+		Found->second.SourceRevision=Active->SourceRevision;
 		Active.reset();
 	}
 	void BlockGridPeer::ReceiveClient(const GridStreamMessage &M, const Resolve &Find, std::uint64_t Tick) {
@@ -145,6 +192,7 @@ namespace gargantuan::network {
 				throw std::invalid_argument("[BlockGrid:Network] Unknown cancellation");
 			Active.reset();
 			Receiver.Cancel();
+			Grid->RetireReplicaContent();
 			Entry.Known = {};
 			Entry.Revision = Entry.Configuration = Entry.MotionRevision = 0;
 			Entry.LastSerial = M.Serial;
@@ -164,7 +212,7 @@ namespace gargantuan::network {
 			if (Active || M.Revision < Entry.Revision || M.Configuration < Entry.Configuration ||
 				M.MotionRevision < Entry.MotionRevision ||
 				(M.Revision == Entry.Revision && M.Configuration == Entry.Configuration &&
-				 M.MotionRevision == Entry.MotionRevision))
+				 M.MotionRevision == Entry.MotionRevision && M.Fence==Entry.Fence))
 				throw std::invalid_argument("[BlockGrid:Network] Unexpected revision");
 			Active.emplace(Transfer{.Offer = M, .ProgressTick = Tick});
 			if (Grid->HasReplicaField() && Entry.Known.Bytes && Entry.Known.Digest == M.Target && M.Base == M.Target &&
@@ -184,7 +232,7 @@ namespace gargantuan::network {
 			Active->Content = std::move(Result.Content);
 		}
 	}
-	void BlockGridPeer::Pump(const Resolve &Find, const Send &Queue, std::uint64_t Tick) {
+	void BlockGridPeer::Pump(const Resolve &Find, const Send &Queue, std::uint64_t Tick,const GridInterest& Interest) {
 		for (auto It = Grids.begin(); It != Grids.end();) {
 			const auto Id = (It++)->first;
 			if (!Find(Id)) Forget(Id);
@@ -197,16 +245,12 @@ namespace gargantuan::network {
 				const auto Grid = Find(Offer.Scope.Grid);
 				if (!Grid || !Offer.Assembly || PlacementDigest(*Grid, Offer.Assembly->Pose) != Offer.Placement) return;
 				if (Active->PendingField) {
-					Grid->InstallReplicaField(std::move(*Active->PendingField));
+					Grid->InstallReplicaField(std::move(*Active->PendingField),Active->Content.Coverage);
 					Active->PendingField.reset();
 				}
 				(void)Grid->ApplyReplicaAssemblyProjection(*Offer.Assembly);
 				const auto World = WorldRoot::GetEffectiveWorld(*Grid);
-				const std::array Required{Grid->GetObjectId()};
-				const auto Position = Grid->GetCFrame().Position;
-				if (!World || !Grid->EnsureAssetBindings() ||
-					!World->PrepareSpatialDestination({Position, Position}, Required))
-					return;
+				if (!World || !Grid->EnsureAssetBindings() || !World->VerifyReplicaGridInstallation(*Grid)) return;
 				Active->Installed = true;
 				auto Ack = Offer;
 				Ack.Kind = GridStreamKind::Installed;
@@ -217,6 +261,7 @@ namespace gargantuan::network {
 				Entry.Configuration = Offer.Configuration;
 				Entry.MotionRevision = Offer.MotionRevision;
 				Entry.Placement = Offer.Placement;
+				Entry.Fence=Offer.Fence;
 				Entry.LastSerial = Offer.Serial;
 				Active.reset();
 			}
@@ -240,14 +285,31 @@ namespace gargantuan::network {
 				auto &[Id, Entry] = *It++;
 				auto Grid = Find(Id);
 				if (!Grid) continue;
+				Entry.Owner=Grid;
 				const auto &Field = Grid->GetField();
 				const auto Revision = Field.GetPublicRevision();
-				if (Entry.CheckedPublicRevision != Revision) {
-					Entry.AssetsGranted = blockgrid::AdmitsAssetPins(Field, SharedAssets.get());
-					Entry.CheckedPublicRevision = Revision;
+				const auto Coverage=SelectGridCoverage(Field,Grid->GetCFrame(),Grid->GetCellSize(),Interest);
+				const auto Fence=CurrentFence(Id,*Grid,Find);
+				const bool SameSelection=Entry.Known.Coverage && *Entry.Known.Coverage==Coverage;
+				const bool SameContent=SameSelection && Entry.SourceRevision==Revision;
+				const bool Ready=Grid->EnsureAssetBindings();
+				if (Entry.Unavailable && Entry.SourceRevision==Revision && Entry.DeniedCoverage && *Entry.DeniedCoverage==Coverage) continue;
+				const auto MotionRevision=Grid->GetAssemblyRevision();
+				if (Ready && SameContent && Grid->GetConfigurationRevision()==Entry.Configuration && Fence==Entry.Fence &&
+					(MotionRevision==Entry.MotionRevision || Tick-Entry.MotionTick<3)) continue;
+				std::optional<GridReplicaContent> Next;
+				if (Ready) {
+					if (SameContent) Next=Entry.Known;
+					else Next=CaptureGridReplica(Field,Coverage,[&](const blockgrid::Field& Schema) {
+						return blockgrid::AdmitsAssetPins(Schema,SharedAssets.get());
+					});
 				}
-				if (!Entry.AssetsGranted || !Grid->EnsureAssetBindings()) {
-					if (Entry.Unavailable) continue;
+				if (!Next) {
+					if (Entry.Unavailable) {
+						Entry.SourceRevision=Revision;
+						Entry.DeniedCoverage=Ready?std::make_shared<const blockgrid::ReplicaCoverage>(Coverage):nullptr;
+						continue;
+					}
 					GridStreamMessage Closed{.Kind = GridStreamKind::Unavailable, .Scope = {Epoch, Id, Domain, GrantGeneration},
 						.Subscription = Entry.Subscription, .Serial = Token()};
 					if (Queue(Closed)) {
@@ -255,34 +317,40 @@ namespace gargantuan::network {
 						Entry.Known = {};
 						Entry.Configuration = Entry.Revision = Entry.MotionRevision = 0;
 						Entry.LastSerial = Closed.Serial;
+						Entry.SourceRevision=Revision;
+						Entry.DeniedCoverage=Ready?std::make_shared<const blockgrid::ReplicaCoverage>(Coverage):nullptr;
 						LastServed = Id;
 					}
 					return;
 				}
 				Entry.Unavailable = false;
-				const bool SameStructure = Grid->GetField().GetPublicRevision() == Entry.Revision &&
-										   Grid->GetConfigurationRevision() == Entry.Configuration;
-				if (SameStructure &&
-					(Entry.MotionRevision == Grid->GetAssemblyRevision() || Tick - Entry.MotionTick < 3))
-					continue;
+				Entry.DeniedCoverage.reset();
+				const bool SameProjection=Entry.Known.Bytes && Next->Digest==Entry.Known.Digest;
+				if (SameProjection) {
+					Entry.SourceRevision=Revision;
+					if (Grid->GetConfigurationRevision()==Entry.Configuration && Fence==Entry.Fence &&
+						(MotionRevision==Entry.MotionRevision || Tick-Entry.MotionTick<3)) continue;
+					Next=Entry.Known;
+				}
 				const auto Motion = Grid->GetAssemblyProjection();
 				if (!Motion) continue;
-				auto Next = Entry.Known.Bytes && Grid->GetField().GetPublicRevision() == Entry.Revision
-								? Entry.Known
-								: CaptureGridReplica(Grid->GetField());
+				if (!SameProjection && Entry.Revision==std::numeric_limits<std::uint64_t>::max())
+					throw std::overflow_error("[BlockGrid:Network] View revision exhausted");
 				auto Offer = MakeGridOffer(
 					{Epoch, Id, Domain, GrantGeneration},
 					Entry.Subscription,
 					Token(),
-					Grid->GetField().GetPublicRevision(),
+					Entry.Revision+unsigned(!SameProjection),
 					Grid->GetConfigurationRevision(),
 					PlacementDigest(*Grid, Motion->Pose),
 					*Motion,
-					Next,
+					*Next,
 					&Entry.Known
 				);
+				Offer.Fence=Fence;
 				Active.emplace(
-					Transfer{.Offer = Offer, .Content = std::move(Next), .Cursor = Offer.Prefix, .ProgressTick = Tick}
+					Transfer{.Offer=Offer,.Content=std::move(*Next),.Cursor=NextGridLiteral(Offer,Offer.Prefix).first,
+						.ProgressTick=Tick,.SourceRevision=Revision}
 				);
 				LastServed = Id;
 				Entry.MotionTick = Tick;
@@ -293,7 +361,17 @@ namespace gargantuan::network {
 		auto &Transfer = *Active;
 		const auto Grid = Find(Transfer.Offer.Scope.Grid);
 		if (!Grid) return;
-		if (Grid->GetConfigurationRevision() != Transfer.Offer.Configuration || !Grid->EnsureAssetBindings()) {
+		const auto Desired=SelectGridCoverage(Grid->GetField(),Grid->GetCFrame(),Grid->GetCellSize(),Interest);
+		bool Current=Grid->GetConfigurationRevision()==Transfer.Offer.Configuration && Grid->EnsureAssetBindings() &&
+			*Transfer.Content.Coverage==Desired && Transfer.Offer.Fence==CurrentFence(Transfer.Offer.Scope.Grid,*Grid,Find);
+		if (Current && Grid->GetField().GetPublicRevision()!=Transfer.SourceRevision) {
+			const auto Updated=CaptureGridReplica(Grid->GetField(),Desired,[&](const blockgrid::Field& Schema) {
+				return blockgrid::AdmitsAssetPins(Schema,SharedAssets.get());
+			});
+			Current=Updated && Updated->Digest==Transfer.Content.Digest;
+			if (Current) Transfer.SourceRevision=Grid->GetField().GetPublicRevision();
+		}
+		if (!Current) {
 			if (Transfer.Offered) {
 				auto Cancel = Transfer.Offer;
 				Cancel.Kind = GridStreamKind::Forget;
@@ -318,10 +396,10 @@ namespace gargantuan::network {
 		auto Fragment = Transfer.Offer;
 		Fragment.Kind = GridStreamKind::Fragment;
 		Fragment.Offset = static_cast<std::uint32_t>(Transfer.Cursor);
-		const auto Count = std::min<std::size_t>(MaximumGridStreamFragment, End - Transfer.Cursor);
+		const auto Count = std::min<std::size_t>(MaximumGridStreamFragment, NextGridLiteral(Transfer.Offer,Transfer.Cursor).second);
 		Fragment.Fragment = std::span(*Transfer.Content.Bytes).subspan(Transfer.Cursor, Count);
 		if (Queue(Fragment)) {
-			Transfer.Cursor += Count;
+			Transfer.Cursor = NextGridLiteral(Transfer.Offer,Transfer.Cursor+Count).first;
 			Transfer.ProgressTick = Tick;
 		}
 	}

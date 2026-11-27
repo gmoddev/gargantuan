@@ -228,6 +228,15 @@ namespace {
 		A->SetParent(Space);
 		B->SetParent(Common);
 		Check(Game->GetSpatialRegions().size() == 2, "both domains registered in one DataModel");
+		auto PublishedPart = std::make_shared<Part>();
+		PublishedPart->SetPosition({90, 2, 0});
+		PublishedPart->SetParent(Space);
+		PublishedPart->SetLinearVelocity({3, 0, 0});
+		PublishedPart->SetAnchored(true);
+		PublishedPart->SetSpatialRegion(A);
+		Check(WorldRoot::GetEffectiveWorld(*PublishedPart) == A && PublishedPart->GetLinearVelocity() == glm::vec3(0),
+			"a structural publish can anchor and route a previously dynamic body before the next physics step");
+		PublishedPart->Destroy();
 		const auto Wide = MakePart(Common, {4, 2, 4}, {5, 2, 0});
 		const auto Tall = MakePart(Common, {1, 6, 1}, {5, 2, 0});
 		const auto WideId = Wide->GetObjectId(), TallId = Tall->GetObjectId();

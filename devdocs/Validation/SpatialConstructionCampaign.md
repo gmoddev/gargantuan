@@ -1,5 +1,15 @@
 # Spatial Domains and BlockGrid production ledger
 
+## Staged transfer and bilateral construction
+
+The Windows SR2 qualifier at `7ac4d0990` passed actual KinematicCharacter capsule landings in independent native worlds. The Linux GNS and SQLite build completed its 468-step graph. On the same `e429969ee` Linux core the only change in the matched rerun was the pinned flat GNS close ABI (`184de3047`). The sanitizer-enabled relocated managed package, real grid session and legacy real transport then passed. The Linux production suite still requires the latest combined binary.
+
+The server-specific signed asset inventory is integrated at `ee1338775`. The new staged-content protocol is at `c6b2340f3`, live session routing at `7155f30e4`, and the actual owner/spectator fixture at `f66682f96`. Windows and Ubuntu are running that combined pin. `8fcf857f2` corrected the imported mesh fixture after native and Luau probes showed that its old ray lay on a real triangle edge. The new clear-gap ray tests both direct and mixed physics paths.
+
+Joint static extraction and merge with revision guards, shared native history and journal rollback entered at `c2e82319f`. Both participants reject concurrent landing reservations at `dc1d7c02c`. Moving split/merge is at `bba8a10c6` with native mass, full tensor and independent velocity transfer. The lane's native three-hull calculation had zero measured world linear and angular momentum residual. Joint linked VM and production session testing is outstanding. `10aeaa710` separates per-grid native installation from whole-destination movement admission.
+
+Delivery owns native/package/GPU benchmarks on the private worker. Storage owns bounded automatic large-grid delivery including partial coverage and paired transfer visibility. Geometry owns the controlling Player's server-only transfer API and the Construction Yard's enter/return workflow. The supervisor owns named Terrain streaming, same-domain motion admission, Studio and promotion. The offline candidate remains separately reviewable. The next qualification combines real named terrain installation, both transport handoffs, native moving split/merge and public creator APIs.
+
 ## Multiplayer and dynamic integration
 
 Windows Release at `af8b62c56` passed both scoped two-client tests, including actual GameNetworkingSockets. The second peer received its independent chart and the first received a live edit. The full selection passed 23 of 25. Linux Clang ASan/UBSan at the same pin passed 16 of 18, including independent-domain delivery with simulated transport, and the relocated 182,368,550-byte offline Player executed both terrain and construction assertions. The two outstanding test results on both platforms were the custom glTF image MIME fixture and the upstream identical-source PreRun expectation. The PNG fixture now explicitly declares its image format, and the alias test removes its separate cube before comparing the two imported meshes at `45f47aafd`.

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 #include <stdexcept>
 
 namespace gargantuan::network {
@@ -132,6 +133,27 @@ namespace gargantuan::network {
 		auto Data = MakeTerrainReceiver(Project,PackageVersion,Manifest.Id.Digest,Directory->Grid);
 		Data->Directory = std::move(*Directory);
 		if (Sender) Data->Source.assign(Artifacts.begin(), Artifacts.end() - 1);
+		return Data;
+	}
+
+	std::shared_ptr<const TerrainSessionData> MakeWorkspaceTerrainSender(ProjectId Project, std::uint64_t PackageVersion,
+		std::span<const terrain::TerrainArtifact> Artifacts, AssetContentId WorkspaceManifest) {
+		const auto *Manifest = terrain::FindTerrainArtifact(Artifacts,{terrain::TerrainArtifactPurpose::Manifest,WorkspaceManifest});
+		if (!Manifest || !Manifest->Bytes || AssetContentId::Hash(*Manifest->Bytes)!=WorkspaceManifest)
+			throw std::invalid_argument("[Terrain:Package] Missing bound Workspace manifest");
+		const auto Directory = terrain::DecodeTerrainManifest(*Manifest->Bytes,Project,terrain::GetTerrainDatasetId(Project));
+		if (!Directory) throw std::invalid_argument("[Terrain:Package] Invalid Workspace dataset");
+		auto Data = MakeTerrainReceiver(Project,PackageVersion,WorkspaceManifest,Directory->Grid);
+		std::set<terrain::TerrainArtifactId> Selected;
+		for (const auto &Ref : Directory->Chunks) {
+			const terrain::TerrainArtifactId Id{terrain::TerrainArtifactPurpose::Chunk,AssetContentId{Ref.Digest.Bytes}};
+			const auto *Leaf = terrain::FindTerrainArtifact(Artifacts,Id);
+			if (!Leaf || !Leaf->Bytes || Leaf->Bytes->size()!=Ref.ByteCount)
+				throw std::invalid_argument("[Terrain:Package] Missing bound Workspace leaf");
+			if (Selected.insert(Id).second) Data->Source.push_back(*Leaf);
+		}
+		std::ranges::sort(Data->Source,{},&terrain::TerrainArtifact::Id);
+		Data->Directory = *Directory;
 		return Data;
 	}
 

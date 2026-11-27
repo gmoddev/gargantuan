@@ -27,7 +27,8 @@
 namespace gargantuan {
 	class AssetService;
 	class BlockGrid;
-	namespace blockgrid { class Field; }
+	namespace blockgrid { class Field; enum class TransferMotion : std::uint8_t; }
+	struct BlockGridParticipant;
 	struct BlockGridWorldState;
 	class LocalLight;
 	class ReflectionProbe;
@@ -173,6 +174,7 @@ namespace gargantuan {
 		std::map<ObjectId, std::weak_ptr<ReflectionProbe>> ReflectionProbes;
 		void ForEachBlockGrid(const std::function<void(const BlockGrid &)> &Visit) const;
 		[[nodiscard]] bool HasBlockGrids() const { return BlockGridState != nullptr; }
+		[[nodiscard]] bool VerifyReplicaGridInstallation(const BlockGrid &Grid);
 
 		void StepPhysics(double DeltaTime, std::optional<std::vector<std::shared_ptr<Instance>>> Instances);
 		[[nodiscard]] PhysicsKinematicMotionResult ResolveKinematicMotion(const PhysicsKinematicMotionRequest &Request);
@@ -209,7 +211,9 @@ namespace gargantuan {
 		std::unique_ptr<BlockGridWorldState> BlockGridState;
 		void AddBlockGrid(const std::shared_ptr<Instance> &Value);
 		[[nodiscard]] std::function<void()> PrepareBlockGridTransfer(BlockGrid& Source,const blockgrid::Field& SourceAfter,
-			BlockGrid& Destination,const blockgrid::Field& DestinationAfter);
+			BlockGrid& Destination,const blockgrid::Field& DestinationAfter,blockgrid::TransferMotion Motion);
+		[[nodiscard]] std::function<void()> PrepareGridMomentum(BlockGridParticipant& A,const blockgrid::Field& SourceAfter,
+			BlockGridParticipant& B,const blockgrid::Field& DestinationAfter,blockgrid::TransferMotion Motion);
 		void RemoveBlockGrid(const std::shared_ptr<Instance> &Value);
 		bool SyncBlockGridCollision();
 		[[nodiscard]] bool SetGridMotion(BlockGrid& Grid,bool Dynamic);
@@ -243,7 +247,7 @@ namespace gargantuan {
 		bool TerrainReplicaCoverageRequired{};
 		[[nodiscard]] bool HasTerrainQueryCoverage(glm::vec3 Origin, glm::vec3 Destination, glm::vec3 Extents) const;
 		[[nodiscard]] bool InstallTerrainReplica(std::unique_ptr<terrain::Field> Field,
-			std::vector<terrain::ChunkPublicationCandidate> Chunks, std::uint64_t Publication);
+			std::vector<terrain::ChunkPublicationCandidate> Chunks, std::uint64_t Publication, bool BindDatasetSpacing = false);
 		void UpdateTerrainVisualDensity(const RenderCameraInput &Camera, std::uint32_t Width, std::uint32_t Height);
 		[[nodiscard]] WorldRaycastResult ResolveQueryHit(PhysicsRaycastResult Result, bool IncludeTerrain);
 		static int RunShapeQuery(lua_State *L, Instance *Value, PhysicsQueryShapeKind Kind, bool IsOverlap);

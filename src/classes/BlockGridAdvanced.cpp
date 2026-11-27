@@ -314,9 +314,10 @@ namespace gargantuan {
 		return SubmitRequest(L,Grid,std::move(Edit));
 	}
 	int BlockGrid::GetValue(lua_State* L,Instance* Object) {
-		const auto& F=ReadTarget(L,Object).GetField();
+		const auto& G=ReadTarget(L,Object);const auto& F=G.GetField();
 		const auto Id=F.GetChannelId(StringAt(L,3));
-		const auto V=ScalarValue(F.GetChannel(Id).Spec.Kind,F.GetValue(ReadCell(L,2),Id));
+		const auto P=ReadCell(L,2);G.RequireReplicaCoverage(SingleCell(P));
+		const auto V=ScalarValue(F.GetChannel(Id).Spec.Kind,F.GetValue(P,Id));
 		if (const auto* B=std::get_if<bool>(&V)) lua_pushboolean(L,*B); else lua_pushnumber(L,std::get<double>(V));
 		return 1;
 	}
@@ -339,6 +340,7 @@ namespace gargantuan {
 		for (unsigned I=1;I<=N;++I) {lua_rawgeti(L,2,I);Seeds.push_back(ReadCell(L,-1));lua_pop(L,1);}
 		Fields(L,3,{"Bounds","Filter","Adjacency","UsePorts","StopAt","MaxVisited"});
 		lua_rawgetfield(L,3,"Bounds"); TraversalOptions O{Bounds(L,-1)};lua_pop(L,1);
+		G.RequireReplicaCoverage(O.Bounds);
 		lua_rawgetfield(L,3,"Filter");O.Select=ReadFilter(L,-1,F);lua_pop(L,1);
 		lua_rawgetfield(L,3,"Adjacency");
 		if (!lua_isnil(L,-1)) {
@@ -358,6 +360,7 @@ namespace gargantuan {
 	int BlockGrid::FindActive(lua_State* L,Instance* Object) {
 		auto& G=ReadTarget(L,Object);const auto& F=G.GetField();
 		const auto Id=F.GetChannelId(StringAt(L,2));const auto R=Bounds(L,3);
+		G.RequireReplicaCoverage(R);
 		auto H=Open(L,G,false,F.GetSnapshotBytes()+4096);
 		H->Scan=std::make_unique<Traversal>(std::make_shared<const Field>(F),Id,R);
 		return PushHandle(L,std::move(H),CursorName,{{"Step",Checked<Step>},{"Cancel",Checked<Cancel<false>>}});
@@ -366,6 +369,7 @@ namespace gargantuan {
 		auto& G=ReadTarget(L,Object);const auto& F=G.GetField();
 		const Region R{ReadCell(L,2),ReadCell(L,3,true)};
 		const auto Count=Volume(R);
+		G.RequireReplicaCoverage(R);
 		lua_createtable(L,0,5);
 		Vector(L,{R.MaxExclusive.X-R.Min.X,R.MaxExclusive.Y-R.Min.Y,R.MaxExclusive.Z-R.Min.Z});lua_setfield(L,-2,"Size");
 		PushText(L,G.GetBlockRevision());lua_setfield(L,-2,"Revision");

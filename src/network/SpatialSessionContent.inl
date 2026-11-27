@@ -107,11 +107,15 @@ bool StageTransferDomain(ConnectionId Connection, WireObjectId Destination, cons
 
 void FinishTransferDomain(Peer &Value,bool Promote) {
 	if (Promote) {
+		RetireBootstrapTerrain(Value);
+		RetireDomainTerrain(Value.NamedTerrain);
+		Value.NamedTerrain=std::move(Value.Staging->Terrain);
 		Value.Grids->Retire();
 		Value.Grids=std::move(Value.Staging->Grids);
 		Value.AuthorizedSpatialRegion=Value.Staging->Grant->Region;
 		Value.CurrentGrantGeneration=Value.Staging->Frame.Serial;
 	} else {
+		RetireDomainTerrain(Value.Staging->Terrain);
 		Value.Staging->Grids->Retire();
 	}
 	Value.Staging.reset();
@@ -169,7 +173,8 @@ void ReceiveSpatialAudience(const ReceivedMessageEvent &Message,Peer &Value) {
 		return;
 	}
 	const bool Promote=Frame->Action==SpatialAudienceAction::Promote;
-	FinishTransferDomain(Value,Promote);
+	try { FinishTransferDomain(Value,Promote); }
+	catch (const std::exception &Error) { Reject(Message.Connection,DisconnectReason::ResourceExhaustion,Error.what()); }
 }
 
 std::optional<SpatialAppliedBinding> GetTransferGridBinding(ConnectionId Connection,
@@ -184,7 +189,7 @@ std::optional<SpatialAppliedBinding> GetTransferGridBinding(ConnectionId Connect
 	const auto &Value=It->second;
 	if (Value.Staging && HasTransferDomain(Connection,WireObjectId::FromObjectId(Value.Staging->Frame.Destination),Bounds,Value.Staging->Frame.Serial) &&
 		ResolveGrid(Connection,Value,*Id,true)==Grid)
-		return Value.Staging->Grids->GetBinding(*Id,*Grid,Provider.AuthoritativeEmpty && Provider.Installed.empty());
+		return Value.Staging->Grids->GetBinding(*Id,*Grid,Provider.AuthoritativeEmpty && Provider.Installed.empty(),Bounds);
 	if (!Value.Grids || ResolveGrid(Connection,Value,*Id,false)!=Grid) return {};
-	return Value.Grids->GetBinding(*Id,*Grid,Provider.AuthoritativeEmpty && Provider.Installed.empty());
+	return Value.Grids->GetBinding(*Id,*Grid,Provider.AuthoritativeEmpty && Provider.Installed.empty(),Bounds);
 }

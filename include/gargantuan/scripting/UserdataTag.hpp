@@ -34,5 +34,6 @@ namespace gargantuan {
 		DataStore,
 		PersistenceOperation,
 		SpatialCollisionLease,
+		SpatialTransferTicket,
 	};
 }

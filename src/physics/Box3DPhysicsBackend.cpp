@@ -347,6 +347,20 @@ namespace gargantuan {
 				return {};
 			}
 
+			PhysicsOperationResult PrepareAssemblyReplacement(std::span<const PhysicsBodyId> Existing,std::size_t Staged) override {
+				if (Existing.empty() || Existing.size()>2 || !Staged || Staged>2)
+					return {PhysicsOperationStatus::InvalidDescription,"Invalid assembly replacement arity"};
+				for (const auto Id:Existing) {
+					const auto* Record=FindBody(Id);
+					if (!Record || !b3Body_IsValid(Record->Body)) return InvalidBody();
+					if (Record->Description.Shape.Kind!=PhysicsShapeKind::ConvexAssembly ||
+						Record->Description.Anchored || b3Body_GetJointCount(Record->Body))
+						return {PhysicsOperationStatus::InvalidDescription,"Assembly replacement requires unconstrained convex bodies"};
+				}
+				// Rollback can retire all prepared bodies, commit can retire all originals, without reallocating the free list.
+				FreeBodySlots.reserve(FreeBodySlots.size()+Existing.size()+Staged);
+				return {};
+			}
 			PhysicsOperationResult DestroyBody(PhysicsBodyId Body) override {
 				runtime_detail::WorkScope Work(runtime_detail::WorkPhase::PhysicsBodyDestroy);
 				auto *Record = FindBody(Body);

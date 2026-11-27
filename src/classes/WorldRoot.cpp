@@ -1200,10 +1200,12 @@ namespace gargantuan {
 	}
 
 	bool WorldRoot::InstallTerrainReplica(std::unique_ptr<terrain::Field> Field,
-		std::vector<terrain::ChunkPublicationCandidate> Chunks, std::uint64_t Publication) {
+		std::vector<terrain::ChunkPublicationCandidate> Chunks, std::uint64_t Publication, bool BindDatasetSpacing) {
 		if (!Field || !HasTerrainRuntime() || SteppingPhysics) return false;
 		const auto Owner = GetTerrainQueryOwner();
-		if (!Owner || !Owner->Field || Owner->Field->GetGrid() != Field->GetGrid()) return false;
+		if (!Owner || !Owner->Field) return false;
+		if (Owner->Field->GetGrid() != Field->GetGrid() &&
+			!(TerrainReplicaCoverageRequired && (BindDatasetSpacing || dynamic_cast<SpatialRegion *>(this)))) return false;
 		if (const auto Realm=GetDataModel()) if (const auto Guard=Realm->GetSpatialTransferProtection(); Guard && !Guard->AllowsResource(*Owner)) return false;
 		if (!TerrainRuntimeValue->InstallReplica(Field->GetGrid(), std::move(Chunks), Publication)) return false;
 		Owner->Field = std::move(Field);
@@ -1232,8 +1234,7 @@ namespace gargantuan {
 
 	std::expected<std::uint64_t, terrain::EditStatus>
 	WorldRoot::SubmitTerrainEdit(const Terrain &Owner, const terrain::TerrainMutation &Edit) {
-		if (dynamic_cast<SpatialRegion *>(this))
-			if (auto Realm = GetDataModel(); Realm && Realm->SupportsNetworkSpatialContent()) return std::unexpected(terrain::EditStatus::Unavailable);
+
 		if (!HasTerrainRuntime() || !TerrainEditTickets || GetTerrainQueryOwner().get() != &Owner || SteppingPhysics)
 			return std::unexpected(terrain::EditStatus::Unavailable);
 		if (const auto Realm=GetDataModel()) if (const auto Guard=Realm->GetSpatialTransferProtection(); Guard && !Guard->AllowsResource(Owner))

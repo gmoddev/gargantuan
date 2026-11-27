@@ -528,8 +528,8 @@ namespace gargantuan::host {
 			.RequirePublisher = Program.is_used("--require-package-publisher"),
 		});
 		if (!Payload) return BootstrapExitCode;
-		const bool NetworkTerrain = !Payload->TerrainArtifacts.empty();
 		const bool SpatialContent = Payload->SpatialContent;
+		const bool NetworkTerrain = SpatialContent ? !Payload->WorkspaceTerrainManifest.empty() : !Payload->TerrainArtifacts.empty();
 		if (SpatialContent && (Payload->Inspection.Target != RuntimeDistributionTarget::DedicatedServer || !BindEndpoint ||
 			!network::IsLoopbackTransportEndpoint(*BindEndpoint) || HostConfiguration.ReliableService)) {
 			std::cerr << "[Spatial:Package] Packaged spatial sessions require a dedicated Server and a loopback endpoint.\n";
@@ -769,8 +769,11 @@ namespace gargantuan::host {
 						.Limits = network::GameSessionConfiguration::DefaultLimits(),
 						.AllowInsecureDevelopmentNetwork = AllowInsecureDevelopmentNetwork,
 						.ReliableService = HostConfiguration.ReliableService,
-						.TerrainBootstrap = NetworkTerrain ? network::MakeTerrainSessionData(Payload->Inspection.Identity,
-							Payload->Inspection.Revision, Payload->TerrainArtifacts, true) : nullptr,
+						.TerrainBootstrap = SpatialContent && NetworkTerrain ? network::MakeWorkspaceTerrainSender(
+							Payload->Inspection.Identity, Payload->Inspection.Revision, Payload->TerrainArtifacts,
+							*AssetContentId::Parse(Payload->WorkspaceTerrainManifest)) :
+							(NetworkTerrain ? network::MakeTerrainSessionData(Payload->Inspection.Identity,
+							Payload->Inspection.Revision, Payload->TerrainArtifacts, true) : nullptr),
 						.RuntimeDistributionIdentity = Payload->ClientCodeIdentity,
 						.SpatialContent = SpatialContent,
 						.SharedGridAssets = SpatialContent ? std::make_shared<const blockgrid::SharedAssetPins>(Payload->SharedGridAssets) : nullptr,

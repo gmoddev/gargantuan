@@ -37,7 +37,8 @@ return c({
 	methods = {
 		GetRevision = Native("(self: BlockGrid) -> string", "Returns an opaque scoped grid revision."),
 		ExtractRegion = Native("(self: BlockGrid, Min: Vector3, MaxExclusive: Vector3, Expected: string) -> BlockGrid", "Transfers up to 4096 cells into a new static sibling and preserves world positions and channel values.", true),
-		MergeFrom = Native("(self: BlockGrid, Source: BlockGrid, Expected: string, ExpectedSource: string) -> string", "Moves a static sibling's occupied cells through an aligned lattice, preserving both identities.", true),
+		SplitRegion = Native("(self: BlockGrid, Min: Vector3, MaxExclusive: Vector3, Expected: string) -> BlockGrid", "Splits a moving convex grid into two nonempty moving siblings with inherited rigid-body velocities.", true),
+		MergeFrom = Native("(self: BlockGrid, Source: BlockGrid, Expected: string, ExpectedSource: string) -> string", "Moves an aligned sibling's occupied cells, preserving grid identity and conserving momentum when both are dynamic.", true),
 		SetMotionMode = Native('(self: BlockGrid, Mode: "Static" | "Dynamic", Expected: string) -> string', "Switches between static construction and a bounded dynamic convex assembly.", true),
 		SetAssemblyVelocity = Native("(self: BlockGrid, Linear: Vector3, Angular: Vector3, Expected: string) -> string", "Sets world-space linear and angular velocity on a dynamic construction.", true),
 		GetAssemblyState = Native('(self: BlockGrid) -> { Mode: "Static" | "Dynamic", CFrame: CFrame, LinearVelocity: Vector3, AngularVelocity: Vector3, Mass: number, CenterOfMass: Vector3, LocalCenterOfMass: Vector3, LocalInertia: {Vector3} }', "Reads current native mass, center, inertia columns, pose and velocity."),

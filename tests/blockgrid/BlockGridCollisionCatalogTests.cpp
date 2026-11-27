@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Team Fireworks
 // SPDX-License-Identifier: MPL-2.0
 #include "gargantuan/blockgrid/Geometry.hpp"
+#include "gargantuan/blockgrid/Momentum.hpp"
 #include <box3d/box3d.h>
 #include <box3d/collision.h>
 #include <algorithm>
@@ -19,6 +20,48 @@ namespace {
 		Point V{};
 		for (int I=0;I<3;++I) for (int J=0;J<3;++J) V[I]+=Basis(R)[I][J]*(P[J]-Center[J]);
 		return {V[0],V[1],V[2]};
+	}
+	void TestMomentum() {
+		auto Config=b3DefaultWorldDef();
+		const auto World=b3CreateWorld(&Config);
+		struct Cleanup { b3WorldId World; ~Cleanup(){b3DestroyWorld(World);} } Guard{World};
+		auto Shape=b3DefaultShapeDef(); Shape.density=1.f;
+		const auto Hull=b3MakeBoxHull(.5f,.35f,.25f);
+		const b3Vec3 Centers[]={{-1,0,0},{1,0,0},{2,1,.5f}};
+		const auto Body=[&](unsigned First,unsigned End) {
+			auto Def=b3DefaultBodyDef(); Def.type=b3_dynamicBody; Def.position={18,5,-9};
+			Def.rotation=b3MakeQuatFromAxisAngle({0,1,0},.631f);
+			const auto Id=b3CreateBody(World,&Def);
+			for (auto I=First;I<End;++I) {
+				auto Transform=b3Transform_identity; Transform.p=Centers[I];
+				(void)b3CreateTransformedHullShape(Id,&Shape,&Hull.base,Transform,{1,1,1});
+			}
+			b3Body_ApplyMassFromShapes(Id);
+			return Id;
+		};
+		const auto Vector=[](auto V){return glm::dvec3(V.x,V.y,V.z);};
+		const auto Mass=[&](b3BodyId Id) {
+			const auto M=b3Body_GetMassData(Id);
+			const auto Matrix=[&](b3Matrix3 B){return glm::dmat3(Vector(B.cx),Vector(B.cy),Vector(B.cz));};
+			const auto R=Matrix(b3MakeMatrixFromQuat(b3Body_GetRotation(Id)));
+			return RigidMass{M.mass,Vector(b3Body_GetWorldCenterOfMass(Id)),R*Matrix(M.inertia)*glm::transpose(R)};
+		};
+		const auto Whole=Mass(Body(0,3)),A=Mass(Body(0,1)),B=Mass(Body(1,3));
+		const RigidVelocity V{{2,-3,.5},{.4,.2,2}};
+		const auto Parts=SplitMomentum(Whole,V,A,B);
+		const auto Rejoined=MergeMomentum(A,Parts[0],B,Parts[1],Whole);
+		if (glm::length(V.Linear-Rejoined.Linear)>1e-5 || glm::length(V.Angular-Rejoined.Angular)>1e-5)
+			throw std::runtime_error("Rotating native split did not conserve rigid motion about the world center");
+		const RigidVelocity VA{{3,-2,1},{-1,2,.25}},VB{{-2,5,-4},{2,-.5,1}};
+		const auto Combined=MergeMomentum(A,VA,B,VB,Whole);
+		const glm::dvec3 Reference{-10,2,17};
+		const auto Angular=[&](const RigidMass& M,RigidVelocity S) {
+			return M.WorldInertia*S.Angular+glm::cross(M.Center-Reference,M.Mass*S.Linear);
+		};
+		const auto L=glm::length(Angular(Whole,Combined)-Angular(A,VA)-Angular(B,VB));
+		const auto P=glm::length(Whole.Mass*Combined.Linear-A.Mass*VA.Linear-B.Mass*VB.Linear);
+		if (L>1e-10 || P>1e-10) throw std::runtime_error("Independent native momenta changed on merge");
+		std::cout<<"[BlockGrid:Momentum] nativeMass="<<Whole.Mass<<" linearResidual="<<P<<" angularResidual="<<L<<'\n';
 	}
 	void TestMovingHulls() {
 		auto Configuration=b3DefaultWorldDef();
@@ -81,5 +124,6 @@ int main() try {
 	}
 	b3DestroyHull(Wedge);
 	TestMovingHulls();
+	TestMomentum();
 	std::cout<<"[BlockGrid:CollisionTest] "<<Trials<<" oriented Box3D primitive ray contacts passed\n";
 } catch (const std::exception& E) { std::cerr<<E.what()<<'\n'; return 1; }

@@ -1,10 +1,13 @@
+#include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/datatypes/Vector3.hpp"
+#include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/SpatialResidency.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/scripting/Userdata.hpp"
+#include "gargantuan/services/Players.hpp"
 
 #include <cmath>
 #include <stdexcept>
@@ -14,6 +17,10 @@ namespace gargantuan {
 	G_USERDATA_DECL(
 		SpatialLeaseUserdata, std::weak_ptr<DataModel> Realm; SpatialResidencyAudience Audience;
 		std::shared_ptr<SpatialCollisionLease> Holder;
+	);
+	G_USERDATA_DECL(
+		SpatialTransferUserdata, std::weak_ptr<DataModel> Realm; SpatialResidencyAudience Issuer;
+		network::SpatialTransferTicket Ticket;
 	);
 	namespace {
 		struct Access {
@@ -82,6 +89,50 @@ namespace gargantuan {
 			}
 			return "Unavailable";
 		}
+		const char *TransferDisposition(network::SpatialTransferStatus Status) {
+			using enum network::SpatialTransferStatus;
+			switch (Status) {
+			case Progress:
+				return "Pending";
+			case Applied:
+				return "Applied";
+			case CommittedUnconfirmed:
+				return "CommittedUnconfirmed";
+			case Canceled:
+				return "Canceled";
+			case Stale:
+				return "Stale";
+			case Denied:
+				return "Denied";
+			case Busy:
+				return "Busy";
+			case Expired:
+				return "Expired";
+			}
+			return "Stale";
+		}
+		Access TransferAccess(lua_State *L, const SpatialTransferUserdata *Handle) {
+			const auto Allowed = CurrentAccess(L);
+			if (!Allowed || !Handle || !Handle->Ticket.Result || Allowed->Realm != Handle->Realm.lock() ||
+				Allowed->Audience != Handle->Issuer ||
+				!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::MutateDataModel))
+				throw std::runtime_error("[Spatial:Transfer] This execution cannot use this movement request");
+			return *Allowed;
+		}
+		int TransferStatus(lua_State *L, SpatialTransferUserdata *Handle) {
+			(void)TransferAccess(L, Handle);
+			lua_pushstring(L, TransferDisposition(*Handle->Ticket.Result));
+			return 1;
+		}
+		int CancelTransfer(lua_State *L, SpatialTransferUserdata *Handle) {
+			const auto Allowed = TransferAccess(L, Handle);
+			if (*Handle->Ticket.Result == network::SpatialTransferStatus::Progress)
+				if (const auto Host = Allowed.Realm->GetSpatialTransferProtection();
+					Host && Host->CancelCreatorTransfer)
+					Host->CancelCreatorTransfer(Handle->Ticket);
+			lua_pushstring(L, TransferDisposition(*Handle->Ticket.Result));
+			return 1;
+		}
 		int Status(lua_State *L, SpatialLeaseUserdata *Handle) {
 			const auto Now = Owned(L, Handle).GetStatus(SpatialResidencyClock::now());
 			lua_createtable(L, 0, 3);
@@ -148,8 +199,72 @@ namespace gargantuan {
 			{"Release", {.Call = &Release}}
 		}
 	);
+	G_USERDATA_IMPL(
+		SpatialTransferUserdata,
+		.Tag = UserdataTag::SpatialTransferTicket,
+		.Type = "SpatialTransfer",
+		.Methods = {{"GetStatus", {.Call = &TransferStatus}}, {"Cancel", {.Call = &CancelTransfer}}}
+	);
 	void RegisterSpatialCollisionUserdata(lua_State *L) {
 		SpatialLeaseUserdata::CreateUserdataMetatable(L);
+		SpatialTransferUserdata::CreateUserdataMetatable(L);
+	}
+	int Player::RequestSpatialTransfer(lua_State *L, Instance *Value) {
+		const auto Allowed = CurrentAccess(L);
+		const auto Engine = ScriptEngine::Get(L);
+		auto *Owner = dynamic_cast<Player *>(Value);
+		if (!Allowed || !Owner || !Engine ||
+			!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::MutateDataModel) ||
+			Owner->GetDataModel() != Allowed->Realm || Owner->GetDestroyed() || Owner->IsDestroying())
+			return Refuse(L, "Unavailable");
+		const auto Destination = CheckStackValue<std::shared_ptr<WorldRoot>>(L, 2);
+		const auto Pose = CheckStackValue<CFrame>(L, 3);
+		const SpatialDestinationBounds Bounds{CheckStackValue<glm::vec3>(L, 4), CheckStackValue<glm::vec3>(L, 5)};
+		if (!Destination || SpatialRegion::FindAttachedWorld(*Destination) != Allowed->Realm ||
+			!Destination->GetSpatialActivation())
+			return Refuse(L, "Unavailable");
+		for (unsigned I = 0; I < 3; ++I)
+			if (!std::isfinite(Bounds.Minimum[I]) || !std::isfinite(Bounds.Maximum[I]) ||
+				Bounds.Minimum[I] >= Bounds.Maximum[I] || double(Bounds.Maximum[I]) - Bounds.Minimum[I] > 512.)
+				return Refuse(L, "Invalid");
+		network::SpatialTransferTicket Ticket;
+		if (Engine->Mode == RuntimeMode::NetworkServer) {
+			const auto Host = Allowed->Realm->GetSpatialTransferProtection();
+			if (!Host || !Host->RequestCreatorTransfer) return Refuse(L, "Unavailable");
+			auto Started = Host->RequestCreatorTransfer(
+				*Owner, Destination->GetObjectId(), Pose, Bounds, Allowed->Audience
+			);
+			if (!Started) return Refuse(L, TransferDisposition(Started.error()));
+			Ticket = std::move(*Started);
+		} else if (Engine->Mode == RuntimeMode::Offline && !Allowed->Realm->HasDefaultNetworkSpatialProfile()) {
+			const auto PlayersService = std::dynamic_pointer_cast<Players>(Owner->GetParent().value_or(nullptr));
+			if (!PlayersService || PlayersService->GetLocalPlayer().value_or(nullptr).get() != Owner)
+				return Refuse(L, "Unavailable");
+			const auto Actor = network::GetSpatialTransferSubject(*Owner);
+			const auto Source = Actor ? WorldRoot::GetEffectiveWorld(*Actor) : nullptr;
+			const auto Proof = Destination->PrepareSpatialDestination(Bounds);
+			if (!Source || Source == Destination || !Proof ||
+				!Destination
+					 ->CommitSpatialTransfer(
+						 Actor,
+						 {Actor->GetObjectId(),
+						  Source->GetObjectId(),
+						  Source->GetSpatialActivation(),
+						  Actor->GetCFrame(),
+						  Pose},
+						 *Proof,
+						 {}
+					 )
+					 .Succeeded())
+				return Refuse(L, "Denied");
+			Ticket.Result = std::make_shared<const network::SpatialTransferStatus>(
+				network::SpatialTransferStatus::Applied
+			);
+		} else
+			return Refuse(L, "Unavailable");
+		StackValue<SpatialTransferUserdata>::Push(L, {{}, Allowed->Realm, Allowed->Audience, std::move(Ticket)});
+		lua_pushnil(L);
+		return 2;
 	}
 	int WorldRoot::RequestCollisionArea(lua_State *L, Instance *Value) {
 		const auto Allowed = CurrentAccess(L);
