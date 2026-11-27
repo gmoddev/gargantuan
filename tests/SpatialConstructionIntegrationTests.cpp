@@ -279,21 +279,22 @@ namespace {
 				{"RequestId", std::to_string(++Sequence)}, {"SessionToken", "grid-history-test"},
 				{"Method", Method}, {"Params", Parameters}}.dump()));
 		};
-		const auto Ok = [&](const char *Method, const Json &Parameters = Json::object()) {
+		const auto Ok = [&](const char *Method, const Json &Parameters) {
 			auto Reply = Call(Method, Parameters);
 			if (!Reply.value("Ok", false)) throw std::runtime_error(std::string(Method) + " rejected: " + Reply.dump());
 			return Reply.at("Result");
 		};
 		const Json Open{{"Root",Root.generic_string()}};
+		const auto Empty = Json::object();
 		const auto Address = [&]() -> Json {
-			auto Snapshot = Ok("GetSnapshot").at("Snapshot");
+			auto Snapshot = Ok("GetSnapshot",Empty).at("Snapshot");
 			for (const auto &Object : Snapshot.at("Objects"))
 				if (Object.value("Name","") == "WestGrid")
 					return {{"Scope",Snapshot.at("Cursor").at("Scope")}, {"Object",Object.at("Id")},
 						{"Cell",{Target.X,Target.Y,Target.Z}}};
 			throw std::runtime_error("authoring grid absent from snapshot");
 		};
-		Ok("Handshake");
+		Ok("Handshake",Empty);
 		Ok("OpenProject",Open);
 		const auto InitialAddress = Address();
 		auto Read = Ok("ReadBlockGridCell",InitialAddress);
@@ -307,13 +308,13 @@ namespace {
 		Require(Receipt.at("Revision") != Read.at("Revision") && Receipt.at("Orientation") == 7,
 			"EditorHost omitted the edit revision or orientation");
 		Require(!Call("EditBlockGridRegion",Edit).at("Ok").get<bool>(), "EditorHost admitted a stale edit");
-		Ok("Undo");
+		Ok("Undo",Empty);
 		Require(Ok("ReadBlockGridCell",InitialAddress).at("Definition") == "Stone", "EditorHost undo lost the prior cell");
-		Ok("Redo");
+		Ok("Redo",Empty);
 		Read = Ok("ReadBlockGridCell",InitialAddress);
 		Require(Read.at("Definition") == "Brick" && Read.at("Orientation") == 7, "EditorHost redo lost the oriented cell");
-		Ok("SaveProject");
-		const auto Play = Ok("StartPlaySession");
+		Ok("SaveProject",Empty);
+		const auto Play = Ok("StartPlaySession",Empty);
 		Edit["Revision"] = Read.at("Revision");
 		Edit["Definition"] = "Air";
 		auto Denied = Call("EditBlockGridRegion",Edit);
