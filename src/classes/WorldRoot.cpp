@@ -1299,16 +1299,7 @@ namespace gargantuan {
 			auto Root = WeakRoot.lock();
 			if (!Root || Root->GetDestroyed() || Root->IsDestroying())
 				return {PhysicsOperationStatus::InvalidDescription, "RaycastParams contains a destroyed filter root"};
-			bool InThisWorld = false;
-			auto Current = std::optional<std::shared_ptr<Instance>>(Root);
-			while (Current && *Current) {
-				if (Current->get() == this) {
-					InThisWorld = true;
-					break;
-				}
-				Current = (*Current)->GetParent();
-			}
-			if (!InThisWorld)
+			if (GetEffectiveWorld(*Root).get() != this)
 				return {
 					PhysicsOperationStatus::InvalidDescription, "RaycastParams filter root belongs to another world"
 				};
@@ -1338,15 +1329,21 @@ namespace gargantuan {
 						return {PhysicsOperationStatus::InvalidDescription, "RaycastParams collider limit reached"};
 				}
 			}
-			for (const auto &Child : Value->Children) {
-				if (!Child || Child->GetDestroyed() || Child->IsDestroying()) continue;
-				if (!Seen.insert(Child->GetObjectId()).second) continue;
-				if (Seen.size() > MaximumRaycastFilterTraversal)
-					return {
-						PhysicsOperationStatus::InvalidDescription, "RaycastParams descendant traversal limit reached"
-					};
+			const auto Enqueue = [&](const std::shared_ptr<Instance> &Child) {
+				if (!Child || Child->GetDestroyed() || Child->IsDestroying() ||
+					GetEffectiveWorld(*Child).get() != this || !Seen.insert(Child->GetObjectId()).second) return true;
+				if (Seen.size() > MaximumRaycastFilterTraversal) return false;
 				Pending.push_back(Child);
-			}
+				return true;
+			};
+			for (const auto &Child : Value->Children)
+				if (!Enqueue(Child))
+					return {PhysicsOperationStatus::InvalidDescription, "RaycastParams descendant traversal limit reached"};
+			// A world root names its entire domain, including members authored below a different hierarchy.
+			if (Value.get() == this)
+				for (const auto &[Id, Weak] : ExplicitSpatialRoots)
+					if (!Enqueue(Weak.lock()))
+						return {PhysicsOperationStatus::InvalidDescription, "RaycastParams descendant traversal limit reached"};
 		}
 		std::ranges::sort(Filter.Bodies);
 		Filter.Bodies.erase(std::unique(Filter.Bodies.begin(), Filter.Bodies.end()), Filter.Bodies.end());
