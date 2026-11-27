@@ -37,9 +37,9 @@ namespace {
 		std::vector<blockgrid::Cell> Cells;
 		std::vector<int> Tops;
 
-		explicit Layout(bool Compact)
-			: Name(Compact ? "Solid" : "Checkerboard"), Width(Compact ? 8 : 16), Height(Compact ? 4 : 1),
-			  Depth(Compact ? 8 : 32), Tops(Width * Depth, -1) {
+		Layout(bool Compact, const std::array<int, 3> &Dimensions, std::size_t Expected)
+			: Name(Compact ? "Solid" : "Checkerboard"), Width(Dimensions[0]), Height(Dimensions[1]),
+			  Depth(Dimensions[2]), Tops(Width * Depth, -1) {
 			for (int Z = 0; Z < Depth; ++Z) {
 				for (int Y = 0; Y < Height; ++Y) {
 					for (int X = 0; X < Width; ++X) {
@@ -49,7 +49,7 @@ namespace {
 					}
 				}
 			}
-			if (Cells.size() != 256) throw std::logic_error("layout must contain 256 occupied cells");
+			if (Cells.size() != Expected) throw std::logic_error("constructed workload has the wrong cell count");
 		}
 	};
 
@@ -140,7 +140,7 @@ namespace {
 		Result["ColdRayUs"] = Microseconds([&] { (void)Ray(0, 0, Site.Tops[0], {}); });
 		int Hits = 0;
 		const auto WarmQueries = [&] {
-			// This odd permutation visits each checkerboard location once and repeats the small footprint evenly.
+			// The same odd permutation covers every coordinate in the original 256-cell checkerboard.
 			for (int I = 0; I < 512; ++I) {
 				const auto Index = (I * 173) % (Site.Width * Site.Depth);
 				Hits += Ray(Index % Site.Width, Index / Site.Width, Site.Tops[Index], {});
@@ -204,15 +204,30 @@ namespace {
 int main(int Count, char **Arguments) try {
 	gargantuan::BootstrapNativeRuntimeSchema();
 	std::filesystem::path Projects;
+	std::array<int, 3> Solid{8, 4, 8}, Checkerboard{16, 1, 32};
+	std::size_t Occupancy = 256;
 	if (Count == 3 && std::string_view(Arguments[1]) == "--projects") {
 		Projects = Arguments[2];
 		if (!std::filesystem::create_directory(Projects))
 			throw std::runtime_error("benchmark project root must be new");
+	} else if (Count == 3 && std::string_view(Arguments[1]) == "--scale") {
+		if (std::string_view(Arguments[2]) == "small") {
+			Solid = {2, 4, 2};
+			Checkerboard = {4, 1, 8};
+			Occupancy = 16;
+		} else if (std::string_view(Arguments[2]) == "large") {
+			Solid = {16, 8, 16};
+			Checkerboard = {64, 1, 64};
+			Occupancy = 2048;
+		} else
+			throw std::runtime_error("supported scales are small and large");
 	} else if (Count != 1)
-		throw std::runtime_error("usage: gargantuan_spatial_construction_benchmark [--projects <new directory>]");
+		throw std::runtime_error(
+			"usage: gargantuan_spatial_construction_benchmark [--projects <new directory> | --scale small|large]"
+		);
 	for (unsigned Trial = 1; Trial <= 7; ++Trial) {
 		for (const bool Compact : {true, false}) {
-			const Layout Site(Compact);
+			const Layout Site(Compact, Compact ? Solid : Checkerboard, Occupancy);
 			for (const bool Grid : {Trial % 2 != 0, Trial % 2 == 0})
 				std::cout << Run(Site, Grid, Projects, Trial).dump() << '\n';
 		}
