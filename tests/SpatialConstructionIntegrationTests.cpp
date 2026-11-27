@@ -129,6 +129,30 @@ namespace {
 			"wrong terrain field published at coincident sample coordinates");
 	}
 
+	void CheckDefaultNetworkProfile(const std::shared_ptr<DataModel> &Populated,
+		const std::shared_ptr<DataModel> &Ordinary) {
+		bool Denied = false;
+		try { (void)Populated->AcquireDefaultNetworkSpatialProfile(); }
+		catch (const std::invalid_argument &) { Denied = true; }
+		Require(Denied && !Populated->HasDefaultNetworkSpatialProfile(),
+			"default-only network admission accepted unsupported native content");
+		auto Profile = Ordinary->AcquireDefaultNetworkSpatialProfile();
+		Require(Profile && Ordinary->HasDefaultNetworkSpatialProfile(), "ordinary world failed default network admission");
+		auto FolderValue = std::make_shared<Folder>();
+		auto DetachedGrid = std::make_shared<BlockGrid>();
+		DetachedGrid->SetParent(FolderValue);
+		const auto Revision = Ordinary->GetAuthoritativeRevision();
+		Denied = false;
+		try { FolderValue->SetParent(WorkspaceOf(Ordinary)); }
+		catch (const std::invalid_argument &) { Denied = true; }
+		Require(Denied && !FolderValue->GetParent() && !DetachedGrid->GetDataModel() &&
+			Ordinary->GetAuthoritativeRevision() == Revision, "network admission partially attached a grid subtree");
+		Profile.reset();
+		FolderValue->SetParent(WorkspaceOf(Ordinary));
+		Require(DetachedGrid->GetDataModel() == Ordinary, "retired network lease blocked offline editing");
+		FolderValue->Destroy();
+	}
+
 	void CheckQueries(WorldRoot &World, const std::shared_ptr<BlockGrid> &Grid,
 		const std::shared_ptr<Instance> &FilterRoot) {
 		const auto Center = TargetCenter(*Grid);
@@ -507,6 +531,7 @@ int main(int Count, char **Arguments) {
 		Require(ForeignDenied && !OtherSpace->GetCurrentSpatialRegion(), "foreign domain became the current view");
 		Require(!Edit(West,Independent->GetObjectId(),{blockgrid::Air,0}).Succeeded() &&
 			West->GetField().Get(Target).Definition == blockgrid::Stone, "foreign mutation scope removed an occupied cell");
+		CheckDefaultNetworkProfile(Game,Independent);
 		Independent->Destroy();
 		CheckPersistence(ProjectValue,Game,West,East);
 		const auto Center = TargetCenter(*East);
