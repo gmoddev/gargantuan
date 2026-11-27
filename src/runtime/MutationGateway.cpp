@@ -21,6 +21,7 @@
 #include "../terrain/TerrainMutation.hpp"
 #include "gargantuan/blockgrid/Edit.hpp"
 #include "gargantuan/classes/BlockGrid.hpp"
+#include "PreparedGridTransfer.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -333,13 +334,18 @@ namespace gargantuan {
 						try {
 							const auto& Edit = *CommandValue.Edit;
 							const auto Categories=unsigned(!Edit.Writes.empty())+unsigned(!Edit.Commands.empty())+
-								unsigned(Edit.Binding.has_value())+unsigned(Edit.Channel.has_value())+unsigned(bool(Edit.Replay))+unsigned(Edit.Motion.has_value());
+								unsigned(Edit.Binding.has_value())+unsigned(Edit.Channel.has_value())+unsigned(bool(Edit.Replay))+unsigned(Edit.Motion.has_value())+unsigned(Edit.Bilateral.has_value());
 							if (Edit.Motion && (!Gameplay || !Edit.ExpectedRevision))
 								return {MutationStatus::Unauthorized,{},"[BlockGrid:Motion] A guarded authoritative simulation command is required"};
 							if (Categories>1 || (Edit.Binding && Edit.Binding->Replace && !Edit.ExpectedRevision) ||
 								(!Edit.Materials.empty() && (!Edit.ExpectedRevision || (Edit.Writes.empty() && Edit.Commands.empty()) ||
 									Edit.Materials.size()>blockgrid::MaximumNewMaterials)))
 								return {MutationStatus::ValidationFailed,{}, "[BlockGrid:Edit] Invalid mixed command or missing guard"};
+							if (Edit.Bilateral) {
+								if (!Edit.ExpectedRevision || Authority.GetTransactionId() || !Edit.Materials.empty())
+									return {MutationStatus::ValidationFailed,{},"[BlockGrid:Transfer] A standalone guarded transfer is required"};
+								return PreparedGridTransfer::Apply(Grid,Edit,Authority);
+							}
 							if (Replay) {
 								const auto& P=*Edit.Replay;
 								if (Edit.ExpectedRevision || unsigned(!P.Cells.empty())+unsigned(!P.StateCells.empty())+
@@ -1341,6 +1347,8 @@ namespace gargantuan {
 					.Message = Redo ? "There is nothing to redo" : "There is nothing to undo"};
 			if (Transaction->ReplayPolicy == TransactionReplayPolicy::PreparedPropertyBatch)
 				return PreparedPropertyCommit::Replay(World, SecurityContext, Redo);
+			if (Transaction->ReplayPolicy == TransactionReplayPolicy::PreparedGridTransfer)
+				return PreparedGridTransfer::Replay(World,SecurityContext,Redo);
 			try {
 				World.EnsureAuthoritativeRevisionAvailable();
 			} catch (const std::overflow_error &Error) {

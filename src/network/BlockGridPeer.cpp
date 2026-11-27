@@ -30,8 +30,9 @@ namespace gargantuan::network {
 			return AssetContentId::Hash(Bytes);
 		}
 	}
-	BlockGridPeer::BlockGridPeer(bool IsServer, std::uint64_t SessionEpoch, ObjectId GrantedDomain)
-		: Server(IsServer), Epoch(SessionEpoch), Domain(GrantedDomain) {}
+	BlockGridPeer::BlockGridPeer(bool IsServer, std::uint64_t SessionEpoch, ObjectId GrantedDomain,
+		std::shared_ptr<const blockgrid::SharedAssetPins> Pins, std::uint64_t Generation)
+		: Server(IsServer), Epoch(SessionEpoch), Domain(GrantedDomain), GrantGeneration(Generation), SharedAssets(std::move(Pins)) {}
 	std::uint64_t BlockGridPeer::Token() {
 		if (!NextToken) throw std::overflow_error("[BlockGrid:Network] Transfer tokens exhausted");
 		return NextToken++;
@@ -63,8 +64,23 @@ namespace gargantuan::network {
 			   Found->second.Configuration == Grid.GetConfigurationRevision() && Grid.EnsureAssetBindings() &&
 			   Found->second.MotionRevision == Grid.GetAssemblyRevision();
 	}
+	std::optional<SpatialAppliedBinding> BlockGridPeer::GetBinding(ObjectId Source, const BlockGrid &Grid, bool Empty) const {
+		const auto Found = Grids.find(Source);
+		if (Found == Grids.end() || (Active && Active->Offer.Scope.Grid == Source)) return {};
+		const auto &Entry = Found->second;
+		if (!Entry.Known.Bytes || Entry.Unavailable || !Grid.EnsureAssetBindings()) return {};
+		if (Server) {
+			if (!IsInstalled(Source,Grid)) return {};
+		} else {
+			const auto Motion = Grid.GetAssemblyProjection();
+			if (Entry.Replica.lock().get()!=&Grid || !Grid.HasReplicaField() || !Motion || Motion->Revision!=Entry.MotionRevision ||
+				PlacementDigest(Grid,Grid.GetCFrame())!=Entry.Placement) return {};
+		}
+		return SpatialAppliedBinding{{WireObjectId::FromObjectId(Source),SpatialCollisionProvider::BlockGrid},
+			Entry.Known.Digest,Entry.Revision,Entry.Configuration,true,Empty};
+	}
 	void BlockGridPeer::Receive(const GridStreamMessage &Message, const Resolve &Find, std::uint64_t Tick) {
-		if (Message.Scope.Epoch != Epoch || Message.Scope.Domain != Domain)
+		if (Message.Scope.Epoch != Epoch || Message.Scope.Domain != Domain || Message.Scope.GrantGeneration != GrantGeneration)
 			throw std::invalid_argument("[BlockGrid:Network] Transfer outside the session grant");
 		if (Server)
 			ReceiveServer(Message, Find);
@@ -109,7 +125,8 @@ namespace gargantuan::network {
 		Active.reset();
 	}
 	void BlockGridPeer::ReceiveClient(const GridStreamMessage &M, const Resolve &Find, std::uint64_t Tick) {
-		if (M.Kind != GridStreamKind::Offer && M.Kind != GridStreamKind::Fragment && M.Kind != GridStreamKind::Forget)
+		if (M.Kind != GridStreamKind::Offer && M.Kind != GridStreamKind::Fragment && M.Kind != GridStreamKind::Forget &&
+			M.Kind != GridStreamKind::Unavailable)
 			throw std::invalid_argument("[BlockGrid:Network] Message has no client-side consumer");
 		auto Found = Grids.find(M.Scope.Grid);
 		if (Found == Grids.end() || Found->second.Subscription != M.Subscription) return;
@@ -135,6 +152,14 @@ namespace gargantuan::network {
 		}
 		if (!Entry.Requested || M.Serial <= Entry.LastSerial)
 			throw std::invalid_argument("[BlockGrid:Network] Unrequested transfer");
+		if (M.Kind == GridStreamKind::Unavailable) {
+			if (Active) throw std::invalid_argument("[BlockGrid:Network] Availability changed during an active offer");
+			Grid->RetireReplicaContent();
+			Entry.Known = {};
+			Entry.Revision = Entry.Configuration = Entry.MotionRevision = 0;
+			Entry.LastSerial = M.Serial;
+			return;
+		}
 		if (M.Kind == GridStreamKind::Offer) {
 			if (Active || M.Revision < Entry.Revision || M.Configuration < Entry.Configuration ||
 				M.MotionRevision < Entry.MotionRevision ||
@@ -199,7 +224,7 @@ namespace gargantuan::network {
 				if (Entry.Requested) continue;
 				GridStreamMessage Request{
 					.Kind = GridStreamKind::Request,
-					.Scope = {Epoch, Id, Domain},
+					.Scope = {Epoch, Id, Domain, GrantGeneration},
 					.Subscription = Entry.Subscription,
 					.Serial = Entry.Subscription
 				};
@@ -215,19 +240,38 @@ namespace gargantuan::network {
 				auto &[Id, Entry] = *It++;
 				auto Grid = Find(Id);
 				if (!Grid) continue;
+				const auto &Field = Grid->GetField();
+				const auto Revision = Field.GetPublicRevision();
+				if (Entry.CheckedPublicRevision != Revision) {
+					Entry.AssetsGranted = blockgrid::AdmitsAssetPins(Field, SharedAssets.get());
+					Entry.CheckedPublicRevision = Revision;
+				}
+				if (!Entry.AssetsGranted || !Grid->EnsureAssetBindings()) {
+					if (Entry.Unavailable) continue;
+					GridStreamMessage Closed{.Kind = GridStreamKind::Unavailable, .Scope = {Epoch, Id, Domain, GrantGeneration},
+						.Subscription = Entry.Subscription, .Serial = Token()};
+					if (Queue(Closed)) {
+						Entry.Unavailable = true;
+						Entry.Known = {};
+						Entry.Configuration = Entry.Revision = Entry.MotionRevision = 0;
+						Entry.LastSerial = Closed.Serial;
+						LastServed = Id;
+					}
+					return;
+				}
+				Entry.Unavailable = false;
 				const bool SameStructure = Grid->GetField().GetPublicRevision() == Entry.Revision &&
 										   Grid->GetConfigurationRevision() == Entry.Configuration;
 				if (SameStructure &&
 					(Entry.MotionRevision == Grid->GetAssemblyRevision() || Tick - Entry.MotionTick < 3))
 					continue;
-				if (!Grid->EnsureAssetBindings()) continue;
 				const auto Motion = Grid->GetAssemblyProjection();
 				if (!Motion) continue;
 				auto Next = Entry.Known.Bytes && Grid->GetField().GetPublicRevision() == Entry.Revision
 								? Entry.Known
 								: CaptureGridReplica(Grid->GetField());
 				auto Offer = MakeGridOffer(
-					{Epoch, Id, Domain},
+					{Epoch, Id, Domain, GrantGeneration},
 					Entry.Subscription,
 					Token(),
 					Grid->GetField().GetPublicRevision(),

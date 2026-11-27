@@ -178,6 +178,7 @@ namespace gargantuan {
 	struct RuntimePackagePayload {
 		PackageInspection Inspection;
 		bool SpatialContent{};
+		blockgrid::SharedAssetPins SharedGridAssets;
 		std::string WorkspaceTerrainManifest;
 		int WorkspaceTerrainSpacingShift{};
 		std::string ProjectJson;

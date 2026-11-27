@@ -48,7 +48,8 @@ namespace gargantuan::network {
 	inline constexpr std::size_t MaximumSpatialTransferBytes = 1'024;
 	[[nodiscard]] bool IsSpatialTransfer(std::span<const std::byte> Bytes);
 	[[nodiscard]] std::vector<std::byte> EncodeSpatialTransfer(const SpatialTransferFrame &Frame);
-	[[nodiscard]] std::optional<SpatialTransferFrame> DecodeSpatialTransfer(std::span<const std::byte> Bytes);
+[[nodiscard]] std::optional<SpatialTransferFrame> DecodeSpatialTransfer(std::span<const std::byte> Bytes);
+	[[nodiscard]] CFrame GetSpatialTransferPose(const WireCFrame &Pose);
 
 	// Supplied by the authoritative content owner, or the replica's verified installed provider.
 	// Empty means positively certified empty for the requested bounds. A missing provider cannot certify it.
@@ -70,6 +71,11 @@ namespace gargantuan::network {
 		std::function<std::optional<ObjectId>(WireObjectId)> ResolveObject;
 		std::function<SpatialTransferLease(const SpatialTransferFrame &, const SpatialDestinationReceipt &)> Reserve;
 	};
+
+	// An early reliable offer can precede its structural/leaf installation. This read-only check
+	// never consumes its serial, grants a lease, or moves the subject.
+	[[nodiscard]] bool IsSpatialOfferInstalled(const SpatialTransferFrame &Offer, WorldRoot &Destination,
+		const SpatialTransferAdapters &Adapters);
 
 	// All calls run on Main. Mutation owners check the old and new bounds before changing collision,
 	// and check the whole provider on retirement or content replacement.
@@ -139,7 +145,7 @@ namespace gargantuan::network {
 			const SpatialDestinationBounds &Bounds,
 			std::span<const ObjectId> RequiredOwners,
 			const SpatialTransferAdapters &Adapters,
-			SpatialTransferClock::time_point Now
+			SpatialTransferClock::time_point Now, std::uint64_t RequestedSerial = 0
 		);
 		[[nodiscard]] SpatialTransferStep Receive(
 			ConnectionId Connection,

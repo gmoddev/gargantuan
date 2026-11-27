@@ -129,6 +129,7 @@ namespace gargantuan {
 	  private:
 		friend class MutationGateway;
 		friend class PreparedPropertyCommit;
+		friend class PreparedGridTransfer;
 		friend struct PreparedPropertyTestAccess;
 		// Synchronous Main-only reservation. Its lock protects candidate sequences
 		// until the coordinator has installed state AND advanced revision.
@@ -176,6 +177,7 @@ namespace gargantuan {
 
 	class ScopedChangeJournalSuppression {
 	  private:
+		friend class PreparedGridTransfer;
 		friend class EditorHost;
 		friend class Instance;
 		friend class InProcessReplicationSession;

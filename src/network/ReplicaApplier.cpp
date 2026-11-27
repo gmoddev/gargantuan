@@ -1,4 +1,5 @@
 #include "gargantuan/network/ReplicaApplier.hpp"
+#include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 #include "../runtime/SnapshotValidation.hpp"
 
@@ -140,6 +141,13 @@ namespace gargantuan::network {
 					Referenced = Receiver.Resolve(Reference->Object);
 					if (!Referenced) throw std::invalid_argument("Replica reference is not materialized");
 				}
+				// A bilateral transfer may have already applied the exact durable assignment.
+				if (Update.PropertyName == "SpatialRegion" && Property->ReadObjectReference &&
+					Property->ReadObjectReference(InstanceValue.get()) == Referenced) {
+					const auto Realm = InstanceValue->GetDataModel();
+					const auto Protection = Realm ? Realm->GetSpatialTransferProtection() : nullptr;
+					if (Protection && Protection->Controls(*InstanceValue)) return;
+				}
 				if (!runtime_detail::ReplicaCharacterProjection::TryWrite(*InstanceValue, Update.PropertyName, Referenced))
 					Property->WriteObjectReference(InstanceValue.get(), Referenced);
 				return;
@@ -153,6 +161,12 @@ namespace gargantuan::network {
 				if (!Item) throw std::invalid_argument("Replica enum item is unknown");
 				Property->WriteEnumValue(InstanceValue.get(), Item->Value);
 				return;
+			}
+			if ((Update.PropertyName == "CFrame" || Update.PropertyName == "Position") && Property->Read) {
+				const auto Realm = InstanceValue->GetDataModel();
+				const auto Protection = Realm ? Realm->GetSpatialTransferProtection() : nullptr;
+				if (Protection && Protection->Controls(*InstanceValue) &&
+					EncodeNativeWireValue(Property->Read(InstanceValue.get())) == Update.Value) return;
 			}
 			auto Native = DecodeNativeWireValue(Update.Value);
 			if (!Native ||

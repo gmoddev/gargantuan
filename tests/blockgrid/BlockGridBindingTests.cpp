@@ -2,8 +2,12 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
+#include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/blockgrid/Edit.hpp"
 #include "gargantuan/blockgrid/Assets.hpp"
+#include "../../src/network/BlockGridPeer.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/services/AssetService.hpp"
@@ -28,9 +32,18 @@ namespace {
 		std::size_t Size=0;
 		auto* Code=luau_compile(Text.data(),Text.size(),&Engine.CompileOptions,&Size);
 		Check(Code!=nullptr,"compile failed");
-		auto Status=luau_load(Engine.L,"BlockGridNative",Code,Size,0);
+		auto Status=luau_load(Engine.L,"=BlockGridNative",Code,Size,0);
 		std::free(Code);
-		if (!Status) Status=lua_pcall(Engine.L,0,0,0);
+		if (!Status) {
+			lua_pushcfunction(Engine.L,[](lua_State *L) {
+				const char *Message=lua_tostring(L,1);
+				const char *Trace=lua_debugtrace(L);
+				lua_pushfstring(L,"%s\n%s",Message?Message:"VM error",Trace?Trace:"");
+				return 1;
+			},"BlockGridTestTrace");
+			lua_insert(Engine.L,-2);
+			Status=lua_pcall(Engine.L,0,0,lua_gettop(Engine.L)-1);
+		}
 		if (Status) throw std::runtime_error(lua_tostring(Engine.L,-1));
 	}
 	void TestAssetDefinitions() {
@@ -89,12 +102,12 @@ namespace {
 			Params.IncludeBlockGrids=true
 			local D=Vector3.new(0,-3,0)
 			for _,X in {0,2} do
-				local O=Vector3.new(X+.25,2,.25)
+				local O=Vector3.new(X+.25,2,.5)
 				local H=G:Raycast(O,D)
 				local W=game.Workspace:Raycast(O,D,Params)
 				assert(H and W and W.GridHit and math.abs(H.Position.Y-.375)<.001)
 				assert(W.GridHit.Cell==H.Cell and math.abs(H.Position.Y-W.Position.Y)<.02)
-				local Gap=Vector3.new(X+.65,2,.65)
+				local Gap=Vector3.new(X+.65,2,.2)
 				assert(G:Raycast(Gap,D)==nil and game.Workspace:Raycast(Gap,D,Params)==nil)
 			end
 		)";
@@ -104,6 +117,31 @@ namespace {
 		const auto& F=Grid->GetField();
 		const auto& Binding=*F.GetDefinition(F.GetDefinitionId("project:tile")).Assets;
 		const auto& D=*Binding.Resolved;
+		auto Shared=std::make_shared<blockgrid::SharedAssetPins>();
+		for (std::size_t I=0; I<F.GetDefinitionCount(); ++I) {
+			const auto &Assets=F.GetDefinition(static_cast<std::uint16_t>(blockgrid::Brick+1+I)).Assets;
+			if (Assets) for (const auto &Pin:Assets->Pins) Shared->emplace(Pin.Id,Pin.Digest);
+		}
+		auto FirstFrame=[&](std::shared_ptr<const blockgrid::SharedAssetPins> Pins) {
+			using namespace network;
+			BlockGridPeer Peer(true,31,{},std::move(Pins));
+			const auto Id=Grid->GetObjectId();
+			auto Find=[&](ObjectId Source) { return Source==Id?Grid:nullptr; };
+			Peer.Receive({.Kind=GridStreamKind::Request,.Scope={31,Id,{}},.Subscription=1,.Serial=1},Find,1);
+			std::vector<std::byte> Packet;
+			Peer.Pump(Find,[&](const GridStreamMessage &M){ Packet=EncodeGridStream(M); return true; },2);
+			return Packet;
+		};
+		auto Admit=network::DecodeGridStream(FirstFrame(Shared));
+		Check(Admit && Admit->Kind==network::GridStreamKind::Offer,"explicit transitive pins did not authorize the native source");
+		const auto Unshared=FirstFrame({});
+		Shared->erase(Binding.Pins.back().Id);
+		Check(FirstFrame(Shared)==Unshared,"partial allowlist disclosed an asset dependency");
+		(*Shared)[Binding.Pins.back().Id]=std::string(64,'a');
+		Check(FirstFrame(Shared)==Unshared,"stale allowed dependency digest authorized content");
+		const auto Closed=network::DecodeGridStream(Unshared);
+		Check(Closed && Closed->Kind==network::GridStreamKind::Unavailable && Unshared.size()<64,
+			"unavailable shell leaked catalog metadata");
 		auto Space=std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
 		RenderPublisher Publisher;
 		auto Textures=Service->DrainTextureChanges();
@@ -170,6 +208,131 @@ namespace {
 		const auto Retired=Publisher.Publish(*Space,Camera,256,144);
 		Check(std::ranges::any_of(Retired->Removes,[&](const auto &Removal){return Removal.Object==Grid->GetObjectId();}),
 			"deleting a required asset retires the published grid resource");
+	}
+	void TestGridTransfers() {
+		auto World=std::make_shared<DataModel>();
+		const auto Server=ScriptSecurityContext::ServerRuntime();
+		Run(World,RuntimeMode::Offline,Server,R"(
+			local Room=Instance.new("SpatialRegion")
+			Room.Parent=game.Workspace
+			local S=Instance.new("BlockGrid")
+			S.Parent=game.Workspace
+			S.SpatialRegion=Room
+			S.CellSize=.5
+			S.CFrame=CFrame.new(8,2,-3)*CFrame.Angles(0,math.pi/2,0)
+			S:DefineBlock("project:transfer",{Shape="Stairs"})
+			S:DefineChannel("private",{Kind="UInt8",Default=3,Indexed=true,OnCopy="Default"})
+			local P=Vector3.new(-3,2,1)
+			S:SetBlock(P,"project:transfer",{Up="+Y",Front="+X"})
+			S:SetBlock(Vector3.zero,"Stone")
+			local Set=S:BeginEdit()
+			Set:SetValue(P,"private",118)
+			Set:Commit()
+			local WorldPoint=S:CellToWorld(P)
+			local Before=S:GetRevision()
+			local D=S:ExtractRegion(P,P+Vector3.one,Before)
+			assert(D~=S and D.Parent==S.Parent and D.SpatialRegion==Room and D.MotionMode=="Static" and D.CellSize==.5)
+			assert(S:GetRevision()~=Before and S:GetBlock(P)==nil and S:GetBlock(Vector3.zero).Definition=="Stone")
+			assert(D:GetBlock(Vector3.zero).Orientation.Front=="+X" and D:GetValue(Vector3.zero,"private")==118)
+			assert((D:CellToWorld(Vector3.zero)-WorldPoint).Magnitude<.0001)
+			local F=D:FindActive("private",{Min=Vector3.zero,MaxExclusive=Vector3.one}):Step(8)
+			assert(#F.Cells==1 and F.Cells[1]==Vector3.zero)
+			local A,B=S:GetRevision(),D:GetRevision()
+			assert(not pcall(function() S:MergeFrom(D,A,A) end) and S:GetRevision()==A and D:GetRevision()==B)
+			S:SetBlock(P,"Brick")
+			A=S:GetRevision()
+			assert(not pcall(function() S:MergeFrom(D,A,B) end) and S:GetRevision()==A and D:GetRevision()==B)
+			S:RemoveBlock(P)
+			D.CFrame=D.CFrame*CFrame.new(.125,0,0)
+			assert(not pcall(function() S:MergeFrom(D,S:GetRevision(),D:GetRevision()) end))
+			D.CFrame=D.CFrame*CFrame.new(-.125,0,0)*CFrame.Angles(0,math.pi/2,0)
+			local Q=S:WorldToCell(D:CellToWorld(Vector3.zero))
+			local M=S:MergeFrom(D,S:GetRevision(),D:GetRevision())
+			assert(M==S:GetRevision() and S:GetBlock(Q).Definition=="project:transfer" and S:GetValue(Q,"private")==118)
+			assert(D.Parent==S.Parent and D:GetBlock(Vector3.zero)==nil)
+			S:SetMotionMode("Dynamic",S:GetRevision())
+			local Token=S:GetRevision()
+			assert(not pcall(function() S:ExtractRegion(Q,Q+Vector3.one,Token) end) and Token==S:GetRevision())
+			S:SetMotionMode("Static",Token)
+		)");
+
+		const auto Parent=std::make_shared<SpatialRegion>(); Parent->SetParent(World->GetService("Workspace"));
+		auto Source=std::make_shared<BlockGrid>(); Source->SetParent(Parent);
+		MutationGateway Gateway;
+		const auto Studio=ScriptSecurityContext::StudioCoreUi();
+		const auto Auth=MutationAuthorityContext::Studio(Studio,World->GetObjectId(),{},41);
+		auto Fill=std::make_shared<blockgrid::EditRequest>();
+		Fill->Writes={{{{0,0,0},{2,1,1}},{blockgrid::Stone,0}}};
+		auto Command=[&](auto E){return SubmitBlockGridEditCommand{Source->GetObjectId(),World->GetObjectId(),std::move(E)};};
+		Check(Gateway.Apply(Command(Fill),Server).Succeeded(),"prepare extraction source");
+		auto Extract=std::make_shared<blockgrid::EditRequest>();
+		Extract->Bilateral=blockgrid::GridTransferEdit{blockgrid::SingleCell({1,0,0})}; Extract->ExpectedRevision=Source->GetBlockRevision();
+		auto Actor=std::make_shared<Part>(); Actor->SetAnchored(true); Actor->SetParent(World->GetService("Workspace"));
+		auto Protection=World->AcquireSpatialTransferProtection([Actor](ObjectId Id){return Actor->GetObjectId()==Id;});
+		const auto Reserve=[&] {
+			const SpatialDestinationBounds Bounds{{0,0,0},{2,1,1}};
+			const std::array Required{Source->GetObjectId()};
+			const auto Receipt=Parent->PrepareSpatialDestination(Bounds,Required);
+			Check(Receipt.has_value(),"reserve the native landing grid coverage");
+			network::SpatialTransferFrame Frame;
+			Frame.Phase=network::SpatialTransferPhase::Reserve; Frame.Serial=1; Frame.Bounds=Bounds;
+			Frame.SourcePose=Frame.DestinationPose=WireCFrame{{0,0,0,1,0,0,0,1,0,0,0,1}};
+			Frame.Scope={1,1,1,1,{11,1},{12,1},{13,1},{}};
+			Frame.Collision=Frame.SubjectGeometry=AssetContentId::Hash(std::array<std::uint8_t,1>{3});
+			for (const auto& P:Receipt->Providers) Frame.Owners.push_back({{P.Owner.Slot,P.Owner.Generation},P.Provider});
+			std::ranges::sort(Frame.Owners);
+			auto Lease=Protection->Reservations.Reserve(Actor->GetObjectId(),Frame,*Receipt,[]{return true;});
+			Check(Lease && (*Lease)(),"landing lease must exist before bilateral checks");
+			return Lease;
+		};
+		{
+			auto Lease=Reserve();
+			Check(!Gateway.Apply(Command(Extract),Auth).Succeeded() && Source->GetField().GetOccupiedCount()==2 &&
+				Source->GetBlockRevision()==*Extract->ExpectedRevision && !World->Transactions.GetStatus().CanUndo,
+				"held landing provider changed during extraction");
+		}
+		const auto Children=Parent->Children.size(),Owned=World->GetOwnedInstanceCount(),Start=World->GetAuthoritativeRevision();
+		unsigned Added=0;
+		auto Watch=Parent->ChildAdded->Connect([&](const auto& Child) {
+			const auto G=std::dynamic_pointer_cast<BlockGrid>(Child);
+			if (G && G!=Source && Source->GetField().GetOccupiedCount()==1 && G->GetField().GetOccupiedCount()==1) ++Added;
+		});
+		const auto Capacity=ChangeJournal::Get().GetCapacity();
+		ChangeJournal::Get().SetCapacity(1);
+		const auto Denied=Gateway.Apply(Command(Extract),Auth);
+		ChangeJournal::Get().SetCapacity(Capacity);
+		Check(!Denied.Succeeded() && World->GetOwnedInstanceCount()==Owned && Parent->Children.size()==Children && !Added &&
+			World->GetAuthoritativeRevision()==Start && Source->GetBlockRevision()==*Extract->ExpectedRevision &&
+			!World->Transactions.GetStatus().CanUndo,"journal rejection leaked hierarchy, history, revisions, notification or coverage");
+		const auto Applied=Gateway.Apply(Command(Extract),Auth);
+		Check(Applied.Succeeded() && Applied.Object && Added==1 && World->GetAuthoritativeRevision()==Start+1,"prepared Studio extraction");
+		auto D=std::dynamic_pointer_cast<BlockGrid>(ObjectRegistry::Get().Lookup(*Applied.Object));
+		const auto Stamp=Source->GetLastTransfer();
+		Check(Stamp && D->GetLastTransfer()==Stamp && Stamp->Grids[0]==Source->GetObjectId() && Stamp->Grids[1]==D->GetObjectId() &&
+			Stamp->PublicRevisions[0]==Source->GetPublicBlockRevision() && Stamp->PublicRevisions[1]==D->GetPublicBlockRevision(),
+			"both public views must identify their shared committed transfer");
+		const auto After=Source->GetBlockRevision(),Other=D->GetBlockRevision();
+		auto Dependent=std::make_shared<BlockGrid>(); Dependent->SetParent(D);
+		Check(!Gateway.Undo(*World,Studio).Succeeded() && Source->GetBlockRevision()==After && D->GetBlockRevision()==Other,
+			"dependent extraction inverse published a partial edit");
+		Dependent->Destroy();
+		Check(Gateway.Undo(*World,Studio).Succeeded() && Source->GetField().GetOccupiedCount()==2 && !D->GetParent() &&
+			D->IsTransferParked() && !D->GetField().GetOccupiedCount(),"Undo extraction must return both cells and park its empty shell");
+		Check(!Gateway.Apply(SubmitBlockGridEditCommand{D->GetObjectId(),World->GetObjectId(),Fill},Server).Succeeded(),
+			"parked shell received gameplay writes");
+		Check(Gateway.Redo(*World,Studio).Succeeded() && D->GetParent().value_or(nullptr)==Parent && !D->IsTransferParked() &&
+			Added==2 && Source->GetBlockRevision()!=After && D->GetBlockRevision()!=Other,"Redo preserves identity and advances both revisions");
+		auto Merge=std::make_shared<blockgrid::EditRequest>();
+		Merge->ExpectedRevision=Source->GetBlockRevision(); Merge->Bilateral=blockgrid::GridTransferEdit{{},D->GetObjectId(),D->GetBlockRevision()};
+		{
+			auto Lease=Reserve();
+			Check(!Gateway.Apply(Command(Merge),Auth).Succeeded() && !Gateway.Undo(*World,Studio).Succeeded() &&
+				D->GetField().GetOccupiedCount()==1 && Source->GetField().GetOccupiedCount()==1,
+				"held landing provider changed through merge or history replay");
+		}
+		Check(Gateway.Apply(Command(Merge),Auth).Succeeded() && !D->GetField().GetOccupiedCount(),"Studio merge");
+		Check(Gateway.Undo(*World,Studio).Succeeded() && D->GetField().GetOccupiedCount()==1 && Source->GetField().GetOccupiedCount()==1,"undo merge");
+		Check(Gateway.Redo(*World,Studio).Succeeded() && D->GetField().GetOccupiedCount()==0 && Source->GetField().GetOccupiedCount()==2,"redo merge");
 	}
 	void TestMovingGrid() {
 		auto World=std::make_shared<DataModel>();
@@ -262,6 +425,7 @@ int main() try {
 	BootstrapNativeRuntimeSchema();
 	TestAssetDefinitions();
 	TestMovingGrid();
+	TestGridTransfers();
 	auto World=std::make_shared<DataModel>();
 	std::ifstream Example(GARGANTUAN_BLOCKGRID_EXAMPLE,std::ios::binary);
 	Check(Example.good(),"could not load PoweredGate creator example");

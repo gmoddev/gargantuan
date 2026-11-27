@@ -12,6 +12,12 @@
 namespace gargantuan {
 	class MutationGateway;
 	class AssetService;
+	struct BlockGridTransferStamp {
+		ObjectId Scope;
+		std::uint64_t WorldRevision{};
+		std::array<ObjectId,2> Grids;
+		std::array<std::string,2> PublicRevisions;
+	};
 	class BlockGrid final : public Instance, public SpatialDomainMember {
 		I_BlockGrid;
 	  public:
@@ -27,6 +33,10 @@ namespace gargantuan {
 		[[nodiscard]] std::string GetPublicBlockRevision() const;
 		[[nodiscard]] std::uint64_t GetConfigurationRevision() const noexcept { return ConfigurationRevision; }
 		[[nodiscard]] bool IsDynamicAssembly() const noexcept { return DynamicAssembly; }
+		[[nodiscard]] bool IsTransferParked() const noexcept { return !ParkedBy.expired(); }
+		[[nodiscard]] static bool HasParkedTransfers() noexcept;
+		// Trusted publication metadata. Each identity still requires its own recipient interest and scope check.
+		[[nodiscard]] std::shared_ptr<const BlockGridTransferStamp> GetLastTransfer() const;
 		[[nodiscard]] std::optional<blockgrid::AssemblyProjection> GetAssemblyProjection() const;
 		bool ApplyReplicaAssemblyProjection(const blockgrid::AssemblyProjection& Value);
 		void ClearReplicaAssemblyProjection();
@@ -40,6 +50,7 @@ namespace gargantuan {
 		void PushGridHit(lua_State* L, blockgrid::Cell Cell, glm::vec3 Position, glm::vec3 Normal) const;
 	  private:
 		friend class MutationGateway;
+		friend class PreparedGridTransfer;
 		friend class WorldRoot;
 		[[nodiscard]] std::string ApplyEdit(const blockgrid::EditRequest& Edit,const blockgrid::Patch* Prepared=nullptr);
 		[[nodiscard]] std::shared_ptr<const blockgrid::Patch> PlanMaterialEdit(const blockgrid::EditRequest& Edit) const;
@@ -51,6 +62,9 @@ namespace gargantuan {
 		void RetireAssemblyState();
 		mutable blockgrid::Field Cells;
 		blockgrid::Field::Admission Admission;
+		bool WorldOwnedAdmission{};
+		std::weak_ptr<const GridTransferHistory> ParkedBy;
+		std::shared_ptr<const BlockGridTransferStamp> LastTransfer;
 		gargantuan::CFrame Transform;
 		float Size{1.0f};
 		bool IsVisible{true}, Collides{true}, Queryable{true}, Editing{};

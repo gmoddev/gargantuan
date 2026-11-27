@@ -243,6 +243,22 @@ namespace gargantuan::network {
 		}
 	}
 
+	CFrame GetSpatialTransferPose(const WireCFrame &Pose) { return LocalPose(Pose); }
+
+	bool IsSpatialOfferInstalled(const SpatialTransferFrame &Offer, WorldRoot &Destination, const SpatialTransferAdapters &Adapters) {
+		if (Offer.Phase != SpatialTransferPhase::Offer || !Valid(Offer) || !Adapters.Resolve) return false;
+		std::vector<ObjectId> Required;
+		for (const auto Key : Offer.Owners) {
+			const auto Local = Adapters.Resolve(Key);
+			if (!Local || !Local->IsValid()) return false;
+			Required.push_back(*Local);
+		}
+		const auto Native = Destination.PrepareSpatialDestination(Offer.Bounds, Required);
+		if (!Native || !LocalSource(Offer, Destination, Adapters, &*Native)) return false;
+		const auto Evidence = Project(*Native, Adapters);
+		return Evidence && Evidence->Owners == Offer.Owners && Evidence->Digest == Offer.Collision;
+	}
+
 	bool IsSpatialTransfer(std::span<const std::byte> Bytes) {
 		GameBinaryReader In(Bytes);
 		std::uint32_t Tag{};
@@ -485,12 +501,13 @@ namespace gargantuan::network {
 		const SpatialDestinationBounds &Bounds,
 		std::span<const ObjectId> RequiredOwners,
 		const SpatialTransferAdapters &Adapters,
-		SpatialTransferClock::time_point Now
+		SpatialTransferClock::time_point Now, std::uint64_t RequestedSerial
 	) {
 		if (Current && Current->Frame.Phase != SpatialTransferPhase::Applied) return {SpatialTransferStatus::Busy, {}};
 		const auto Started = ++Mutation;
 		if (!Connection.IsValid() || !Valid(Scope) || !Subject || !Destination || !Adapters.Reserve ||
 			!Adapters.ResolveObject || LastSerial == std::numeric_limits<std::uint64_t>::max() ||
+			(RequestedSerial && RequestedSerial <= LastSerial) ||
 			Subject->GetObjectId() != Movement.Member || Adapters.ResolveObject(Scope.Subject) != Movement.Member ||
 			Adapters.ResolveObject(Scope.Source) != Movement.SourceDomain ||
 			Adapters.ResolveObject(Scope.Destination) != Destination->GetObjectId())
@@ -515,7 +532,7 @@ namespace gargantuan::network {
 		Next->Frame = {
 			SpatialTransferPhase::Offer,
 			Scope,
-			LastSerial + 1,
+			RequestedSerial ? RequestedSerial : LastSerial + 1,
 			Bounds,
 			WirePose(Movement.SourcePose),
 			WirePose(Movement.DestinationPose),
@@ -530,7 +547,7 @@ namespace gargantuan::network {
 		Next->Lease = Adapters.Reserve(Next->Frame, Next->Receipt);
 		if (!Next->Lease || !EvidenceIsCurrent(*Next, Adapters) || Started != Mutation)
 			return {SpatialTransferStatus::Denied, {}};
-		++LastSerial;
+		LastSerial = Next->Frame.Serial;
 		Current = std::move(Next);
 		return {SpatialTransferStatus::Progress, Current->Frame};
 	}

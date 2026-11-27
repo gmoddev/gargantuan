@@ -62,6 +62,9 @@ namespace {
 		const auto Baseline = Coordinator.AddPeer({1, 1}, ReplicationEpoch(1));
 		ReplicaApplier Replica;
 		Require(Baseline.Succeeded() && Replica.ApplyFrame(*Baseline.Frame).Succeeded(), "structural baseline failed");
+		HeadlessRenderer View(Vector2(64,64));
+		Engine ReplicaRuntime(std::dynamic_pointer_cast<DataModel>(Replica.GetReplicaRoot()), &View, nullptr,
+			{.Mode = RuntimeMode::Offline, .AdmitSpatialContent = true});
 		auto Shell = std::dynamic_pointer_cast<BlockGrid>(Replica.Resolve(Id));
 		Require(Shell && Shell->IsReplicaMaterialization(), "missing replicated shell");
 		Shell->SetCellSize(1);
@@ -105,6 +108,16 @@ namespace {
 		In.Receive(Read(), ResolveShell, 7);
 		In.Pump(ResolveShell, Send, 8);
 		auto Ack = Read();
+		if (Ack.Kind != GridStreamKind::Installed || !Shell->HasReplicaField()) {
+			const auto Owner = WorldRoot::GetEffectiveWorld(*Shell);
+			const auto Position = Shell->GetCFrame().Position;
+			const std::array Required{Shell->GetObjectId()};
+			const auto Proof = Owner ? Owner->PrepareSpatialDestination({Position,Position}, Required)
+				: std::expected<SpatialDestinationReceipt,PhysicsOperationStatus>(std::unexpected(PhysicsOperationStatus::InvalidId));
+			std::cerr << "[BlockGrid:Installation] Field=" << Shell->HasReplicaField() << " Frame=" << int(Ack.Kind)
+				<< " HasWorld=" << bool(Owner) << " HasTerrain=" << bool(Owner && Owner->GetOwnedTerrain())
+				<< " NativeStatus=" << int(Proof ? PhysicsOperationStatus::Success : Proof.error()) << '\n';
+		}
 		Require(Ack.Kind == GridStreamKind::Installed && Shell->HasReplicaField(), "fresh field did not install");
 		auto Forged = Ack;
 		Forged.Placement.Bytes[0] ^= 1;
@@ -129,6 +142,7 @@ namespace {
 		Require(Out.IsInstalled(Id, *Source), "collision-only update did not install");
 		Out.Forget(Id);
 		Require(!Out.IsInstalled(Id, *Source), "retirement retained the installation");
+		ReplicaRuntime.Destroy();
 	}
 	void Run(bool Socket) {
 		BootstrapNativeRuntimeSchema();

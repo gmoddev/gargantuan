@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Team Fireworks
 // SPDX-License-Identifier: MPL-2.0
+#include "gargantuan/blockgrid/AssetAudience.hpp"
 #include "gargantuan/blockgrid/Field.hpp"
 #include "gargantuan/blockgrid/Assets.hpp"
 #include "gargantuan/blockgrid/Edit.hpp"
@@ -111,6 +112,20 @@ namespace gargantuan::blockgrid {
 		throw std::invalid_argument("[BlockGrid:Definition] Unknown block definition");
 	}
 	std::size_t Field::GetDefinitionCount() const noexcept { return Definitions?Definitions->Entries.size():0; }
+	bool AdmitsAssetPins(const Field &Field, const SharedAssetPins *Shared) {
+		if (!Field.HasAssetBindings()) return true;
+		if (!Shared || Shared->empty()) return false;
+		for (std::size_t I = 0; I < Field.GetDefinitionCount(); ++I) {
+			const auto &Assets = Field.GetDefinition(static_cast<std::uint16_t>(Brick + 1 + I)).Assets;
+			if (!Assets) continue;
+			if (Assets->Pins.empty()) return false;
+			for (const auto &Pin : Assets->Pins) {
+				const auto Found = Shared->find(Pin.Id);
+				if (Found == Shared->end() || Found->second != Pin.Digest) return false;
+			}
+		}
+		return true;
+	}
 	void Field::HydrateAssets(const std::function<std::shared_ptr<const AssetBinding>(const AssetBinding&)>& Resolve) {
 		if (!HasAssetBindings()) return;
 		std::shared_ptr<Catalog> Next;

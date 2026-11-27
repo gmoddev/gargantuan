@@ -794,17 +794,76 @@ namespace gargantuan::network {
 		return true;
 	}
 
+	bool ReplicationCoordinator::MatchesSpatialAudience(const PeerRelevanceSelection &Selection, ObjectId Player) const {
+		const auto Stage = SpatialStages.find(Player);
+		return Selection.AuthorizedSpatialRegion == GetSpatialGrant(Player) &&
+			(Stage == SpatialStages.end() ? !Selection.Staging : Stage->second == Selection.Staging);
+	}
+	bool ReplicationCoordinator::ApplySpatialAudience(ConnectionId Connection,
+		std::shared_ptr<const PeerRelevanceSelection> Selection, std::uint64_t Tick) {
+		const auto Found = Peers.find(Connection);
+		if (!Configuration.ScopeSpatialDomains || !Selection || Found == Peers.end() || !Found->second.Planned ||
+			Found->second.PreparedCommit || Found->second.LocalPlayer != Selection->LocalPlayer) return false;
+		const auto Player = Selection->LocalPlayer;
+		const auto Previous = GetSpatialGrant(Player);
+		const auto Stage = SpatialStages.find(Player);
+		const auto OldStage = Stage == SpatialStages.end() ? nullptr : Stage->second;
+		if (MatchesSpatialAudience(*Selection, Player)) return true;
+		if (Selection->AuthorizedSpatialRegion != Previous && (!OldStage || Selection->Staging ||
+			Selection->AuthorizedSpatialRegion != OldStage->Region)) return false;
+		if (Selection->Staging && (OldStage || Selection->Staging->Region == Previous)) return false;
+		auto Set = [&](ObjectId Region, const std::shared_ptr<const SpatialStagingGrant> &Value) {
+			if (Region.IsValid()) SpatialGrants.insert_or_assign(Player,Region);
+			else SpatialGrants.erase(Player);
+			if (Value) SpatialStages.insert_or_assign(Player,Value);
+			else SpatialStages.erase(Player);
+		};
+		Set(Selection->AuthorizedSpatialRegion, Selection->Staging);
+		if (Selection->Staging) {
+			std::string Error;
+			const auto &Ids = Selection->Staging->Objects;
+			const auto Admitted = [&](ObjectId Id) {
+				return (Id == SourceRootId || Found->second.View.Knows(Id) || std::ranges::binary_search(Ids, Id)) &&
+					Catalog.contains(Id) && !RetiredObjects.contains(Id) && IsVisibleToPeer(Id, Player);
+			};
+			const auto HasClosure = [&](ObjectId Id) {
+				if (!Admitted(Id)) return false;
+				const auto &Node = Catalog.at(Id)->Publication;
+				if (Node.Parent && !Admitted(*Node.Parent)) return false;
+				for (const auto &[Name, Value] : Node.Properties) {
+					const auto *Ref = std::get_if<WireObjectReference>(&Value);
+					if (Ref && IsHardReference(Node, Name) && !HidesPlayerCharacter(Id, Name, Ref->Object.ToObjectId(), Player) &&
+						!Admitted(Ref->Object.ToObjectId())) return false;
+				}
+				return true;
+			};
+			if (!RefreshCatalog(Error) || !std::ranges::all_of(Ids, HasClosure)) {
+				Set(Previous, OldStage);
+				return false;
+			}
+		}
+		if (!RequestPlanning(Connection,Selection,Tick).Succeeded()) {
+			Set(Previous,OldStage);
+			return false;
+		}
+		return true;
+	}
 	bool ReplicationCoordinator::IsVisibleToPeer(ObjectId Object, ObjectId LocalPlayer) const {
 		const auto &Schema = FrozenSchema ? *FrozenSchema : detail::GetReplicationSchemaRegistry();
 		bool ViewportScene = false;
 		bool OwnedGui = false;
 		const auto Granted = Configuration.ScopeSpatialDomains ? GetSpatialGrant(LocalPlayer) : ObjectId{};
+		const auto Stage = SpatialStages.find(LocalPlayer);
+		const bool Staged = Stage != SpatialStages.end() && std::ranges::binary_search(Stage->second->Objects,Object);
+		const auto Permits = [&](ObjectId Region) {
+			return Region == Granted || (Staged && Stage->second->Region == Region);
+		};
 		bool SpatialParticipant = false, InsideGrant = false;
 		const auto CheckAssignment = [&](const PublishReplication &Node) {
 			const auto It = Node.Properties.find("SpatialRegion");
 			if (It == Node.Properties.end() || std::holds_alternative<std::monostate>(It->second)) return true;
 			const auto *Reference = std::get_if<WireObjectReference>(&It->second);
-			if (!Reference || !Granted.IsValid() || Reference->Object.ToObjectId() != Granted || RetiredObjects.contains(Granted))
+			if (!Reference || !Permits(Reference->Object.ToObjectId()) || RetiredObjects.contains(Reference->Object.ToObjectId()))
 				return false;
 			InsideGrant = true;
 			return true;
@@ -836,7 +895,7 @@ namespace gargantuan::network {
 					}
 				}
 				if (Publication.ClassSchemaId == SpatialRegionId) {
-					if (Object != Granted || RetiredObjects.contains(Object)) return false;
+					if (!Permits(Object) || RetiredObjects.contains(Object)) return false;
 					InsideGrant = true;
 				}
 			}
@@ -849,7 +908,7 @@ namespace gargantuan::network {
 			Object = *Publication.Parent;
 		}
 		if (ViewportScene) return OwnedGui;
-		return !SpatialParticipant || !Granted.IsValid() || InsideGrant;
+		return !SpatialParticipant || Permits({}) || InsideGrant;
 	}
 
 	bool ReplicationCoordinator::HidesPlayerCharacter(ObjectId Referrer, std::string_view Property, ObjectId Target, ObjectId Peer) const {
@@ -1199,8 +1258,8 @@ namespace gargantuan::network {
 			Error = "A structural frame is awaiting scheduler acceptance";
 			return false;
 		}
-		if (Selection.AuthorizedSpatialRegion != GetSpatialGrant(Peer.LocalPlayer)) {
-			Error = "The spatial audience is immutable within a replication epoch";
+		if (!MatchesSpatialAudience(Selection,Peer.LocalPlayer)) {
+			Error = "The requested selection does not match the trusted spatial audience";
 			return false;
 		}
 		if (Selection.LocalPlayer != Peer.LocalPlayer) {
@@ -2756,6 +2815,7 @@ namespace gargantuan::network {
 		auto Peer = Peers.find(Connection);
 		if (Peer == Peers.end()) return false;
 		if (!SpatialGrants.empty()) SpatialGrants.erase(Peer->second.LocalPlayer);
+		SpatialStages.erase(Peer->second.LocalPlayer);
 		if (!FrozenQuote) detail::RecordStructuralCausal({.Kind = detail::StructuralCausalKind::PeerRemoved,
 			.Reason = detail::StructuralCausalReason::GenerationRemoved, .Connection = Connection, .SourceScope = SourceRootId});
 		PendingTransitionCount -= std::min(PendingTransitionCount, Peer->second.PendingTransitions.size());

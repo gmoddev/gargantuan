@@ -4,6 +4,7 @@
 #include "gargantuan/blockgrid/Picking.hpp"
 #include "gargantuan/blockgrid/Edit.hpp"
 #include "gargantuan/blockgrid/Traversal.hpp"
+#include "gargantuan/blockgrid/Transfer.hpp"
 #include "gargantuan/blockgrid/Assets.hpp"
 #include <algorithm>
 #include <array>
@@ -27,6 +28,35 @@ namespace {
 		DVec Out{Pivot,Pivot,Pivot};
 		for (unsigned I=0;I<3;++I) for (unsigned J=0;J<3;++J) Out[I]+=Basis(R)[J][I]*(P[J]-Pivot);
 		return Out;
+	}
+	void TestBilateralTransfer() {
+		Field S,T;
+		const ChannelSpec Private{"charge",ChannelKind::UInt8,3,false,false,true,false};
+		Check(S.Define({"project:ramp",Shape::Wedge}) && S.DefineChannel(Private));
+		Check(T.Define({"project:other",Shape::Slab}) && T.DefineChannel({"other",ChannelKind::Int32,7}));
+		const Cell P{-3,2,4};
+		Check(Fill(S,SingleCell(P),{3,9}) && Fill(S,SingleCell({30,0,0}),{Stone,0}));
+		const std::array<Operation,1> Op{ValueWrite{P,0,19}}; Check(S.ApplyOperations(Op));
+		const auto S0=S,T0=T;
+		for (std::uint8_t R=0;R<24;++R) {
+			auto A=PlanGridTransfer(S,T,SingleCell(P),{{10,0,-8},R});
+			const auto M=Rotate({P.X+.5,P.Y+.5,P.Z+.5},R,0);
+			const Cell Q{10+static_cast<int>(std::floor(M[0])),static_cast<int>(std::floor(M[1])),-8+static_cast<int>(std::floor(M[2]))};
+			const auto B=A.Destination.Get(Q);
+			Check(B.Definition==4 && A.Destination.GetDefinition(B.Definition).Geometry==Shape::Wedge);
+			const DVec V{1,2,3};
+			Check(Rotate(V,B.Orientation,0)==Rotate(Rotate(V,9,0),R,0));
+			Check(A.Destination.GetValue(Q,1)==19 && A.Destination.GetValue(Q,0)==7);
+			Check(A.Source.Get(P)==Block{} && !A.Source.GetOverrideCount() && A.Source.GetOccupiedCount()==1);
+			Check(A.Source.GetRevision()==S.GetRevision()+1 && A.Destination.GetRevision()==T.GetRevision()+1);
+			Reject([&]{(void)PlanGridTransfer(S,A.Destination,SingleCell(P),{{10,0,-8},R});});
+		}
+		Check(S.HasSameContents(S0) && T.HasSameContents(T0));
+		Reject([&]{(void)PlanGridTransfer(S,T,SingleCell({0,0,0}),{});});
+		Reject([&]{(void)PlanGridTransfer(S,T,Region{{0,0,0},{4097,1,1}},{});});
+		Check(T.Define({"project:ramp",Shape::Stairs}));
+		Reject([&]{(void)PlanGridTransfer(S,T,{},{});});
+		Check(!T.HasSameContents(T0) && S.HasSameContents(S0));
 	}
 	void TestAssetPins() {
 		using namespace gargantuan;
@@ -244,6 +274,7 @@ namespace {
 int main() try {
 	TestDefinitions();
 	TestAssetPins();
+	TestBilateralTransfer();
 	TestState();
 	TestTraversal();
 	Field Grid;

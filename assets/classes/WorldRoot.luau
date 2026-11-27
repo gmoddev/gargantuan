@@ -15,6 +15,11 @@ return c({
 	},
 
 	methods = {
+		RequestCollisionArea = {
+			description = "Holds an observation of applied collision for this world in an authorized running server Script. Each Script execution owns its handles. Seconds defaults to five.",
+			asLuau = true,
+			luauSignature = [=[(self: WorldRoot, Minimum: Vector3, Maximum: Vector3, Seconds: number?, Priority: ("Background" | "Normal" | "Interactive")?) -> ({ GetStatus: (self: unknown) -> { Life: "Active" | "Released" | "Expired" | "Stale", Collision: "Pending" | "Ready" | "Unavailable", Revision: string }, SetArea: (self: unknown, Minimum: Vector3, Maximum: Vector3) -> boolean, SetPriority: (self: unknown, Priority: "Background" | "Normal" | "Interactive") -> boolean, Renew: (self: unknown, Seconds: number) -> boolean, Release: (self: unknown) -> () }?, string?)]=],
+		},
 		SphereCast = {
 			description = "Sweeps a sphere; Direction magnitude is distance. Initial overlaps are ignored.", asLuau = true,
 			luauSignature = "(self: WorldRoot, Origin: Vector3, Radius: number, Direction: Vector3, Params: RaycastParams?) -> { Instance: BasePart | Terrain | BlockGrid, GridHit: { Cell: Vector3, Block: { Definition: string, Orientation: { Up: string, Front: string } }, Position: Vector3, Normal: Vector3, Revision: string }?, Position: Vector3, Normal: Vector3, Distance: number }?",

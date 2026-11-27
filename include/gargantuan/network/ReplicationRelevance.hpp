@@ -52,12 +52,19 @@ namespace gargantuan::network {
 		[[nodiscard]] SpatialRegionIndexConfiguration SpatialConfiguration() const;
 	};
 
+	inline constexpr std::size_t MaximumSpatialStagingObjects = 256;
+	struct SpatialStagingGrant {
+		ObjectId Region;
+		std::uint64_t Serial{};
+		std::vector<ObjectId> Objects;
+	};
 	struct PeerRelevanceSelection {
 		std::vector<ObjectId> RequiredObjects;
 		std::vector<ObjectId> DesiredObjects;
 		ObjectId LocalPlayer;
 		// Trusted server grant bound to one connection epoch. Zero selects Workspace.
 		ObjectId AuthorizedSpatialRegion;
+		std::shared_ptr<const SpatialStagingGrant> Staging;
 		bool operator==(const PeerRelevanceSelection &) const = default;
 	};
 
@@ -118,7 +125,8 @@ namespace gargantuan::network {
 		bool AddPeer(ConnectionId Connection, ObjectId LocalPlayer, ObjectId OwnerCharacter = {}, ObjectId AuthorizedSpatialRegion = {});
 		bool RemovePeer(ConnectionId Connection);
 		bool SetOwnerCharacter(ConnectionId Connection, ObjectId Character);
-		bool SetTrustedFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints);
+		bool SetTrustedFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints, bool *Changed = nullptr);
+		bool SetSpatialAudience(ConnectionId Connection, ObjectId Region, std::shared_ptr<const SpatialStagingGrant> Staging);
 		bool Update(std::uint64_t SimulationTick);
 
 		[[nodiscard]] const PeerRelevanceSelection *GetSelection(ConnectionId Connection) const;

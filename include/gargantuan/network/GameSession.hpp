@@ -1,4 +1,5 @@
 #pragma once
+#include "gargantuan/blockgrid/AssetAudience.hpp"
 
 #include "gargantuan/network/Limits.hpp"
 #include "gargantuan/network/GameplayInput.hpp"
@@ -9,6 +10,7 @@
 #include "gargantuan/network/ReliableServiceProfile.hpp"
 #include "gargantuan/network/RemoteManager.hpp"
 #include "gargantuan/network/Transport.hpp"
+#include "gargantuan/network/SpatialTransfer.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
 
 #include <cstddef>
@@ -73,6 +75,7 @@ namespace gargantuan::network {
 		// Trusted native startup policy. Only the server chooses the initial coordinate domain.
 		bool SpatialContent{};
 		std::function<ObjectId(const Player &)> ResolveInitialSpatialAudience;
+		std::shared_ptr<const blockgrid::SharedAssetPins> SharedGridAssets;
 
 		[[nodiscard]] bool IsValid() const;
 		[[nodiscard]] static NetworkLimits DefaultLimits();
@@ -310,6 +313,11 @@ namespace gargantuan::network {
 		[[nodiscard]] std::optional<RemotePeerContext> ResolveRemotePeer(const Player &PlayerValue) const;
 		[[nodiscard]] std::vector<GameSessionPeerIdentity> GetPeerIdentities() const;
 		bool SetTrustedReplicationFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints);
+		// Trusted server host. The subject is resolved from the authenticated Player's current control.
+		[[nodiscard]] SpatialTransferStatus RequestSpatialTransfer(ConnectionId Connection, ObjectId Destination,
+			const CFrame &DestinationPose, const SpatialDestinationBounds &Bounds);
+		[[nodiscard]] SpatialTransferStatus CancelSpatialTransfer(ConnectionId Connection);
+		[[nodiscard]] std::optional<SpatialTransferStatus> GetSpatialTransferStatus(ConnectionId Connection) const;
 
 	  private:
 		friend class detail::GameSessionTestAccess;

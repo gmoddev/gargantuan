@@ -10,7 +10,7 @@
 namespace gargantuan::network {
 	namespace {
 		constexpr std::uint32_t Magic = 0x53474247; // GBGS
-		constexpr std::uint16_t Version = 2;
+		constexpr std::uint16_t Version = 3;
 		bool ValidScope(const GridStreamScope &Scope) {
 			return Scope.Epoch && Scope.Grid.IsValid() && (Scope.Domain.IsValid() || Scope.Domain == ObjectId{}) &&
 				   Scope.Domain != Scope.Grid;
@@ -20,6 +20,7 @@ namespace gargantuan::network {
 			switch (Message.Kind) {
 			case GridStreamKind::Request:
 			case GridStreamKind::Forget:
+			case GridStreamKind::Unavailable:
 				return true;
 			case GridStreamKind::Installed:
 				return Message.Target.IsValid() && Message.Placement.IsValid() && Message.Revision &&
@@ -66,6 +67,7 @@ namespace gargantuan::network {
 		Writer.Integer(Value.Scope.Grid.Generation);
 		Writer.Integer(Value.Scope.Domain.Slot);
 		Writer.Integer(Value.Scope.Domain.Generation);
+		Writer.Integer(Value.Scope.GrantGeneration);
 		Writer.Integer(Value.Subscription);
 		Writer.Integer(Value.Serial);
 		if (Value.Kind == GridStreamKind::Request) Writer.Append(std::as_bytes(std::span(Value.Base.Bytes)));
@@ -105,7 +107,7 @@ namespace gargantuan::network {
 		if (!Reader.Integer(Signature) || Signature != Magic || !Reader.Integer(Format) || Format != Version ||
 			!Reader.Integer(Kind) || !Reader.Integer(M.Scope.Epoch) || !Reader.Integer(M.Scope.Grid.Slot) ||
 			!Reader.Integer(M.Scope.Grid.Generation) || !Reader.Integer(M.Scope.Domain.Slot) ||
-			!Reader.Integer(M.Scope.Domain.Generation) || !Reader.Integer(M.Subscription) || !Reader.Integer(M.Serial))
+			!Reader.Integer(M.Scope.Domain.Generation) || !Reader.Integer(M.Scope.GrantGeneration) || !Reader.Integer(M.Subscription) || !Reader.Integer(M.Serial))
 			return {};
 		M.Kind = static_cast<GridStreamKind>(Kind);
 		if (M.Kind == GridStreamKind::Request && !ReadDigest(Reader, M.Base)) return {};

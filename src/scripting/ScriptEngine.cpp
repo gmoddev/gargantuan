@@ -1,4 +1,5 @@
 #include "gargantuan/scripting/ScriptEngine.hpp"
+#include "gargantuan/runtime/SpatialResidency.hpp"
 #include "gargantuan/blockgrid/RuntimeHandles.hpp"
 #include "DiagnosticText.hpp"
 #include "gargantuan/runtime/ServicePolicy.hpp"
@@ -81,6 +82,7 @@ namespace gargantuan {
 		{"Tween", nullptr, Tween::CreateUserdataMetatable},
 		{"TweenInfo", OpenLibTweenInfo, TweenInfo::CreateUserdataMetatable},
 		{"DataStore", nullptr, RegisterDataStoreUserdata},
+		{"SpatialCollisionLease", nullptr, RegisterSpatialCollisionUserdata},
 		{"Vector2", OpenLibVector2, Vector2::CreateUserdataMetatable},
 		{"Vector3", OpenLibVector3},
 
@@ -208,7 +210,7 @@ namespace gargantuan {
 			if (auto Connection = WeakConnection.lock()) Connection->Disconnect();
 		SignalConnections.clear();
 		for (auto &[Id, WeakScript] : ManagedScripts)
-			if (auto ScriptValue = WeakScript.lock()) ScriptValue->Cleanup();
+			if (auto ScriptValue = WeakScript.lock()) {ScriptValue->RetireExecution(); ScriptValue->Cleanup();}
 		ManagedScripts.clear();
 		ManagedScriptIds.clear();
 		DetachedManagedScripts.clear();

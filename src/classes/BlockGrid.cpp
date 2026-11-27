@@ -211,6 +211,7 @@ namespace gargantuan {
 		AssertCanMutate();
 		if (Editing) throw std::logic_error("[BlockGrid:Admission] Cannot replace an active admission hook");
 		Admission=std::move(BeforeCommit);
+		WorldOwnedAdmission=false;
 	}
 	void BlockGrid::InstallReplicaField(blockgrid::Field Value) {
 		AssertCanMutate();
@@ -250,7 +251,7 @@ namespace gargantuan {
 	std::string BlockGrid::ApplyEdit(const blockgrid::EditRequest& Edit,const blockgrid::Patch* Prepared) {
 		AssertCanMutate();
 		const auto World=GetDataModel();
-		if (!World || Editing) throw std::logic_error("[BlockGrid:Edit] Grid is unavailable for admission");
+		if (!World || Editing || IsTransferParked()) throw std::logic_error("[BlockGrid:Edit] Grid is unavailable for admission");
 		if (const auto Protection=World->GetSpatialTransferProtection(); Protection && !Protection->AllowsResource(*this))
 			throw std::runtime_error("[BlockGrid:Edit] Collision is reserved for an active transfer");
 		if (Edit.ExpectedRevision && *Edit.ExpectedRevision!=GetBlockRevision()) throw std::domain_error("[BlockGrid:Conflict] Revision changed");
@@ -340,7 +341,7 @@ namespace gargantuan {
 	}
 	void BlockGrid::CheckConfigurationWrite() const {
 		AssertCanMutate();
-		if (Editing || GetCurrentScriptSecurityContext().Domain==ScriptExecutionDomain::Client)
+		if (Editing || IsTransferParked() || GetCurrentScriptSecurityContext().Domain==ScriptExecutionDomain::Client)
 			throw std::runtime_error("[BlockGrid:Access] Grid configuration requires local authority");
 		if (ConfigurationRevision==std::numeric_limits<std::uint64_t>::max())
 			throw std::overflow_error("[BlockGrid:Revision] Configuration revision exhausted");

@@ -201,6 +201,12 @@ namespace gargantuan {
 	}
 	void ValidateBlockGridReparent(const Instance& Moving,const std::shared_ptr<Instance>& NewParent,
 		std::span<const std::shared_ptr<Instance>> Subtree) {
+		if (NewParent && BlockGrid::HasParkedTransfers()) {
+			const auto* Parked=dynamic_cast<const BlockGrid*>(&Moving);
+			const auto* ParentGrid=dynamic_cast<const BlockGrid*>(NewParent.get());
+			if ((Parked && Parked->IsTransferParked()) || (ParentGrid && ParentGrid->IsTransferParked()))
+				throw std::domain_error("[BlockGrid:History] Extracted shell is parked by Undo");
+		}
 		if (!LiveAssemblies.load(std::memory_order_relaxed) || !NewParent || Moving.IsDestroying()) return;
 		const auto Old=WorldRoot::GetEffectiveWorld(Moving);
 		if (!Old || Old==WorldRoot::GetEffectiveWorld(*NewParent)) return;
@@ -257,6 +263,42 @@ namespace gargantuan {
 				Member.Assembly->Hulls=Updated; Member.Assembly->Pose=Member.Grid->GetCFrame(); return true;
 			});
 		});
+		Grid->WorldOwnedAdmission=true;
+	}
+
+	std::function<void()> WorldRoot::PrepareBlockGridTransfer(BlockGrid& Source,const blockgrid::Field& SourceAfter,
+		BlockGrid& Destination,const blockgrid::Field& DestinationAfter) {
+		if (SteppingPhysics || ShuttingDownPhysics || !BlockGridState || !Source.WorldOwnedAdmission || !Destination.WorldOwnedAdmission)
+			throw std::runtime_error("[BlockGrid:Admission] Both grids require a reservable world provider");
+		auto& Live=*BlockGridState;
+		const auto SourceMember=Live.Members.find(Source.GetObjectId()),DestinationMember=Live.Members.find(Destination.GetObjectId());
+		if (SourceMember==Live.Members.end() || DestinationMember==Live.Members.end())
+			throw std::domain_error("[BlockGrid:Admission] A transfer participant has left the collision domain");
+		auto& A=SourceMember->second;
+		auto& B=DestinationMember->second;
+		if (&A==&B || A.Assembly || B.Assembly)
+			throw std::domain_error("[BlockGrid:Motion] Freeze both assemblies before transferring cells");
+		struct Coverage { BlockGridParticipant A,B; std::size_t WorldCount{}; };
+		auto Reserved=std::make_shared<Coverage>();
+		BlockGridWorldState Scratch;
+		Scratch.ReservedBoxes=Live.ReservedBoxes-A.DesiredCount-B.DesiredCount;
+		const auto Reserve=[&](BlockGridParticipant& Original,BlockGridParticipant& Staged,const blockgrid::Field& After) {
+			Staged.Grid=Original.Grid;
+			Staged.Desired=Original.Desired; Staged.DesiredCount=Original.DesiredCount;
+			Staged.TopologyMask=Original.TopologyMask; Staged.TopologyCurrent=Original.TopologyCurrent;
+			Scratch.ReservedBoxes+=Original.DesiredCount;
+			if (!After.AdmitTransferFrom(Original.Grid->GetField(),[&](const auto& Next,auto){return PrepareTopology(Scratch,Staged,Next);}))
+				throw std::length_error("[BlockGrid:Admission] Transfer exceeds available collision coverage");
+		};
+		Reserve(A,Reserved->A,SourceAfter); Reserve(B,Reserved->B,DestinationAfter);
+		Reserved->WorldCount=Scratch.ReservedBoxes;
+		return [&Live,&A,&B,Reserved=std::move(Reserved)]() noexcept {
+			const auto Install=[](BlockGridParticipant& To,BlockGridParticipant& From) noexcept {
+				To.Desired.swap(From.Desired); To.DesiredCount=From.DesiredCount;
+				To.TopologyMask=From.TopologyMask; To.TopologyCurrent=true;
+			};
+			Install(A,Reserved->A); Install(B,Reserved->B); Live.ReservedBoxes=Reserved->WorldCount;
+		};
 	}
 
 	void WorldRoot::RemoveBlockGrid(const std::shared_ptr<Instance> &Value) {

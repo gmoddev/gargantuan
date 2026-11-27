@@ -1,4 +1,5 @@
 #pragma once
+#include "gargantuan/blockgrid/AssetAudience.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -51,6 +52,7 @@ namespace gargantuan {
 		std::string ClientCodeIdentity;
 		std::string SessionIdentity;
 		bool SpatialContent{};
+		blockgrid::SharedAssetPins SharedGridAssets;
 		std::string WorkspaceTerrainManifest;
 		int WorkspaceTerrainSpacingShift{};
 	};

@@ -13,11 +13,12 @@
 namespace gargantuan::network {
 	inline constexpr std::size_t MaximumGridReplicaBytes = 1024 * 1024;
 	inline constexpr std::size_t MaximumGridStreamFragment = 16 * 1024;
-	enum class GridStreamKind : std::uint8_t { Request = 1, Offer, Fragment, Installed, Forget };
+	enum class GridStreamKind : std::uint8_t { Request = 1, Offer, Fragment, Installed, Forget, Unavailable };
 
 	struct GridStreamScope {
 		std::uint64_t Epoch{};
 		ObjectId Grid{}, Domain{};
+		std::uint64_t GrantGeneration{};
 		bool operator==(const GridStreamScope &) const = default;
 	};
 	struct GridStreamMessage {

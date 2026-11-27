@@ -69,6 +69,7 @@ namespace gargantuan {
 		friend class PackageBuilder;
 		friend class MutationGateway;
 		friend class PreparedPropertyCommit;
+		friend class PreparedGridTransfer;
 		friend struct PreparedPropertyTestAccess;
 		[[nodiscard]] bool HasDeferredRevision() const noexcept;
 		std::uint64_t AuthoritativeRevision = InitialProjectRevision;

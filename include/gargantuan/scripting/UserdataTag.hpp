@@ -33,5 +33,6 @@ namespace gargantuan {
 		Tween,
 		DataStore,
 		PersistenceOperation,
+		SpatialCollisionLease,
 	};
 }
