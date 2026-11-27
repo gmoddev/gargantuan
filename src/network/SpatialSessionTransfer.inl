@@ -175,6 +175,11 @@ void RetireSessionTransfer(ConnectionId Connection, Peer &Value) {
 void FinishTransfer(ConnectionId Connection, Peer &Value, SpatialTransferStatus Status) {
 	if (!HasTransfer(Value)) return;
 	const auto Request = *Value.SpatialTransfer->Pending;
+	if (Status != SpatialTransferStatus::Applied)
+		LOG_INFO(App, "[Spatial:Transfer] %s ended status=%d started=%d committed=%d waiting=%s",
+			Configuration.Role == GameSessionRole::Server ? "Server" : "Player", static_cast<int>(Status),
+			static_cast<int>(Request.Started), static_cast<int>(Request.Committed),
+			Request.OfferPendingReason ? Request.OfferPendingReason : "none");
 	if (Configuration.Role == GameSessionRole::Server) {
 		const bool Promote = Status == SpatialTransferStatus::Applied;
 		if (!ReleaseTransferDomain(Connection, Request.Serial, Promote)) {
@@ -369,7 +374,9 @@ void PumpSessionTransfer(ConnectionId Connection, Peer &Value) {
 	if (!Destination || !Source || !Subject) return;
 	if (!Request.DestinationActivation) Request.DestinationActivation = Destination->GetSpatialActivation();
 	if (!Server) {
-		if (!Request.WaitingOffer || !IsSpatialOfferInstalled(*Request.WaitingOffer, *Destination, Adapters)) return;
+		if (!Request.WaitingOffer) return;
+		Request.OfferPendingReason = GetSpatialOfferPendingReason(*Request.WaitingOffer, *Destination, Adapters);
+		if (Request.OfferPendingReason) return;
 		auto Frame = std::move(*Request.WaitingOffer);
 		Request.WaitingOffer.reset();
 		Request.Started = true;

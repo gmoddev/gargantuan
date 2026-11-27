@@ -240,6 +240,7 @@ namespace gargantuan::network {
 				std::optional<SpatialTransferFrame> WaitingOffer;
 				SpatialResidencyAudience Issuer;
 				std::shared_ptr<SpatialTransferStatus> Observation;
+				const char *OfferPendingReason{};
 				bool Started{}, Committed{};
 			};
 			std::uint64_t LastSerial{};

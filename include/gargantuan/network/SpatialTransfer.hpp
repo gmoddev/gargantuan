@@ -78,7 +78,8 @@ namespace gargantuan::network {
 
 	// An early reliable offer can precede its structural/leaf installation. This read-only check
 	// never consumes its serial, grants a lease, or moves the subject.
-	[[nodiscard]] bool IsSpatialOfferInstalled(const SpatialTransferFrame &Offer, WorldRoot &Destination,
+	// A null reason means all native providers and the controlled source agree.
+	[[nodiscard]] const char *GetSpatialOfferPendingReason(const SpatialTransferFrame &Offer, WorldRoot &Destination,
 		const SpatialTransferAdapters &Adapters);
 
 	// All calls run on Main. Mutation owners check the old and new bounds before changing collision,
