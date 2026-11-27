@@ -108,7 +108,9 @@ namespace {
 		if (!Grid)
 			for (const auto &Piece : Parts)
 				Mass += Piece->GetMass();
-		Require(std::abs(Mass - Count) < .02, "aggregate native mass differs");
+		const double UnitDensity = Grid ? 1. : .7;
+		Require(std::abs(Mass - Count * UnitDensity) < .02, "aggregate mass differs from the native material density");
+		Result["UnitDensity"] = UnitDensity;
 		Result["Mass"] = Mass;
 		const auto Position = [&](std::size_t Index) {
 			return Grid ? Projection->Pose.PointToWorldSpace(Center(Cells[Index])) : Parts[Index]->GetCFrame().Position;
