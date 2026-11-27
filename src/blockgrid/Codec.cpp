@@ -8,7 +8,7 @@
 
 namespace gargantuan::blockgrid {
 	namespace {
-		constexpr std::uint8_t Magic[]{'B','G','R','D',1};
+		constexpr std::uint8_t Magic[]{'B','G','R','D'};
 		void Put(std::vector<std::uint8_t>& Bytes, std::uint32_t Value, unsigned Width) {
 			for (unsigned I=0; I<Width; ++I) Bytes.push_back(static_cast<std::uint8_t>(Value>>(8*I)));
 		}
@@ -20,6 +20,7 @@ namespace gargantuan::blockgrid {
 		struct Reader {
 			std::span<const std::uint8_t> Bytes;
 			std::size_t Offset{};
+			std::uint16_t MaximumId{Brick};
 			std::uint32_t Take(unsigned Width) {
 				if (Bytes.size()-Offset < Width) Invalid();
 				std::uint32_t Result = 0;
@@ -28,7 +29,7 @@ namespace gargantuan::blockgrid {
 			}
 			Block TakeBlock() {
 				const Block Value{static_cast<std::uint16_t>(Take(2)), static_cast<std::uint8_t>(Take(1))};
-				if (!ValidBlock(Value)) Invalid();
+				if (Value.Definition>MaximumId || !ValidBlock(Value)) Invalid();
 				return Value;
 			}
 		};
@@ -36,6 +37,18 @@ namespace gargantuan::blockgrid {
 	std::vector<std::uint8_t> Encode(const Field& F) {
 		std::vector<std::uint8_t> Out(std::begin(Magic),std::end(Magic));
 		Out.reserve(F.EncodedBytes);
+		Out.push_back(F.Definitions?2:1);
+		if (F.Definitions) {
+			Put(Out,static_cast<std::uint32_t>(F.Definitions->Entries.size()),2);
+			for (const auto& D:F.Definitions->Entries) {
+				Put(Out,static_cast<std::uint32_t>(D.Key.size()),1);
+				Out.insert(Out.end(),D.Key.begin(),D.Key.end());
+				Put(Out,static_cast<unsigned>(D.Geometry),1);
+				for (const auto C:D.Color) Put(Out,std::bit_cast<std::uint32_t>(C),4);
+				Put(Out,unsigned(D.CanCollide)|(unsigned(D.Queryable)<<1),1);
+				Put(Out,D.Ports,1);
+			}
+		}
 		Put(Out, static_cast<std::uint32_t>(F.Leaves.size()), 4);
 		for (const auto& [Base, Page] : F.Leaves) {
 			for (auto N : {Base.X,Base.Y,Base.Z}) Put(Out,std::bit_cast<std::uint32_t>(N),4);
@@ -55,13 +68,37 @@ namespace gargantuan::blockgrid {
 		return Out;
 	}
 	Field Decode(std::span<const std::uint8_t> Bytes) {
-		if (Bytes.size() > MaximumEncodedBytes || Bytes.size() < sizeof(Magic)+4 ||
+		if (Bytes.size() > MaximumEncodedBytes || Bytes.size() < sizeof(Magic)+5 ||
 			!std::equal(std::begin(Magic),std::end(Magic),Bytes.begin())) Invalid();
 		Reader In{Bytes, sizeof(Magic)};
+		Field Result;
+		const auto Version=In.Take(1);
+		if (Version==2) {
+			const auto N=In.Take(2);
+			if (!N || N>MaximumDefinitions || N>(Bytes.size()-In.Offset)/25) Invalid();
+			auto Bindings=std::make_shared<Field::Catalog>();
+			Bindings->Entries.reserve(N);
+			for (unsigned I=0;I<N;++I) {
+				const auto Length=In.Take(1);
+				if (Length>56 || Length>Bytes.size()-In.Offset) Invalid();
+				Definition D; D.Key.assign(reinterpret_cast<const char*>(Bytes.data()+In.Offset),Length); In.Offset+=Length;
+				D.Geometry=static_cast<Shape>(In.Take(1));
+				for (auto& C:D.Color) C=std::bit_cast<float>(In.Take(4));
+				const auto Flags=In.Take(1);
+				if (Flags>3) Invalid();
+				D.CanCollide=(Flags&1)!=0; D.Queryable=(Flags&2)!=0;
+				D.Ports=static_cast<std::uint8_t>(In.Take(1));
+				ValidateDefinition(D);
+				const auto Id=static_cast<std::uint16_t>(Brick+1+I);
+				if (!Bindings->Names.emplace(D.Key,Id).second) Invalid();
+				Bindings->Entries.push_back(std::move(D));
+			}
+			Result.Definitions=std::move(Bindings);
+			In.MaximumId=static_cast<std::uint16_t>(Brick+N);
+		} else if (Version!=1) Invalid();
 		const auto Count = In.Take(4);
 		if (Count > MaximumLeaves || Count > (Bytes.size()-In.Offset)/16) Invalid();
 		std::optional<Cell> Previous;
-		Field Result;
 		for (unsigned L=0; L<Count; ++L) {
 			const Cell Base{std::bit_cast<std::int32_t>(In.Take(4)), std::bit_cast<std::int32_t>(In.Take(4)),
 				std::bit_cast<std::int32_t>(In.Take(4))};
@@ -86,6 +123,7 @@ namespace gargantuan::blockgrid {
 					const auto B = In.TakeBlock();
 					if (Slot>=LeafVolume || B.Definition==Air || (!Entries.empty() && Entries.back().Index>=Slot)) Invalid();
 					Entries.push_back({static_cast<std::uint16_t>(Slot), B});
+					Page.CustomCells+=static_cast<unsigned>(B.Definition>Brick);
 				}
 				Page.Occupied = N;
 				break;
@@ -98,6 +136,7 @@ namespace gargantuan::blockgrid {
 					const auto B = In.TakeBlock();
 					Values.push_back(B);
 					Page.Occupied += static_cast<unsigned>(B.Definition != Air);
+					Page.CustomCells += static_cast<unsigned>(B.Definition>Brick);
 				}
 				if (Page.Occupied <= Leaf::SparseLimit ||
 					std::ranges::all_of(Values,[&](Block B){return B==Values.front();})) Invalid();
@@ -107,6 +146,13 @@ namespace gargantuan::blockgrid {
 			}
 			Result.Occupied += Page.Occupied;
 			if (Result.Occupied > MaximumOccupiedCells) Invalid();
+			if (Page.CustomCells) {
+				std::vector<std::uint16_t> Ids;
+				Page.CollectDefinitionIds(Ids);
+				if (!Result.Dependencies) Result.Dependencies=std::make_shared<Field::Links>();
+				if (Ids.size()>MaximumDefinitionLeafLinks-Result.Dependencies->size()) Invalid();
+				for (auto Id:Ids) Result.Dependencies->insert({Id,Base});
+			}
 			Result.Leaves.emplace_hint(Result.Leaves.end(), Base, std::make_shared<const Leaf>(std::move(Page)));
 		}
 		if (In.Offset != Bytes.size()) Invalid();

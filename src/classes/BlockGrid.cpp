@@ -5,6 +5,7 @@
 #include "gargantuan/blockgrid/Picking.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
+#include "gargantuan/datatypes/Color3.hpp"
 #include "gargantuan/datatypes/Vector3.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
@@ -21,16 +22,7 @@
 namespace gargantuan {
 	namespace {
 		using namespace blockgrid;
-		using FacePair = std::array<unsigned,2>;
 		constexpr std::array<std::string_view,6> Faces{"+X","-X","+Y","-Y","+Z","-Z"};
-		constexpr auto Rotations = [] {
-			std::array<FacePair,24> Values{};
-			Values[0] = {2,5};
-			unsigned I = 1;
-			for (unsigned Up=0; Up<6; ++Up) for (unsigned Front=0; Front<6; ++Front)
-				if (Up/2 != Front/2 && FacePair{Up,Front} != Values[0]) Values[I++]={Up,Front};
-			return Values;
-		}();
 		BlockGrid& ReadTarget(lua_State* L, Instance* Object, bool Edit = false) {
 			const auto* Script = ScriptEngine::Get(L);
 			const auto& Security = GetCurrentScriptSecurityContext();
@@ -60,7 +52,7 @@ namespace gargantuan {
 			const auto* S = lua_tolstring(L,I,&N);
 			return {S,N};
 		}
-		unsigned Face(lua_State* L, int I, const char* Key) {
+		unsigned ReadFace(lua_State* L, int I, const char* Key) {
 			lua_pushstring(L,Key);
 			lua_rawget(L,I);
 			const auto Name=StringAt(L,-1);
@@ -69,40 +61,83 @@ namespace gargantuan {
 			if (It==Faces.end()) throw std::invalid_argument("[BlockGrid:Orientation] Unknown face");
 			return static_cast<unsigned>(It-Faces.begin());
 		}
-		Block ReadBlock(lua_State* L, int Definition, int Orientation) {
-			const auto Name=StringAt(L,Definition);
-			Block B;
-			if (Name=="Stone") B.Definition=Stone;
-			else if (Name=="Brick") B.Definition=Brick;
-			else throw std::invalid_argument("[BlockGrid:Definition] Unknown block definition");
+		Block ReadBlock(lua_State* L, const Field& Source, int Key, int Orientation) {
+			Block B{Source.GetDefinitionId(StringAt(L,Key))};
 			if (lua_isnoneornil(L,Orientation)) return B;
 			if (!lua_istable(L,Orientation)) throw std::invalid_argument("[BlockGrid:Orientation] Expected an Up and Front table");
-			const FacePair Pair{Face(L,Orientation,"Up"),Face(L,Orientation,"Front")};
-			const auto It=std::ranges::find(Rotations,Pair);
-			if (It==Rotations.end()) throw std::invalid_argument("[BlockGrid:Orientation] Up and Front must be perpendicular");
-			B.Orientation=static_cast<std::uint8_t>(It-Rotations.begin());
+			B.Orientation=OrientationIndex(ReadFace(L,Orientation,"Up"),ReadFace(L,Orientation,"Front"));
 			return B;
 		}
 		void PushText(lua_State* L, std::string_view S) { lua_pushlstring(L,S.data(),S.size()); }
-		void PushBlock(lua_State* L, Block B) {
+		void PushBlock(lua_State* L, const Field& Source, Block B) {
 			if (B.Definition==Air) { lua_pushnil(L); return; }
 			lua_createtable(L,0,2);
-			PushText(L,B.Definition==Stone?"Stone":"Brick"); lua_setfield(L,-2,"Definition");
+			PushText(L,Source.GetDefinition(B.Definition).Key); lua_setfield(L,-2,"Definition");
 			lua_createtable(L,0,2);
-			PushText(L,Faces[Rotations[B.Orientation][0]]); lua_setfield(L,-2,"Up");
-			PushText(L,Faces[Rotations[B.Orientation][1]]); lua_setfield(L,-2,"Front");
+			const auto [Up,Front]=OrientationFaces(B.Orientation);
+			PushText(L,Faces[Up]); lua_setfield(L,-2,"Up");
+			PushText(L,Faces[Front]); lua_setfield(L,-2,"Front");
 			lua_setreadonly(L,-1,true); lua_setfield(L,-2,"Orientation");
 			lua_setreadonly(L,-1,true);
 		}
-		int Submit(lua_State* L, BlockGrid& Grid, blockgrid::Write W) {
-			auto Edit=std::make_shared<EditRequest>();
-			Edit->Writes.push_back(W);
+		int SubmitRequest(lua_State* L, BlockGrid& Grid, std::shared_ptr<EditRequest> Edit) {
 			MutationGateway Gateway;
 			const auto Result=Gateway.Apply(SubmitBlockGridEditCommand{Grid.GetObjectId(),Grid.GetReplicationScopeId(),std::move(Edit)});
 			if (!Result.Succeeded() || !Result.BlockRevision)
 				throw std::runtime_error(Result.Message.empty()?"[BlockGrid:Edit] Rejected":Result.Message);
 			PushText(L,*Result.BlockRevision);
 			return 1;
+		}
+		int Submit(lua_State* L, BlockGrid& Grid, blockgrid::Write W) {
+			auto Edit=std::make_shared<EditRequest>();
+			Edit->Writes.push_back(W);
+			return SubmitRequest(L,Grid,std::move(Edit));
+		}
+		Definition ReadDefinition(lua_State* L) {
+			if (!lua_istable(L,3)) throw std::invalid_argument("[BlockGrid:Definition] Expected a definition table");
+			const auto Key=StringAt(L,2);
+			if (Key.size()>56) throw std::invalid_argument("[BlockGrid:Definition] Oversized definition key");
+			Definition D{std::string(Key)};
+			lua_pushnil(L);
+			while (lua_next(L,3)) {
+				const auto Name=StringAt(L,-2);
+				if (Name=="Shape") {
+					constexpr std::array<std::string_view,4> Shapes{"Cube","Slab","Wedge","Stairs"};
+					const auto It=std::ranges::find(Shapes,StringAt(L,-1));
+					if (It==Shapes.end()) throw std::invalid_argument("[BlockGrid:Unsupported] Unknown or unavailable shape");
+					D.Geometry=static_cast<Shape>(It-Shapes.begin());
+				} else if (Name=="Color") {
+					const auto C=CheckStackValue<Color3>(L,-1);
+					D.Color={C.R,C.G,C.B};
+				} else if (Name=="Collision") {
+					const auto Value=StringAt(L,-1);
+					if (Value!="Shape" && Value!="None") throw std::invalid_argument("[BlockGrid:Unsupported] Unknown collision representation");
+					D.CanCollide=Value=="Shape";
+				} else if (Name=="Queryable") {
+					if (lua_type(L,-1)!=LUA_TBOOLEAN) throw std::invalid_argument("[BlockGrid:Definition] Expected Queryable boolean");
+					D.Queryable=lua_toboolean(L,-1)!=0;
+				} else if (Name=="Ports") {
+					if (!lua_istable(L,-1)) throw std::invalid_argument("[BlockGrid:Definition] Expected a face array");
+					const auto Count=lua_objlen(L,-1);
+					if (Count>6) throw std::invalid_argument("[BlockGrid:Definition] Too many ports");
+					D.Ports=0;
+					int Seen=0;
+					const int Ports=lua_gettop(L);
+					lua_pushnil(L);
+					while (lua_next(L,Ports)) {
+						if (lua_type(L,-2)!=LUA_TNUMBER) throw std::invalid_argument("[BlockGrid:Definition] Invalid face array");
+						const double K=lua_tonumber(L,-2);
+						if (++Seen>6 || K<1 || K>Count || std::trunc(K)!=K) throw std::invalid_argument("[BlockGrid:Definition] Invalid face array");
+						const auto It=std::ranges::find(Faces,StringAt(L,-1));
+						if (It==Faces.end() || (D.Ports&(1u<<(It-Faces.begin())))) throw std::invalid_argument("[BlockGrid:Definition] Invalid or duplicate port");
+						D.Ports|=static_cast<std::uint8_t>(1u<<(It-Faces.begin()));
+						lua_pop(L,1);
+					}
+					if (Seen!=Count) throw std::invalid_argument("[BlockGrid:Definition] Sparse face array");
+				} else throw std::invalid_argument("[BlockGrid:Unsupported] Unknown or unavailable definition property");
+				lua_pop(L,1);
+			}
+			return D;
 		}
 		bool ValidTransform(const CFrame& Frame) {
 			for (unsigned I=0; I<3; ++I) {
@@ -133,7 +168,7 @@ namespace gargantuan {
 	}
 	void BlockGrid::RestoreField(blockgrid::Field Value) {
 		AssertCanMutate();
-		if (GetDataModel() || Cells.GetRevision()!=1 || Cells.GetLeafCount() || Admission || Editing)
+		if (GetDataModel() || Cells.GetRevision()!=1 || Cells.GetLeafCount() || Cells.GetDefinitionCount() || Admission || Editing)
 			throw std::logic_error("[BlockGrid:Restore] Only an unpublished detached grid may restore native data");
 		Cells=std::move(Value);
 	}
@@ -150,7 +185,7 @@ namespace gargantuan {
 			ConfigurationRevision,Cells.GetRevision());
 	}
 	std::string BlockGrid::ApplyWrites(std::span<const blockgrid::Write> Writes, const std::optional<std::string>& Expected,
-		bool ReplayingCells) {
+		bool ReplayingCells,const blockgrid::BindingEdit* Binding,const blockgrid::BindingDelta* ReplayBinding,bool Forward) {
 		AssertCanMutate();
 		const auto World=GetDataModel();
 		if (!World || Editing) throw std::logic_error("[BlockGrid:Edit] Grid is unavailable for admission");
@@ -160,7 +195,16 @@ namespace gargantuan {
 		{
 			struct Guard { bool& Flag; ~Guard(){ Flag=false; } } Reset{Editing};
 			Editing=true;
-			Changed=ReplayingCells ? Cells.ApplyCellPatch(Writes,Admission) : Cells.Apply(Writes,{},Admission);
+			if (ReplayBinding) {
+				const auto& D=*ReplayBinding;
+				const auto Id=Cells.FindDefinitionId(D.After.Key);
+				const auto* Before=Forward?(D.Before?&*D.Before:nullptr):&D.After;
+				if (bool(Id)!=bool(Before) || (Id && Cells.GetDefinition(*Id)!=*Before))
+					throw std::domain_error("[BlockGrid:Conflict] Definition history has diverged");
+				if (Forward || D.Before) Changed=Cells.Define(Forward?D.After:*D.Before,bool(Id),Admission);
+				else { Cells.UndoDefinitionInsertion(D.After,Admission); Changed=true; }
+			} else if (Binding) Changed=Cells.Define(Binding->Spec,Binding->Replace,Admission);
+			else Changed=ReplayingCells ? Cells.ApplyCellPatch(Writes,Admission) : Cells.Apply(Writes,{},Admission);
 		}
 		const auto Revision=GetBlockRevision();
 		if (Changed) {
@@ -216,7 +260,7 @@ namespace gargantuan {
 	}
 	int BlockGrid::SetBlock(lua_State* L,Instance* Object) {
 		auto& Grid=ReadTarget(L,Object,true);
-		return Submit(L,Grid,{SingleCell(ReadCell(L,2)),ReadBlock(L,3,4)});
+		return Submit(L,Grid,{SingleCell(ReadCell(L,2)),ReadBlock(L,Grid.Cells,3,4)});
 	}
 	int BlockGrid::RemoveBlock(lua_State* L,Instance* Object) {
 		auto& Grid=ReadTarget(L,Object,true);
@@ -224,11 +268,11 @@ namespace gargantuan {
 	}
 	int BlockGrid::GetBlock(lua_State* L,Instance* Object) {
 		const auto& Grid=ReadTarget(L,Object);
-		PushBlock(L,Grid.Cells.Get(ReadCell(L,2))); return 1;
+		PushBlock(L,Grid.Cells,Grid.Cells.Get(ReadCell(L,2))); return 1;
 	}
 	int BlockGrid::Fill(lua_State* L,Instance* Object) {
 		auto& Grid=ReadTarget(L,Object,true);
-		return Submit(L,Grid,{{ReadCell(L,2),ReadCell(L,3,true)},ReadBlock(L,4,5)});
+		return Submit(L,Grid,{{ReadCell(L,2),ReadCell(L,3,true)},ReadBlock(L,Grid.Cells,4,5)});
 	}
 	int BlockGrid::Clear(lua_State* L,Instance* Object) {
 		auto& Grid=ReadTarget(L,Object,true);
@@ -248,7 +292,7 @@ namespace gargantuan {
 				if (B.Definition==Air) continue;
 				lua_createtable(L,0,2);
 				StackValue<glm::vec3>::Push(L,glm::vec3(X,Y,Z)); lua_setfield(L,-2,"Position");
-				PushBlock(L,B); lua_setfield(L,-2,"Block"); lua_rawseti(L,-2,++N);
+				PushBlock(L,Grid.Cells,B); lua_setfield(L,-2,"Block"); lua_rawseti(L,-2,++N);
 			}
 		lua_setfield(L,-2,"Cells"); return 1;
 	}
@@ -273,7 +317,7 @@ namespace gargantuan {
 		if (B.Definition==Air) throw std::logic_error("[BlockGrid:Raycast] Hit owner is no longer occupied");
 		lua_createtable(L,0,5);
 		StackValue<glm::vec3>::Push(L,glm::vec3(Cell.X,Cell.Y,Cell.Z)); lua_setfield(L,-2,"Cell");
-		PushBlock(L,B); lua_setfield(L,-2,"Block");
+		PushBlock(L,Cells,B); lua_setfield(L,-2,"Block");
 		StackValue<glm::vec3>::Push(L,Position); lua_setfield(L,-2,"Position");
 		StackValue<glm::vec3>::Push(L,Normal); lua_setfield(L,-2,"Normal");
 		PushText(L,GetBlockRevision()); lua_setfield(L,-2,"Revision");
@@ -294,6 +338,24 @@ namespace gargantuan {
 		if (!Hit) { lua_pushnil(L); return 1; }
 		const auto& N=Hit->Normal;
 		Grid.PushGridHit(L,Hit->Position,glm::vec3(O+D*Hit->Fraction),glm::vec3(glm::normalize(R*glm::dvec3(N[0],N[1],N[2]))));
+		return 1;
+	}
+	int BlockGrid::DefineBlock(lua_State* L,Instance* Object) {
+		auto& Grid=ReadTarget(L,Object,true);
+		auto Edit=std::make_shared<EditRequest>();
+		Edit->Binding=BindingEdit{ReadDefinition(L),false};
+		return SubmitRequest(L,Grid,std::move(Edit));
+	}
+	int BlockGrid::ReplaceDefinition(lua_State* L,Instance* Object) {
+		auto& Grid=ReadTarget(L,Object,true);
+		auto Edit=std::make_shared<EditRequest>();
+		Edit->Binding=BindingEdit{ReadDefinition(L),true};
+		Edit->ExpectedRevision=std::string(StringAt(L,4));
+		return SubmitRequest(L,Grid,std::move(Edit));
+	}
+	int BlockGrid::GetDefinitionDigest(lua_State* L,Instance* Object) {
+		const auto& F=ReadTarget(L,Object).GetField();
+		PushText(L,DefinitionDigest(F.GetDefinition(F.GetDefinitionId(StringAt(L,2)))));
 		return 1;
 	}
 }

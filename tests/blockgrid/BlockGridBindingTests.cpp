@@ -61,6 +61,21 @@ int main() try {
 		local Other=Instance.new("BlockGrid")
 		Other.Parent=game.Workspace
 		assert(Other:GetRevision()~=G:GetRevision())
+		local Spec={Shape="Wedge",Color=Color3.new(0.25,0.5,1),Ports={"+X","-X"}}
+		local Registered=Other:DefineBlock("project:ramp",Spec)
+		assert(Other:DefineBlock("project:ramp",Spec)==Registered)
+		assert(not pcall(function() Other:DefineBlock("project:ramp",{Shape="Slab"}) end))
+		assert(not pcall(function() Other:DefineBlock("project:bad",{Ports={"+Z","+Z"}}) end))
+		assert(not pcall(function() Other:DefineBlock("project:bad",{Shape="Unresolved"}) end))
+		local Digest=Other:GetDefinitionDigest("project:ramp")
+		assert(#Digest==64 and Other:GetRevision()==Registered)
+		local Placed=Other:SetBlock(Vector3.zero,"project:ramp")
+		local Hit=Other:Raycast(Vector3.new(0.5,2,0.25),Vector3.new(0,-2,0))
+		assert(Hit.Block.Definition=="project:ramp" and math.abs(Hit.Position.Y-0.25)<0.001)
+		assert(not pcall(function() Other:ReplaceDefinition("project:ramp",{Shape="Slab"},Registered) end))
+		assert(Other:ReplaceDefinition("project:ramp",{Shape="Slab",Collision="None",Queryable=false},Placed)~=Placed)
+		assert(Other:GetDefinitionDigest("project:ramp")~=Digest and Other:GetBlock(Vector3.zero).Definition=="project:ramp")
+		assert(Other:Raycast(Vector3.new(0.5,2,0.25),Vector3.new(0,-2,0))==nil)
 		local Room=Instance.new("SpatialRegion")
 		Room.Parent=game.Workspace
 		local BeforeDomain=G:GetRevision()
@@ -125,5 +140,11 @@ int main() try {
 		ScriptSecurityContext::ServerRuntime()).Succeeded(),"independent runtime mutation");
 	const auto Diverged=blockgrid::Encode(Grid->GetField());
 	Check(!Gateway.Undo(*World,Studio).Succeeded() && blockgrid::Encode(Grid->GetField())==Diverged,"divergence holds current state");
+	auto Def=std::make_shared<blockgrid::EditRequest>();
+	Def->Binding=blockgrid::BindingEdit{{"project:authored",blockgrid::Shape::Slab}};
+	Check(Gateway.Apply(SubmitBlockGridEditCommand{Grid->GetObjectId(),World->GetObjectId(),Def},
+		MutationAuthorityContext::Studio(Studio,World->GetObjectId(),{},Owner)).Succeeded(),"author definition");
+	Check(Gateway.Undo(*World,Studio).Succeeded() && !Grid->GetField().FindDefinitionId("project:authored"),"undo definition");
+	Check(Gateway.Redo(*World,Studio).Succeeded() && Grid->GetField().FindDefinitionId("project:authored"),"redo definition");
 	std::cout<<"[BlockGrid:BindingTest] Class, actual VM edits, authority, grid picking and conflict checks passed\n";
 } catch (const std::exception& Error) { std::cerr<<"[BlockGrid:BindingTest] "<<Error.what()<<'\n'; return 1; }

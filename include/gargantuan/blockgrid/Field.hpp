@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Team Fireworks
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
+#include "gargantuan/blockgrid/Geometry.hpp"
 
 #include <compare>
 #include <cstddef>
@@ -9,7 +10,9 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -20,6 +23,7 @@ namespace gargantuan::blockgrid {
 	inline constexpr std::size_t MaximumEditVisits = 32'768, MaximumReadCells = 4'096;
 	inline constexpr std::size_t MaximumCommands = 1'024, MaximumLeaves = 16'384;
 	inline constexpr std::size_t MaximumOccupiedCells = 1'048'576, MaximumEncodedBytes = 16 * 1024 * 1024;
+	inline constexpr std::size_t MaximumDefinitions = 1024, MaximumDefinitionLeafLinks = 65'536;
 
 	struct Cell {
 		std::int32_t X{}, Y{}, Z{};
@@ -59,6 +63,8 @@ namespace gargantuan::blockgrid {
 		static constexpr unsigned SparseLimit = 64;
 		std::variant<Block, Sparse, Dense> Storage{Block{}};
 		unsigned Occupied{};
+		unsigned CustomCells{};
+		void CollectDefinitionIds(std::vector<std::uint16_t>& Ids) const;
 		[[nodiscard]] std::size_t EncodedSize() const noexcept;
 		void Set(unsigned Index, Block Value);
 		void Fill(Block Value) noexcept;
@@ -67,11 +73,23 @@ namespace gargantuan::blockgrid {
 
 	class Field {
 		using Directory = std::map<Cell, std::shared_ptr<const Leaf>, CellOrder>;
+		struct Catalog {
+			std::vector<Definition> Entries;
+			std::map<std::string, std::uint16_t, std::less<>> Names;
+		};
+		struct Link { std::uint16_t Id; Cell Origin; };
+		struct LinkOrder {
+			bool operator()(const Link& A,const Link& B) const noexcept {
+				return A.Id!=B.Id ? A.Id<B.Id : CellOrder{}(A.Origin,B.Origin);
+			}
+		};
+		using Links = std::set<Link,LinkOrder>;
 	  public:
 		class Candidate {
 		  public:
 			[[nodiscard]] Block Get(Cell Position) const;
 			[[nodiscard]] const Leaf* GetLeaf(Cell AnyCell) const;
+			[[nodiscard]] const Definition& GetDefinition(std::uint16_t Id) const;
 			[[nodiscard]] std::size_t GetLeafCount() const noexcept { return LeafCount; }
 			[[nodiscard]] std::size_t GetOccupiedCount() const noexcept { return OccupiedCount; }
 			void ForEachLeaf(const std::function<void(Cell,const Leaf&)>& Visit) const;
@@ -79,15 +97,21 @@ namespace gargantuan::blockgrid {
 			void ForEachChangedLeaf(const std::function<void(Cell,const Leaf*)>& Visit) const;
 		  private:
 			friend class Field;
-			Candidate(const Field& Prior, const Directory& Added, std::span<const Cell> Erased,
-				std::size_t Pages, std::size_t Cells) : Base(Prior), Replacements(Added), Removed(Erased),
+			Candidate(const Field& Prior, const Catalog* Definitions, const Directory& Added, std::span<const Cell> Erased,
+				std::size_t Pages, std::size_t Cells) : Base(Prior), Definitions(Definitions), Replacements(Added), Removed(Erased),
 				LeafCount(Pages), OccupiedCount(Cells) {}
 			const Field& Base;
+			const Catalog* Definitions;
 			const Directory& Replacements;
 			std::span<const Cell> Removed;
 			std::size_t LeafCount, OccupiedCount;
 		};
 		[[nodiscard]] Block Get(Cell Position) const;
+		[[nodiscard]] std::uint16_t GetDefinitionId(std::string_view Key) const;
+		[[nodiscard]] std::optional<std::uint16_t> FindDefinitionId(std::string_view Key) const;
+		[[nodiscard]] const Definition& GetDefinition(std::uint16_t Id) const;
+		[[nodiscard]] std::size_t GetDefinitionCount() const noexcept;
+		[[nodiscard]] bool IsValid(Block Value) const noexcept;
 		[[nodiscard]] std::uint64_t GetRevision() const noexcept { return Revision; }
 		[[nodiscard]] std::size_t GetOccupiedCount() const noexcept { return Occupied; }
 		[[nodiscard]] std::size_t GetLeafCount() const noexcept { return Leaves.size(); }
@@ -96,6 +120,8 @@ namespace gargantuan::blockgrid {
 		void ForEachOccupied(const std::function<void(Cell, Block)>& Visit) const;
 		// All commands share a single commit. Unchanged data preserves the revision.
 		using Admission = std::function<bool(const Candidate&, std::span<const Write>)>;
+		[[nodiscard]] bool Define(Definition Spec,bool Replace=false,const Admission& BeforeCommit={});
+		void UndoDefinitionInsertion(const Definition& Expected,const Admission& BeforeCommit={});
 		[[nodiscard]] bool Apply(std::span<const Write> Writes, std::optional<std::uint64_t> Expected = {},
 			const Admission& BeforeCommit = {});
 		[[nodiscard]] bool ApplyCellPatch(std::span<const Write> Cells, const Admission& BeforeCommit = {});
@@ -104,7 +130,10 @@ namespace gargantuan::blockgrid {
 		friend std::vector<std::uint8_t> Encode(const Field&);
 		friend Field Decode(std::span<const std::uint8_t>);
 		[[nodiscard]] bool ApplyChecked(std::span<const Write> Writes, const Admission& BeforeCommit);
+		[[nodiscard]] static const Definition& Lookup(const Catalog* Bindings,std::uint16_t Id);
 		Directory Leaves;
+		std::shared_ptr<const Catalog> Definitions;
+		std::shared_ptr<Links> Dependencies;
 		std::size_t Occupied{};
 		std::size_t EncodedBytes{9};
 		std::uint64_t Revision{1};
@@ -112,4 +141,6 @@ namespace gargantuan::blockgrid {
 
 	[[nodiscard]] std::vector<std::uint8_t> Encode(const Field& Value);
 	[[nodiscard]] Field Decode(std::span<const std::uint8_t> Bytes);
+	void ValidateDefinition(const Definition& Value);
+	[[nodiscard]] std::string DefinitionDigest(const Definition& Value);
 }

@@ -65,9 +65,17 @@ namespace gargantuan {
 						   WireValueBytes(Typed.After);
 				else if constexpr (std::is_same_v<ChangeType, ReparentTransactionChange>)
 					return sizeof(Typed);
-				else if constexpr (std::is_same_v<ChangeType, BlockGridTransactionChange>)
-					return sizeof(Typed) + sizeof(blockgrid::Patch) +
-						(Typed.Delta ? Typed.Delta->Cells.capacity()*sizeof(blockgrid::CellDelta) : 0);
+				else if constexpr (std::is_same_v<ChangeType, BlockGridTransactionChange>) {
+					auto Bytes=sizeof(Typed)+sizeof(blockgrid::Patch);
+					if (Typed.Delta) {
+						Bytes+=Typed.Delta->Cells.capacity()*sizeof(blockgrid::CellDelta);
+						if (const auto& D=Typed.Delta->Binding;D) {
+							Bytes+=D->After.Key.capacity();
+							if (D->Before) Bytes+=D->Before->Key.capacity();
+						}
+					}
+					return Bytes;
+				}
 				else
 					return sizeof(Typed) + Typed.Objects.size() * sizeof(ObjectId) + Typed.PersistentSnapshot.size();
 			},

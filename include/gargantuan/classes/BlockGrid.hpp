@@ -3,6 +3,7 @@
 #pragma once
 
 #include "gargantuan/blockgrid/Field.hpp"
+#include "gargantuan/blockgrid/Edit.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/generated/BlockGrid.hpp"
 #include "gargantuan/runtime/SpatialDomainMember.hpp"
@@ -21,7 +22,8 @@ namespace gargantuan {
 	  private:
 		friend class MutationGateway;
 		[[nodiscard]] std::string ApplyWrites(std::span<const blockgrid::Write> Writes,
-			const std::optional<std::string>& Expected, bool ReplayingCells = false);
+			const std::optional<std::string>& Expected, bool ReplayingCells = false,
+			const blockgrid::BindingEdit* Binding = nullptr, const blockgrid::BindingDelta* ReplayBinding = nullptr,bool Forward = false);
 		void CheckConfigurationWrite() const;
 		void NotifyConfiguration(std::string_view Name);
 		blockgrid::Field Cells;

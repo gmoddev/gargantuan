@@ -24,7 +24,7 @@ namespace gargantuan::blockgrid {
 			P.Y < CoordinateLimit && P.Z >= -CoordinateLimit && P.Z < CoordinateLimit;
 	}
 	bool ValidBlock(Block B) noexcept {
-		return B.Definition <= Brick && B.Orientation < 24 && (B.Definition != Air || B.Orientation == 0);
+		return B.Definition <= Brick+MaximumDefinitions && B.Orientation < 24 && (B.Definition != Air || B.Orientation == 0);
 	}
 	std::size_t Volume(Region R, std::size_t Limit) {
 		if (!ValidCell(R.Min) || R.MaxExclusive.X > CoordinateLimit || R.MaxExclusive.Y > CoordinateLimit ||
@@ -64,6 +64,7 @@ namespace gargantuan::blockgrid {
 	void Leaf::Fill(Block Value) noexcept {
 		Storage = Value;
 		Occupied = Value.Definition == Air ? 0 : LeafVolume;
+		CustomCells = Value.Definition > Brick ? LeafVolume : 0;
 	}
 	void Leaf::Set(unsigned I, Block Value) {
 		if (const auto* Uniform = std::get_if<Block>(&Storage)) {
@@ -77,11 +78,14 @@ namespace gargantuan::blockgrid {
 		if (auto* Values = std::get_if<Sparse>(&Storage)) {
 			auto Found = std::ranges::lower_bound(*Values, I, {}, &Entry::Index);
 			if (Found != Values->end() && Found->Index == I) {
+				CustomCells += static_cast<unsigned>(Value.Definition>Brick);
+				CustomCells -= static_cast<unsigned>(Found->Value.Definition>Brick);
 				if (Value.Definition == Air) { Values->erase(Found); --Occupied; }
 				else Found->Value = Value;
 			} else if (Value.Definition != Air) {
 				Values->insert(Found, Entry{static_cast<std::uint16_t>(I), Value});
 				++Occupied;
+				CustomCells += static_cast<unsigned>(Value.Definition>Brick);
 				if (Occupied > SparseLimit) {
 					Dense Expanded(LeafVolume);
 					for (const auto& E : *Values) Expanded[E.Index] = E.Value;
@@ -91,6 +95,8 @@ namespace gargantuan::blockgrid {
 			return;
 		}
 		auto& Old = std::get<Dense>(Storage)[I];
+		CustomCells += static_cast<unsigned>(Value.Definition>Brick);
+		CustomCells -= static_cast<unsigned>(Old.Definition>Brick);
 		Occupied += static_cast<unsigned>(Value.Definition != Air);
 		Occupied -= static_cast<unsigned>(Old.Definition != Air);
 		Old = Value;
@@ -120,6 +126,13 @@ namespace gargantuan::blockgrid {
 		} else if (const auto Uniform = std::get<Block>(Storage); Uniform.Definition != Air) {
 			for (unsigned I=0; I<LeafVolume; ++I) Emit(I, Uniform);
 		}
+	}
+	void Leaf::CollectDefinitionIds(std::vector<std::uint16_t>& Ids) const {
+		if (!CustomCells) return;
+		if (const auto Value=GetUniform()) { Ids.push_back(Value->Definition); return; }
+		ForEachOccupied([&](unsigned,unsigned,unsigned,Block B){ if (B.Definition>Brick) Ids.push_back(B.Definition); });
+		std::ranges::sort(Ids);
+		Ids.erase(std::unique(Ids.begin(),Ids.end()),Ids.end());
 	}
 	Block Field::Get(Cell P) const {
 		if (!ValidCell(P)) throw std::out_of_range("[BlockGrid:Bounds] Cell outside supported coordinates");
@@ -182,7 +195,7 @@ namespace gargantuan::blockgrid {
 	bool Field::ApplyChecked(std::span<const Write> Writes,const Admission& BeforeCommit) {
 		std::size_t Visits = 0;
 		for (const auto& W : Writes) {
-			if (!ValidBlock(W.Value)) throw std::invalid_argument("[BlockGrid:Definition] Invalid definition or orientation");
+			if (!IsValid(W.Value)) throw std::invalid_argument("[BlockGrid:Definition] Invalid definition or orientation");
 			Visits += Volume(W.Bounds, MaximumEditVisits-Visits);
 		}
 		std::map<Cell, Leaf, CellOrder> Staged;
@@ -208,11 +221,23 @@ namespace gargantuan::blockgrid {
 		}
 		Directory Replacements;
 		std::vector<Cell> Removed;
+		std::shared_ptr<Links> AddedLinks;
+		std::vector<Link> RemovedLinks;
 		auto NewOccupied = Occupied, NewLeaves = Leaves.size(), NewBytes = EncodedBytes;
 		for (auto& [Key, Page] : Staged) {
 			Page.Compact();
 			const auto Old = Leaves.find(Key);
 			if (Old != Leaves.end() && Old->second->Storage == Page.Storage) continue;
+			if (Page.CustomCells || (Old!=Leaves.end() && Old->second->CustomCells)) {
+				std::vector<std::uint16_t> Before,After;
+				if (Old!=Leaves.end()) Old->second->CollectDefinitionIds(Before);
+				Page.CollectDefinitionIds(After);
+				for (auto Id:Before) if (!std::ranges::binary_search(After,Id)) RemovedLinks.push_back({Id,Key});
+				for (auto Id:After) if (!std::ranges::binary_search(Before,Id)) {
+					if (!AddedLinks) AddedLinks=std::make_shared<Links>();
+					AddedLinks->insert({Id,Key});
+				}
+			}
 			if (Old != Leaves.end()) {
 				NewOccupied -= Old->second->Occupied;
 				NewBytes -= Old->second->EncodedSize();
@@ -228,9 +253,20 @@ namespace gargantuan::blockgrid {
 		if (Replacements.empty() && Removed.empty()) return false;
 		if (NewOccupied > MaximumOccupiedCells || NewLeaves > MaximumLeaves || NewBytes > MaximumEncodedBytes ||
 			Revision == std::numeric_limits<std::uint64_t>::max()) throw std::length_error("[BlockGrid:Limit] Grid capacity exhausted");
-		const Candidate Next(*this,Replacements,Removed,NewLeaves,NewOccupied);
+		if ((Dependencies?Dependencies->size():0)-RemovedLinks.size()+(AddedLinks?AddedLinks->size():0)>MaximumDefinitionLeafLinks)
+			throw std::length_error("[BlockGrid:Limit] Definition dependency capacity exhausted");
+		// Copied Fields pin the reverse index until an edit changes one of its edges.
+		auto WritableDependencies=Dependencies && Dependencies.use_count()>1 && (AddedLinks || !RemovedLinks.empty()) ?
+			std::make_shared<Links>(*Dependencies) : Dependencies;
+		const Candidate Next(*this,Definitions.get(),Replacements,Removed,NewLeaves,NewOccupied);
 		if (BeforeCommit && !BeforeCommit(Next, Writes)) throw std::length_error("[BlockGrid:Admission] Provider capacity denied");
 		// From this point installation only moves prepared map nodes/pointers or removes old nodes.
+		if (WritableDependencies) {
+			for (const auto& Link:RemovedLinks) WritableDependencies->erase(Link);
+			if (AddedLinks) WritableDependencies->merge(*AddedLinks);
+			if (WritableDependencies->empty()) WritableDependencies.reset();
+			Dependencies=std::move(WritableDependencies);
+		} else if (AddedLinks) Dependencies=std::move(AddedLinks);
 		for (const auto& Key : Removed) Leaves.erase(Key);
 		for (auto& [Key, Page] : Replacements)
 			if (const auto Old = Leaves.find(Key); Old != Leaves.end()) Old->second = std::move(Page);
