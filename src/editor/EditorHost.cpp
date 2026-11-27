@@ -4465,6 +4465,9 @@ namespace gargantuan {
 				}
 				if (!LastViewportPublication) {
 					PublishEditViewport(*workspace, camera);
+					// This publication is consumed by the pick projection alone. The renderer's next
+					// capture must start from a full publication instead of a base it never applied.
+					ViewportPublisher->RequestFullResync();
 				}
 				if (ViewportProjection.GetLastPublicationId() != LastViewportPublication->Id)
 					(void)ViewportProjection.Apply(*LastViewportPublication);
