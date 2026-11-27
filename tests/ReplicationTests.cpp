@@ -485,7 +485,7 @@ namespace {
 		const auto Rejected = Replica.ApplyFrameWithDeferredSignals(*Batch.Frame,
 			[](ObjectId, const std::shared_ptr<Instance> &) { throw std::runtime_error("injected preparation failure"); });
 		BeforePublish->Disconnect();
-		const auto Current = Replica.Resolve(Source->GetObjectId());
+		const auto Current = std::dynamic_pointer_cast<Part>(Replica.Resolve(Source->GetObjectId()));
 		Check(Rejected.Status == ReplicaApplyStatus::SemanticRejection && Rejected.AppliedOperations == 0 && Calls == 0 &&
 			Replica.GetNextSequence() == Batch.Frame->Sequence && !Replica.Resolve(Child->GetObjectId()) &&
 			Current && Current->GetName() == "Before", "failed preparation restores the receiver and cancels queued observers");
@@ -499,7 +499,7 @@ namespace {
 			++Calls;
 			SawCommit = Replica.GetNextSequence() == ReliableReplicationSequence(3) && Current->GetName() == "After" &&
 				Replica.Resolve(Child->GetObjectId()) != nullptr;
-			Current->SetArchivable(false);
+			Current->SetTransparency(0.5f);
 			throw std::monostate{}; // Native observers may also throw outside the standard exception hierarchy.
 		});
 		const auto FramesBefore = Replica.GetMetrics().FramesApplied;
@@ -507,11 +507,11 @@ namespace {
 		Observer->Disconnect();
 		Check(Result.Status == ReplicaApplyStatus::CommittedObserverFailure && Calls == 1 && SawCommit &&
 			Result.AppliedOperations == Batch.Frame->Operations.size() && Replica.GetMetrics().FramesApplied == FramesBefore + 1 &&
-			!Current->GetArchivable() && Journal.Read(Cursor).Records.empty(),
+			Current->GetTransparency() == 0.5f && Journal.Read(Cursor).Records.empty(),
 			"a throwing native observer sees the published batch exactly once inside the replica journal guard");
 		Check(Replica.ApplyFrameWithDeferredSignals(*Batch.Frame, {}).Status == ReplicaApplyStatus::StaleSequence && Calls == 1,
 			"a committed frame cannot be replayed after a local observer fails");
-		Current->SetArchivable(true);
+		Current->SetTransparency(0.0f);
 		Check(!Journal.Read(Cursor).Records.empty(), "ordinary local writes resume after observer failure");
 		Replica.Reset();
 		World->Destroy();
