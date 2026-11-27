@@ -1,5 +1,6 @@
 #include "gargantuan/network/ReplicaApplier.hpp"
 #include "gargantuan/network/SpatialTransferProtection.hpp"
+#include "ReplicaNotifications.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 #include "../runtime/SnapshotValidation.hpp"
 
@@ -610,11 +611,12 @@ namespace gargantuan::network {
 
 	ReplicaApplyResult ReplicaApplier::ApplyFrameWithDeferredSignals(const ReplicationFrame &Frame, const BeforePublish &Prepare) {
 		ScopedSignalDeferral Signals;
-		auto Result=ApplyFrame(Frame,Prepare);
-		if (Result.Succeeded()) {
-			ScopedChangeJournalSuppression SuppressReplicaJournal(Receiver.Root ? Receiver.Root->GetObjectId() : ObjectId{});
-			Signals.Commit();
-		}
+		auto Result = ApplyFrame(Frame, Prepare);
+		if (!Result.Succeeded()) return Result;
+
+		ScopedChangeJournalSuppression SuppressReplicaJournal(Receiver.Root ? Receiver.Root->GetObjectId() : ObjectId{});
+		if (!detail::DispatchReplicaNotifications(Signals, "structural publication"))
+			return {ReplicaApplyStatus::CommittedObserverFailure, Result.AppliedOperations, detail::CommittedObserverFailureMessage};
 		return Result;
 	}
 

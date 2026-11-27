@@ -460,6 +460,63 @@ namespace {
 		World->Destroy();
 	}
 
+	void TestDeferredReplicaObserverFailure() {
+		auto World = std::make_shared<DataModel>();
+		auto Source = std::make_shared<Part>();
+		Source->SetName("Before");
+		Source->SetParent(World);
+		ReplicationCoordinator Coordinator(World);
+		ReplicaApplier Replica;
+		const ConnectionId Peer{703, 1};
+		const auto Baseline = Coordinator.AddPeer(Peer, ReplicationEpoch(1));
+		if (!Baseline.Succeeded() || !Replica.ApplyFrame(*Baseline.Frame).Succeeded()) {
+			Check(false, "deferred observer regression requires a valid baseline");
+			return;
+		}
+		const auto Original = Replica.Resolve(Source->GetObjectId());
+		if (!Original) { Check(false, "baseline contains the observed Part"); return; }
+		unsigned Calls = 0;
+		const auto BeforePublish = Original->GetPropertyChangedSignal("Name")->Connect([&](std::monostate) { ++Calls; });
+		Source->SetName("After");
+		auto Child = std::make_shared<Folder>();
+		Child->SetParent(World);
+		const auto Batch = Coordinator.ProduceIncremental(Peer);
+		if (!Batch.Succeeded()) { Check(false, "source emits the mixed update and publication"); return; }
+		const auto Rejected = Replica.ApplyFrameWithDeferredSignals(*Batch.Frame,
+			[](ObjectId, const std::shared_ptr<Instance> &) { throw std::runtime_error("injected preparation failure"); });
+		BeforePublish->Disconnect();
+		const auto Current = Replica.Resolve(Source->GetObjectId());
+		Check(Rejected.Status == ReplicaApplyStatus::SemanticRejection && Rejected.AppliedOperations == 0 && Calls == 0 &&
+			Replica.GetNextSequence() == Batch.Frame->Sequence && !Replica.Resolve(Child->GetObjectId()) &&
+			Current && Current->GetName() == "Before", "failed preparation restores the receiver and cancels queued observers");
+		if (!Current || !Replica.GetReplicaRoot()) return;
+
+		const auto Scope = Replica.GetReplicaRoot()->GetObjectId();
+		auto &Journal = ChangeJournal::Get();
+		const auto Cursor = Journal.CreateCursor(Scope);
+		bool SawCommit = false;
+		const auto Observer = Current->GetPropertyChangedSignal("Name")->Once([&](std::monostate) {
+			++Calls;
+			SawCommit = Replica.GetNextSequence() == ReliableReplicationSequence(3) && Current->GetName() == "After" &&
+				Replica.Resolve(Child->GetObjectId()) != nullptr;
+			Current->SetArchivable(false);
+			throw std::monostate{}; // Native observers may also throw outside the standard exception hierarchy.
+		});
+		const auto FramesBefore = Replica.GetMetrics().FramesApplied;
+		const auto Result = Replica.ApplyFrameWithDeferredSignals(*Batch.Frame, {});
+		Observer->Disconnect();
+		Check(Result.Status == ReplicaApplyStatus::CommittedObserverFailure && Calls == 1 && SawCommit &&
+			Result.AppliedOperations == Batch.Frame->Operations.size() && Replica.GetMetrics().FramesApplied == FramesBefore + 1 &&
+			!Current->GetArchivable() && Journal.Read(Cursor).Records.empty(),
+			"a throwing native observer sees the published batch exactly once inside the replica journal guard");
+		Check(Replica.ApplyFrameWithDeferredSignals(*Batch.Frame, {}).Status == ReplicaApplyStatus::StaleSequence && Calls == 1,
+			"a committed frame cannot be replayed after a local observer fails");
+		Current->SetArchivable(true);
+		Check(!Journal.Read(Cursor).Records.empty(), "ordinary local writes resume after observer failure");
+		Replica.Reset();
+		World->Destroy();
+	}
+
 	void TestReplicaCharacterTransferWithPendingPossessionRelease() {
 		auto World = std::make_shared<DataModel>();
 		auto PlayersValue = std::dynamic_pointer_cast<Players>(World->GetService("Players"));
@@ -1093,6 +1150,7 @@ int main() {
 	Check(test::RunFarmRecoveryObservationTests(), "farm recovery stage comes from the replicated DataModel");
 	TestReplicaRenderDirtiness();
 	TestRepeatedReplicaPropertyPreflight();
+	TestDeferredReplicaObserverFailure();
 	TestReplicaCharacterTransferWithPendingPossessionRelease();
 	TestClientReplicaIdentityObservations();
 	TestSourceOwnedAdmissionEmptiness();
