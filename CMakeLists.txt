@@ -232,21 +232,22 @@ if(FT_DISABLE_ZLIB)
 endif()
 add_subdirectory(vendor/sdl_ttf SYSTEM)
 
-# SDL expands __FILE__ into diagnostics that ship in its runtime library. Keep
-# those strings independent of the developer checkout without changing codegen
-# for Gargantuan or the rest of the dependency graph.
-if(MSVC)
-	target_compile_options(SDL3-shared PRIVATE
-		/experimental:deterministic
-		"/pathmap:${CMAKE_CURRENT_SOURCE_DIR}=."
-		"/pathmap:${CMAKE_CURRENT_BINARY_DIR}=."
-	)
-else()
-	target_compile_options(SDL3-shared PRIVATE
-		"-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=."
-		"-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=."
-	)
-endif()
+# Shipped dependency diagnostics retain source-relative file names.
+function(GargantuanMapRuntimeSourcePaths Target)
+	if(MSVC)
+		target_compile_options(${Target} PRIVATE
+			/experimental:deterministic
+			"/pathmap:${CMAKE_CURRENT_SOURCE_DIR}=."
+			"/pathmap:${CMAKE_CURRENT_BINARY_DIR}=."
+		)
+	else()
+		target_compile_options(${Target} PRIVATE
+			"-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=."
+			"-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=."
+		)
+	endif()
+endfunction()
+GargantuanMapRuntimeSourcePaths(SDL3-shared)
 
 set(GARGANTUAN_GUI_RUNTIME_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/runtime")
 file(MAKE_DIRECTORY "${GARGANTUAN_GUI_RUNTIME_DIRECTORY}")
