@@ -701,6 +701,16 @@ namespace {
 		Check(Encoded && DecodeGameSessionMessage(*Encoded).has_value(), "GSES client hello round-trips");
 		if (!Encoded) return;
 		Check((*Encoded)[4] == std::byte{GameSessionProtocolVersion}, "ordinary GSES retains version 2");
+		for (const bool Managed : {false, true}) {
+			GameSessionClientHello Spatial{.Nonce=77, .AdvertisedLimits=Limits,
+				.RuntimeDistributionIdentity=Managed ? std::string(64, 'a') : std::string{}, .SpatialContent=true};
+			auto Hello = EncodeGameSessionMessage(Spatial);
+			Check(Hello && (*Hello)[4] == (Managed ? std::byte{16} : std::byte{15}) && DecodeGameSessionMessage(*Hello),
+				"spatial GSES negotiates the controller checkpoint profile");
+			if (!Hello) continue;
+			(*Hello)[4] = Managed ? std::byte{14} : std::byte{13};
+			Check(!DecodeGameSessionMessage(*Hello), "older spatial peers require a matching profile");
+		}
 		for (std::size_t Size = 0; Size < Encoded->size(); ++Size)
 			Check(
 				!DecodeGameSessionMessage(std::span(*Encoded).first(Size)),
