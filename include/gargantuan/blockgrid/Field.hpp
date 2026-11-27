@@ -50,7 +50,7 @@ namespace gargantuan::blockgrid {
 		bool operator==(const ChannelSpec&) const = default;
 	};
 	struct ChannelData {
-		struct Entry { std::uint16_t Index; std::uint32_t Bits; };
+		struct Entry { std::uint16_t Index; std::uint32_t Bits; bool operator==(const Entry&) const = default; };
 		using Page=std::vector<Entry>;
 		using Directory=std::map<Cell,std::shared_ptr<const Page>,CellOrder>;
 		ChannelSpec Spec;
@@ -162,6 +162,9 @@ namespace gargantuan::blockgrid {
 		[[nodiscard]] std::size_t GetChannelCount() const noexcept { return State?State->Channels.size():0; }
 		[[nodiscard]] std::size_t GetOverrideCount() const noexcept { return State?State->Overrides:0; }
 		[[nodiscard]] std::size_t GetSnapshotBytes() const noexcept;
+		[[nodiscard]] bool HasSameContents(const Field& Other) const;
+		// A bilateral transfer installs its fully staged result at one new revision on each participant.
+		void AdvanceTransferRevision(const Field& Previous);
 		[[nodiscard]] const ChannelData& GetChannel(std::uint8_t Id) const;
 		[[nodiscard]] std::uint8_t GetChannelId(std::string_view Name) const;
 		[[nodiscard]] std::uint32_t GetValue(Cell P,std::uint8_t Channel) const;
@@ -176,6 +179,7 @@ namespace gargantuan::blockgrid {
 		// All commands share a single commit. Unchanged data preserves the revision.
 		using Admission = std::function<bool(const Candidate&, std::span<const Write>)>;
 		void InstallReplica(Field Value, const Admission &BeforeCommit);
+		[[nodiscard]] bool AdmitTransferFrom(const Field& Previous,const Admission& Check) const;
 		[[nodiscard]] bool Define(Definition Spec,bool Replace=false,const Admission& BeforeCommit={});
 		void UndoDefinitionInsertion(const Definition& Expected,const Admission& BeforeCommit={});
 		[[nodiscard]] bool Apply(std::span<const Write> Writes, std::optional<std::uint64_t> Expected = {},
