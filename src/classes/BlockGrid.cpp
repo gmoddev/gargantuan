@@ -200,6 +200,8 @@ namespace gargantuan {
 		AssertCanMutate();
 		if (!GetDataModel() || Editing) throw std::logic_error("[BlockGrid:Replica] Shell is unavailable");
 		Cells.InstallReplica(std::move(Value), Admission);
+		AssetSequence = 0;
+		AssetsReady = false;
 		LastCellEdit.reset();
 		ReplicaFieldAvailable = true;
 		NotifyPropertyCommitted("BlockRevision");

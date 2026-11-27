@@ -7,6 +7,8 @@
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/Workspace.hpp"
+#include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
@@ -79,6 +81,31 @@ namespace {
 		const auto& F=Grid->GetField();
 		const auto& Binding=*F.GetDefinition(F.GetDefinitionId("project:tile")).Assets;
 		const auto& D=*Binding.Resolved;
+		auto Space=std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
+		RenderPublisher Publisher;
+		auto Textures=Service->DrainTextureChanges();
+		Publisher.SetUiTextureChanges(std::move(Textures.Creates),std::move(Textures.Updates),std::move(Textures.Removes));
+		const auto Camera=MakeLookAtRenderCameraInput({4,3,6},{1,0,0},{0,1,0},65);
+		const auto Packet=Publisher.Publish(*Space,Camera,256,144);
+		const auto Object=std::ranges::find_if(Packet->Creates,[&](const auto &Created){return Created.Item.Object==Grid->GetObjectId();});
+		Check(Object!=Packet->Creates.end() && Object->Mesh && Object->Primitives && Object->Primitives->size()==4,
+			"both placed tiles publish two contiguous material slots each");
+		const auto Surface=std::ranges::find_if(Packet->MeshCreates,[&](const auto &Mesh){return Mesh.Mesh==*Object->Mesh;});
+		Check(Surface!=Packet->MeshCreates.end() && D.VisualMesh && Surface->Vertices->size()==2*D.VisualMesh->Vertices->size() &&
+			Surface->Indices->size()==2*D.VisualMesh->Indices->size(),"published triangles preserve imported mesh topology");
+		for (std::size_t I=0; I<Object->Primitives->size(); ++I) {
+			const auto &Source=(*D.Primitives)[I%2];
+			const auto &Range=(*Object->Primitives)[I];
+			Check(Range.FirstIndex==(I/2)*D.VisualMesh->Indices->size()+Source.FirstIndex &&
+				Range.IndexCount==Source.IndexCount && Range.Material==Source.Material,"texture, opacity and emission survive range rebasing");
+		}
+		for (std::size_t I=0; I<D.VisualMesh->Vertices->size(); ++I) {
+			const auto &Source=(*D.VisualMesh->Vertices)[I];
+			const auto &Vertex=(*Surface->Vertices)[I];
+			Check(glm::length(Vertex.Position-(glm::vec3(.5f)+Source.Position))<1e-5f &&
+				Vertex.TextureCoordinate==Source.TextureCoordinate && Vertex.Normal==Source.Normal &&
+				Vertex.Tangent==Source.Tangent,"mesh center, UV, normal and tangent survive grid publication");
+		}
 		Check(Binding.Pins.size()>=5 && D.VisualMesh && D.QueryMesh && !D.FullyOpaque && D.Primitives && D.Primitives->size()==2,
 			"whole dependency closure and immutable material slots");
 		Check(D.Primitives->front().Material.BaseColorTexture.has_value() && D.Primitives->back().Material.OpacityMode==RenderOpacityMode::Transparent &&
@@ -96,6 +123,9 @@ namespace {
 		const auto Before=Grid->GetBlockRevision();
 		Check(Service->DeleteProjectAsset(Tile.Record->Reference.Value).Ok && !Grid->EnsureAssetBindings() && Grid->GetBlockRevision()==Before,
 			"retired project resources invalidate publication without changing authored data");
+		const auto Retired=Publisher.Publish(*Space,Camera,256,144);
+		Check(std::ranges::any_of(Retired->Removes,[&](const auto &Removal){return Removal.Object==Grid->GetObjectId();}),
+			"deleting a required asset retires the published grid resource");
 	}
 }
 int main() try {
