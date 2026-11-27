@@ -226,6 +226,7 @@ namespace gargantuan::network {
 		// the shared retirement budget; no per-peer or per-refresh allowance exists.
 		void ProcessCatalogRetirement(std::uint64_t SimulationTick);
 		[[nodiscard]] const ReplicationView *GetView(ConnectionId Connection) const;
+		[[nodiscard]] bool CanDeliverSpatialContent(ConnectionId Connection, ObjectId Object) const;
 		[[nodiscard]] bool HasPendingRelevance(ConnectionId Connection) const;
 		[[nodiscard]] std::size_t GetPendingCriticalTransitionCount(ConnectionId Connection) const;
 		[[nodiscard]] bool HasPendingStructuralWork() const;

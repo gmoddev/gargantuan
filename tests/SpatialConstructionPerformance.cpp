@@ -78,15 +78,18 @@ namespace {
 			if (UseGrid) {
 				Grid = std::make_shared<BlockGrid>();
 				Grid->SetParent(FolderValue);
-				std::vector<blockgrid::Write> Writes;
-				if (Site.Height > 1)
-					Writes.push_back({{{0, 0, 0}, {Site.Width, Site.Height, Site.Depth}}, {blockgrid::Stone, 0}});
-				else {
-					Writes.reserve(Site.Cells.size());
-					for (const auto Cell : Site.Cells)
-						Writes.push_back({blockgrid::SingleCell(Cell), {blockgrid::Stone, 0}});
+				if (Site.Height > 1) {
+					Submit(Grid, {{{{0, 0, 0}, {Site.Width, Site.Height, Site.Depth}}, {blockgrid::Stone, 0}}});
+				} else {
+					for (std::size_t Start = 0; Start < Site.Cells.size(); Start += blockgrid::MaximumCommands) {
+						const auto End = std::min(Start + blockgrid::MaximumCommands, Site.Cells.size());
+						std::vector<blockgrid::Write> Writes;
+						Writes.reserve(End - Start);
+						for (auto Index = Start; Index < End; ++Index)
+							Writes.push_back({blockgrid::SingleCell(Site.Cells[Index]), {blockgrid::Stone, 0}});
+						Submit(Grid, std::move(Writes));
+					}
 				}
-				Submit(Grid, std::move(Writes));
 			} else {
 				Parts.reserve(Site.Cells.size());
 				for (const auto Cell : Site.Cells) {

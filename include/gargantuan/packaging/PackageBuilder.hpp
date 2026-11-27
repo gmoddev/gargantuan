@@ -177,6 +177,7 @@ namespace gargantuan {
 
 	struct RuntimePackagePayload {
 		PackageInspection Inspection;
+		bool SpatialContent{};
 		std::string ProjectJson;
 		std::optional<std::string> PreRunSource;
 		AssetRuntimeSnapshot Assets;

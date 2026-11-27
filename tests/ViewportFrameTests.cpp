@@ -240,8 +240,8 @@ namespace {
 		const auto Blank = Capture();
 		const auto Grid = [&](const std::shared_ptr<SpatialRegion> &World, blockgrid::Point Color) {
 			blockgrid::Field Cells;
-			Check(Cells.Define({.Key="Fixture",.Color=Color}), "domain GPU fixture definition");
-			const std::array<blockgrid::Write,1> Writes{{{{{-1,-1,-1},{1,1,1}}, {Cells.GetDefinitionId("Fixture"),0}}}};
+			Check(Cells.Define({.Key="project:fixture",.Color=Color}), "domain GPU fixture definition");
+			const std::array<blockgrid::Write,1> Writes{{{{{-1,-1,-1},{1,1,1}}, {Cells.GetDefinitionId("project:fixture"),0}}}};
 			Check(Cells.Apply(Writes), "domain GPU fixture fill");
 			auto Value = std::make_shared<BlockGrid>(); Value->RestoreField(std::move(Cells)); Value->SetParent(World);
 			return Value;

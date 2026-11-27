@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Replay the Construction Yard controls against the normal Engine EditorHost."""
 import argparse
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -50,7 +51,21 @@ Run.PostSimulation:Connect(function()
 end)
 '''
 
-def Verify(Engine, Project):
+ReplayProof = r'''
+local World = game.Workspace
+local Target = Vector3.new(-2, 2, -5)
+local Connection
+Connection = game:GetService("RunService").PostSimulation:Connect(function()
+    local Outside = World.RetainingWall:GetBlock(Target)
+    local Inside = World.Workshop.WorkshopBlocks:GetBlock(Target)
+    if Outside and Inside and Outside.Definition == "Brick" and Inside.Definition == "Brick" then
+        print("[Spatial:YardInput] both constructions restored")
+        Connection:Disconnect()
+    end
+end)
+'''
+
+def Verify(Engine, Project, Mode="Disabled", Replay=False):
     with EditorHost(Engine) as Host:
         Host.Call("Handshake")
         Host.Call("OpenProject", Root=Project.as_posix())
@@ -60,8 +75,8 @@ def Verify(Engine, Project):
         Script = next(Row for Row in Host.Call("GetSchema")["Definitions"]
                       if Row["Kind"] == "Class" and Row["Namespace"] == "Engine" and Row["Name"] == "Script")
         Host.Call("CreateInstance", ClassSchemaId=Script["SchemaId"], DefinitionVersion=Script["DefinitionVersion"],
-                  Parent=Space, Name="QualificationObserver", InitialSource=Proof)
-        Started = Host.Call("StartPlaySession")
+                  Parent=Space, Name="QualificationObserver", InitialSource=ReplayProof if Replay else Proof)
+        Started = Host.Call("StartPlaySession", PersistenceMode=Mode)
         Session = Started["PlaySessionId"]
         Messages = []
 
@@ -71,9 +86,9 @@ def Verify(Engine, Project):
                     raise RuntimeError(f"Construction Yard Play failed: {Row}")
                 Messages.append(Row.get("Message", ""))
 
-        def Wait(Marker):
+        def Wait(Marker, Prefix="[Spatial:YardInput] "):
             Limit = time.monotonic() + 12
-            while not any("[Spatial:YardInput] " + Marker in Message for Message in Messages):
+            while not any(Prefix + Marker in Message for Message in Messages):
                 if time.monotonic() >= Limit:
                     raise RuntimeError(f"Missing {Marker!r} in runtime diagnostics: {Messages[-12:]}")
                 time.sleep(0.04)
@@ -81,10 +96,15 @@ def Verify(Engine, Project):
 
         try:
             Collect(Started)
-            Wait("ready")
-            for Key, Physical, Expected in (("b", 5, "built outside"), ("f", 9, "entered workshop"),
-                                            ("b", 5, "built inside"), ("f", 9, "returned to yard"),
-                                            ("e", 8, "excavation committed")):
+            if Replay:
+                Wait("ready edits=3 persistence=documents", "[Spatial:ConstructionYard] ")
+                Wait("both constructions restored")
+            else:
+                Wait("ready")
+                Wait("ready edits=0", "[Spatial:ConstructionYard] ")
+            Actions = (("b", 5, "built outside"), ("f", 9, "entered workshop"),
+                       ("b", 5, "built inside"), ("f", 9, "returned to yard"), ("e", 8, "excavation committed"))
+            for Key, Physical, Expected in (() if Replay else Actions):
                 for State in ("Pressed", "Released"):
                     Host.Call("SendPlayInput", PlaySessionId=Session, Type="Key",
                               Logical=ord(Key), Physical=Physical, State=State)
@@ -96,12 +116,14 @@ def Verify(Engine, Project):
         Cell = Host.Call("ReadBlockGridCell", Scope=Snapshot["Cursor"]["Scope"], Object=Wall, Cell=[-2, 2, -5])
         if Cell["Definition"] != "Air":
             raise RuntimeError("Edit world retained the runtime wall cell after Stop")
-        print("[Spatial:YardInput] Both builds, both doorway crossings, excavation and Stop verified")
+        print("[Spatial:YardInput] Durable restart restored both grids and excavation" if Replay else
+              "[Spatial:YardInput] Both builds, both doorway crossings, excavation and Stop verified")
 
 
 if __name__ == "__main__":
     Parser = argparse.ArgumentParser(description=__doc__)
     Parser.add_argument("--engine", type=Path, required=True)
+    Parser.add_argument("--durable", action="store_true", help="Use a fresh SQLite profile and verify a fresh process replays it")
     Parser.add_argument("--project", type=Path, help="Reuse a saved Construction Yard in a fresh EditorHost process")
     Args = Parser.parse_args()
     Executable = Args.engine.resolve(strict=True)
@@ -112,5 +134,12 @@ if __name__ == "__main__":
             Destination = Path(Root) / "Yard"
             subprocess.run([sys.executable, "-B", str(Samples / "ConstructionYard" / "BuildProject.py"),
                             "--engine", str(Executable), "--project", str(Destination)], check=True, timeout=90)
-            Verify(Executable, Destination)
+            if Args.durable:
+                DataRoot = Path(Root) / "PlayData"
+                DataRoot.mkdir()
+                os.environ["GARGANTUAN_STUDIO_PLAY_DATA_ROOT"] = str(DataRoot)
+                Verify(Executable, Destination, "Persistent")
+                Verify(Executable, Destination, "Persistent", Replay=True)
+            else:
+                Verify(Executable, Destination)
 

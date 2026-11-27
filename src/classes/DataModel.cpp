@@ -1,5 +1,6 @@
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/Terrain.hpp"
+#include "gargantuan/terrain/Field.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/runtime/SpatialDomainMember.hpp"
 #include "gargantuan/classes/DataModel.hpp"

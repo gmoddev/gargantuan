@@ -22,7 +22,7 @@ namespace gargantuan::network {
 	struct GridStreamMessage {
 		GridStreamKind Kind{};
 		GridStreamScope Scope;
-		std::uint64_t Serial{}, Revision{};
+		std::uint64_t Subscription{}, Serial{}, Revision{};
 		AssetContentId Base, Target;
 		std::uint32_t Size{}, Prefix{}, Suffix{}, Offset{};
 		std::span<const std::uint8_t> Fragment;
@@ -35,8 +35,14 @@ namespace gargantuan::network {
 		std::shared_ptr<const std::vector<std::uint8_t>> Bytes;
 	};
 	[[nodiscard]] GridReplicaContent CaptureGridReplica(const blockgrid::Field &Field);
-	[[nodiscard]] GridStreamMessage MakeGridOffer(GridStreamScope Scope, std::uint64_t Serial, std::uint64_t Revision,
-		const GridReplicaContent &Next, const GridReplicaContent *Known = nullptr);
+	[[nodiscard]] GridStreamMessage MakeGridOffer(
+		GridStreamScope Scope,
+		std::uint64_t Subscription,
+		std::uint64_t Serial,
+		std::uint64_t Revision,
+		const GridReplicaContent &Next,
+		const GridReplicaContent *Known = nullptr
+	);
 
 	// One receiver per active session transfer. Every fragment belongs to the same authenticated shell and serial.
 	class GridStreamReceiver {
@@ -44,9 +50,13 @@ namespace gargantuan::network {
 		void Begin(const GridStreamMessage &Offer, const GridStreamScope &Granted, const GridReplicaContent *Known);
 		void Append(const GridStreamMessage &Fragment);
 		[[nodiscard]] bool Complete() const;
-		struct Result { blockgrid::Field Field; GridReplicaContent Content; };
+		struct Result {
+			blockgrid::Field Field;
+			GridReplicaContent Content;
+		};
 		[[nodiscard]] Result Finish();
 		void Cancel() noexcept;
+
 	  private:
 		std::optional<GridStreamMessage> Active;
 		std::vector<std::uint8_t> Bytes;

@@ -113,24 +113,34 @@ namespace gargantuan::runtime_distribution {
 	}
 
 	Json EncodeMetadata(const Metadata &Value) {
-		return {
+		Json Result = {
 			{"Version", 1u}, {"Target", GetRuntimeDistributionName(Value.Target)},
 			{"PublisherId", Value.PublisherId}, {"SigningKeyId", Value.SigningKeyId},
 			{"ReleaseId", Value.ReleaseId}, {"KeyAccess", GetRuntimeDistributionName(Value.KeyAccess)},
 			{"ContentKeyId", Value.ContentKeyId}, {"Compiler", Value.Compiler}, {"ScriptCatalog", CodeCatalogPath},
 			{"ClientCodeIdentity", Value.ClientCodeIdentity},
 		};
+		if (Value.SpatialContent) {
+			Result["Version"] = 2u;
+			Result["SpatialContent"] = "BlockGrid1";
+		}
+		return Result;
 	}
 
 	Metadata DecodeMetadata(const Json &Value) {
-		if (!Value.is_object() || Value.size() != 10 || Value.value("Version", 0u) != 1 ||
+		const bool Spatial = Value.is_object() && Value.value("Version", 0u) == 2;
+		if (!Value.is_object() || Value.size() != (Spatial ? 11u : 10u) ||
+			(!Spatial && Value.value("Version", 0u) != 1) || (Spatial && String(Value,"SpatialContent") != "BlockGrid1") ||
 			String(Value, "ScriptCatalog") != CodeCatalogPath)
 			Reject("InvalidPolicy", "Runtime distribution manifest metadata is unsupported.");
 		Metadata Result;
+		Result.SpatialContent = Spatial;
 		const auto Target = String(Value, "Target");
 		if (Target == "DistributedPlayer") Result.Target = RuntimeDistributionTarget::DistributedPlayer;
 		else if (Target == "DedicatedServer") Result.Target = RuntimeDistributionTarget::DedicatedServer;
 		else if (Target != "OfflinePlayer") Reject("InvalidPolicy", "Runtime distribution target is unsupported.");
+		if (Spatial && Result.Target == RuntimeDistributionTarget::OfflinePlayer)
+			Reject("InvalidPolicy", "Spatial delivery requires a multiplayer target.");
 		const auto KeyAccess = String(Value, "KeyAccess");
 		if (KeyAccess == "LocalProvisioned") Result.KeyAccess = RuntimeDistributionKeyAccess::LocalProvisioned;
 		else if (KeyAccess == "HostProvisioned") Result.KeyAccess = RuntimeDistributionKeyAccess::HostProvisioned;

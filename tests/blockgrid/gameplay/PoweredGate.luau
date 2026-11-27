@@ -13,7 +13,7 @@ local Gate = Vector3.new(3, 0, 0)
 local Site = {Min = Vector3.zero, MaxExclusive = Vector3.new(4, 1, 1)}
 local Install = Grid:BeginEdit()
 Install:SetBlock(Vector3.zero, "project:supply")
-Install:Fill(Vector3.new(1, 0, 0), Gate, "project:wire")
+Install:Fill(Vector3.new(1, 0, 0), Vector3.new(3, 1, 1), "project:wire")
 Install:SetBlock(Gate, "project:gate")
 Install:Commit()
 

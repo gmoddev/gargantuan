@@ -211,6 +211,10 @@ namespace gargantuan {
 		std::weak_ptr<Terrain> TerrainChild;
 		bool TerrainRestored = false;
 		friend class network::GameSession;
+		// A negotiated controller needs a live session proof for its proposed movement.
+		bool RequiresSpatialMotionProof{};
+		using SpatialMotionGuard = std::function<bool(WorldRoot &, ObjectId, glm::vec3, glm::vec3, glm::vec3)>;
+		std::weak_ptr<const SpatialMotionGuard> SpatialMotionAdmission;
 		// A Main-owned session may bound motion to its installed collision coverage.
 		using TerrainMotionGuard = std::function<bool(ObjectId, glm::vec3, glm::vec3)>;
 		std::weak_ptr<const TerrainMotionGuard> TerrainMotionAdmission;
