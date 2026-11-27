@@ -9,7 +9,7 @@ ObjectId TerrainStreamOwner(ObjectId Region,std::uint64_t Grant) const {
 	return TransferIdentity(Runtime->Workspace).ToObjectId();
 }
 
-void RetireBootstrapTerrain(Peer &Value) {
+void RetireBootstrapTerrain(Peer &Value, bool Closing = false) {
 	if (!UsesBootstrapTerrain(Value)) return;
 	Value.RetiredBootstrapSerial=Value.TerrainIdentity.Serial;
 	if (Value.TerrainPending) Value.RetiredBootstrapSerial=std::max(Value.RetiredBootstrapSerial,Value.TerrainPending->Offer.Identity.Serial);
@@ -23,9 +23,12 @@ void RetireBootstrapTerrain(Peer &Value) {
 		World->TerrainMotionAdmission.reset();
 		NamedTerrainPublication=std::max(NamedTerrainPublication,Value.TerrainIdentity.Serial);
 		if (Value.TerrainPending) NamedTerrainPublication=std::max(NamedTerrainPublication,Value.TerrainPending->Offer.Identity.Serial);
-		auto Empty=std::make_unique<terrain::Field>(Configuration.TerrainBootstrap->Directory.Grid);
-		if (!World->InstallTerrainReplica(std::move(Empty),{},NextDomainTerrainPublication()))
-			throw std::runtime_error("[Terrain:Domain] Workspace collision retirement failed");
+		if (Closing) World->InvalidateTerrainReplica();
+		else {
+			auto Empty=std::make_unique<terrain::Field>(Configuration.TerrainBootstrap->Directory.Grid);
+			if (!World->InstallTerrainReplica(std::move(Empty),{},NextDomainTerrainPublication()))
+				throw std::runtime_error("[Terrain:Domain] Workspace collision retirement failed");
+		}
 	}
 	Value.TerrainWindow.reset();
 	Value.TerrainPending.reset();
@@ -202,15 +205,21 @@ void PumpDomainTerrain(ConnectionId Connection, Peer &Value, std::shared_ptr<Dom
 	}
 }
 
-void RetireDomainTerrain(std::shared_ptr<DomainTerrainDelivery> &State) {
+void RetireDomainTerrain(std::shared_ptr<DomainTerrainDelivery> &State, bool Closing = false) {
 	if (!State) return;
+	if (State->Pending && State->Pending->Sending) State->Pending->Sending->Stop.request_stop();
+	if (State->Receiving) State->Receiving->Stop.request_stop();
 	const auto Owner = State->InstalledOwner.lock();
 	if (Owner && !Owner->GetDestroyed() && !Owner->IsDestroying() && Owner->TerrainMotionAdmission.lock()==State->Coverage) {
-		Owner->TerrainMotionAdmission.reset();
-		if (State->InstalledLifetime && Owner->GetOwnedTerrain() && Owner->IsTerrainCollisionReady()) {
-			auto Empty = std::make_unique<terrain::Field>(State->Grid);
-			(void)Owner->InstallTerrainReplica(std::move(Empty),{},NextDomainTerrainPublication());
+		if (State->InstalledLifetime) {
+			if (Closing) Owner->InvalidateTerrainReplica();
+			else {
+				auto Empty = std::make_unique<terrain::Field>(State->Grid);
+				if (!Owner->InstallTerrainReplica(std::move(Empty),{},NextDomainTerrainPublication()))
+					throw std::runtime_error("[Terrain:Domain] Destination collision retirement failed");
+			}
 		}
+		Owner->TerrainMotionAdmission.reset();
 	}
 	State.reset();
 }

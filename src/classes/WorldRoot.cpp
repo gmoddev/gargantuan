@@ -1212,6 +1212,13 @@ namespace gargantuan {
 		return true;
 	}
 
+	void WorldRoot::InvalidateTerrainReplica() noexcept {
+		if (!TerrainReplicaCoverageRequired) return;
+		TerrainMotionAdmission.reset();
+		TerrainRuntimeValue.reset();
+		if (const auto Owner = GetOwnedTerrain()) Owner->RetireField();
+	}
+
 	const terrain::PhysicsStage *WorldRoot::GetTerrainPhysics() const noexcept {
 		return TerrainRuntimeValue ? &TerrainRuntimeValue->GetPhysicsStage() : nullptr;
 	}

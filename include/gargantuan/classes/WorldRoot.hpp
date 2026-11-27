@@ -248,6 +248,7 @@ namespace gargantuan {
 		[[nodiscard]] bool HasTerrainQueryCoverage(glm::vec3 Origin, glm::vec3 Destination, glm::vec3 Extents) const;
 		[[nodiscard]] bool InstallTerrainReplica(std::unique_ptr<terrain::Field> Field,
 			std::vector<terrain::ChunkPublicationCandidate> Chunks, std::uint64_t Publication, bool BindDatasetSpacing = false);
+		void InvalidateTerrainReplica() noexcept;
 		void UpdateTerrainVisualDensity(const RenderCameraInput &Camera, std::uint32_t Width, std::uint32_t Height);
 		[[nodiscard]] WorldRaycastResult ResolveQueryHit(PhysicsRaycastResult Result, bool IncludeTerrain);
 		static int RunShapeQuery(lua_State *L, Instance *Value, PhysicsQueryShapeKind Kind, bool IsOverlap);

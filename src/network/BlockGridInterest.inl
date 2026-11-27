@@ -6,6 +6,11 @@ GridInterest GetGridInterest(ConnectionId Connection,const Peer& Value,bool Stag
 		if (Value.Staging) Result.Destination=Value.Staging->Frame.Bounds;
 		return Result;
 	}
+	const auto PlayerValue=Value.PlayerValue;
+	const auto Subject=PlayerValue ? GetSpatialTransferSubject(*PlayerValue) : nullptr;
+	const auto Domain=Subject ? WorldRoot::GetEffectiveWorld(*Subject) : nullptr;
+	if (Domain && (Domain==Runtime->Workspace ? ObjectId{} : Domain->GetObjectId())==Value.AuthorizedSpatialRegion)
+		Result.ControlledMotion=ControlledMotionArea(PlayerValue);
 	if (Relevance) {
 		const auto Focus=Relevance->GetResolvedFocus(Connection);
 		Result.Count=std::min(Result.Centers.size(),Focus.size());

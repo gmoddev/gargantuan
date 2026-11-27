@@ -236,11 +236,14 @@ namespace gargantuan::network {
 			Active->Content = std::move(Result.Content);
 		}
 	}
-	void BlockGridPeer::Pump(const Resolve &Find, const Send &Queue, std::uint64_t Tick,const GridInterest& Interest) {
+	void BlockGridPeer::Prune(const Resolve &Find) {
 		for (auto It = Grids.begin(); It != Grids.end();) {
 			const auto Id = (It++)->first;
 			if (!Find(Id)) Forget(Id);
 		}
+	}
+	void BlockGridPeer::Pump(const Resolve &Find, const Send &Queue, std::uint64_t Tick,const GridInterest& Interest) {
+		Prune(Find);
 		if (Active && Tick - Active->ProgressTick > 600)
 			throw std::runtime_error("[BlockGrid:Network] Grid transfer timed out");
 		if (!Server) {

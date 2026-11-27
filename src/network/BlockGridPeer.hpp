@@ -16,6 +16,7 @@ namespace gargantuan::network {
 		std::array<glm::vec3,4> Centers{};
 		std::size_t Count{};
 		std::optional<SpatialDestinationBounds> Destination;
+		std::optional<SpatialDestinationBounds> ControlledMotion;
 	};
 	[[nodiscard]] blockgrid::ReplicaCoverage SelectGridCoverage(const blockgrid::Field& Field,const CFrame& Pose,
 		float CellSize,const GridInterest& Interest);
@@ -31,6 +32,7 @@ namespace gargantuan::network {
 		void Track(ObjectId Grid);
 		void Forget(ObjectId Grid);
 		void Retire();
+		void Prune(const Resolve &Find);
 		void Receive(const GridStreamMessage &Message, const Resolve &Find, std::uint64_t Tick);
 		void Pump(const Resolve &Find, const Send &Queue, std::uint64_t Tick,const GridInterest& Interest={});
 		[[nodiscard]] bool IsInstalled(ObjectId Source, const BlockGrid &Grid) const;

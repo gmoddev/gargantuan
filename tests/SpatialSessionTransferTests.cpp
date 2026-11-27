@@ -495,6 +495,12 @@ script:SetAttribute("Isolated", true)
 			Require(OwnerRuntime->Workspace->ResolveRaycast({7,8,7},{0,-9,0},TerrainFilter).TerrainInstance==OwnerRuntime->Workspace->GetTerrain() &&
 				SpectatorRuntime->Workspace->GetTerrain()->GetField().GetStats().MaterializedPages==0,
 				"returning controller failed to reacquire Workspace terrain exclusively");
+			const auto FormerTerrain = OwnerRuntime->Workspace->GetTerrain();
+			Owner.Stop();
+			bool Readable = true;
+			try { (void)FormerTerrain->GetField(); } catch (const std::runtime_error &) { Readable = false; }
+			Require(!Readable && !OwnerRuntime->Workspace->IsTerrainCollisionReady(),
+				"a disconnected client retained its old terrain samples or collision");
 		}
 
 	}

@@ -82,6 +82,12 @@ int main() try {
 	Four.Centers={Focus({12.5f,12.5f,12.5f}).Centers[0],Focus({76.5f,12.5f,12.5f}).Centers[0],
 		Focus({12.5f,52.5f,52.5f}).Centers[0],Focus({76.5f,52.5f,52.5f}).Centers[0]};
 	Check(SelectGridCoverage(Grid,Pose,2,Four).Origins.size()==MaximumReplicaPages,"independent origins were combined incorrectly");
+	const SpatialDestinationBounds MotionArea{{-5,25,-6},{7,39,7}};
+	Four.ControlledMotion=MotionArea;
+	const auto Controlled=SelectGridCoverage(Grid,Pose,2,Four);
+	const auto SweptCells=GridLocalBounds(Pose,2,MotionArea);
+	Check(SweptCells && Controlled.Contains(*SweptCells) && Controlled.Origins.size()<=MaximumReplicaPages,
+		"independent focus origins displaced verified controller motion coverage");
 	GridInterest Landing;Landing.Destination=SpatialDestinationBounds{glm::vec3(-400),glm::vec3(400)};
 	const auto Exhausted=SelectGridCoverage(Grid,Pose,2,Landing);
 	Check(!Exhausted.Whole && Exhausted.Origins.empty() && !Exhausted.Contains(SingleCell({12,12,12})),"oversized landing claimed coverage");

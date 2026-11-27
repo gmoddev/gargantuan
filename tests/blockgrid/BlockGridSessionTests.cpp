@@ -359,6 +359,13 @@ namespace {
 			[&] { return Replica->GetMotionMode() == "Static" && Replica->GetAssemblyProjection()->Mass == 0.f; },
 			"relevant replica did not retire dynamic state"
 		);
+		Outside->SetSpatialRegion(Interior);
+		Wait([&] { return !Find(*ClientA->DataModel,"ExteriorGrid") && Received(*ClientB,"ExteriorGrid",blockgrid::Brick); },
+			"cross-chart assignment failed to retire the old audience and install the new grid");
+		Require(Replica->GetDestroyed() || !Replica->HasReplicaField(),"detached grid shell retained its installed pages");
+		Outside->SetSpatialRegion(std::nullopt);
+		Wait([&] { return Received(*ClientA,"ExteriorGrid",blockgrid::Brick) && !Find(*ClientB->DataModel,"ExteriorGrid"); },
+			"returning grid shell did not acquire a fresh subscription");
 		A.Stop();
 		B.Stop();
 		Server.Stop();

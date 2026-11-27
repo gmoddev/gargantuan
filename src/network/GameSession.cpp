@@ -1702,10 +1702,14 @@ namespace gargantuan::network {
 			const auto LocalPeer = PrimaryConnection ? Peers.find(*PrimaryConnection) : Peers.end();
 			const auto TrustedOwner = LocalPeer != Peers.end() ? LocalPeer->second.PlayerObject : ObjectId{};
 			bool CharacterProjected = false;
+			const bool SpatialReplica = ClientRuntimeAttached && LocalPeer != Peers.end() && LocalPeer->second.Grids;
+			bool GridMembershipChanged = false;
 			for (const auto &Operation : Frame->Operations) {
 				const auto Object = ReplicationObject(Operation.Intent);
+				const auto *Property = std::get_if<PropertyReplicationUpdate>(&Operation.Intent);
+				if (SpatialReplica && (std::holds_alternative<ReparentReplication>(Operation.Intent) ||
+					(Property && Property->PropertyName == "SpatialRegion"))) GridMembershipChanged = true;
 				if (Object == TrustedOwner) {
-					const auto *Property = std::get_if<PropertyReplicationUpdate>(&Operation.Intent);
 					CharacterProjected = CharacterProjected || IsPublishReplication(Operation.Intent) ||
 						(Property && Property->PropertyName == "Character");
 				}
@@ -1719,11 +1723,7 @@ namespace gargantuan::network {
 						return;
 					}
 					auto ReplicaObject = Replica.Resolve(Object);
-					if (ClientRuntimeAttached && LocalPeer != Peers.end() && LocalPeer->second.Grids &&
-						std::dynamic_pointer_cast<BlockGrid>(ReplicaObject)) {
-						try { TrackGrid(Message.Connection, LocalPeer->second, Object); }
-						catch (const std::exception &Error) { FailSession({DisconnectReason::ResourceExhaustion,Error.what()}); return; }
-					}
+					if (SpatialReplica && std::dynamic_pointer_cast<BlockGrid>(ReplicaObject)) GridMembershipChanged = true;
 					if (std::dynamic_pointer_cast<KinematicCharacter>(ReplicaObject))
 						ClientCharacterObjects.insert(Object);
 					if (std::dynamic_pointer_cast<RemoteBase>(ReplicaObject)) ClientRemoteObjects.insert(Object);
@@ -1766,8 +1766,19 @@ namespace gargantuan::network {
 					}
 				}
 			}
+			// ApplyFrame has finished all reparenting and explicit assignments, including ancestor moves.
+			// Retire obsolete subscriptions first so their content cannot clear a new lane's installation.
+			if (GridMembershipChanged) {
+				auto &Value = LocalPeer->second;
+				Value.Grids->Prune([&](ObjectId Id) { return ResolveGrid(Message.Connection,Value,Id,false); });
+				if (Value.Staging) Value.Staging->Grids->Prune([&](ObjectId Id) { return ResolveGrid(Message.Connection,Value,Id,true); });
+			}
 			for (auto Iterator = ClientKnownObjects.begin(); Iterator != ClientKnownObjects.end();) {
-				if (Replica.Resolve(*Iterator)) {
+				if (const auto Known = Replica.Resolve(*Iterator)) {
+					if (GridMembershipChanged && std::dynamic_pointer_cast<BlockGrid>(Known)) {
+						try { TrackGrid(Message.Connection,LocalPeer->second,*Iterator); }
+						catch (const std::exception &Error) { FailSession({DisconnectReason::ResourceExhaustion,Error.what()}); return; }
+					}
 					++Iterator;
 					continue;
 				}
@@ -2745,9 +2756,11 @@ namespace gargantuan::network {
 			RetireSessionTransfer(Connection, Iterator->second);
 			auto PeerValue = std::move(Iterator->second);
 			Peers.erase(Iterator);
-			RetireDomainTerrain(PeerValue.NamedTerrain);
+			if (Configuration.SpatialContent && Configuration.Role==GameSessionRole::Client && Runtime && ClientRuntimeAttached)
+				RetireBootstrapTerrain(PeerValue,true);
+			RetireDomainTerrain(PeerValue.NamedTerrain,true);
 			if (PeerValue.Staging) {
-				RetireDomainTerrain(PeerValue.Staging->Terrain);
+				RetireDomainTerrain(PeerValue.Staging->Terrain,true);
 				PeerValue.Staging->Grids->Retire();
 			}
 			if (PeerValue.Grids) PeerValue.Grids->Retire();

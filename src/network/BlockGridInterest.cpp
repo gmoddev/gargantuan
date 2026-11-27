@@ -30,18 +30,22 @@ namespace gargantuan::network {
 	blockgrid::ReplicaCoverage SelectGridCoverage(const blockgrid::Field& Field,const CFrame& Pose,float Size,const GridInterest& Interest) {
 		using namespace blockgrid;
 		ReplicaCoverage Result;
-		if (Interest.Destination) {
-			const auto R=GridLocalBounds(Pose,Size,*Interest.Destination);
-			if (!R) return Result;
+		auto ExactPages = [&](const SpatialDestinationBounds &Bounds) {
+			const auto R=GridLocalBounds(Pose,Size,Bounds);
+			if (!R) return;
 			const auto A=LeafOrigin(R->Min),B=LeafOrigin({R->MaxExclusive.X-1,R->MaxExclusive.Y-1,R->MaxExclusive.Z-1});
 			constexpr int Side=LeafSide;
 			const auto Count=std::uint64_t(1+(B.X-A.X)/Side)*(1+(B.Y-A.Y)/Side)*(1+(B.Z-A.Z)/Side);
-			if (Count>MaximumReplicaPages) return Result;
+			if (Count>MaximumReplicaPages) return;
 			for (int Z=A.Z;Z<=B.Z;Z+=Side) for (int Y=A.Y;Y<=B.Y;Y+=Side)
 				for (int X=A.X;X<=B.X;X+=Side) Result.Origins.push_back({X,Y,Z});
+		};
+		if (Interest.Destination) {
+			ExactPages(*Interest.Destination);
 			return Result;
 		}
-		if (!Interest.Count) {
+		if (Interest.ControlledMotion) ExactPages(*Interest.ControlledMotion);
+		if (!Interest.Count && !Interest.ControlledMotion) {
 			Result.Whole=Field.GetLeafCount()<=WholeReplicaPages;
 			return Result;
 		}
@@ -53,7 +57,12 @@ namespace gargantuan::network {
 			constexpr int Side=LeafSide;
 			for (int Z=-1;Z<=1;++Z) for (int Y=-1;Y<=1;++Y) for (int X=-1;X<=1;++X) {
 				const Cell O{A.X+Side*X,A.Y+Side*Y,A.Z+Side*Z};
-				if (ValidCell(O)) Result.Origins.push_back(O);
+				if (!ValidCell(O)) continue;
+				if (!Interest.ControlledMotion) Result.Origins.push_back(O);
+				else if (Result.Origins.size()<MaximumReplicaPages) {
+					const auto At=std::ranges::lower_bound(Result.Origins,O,CellOrder{});
+					if (At==Result.Origins.end() || *At!=O) Result.Origins.insert(At,O);
+				}
 			}
 		}
 		std::ranges::sort(Result.Origins,CellOrder{});

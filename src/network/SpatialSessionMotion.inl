@@ -110,6 +110,13 @@ void AttachSpatialMotion() {
 	for (const auto &Region:Runtime->DataModel->GetSpatialRegions()) Region->SpatialMotionAdmission=SpatialMotionAdmission;
 }
 
+SpatialDestinationBounds ControlledMotionArea(const std::shared_ptr<Player> &PlayerValue) const {
+	const auto Geometry=GetTerrainFocusBounds(TerrainFocusActor(PlayerValue));
+	const auto Cell=glm::floor(Geometry.Position/4.f)*4.f;
+	const auto Pad=Geometry.Extents+glm::vec3(2);
+	return {Cell-Pad,Cell+glm::vec3(4)+Pad};
+}
+
 void PumpSpatialMotion(ConnectionId Connection,Peer &Value) {
 	if (Value.Phase!=PeerPhase::Ready || PendingPeerFailures.contains(Connection)) return;
 	const bool Server=Configuration.Role==GameSessionRole::Server;
@@ -130,13 +137,10 @@ void PumpSpatialMotion(ConnectionId Connection,Peer &Value) {
 		if (QueueTerrainFrame(Connection,Value,EncodeMotionWindow(Reply))) Frame.Installed=true;
 		return;
 	}
-	if (CurrentTick < Value.NextMotionCheckTick) return;
-	Value.NextMotionCheckTick=CurrentTick+6;
-	const auto Actor=TerrainFocusActor(PlayerValue);
-	const auto Geometry=GetTerrainFocusBounds(Actor);
-	const auto Cell=glm::floor(Geometry.Position/8.f)*8.f;
-	const auto Pad=Geometry.Extents+glm::vec3(4);
-	const SpatialDestinationBounds Area{Cell-Pad,Cell+glm::vec3(8)+Pad};
+	if (TerrainTick < Value.NextMotionCheckTick) return;
+	Value.NextMotionCheckTick=TerrainTick;
+	SaturatingAdd(Value.NextMotionCheckTick,6);
+	const auto Area=ControlledMotionArea(PlayerValue);
 	if (!ValidSpatialArea(Area)) { Value.MotionWindow.reset(); return; }
 	const auto Possession=PlayerValue->GetPossessionRevision();
 	if (Value.MotionWindow && Value.MotionWindow->Installed && Value.MotionWindow->Bounds==Area &&
