@@ -111,7 +111,13 @@ namespace {
 				Exchange();
 				if (A.GetStatus() == GameSessionStatus::Failed || B.GetStatus() == GameSessionStatus::Failed) break;
 			}
-			Require(Predicate(), Failure);
+			if (!Predicate()) {
+				std::cerr << "[BlockGrid:Session] tick=" << Tick << " server=" << static_cast<int>(Server.GetStatus())
+					<< " first=" << static_cast<int>(A.GetStatus()) << " second=" << static_cast<int>(B.GetStatus())
+					<< " players=" << Server.GetMetrics().PlayersCreated << " accepted=" << Server.GetMetrics().AcceptedPeers
+					<< " ServerError=" << Server.GetFailure() << " FirstError=" << A.GetFailure() << " SecondError=" << B.GetFailure() << '\n';
+				throw std::runtime_error(Failure);
+			}
 		};
 		auto Attach = [&](GameSession &Session, HeadlessRenderer &View, std::unique_ptr<Engine> &Runtime) {
 			Wait(
