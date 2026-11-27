@@ -111,7 +111,8 @@ namespace {
 			assert(Grid:GetBlock(Cell)==nil)
 			Grid:SetBlock(Cell,"Brick")
 			assert(Grid:GetBlock(Cell).Definition=="Brick")
-			print("[Spatial:PlayTerrain] Independent fields and runtime-only cell verified")
+			-- The packaged Player exposes Warning diagnostics on its bounded headless console.
+			warn("[Spatial:PlayTerrain] Independent fields and runtime-only cell verified")
 		)");
 		Proof->SetParent(Space);
 	}
@@ -445,7 +446,7 @@ namespace {
 			local A = World:Raycast(Origin, Direction, Params)
 			local B = Region:Raycast(Origin, Direction, Params)
 			assert(A.Instance == West and B.Instance == East and A.GridHit.Cell == Cell and B.GridHit.Cell == Cell)
-			print("[Spatial:PackagedGrid] Two coincident charts restored and queried")
+			warn("[Spatial:PackagedGrid] Two coincident charts restored and queried")
 		)");
 		Proof->SetParent(Space);
 		Game->MarkPersistenceSubtreeArchivable();
