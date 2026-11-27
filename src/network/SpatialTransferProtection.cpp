@@ -1,4 +1,6 @@
 #include "gargantuan/network/SpatialTransferProtection.hpp"
+#include "gargantuan/classes/KinematicCharacter.hpp"
+#include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -196,7 +198,16 @@ namespace gargantuan::network {
 				Nodes.push_back(Child.get());
 		}
 	}
+	std::shared_ptr<BasePart> GetSpatialTransferSubject(const Player &Owner) {
+		const auto CharacterValue = Owner.GetCharacter().value_or(nullptr);
+		const auto Entity = Owner.GetPossessedEntity().value_or(nullptr);
+		if (Entity && Entity != CharacterValue) return std::dynamic_pointer_cast<BasePart>(Entity);
+		const auto Controller = std::dynamic_pointer_cast<KinematicCharacter>(CharacterValue);
+		return Controller ? Controller->GetRootPart().value_or(nullptr) : nullptr;
+	}
 	void SpatialTransferProtection::Retire() {
+		RequestCreatorTransfer = {};
+		CancelCreatorTransfer = {};
 		Controlled = {};
 		Reservations.Reset();
 	}

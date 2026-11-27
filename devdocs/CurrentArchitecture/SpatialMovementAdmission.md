@@ -55,6 +55,14 @@ The protected network profile accepts an anchored or stationary kinematic source
 
 The host owns wire dispatch, authenticated epoch selection, reconnect and revocation, installed content provenance, subject control and reconciliation. Transport bindings must use the current controlling session when calling the state machine. A selected viewport or a client-supplied scope never grants movement authority.
 
+### Requesting a player transfer
+
+A running server Script with MutateDataModel can call `Player:RequestSpatialTransfer(Destination, DestinationPose, Minimum, Maximum)`. The player and destination must belong to that Script's DataModel. Supply a Workspace or SpatialRegion, a rigid destination CFrame and strictly increasing corners in destination coordinates. Each axis supports a maximum extent of 512 units. The bounds must contain the complete landing box and controller capsule. The method returns a request handle and nil, or nil and a reason such as `Invalid`, `Unavailable`, `Denied` or `Busy`.
+
+`Request:GetStatus()` returns `Pending`, `Applied`, `Canceled`, `Expired` or `CommittedUnconfirmed` for an admitted request. `Request:Cancel()` returns its current disposition. A terminal handle keeps its own result through later requests. Its issuing Script execution owns both methods. Disabling, restarting or removing that Script invalidates its live authority. The negotiated server session resolves the current controlling Player, source root, source chart and session epoch. An Offline server Script uses the same native landing and commit checks for its local Player, and a successful move has an immediate Applied disposition.
+
+Online, a destination can stage for up to 15 seconds. The three-second bilateral exchange begins after the server obtains its native receipt and owner content bindings. Character command and possession epochs are revoked while staging. The controller's regular structural stream waits between the native server commit and the replica's Applied acknowledgment. The server promotes the destination audience only after that acknowledgment. An unconfirmed native commit requires the controlling connection to resynchronize.
+
 ### Destination content in GameSession
 
 The native spatial handshake uses GSES 11, and a managed spatial package pair uses GSES 12. A trusted server transition can temporarily add one destination volume to an established peer. GSDA version 1 binds the connection epoch, monotone grant serial, destination source ObjectId, and a sorted list of up to 256 public structural identities. Each axis of the volume spans at most 512 units. The server derives the list from native collision providers, their ancestors and the controlled subject. Final replication policy must admit each identity and its hard references before the server queues the manifest. The grant expires after 15 seconds and is private to its connection.

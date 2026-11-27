@@ -30,6 +30,7 @@
 #include "gargantuan/classes/PlayerGui.hpp"
 #include "gargantuan/classes/RemoteBase.hpp"
 #include "gargantuan/classes/ScreenGui.hpp"
+#include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/gui/PlayerGuiScope.hpp"
@@ -236,6 +237,8 @@ namespace gargantuan::network {
 				CFrame SourcePose, DestinationPose;
 				SpatialTransferClock::time_point Deadline;
 				std::optional<SpatialTransferFrame> WaitingOffer;
+				SpatialResidencyAudience Issuer;
+				std::shared_ptr<SpatialTransferStatus> Observation;
 				bool Started{}, Committed{};
 			};
 			std::uint64_t LastSerial{};
@@ -995,6 +998,7 @@ namespace gargantuan::network {
 					if (Value.Phase == PeerPhase::Ready && !PendingPeerFailures.contains(Connection) && Controls(Value.PlayerValue)) return true;
 				return false;
 			});
+			if (Configuration.Role == GameSessionRole::Server) BindCreatorTransfers();
 		}
 
 #include "SpatialSessionContent.inl"

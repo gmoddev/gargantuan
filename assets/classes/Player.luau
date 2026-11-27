@@ -59,6 +59,12 @@ return c({
 	},
 
 	methods = {
+		RequestSpatialTransfer = {
+			description = "Requests admission for the player's controlled root to a destination WorldRoot. A running server Script owns the resulting status handle.",
+			asLuau = true,
+			requiredCapability = "MutateDataModel",
+			luauSignature = [=[(self: Player, Destination: WorldRoot, DestinationPose: CFrame, Minimum: Vector3, Maximum: Vector3) -> ({ GetStatus: (self: unknown) -> string, Cancel: (self: unknown) -> string }?, string?)]=],
+		},
 		SetPossession = {
 			description = "Assigns an unoccupied live Workspace entity, or releases the current target with nil. Server only.",
 			requiredCapability = "MutateDataModel",

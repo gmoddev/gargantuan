@@ -4,7 +4,9 @@
 #include "gargantuan/Log.hpp"
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
+#include "gargantuan/classes/ModuleScript.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/terrain/Field.hpp"
@@ -202,8 +204,10 @@ namespace {
 		for (const auto &Identity : Server.GetPeerIdentities())
 			if (Identity.Ready && Identity.Connection != *Connection) GalleryConnection = Identity.Connection;
 		const std::array GalleryFocus{glm::vec3(-5, 30, 0)};
-		Require(GalleryConnection && Server.SetTrustedReplicationFocus(*GalleryConnection, GalleryFocus),
-			"spectator gallery interest unavailable");
+		Require(
+			GalleryConnection && Server.SetTrustedReplicationFocus(*GalleryConnection, GalleryFocus),
+			"spectator gallery interest unavailable"
+		);
 		Wait(
 			[&] { return Server.GetMetrics().ReadyPeers == 2 && Find(*SpectatorRuntime, "GalleryWall"); },
 			"spectator not independently ready"
@@ -259,11 +263,54 @@ namespace {
 			"cancellation moved the actor"
 		);
 		ObserveStage = true;
-		Require(
-			Server.RequestSpatialTransfer(*Connection, Room->GetObjectId(), Target, Bounds) ==
-				SpatialTransferStatus::Progress,
-			"movement request failed"
-		);
+		std::shared_ptr<Script> Creator;
+		if (CharacterProfile) {
+			const auto Shared = std::make_shared<ModuleScript>();
+			Shared->SetName("MovementFixtureState");
+			Shared->SetSource("return {}");
+			Shared->SetParent(Space);
+			Creator = std::make_shared<Script>();
+			Creator->SetName("MovementIssuer");
+			Creator->SetRunContext(Enums::RunContext::Server);
+			Creator->SetParent(Space);
+			Creator->SetSource(R"lua(
+local State = require("@game/Workspace/MovementFixtureState")
+local Room = game.Workspace.LandingRoom
+local Owner
+for _, Player in game:GetService("Players"):GetPlayers() do
+	if Player.Character and Player.Character.Name == "TransferCharacter" then Owner = Player end
+end
+local Transfer, Reason = Owner:RequestSpatialTransfer(Room, CFrame.new(0,30,0), Vector3.new(-8,24,-7), Vector3.new(8,36,7))
+assert(Transfer and not Reason and typeof(Transfer) == "SpatialTransfer" and Transfer:GetStatus() == "Pending")
+State.Ticket = Transfer
+task.defer(function()
+	local State = Transfer:GetStatus()
+	assert(State == "Applied" and Transfer:Cancel() == State)
+	script:SetAttribute("ObservedApplied", true)
+end)
+)lua");
+			ServerRuntime.Script->RunBootstrapScript(Creator);
+			if (Creator->Status == ScriptStatus::Error) throw std::runtime_error(Creator->ErrorMessage);
+			const auto Other = std::make_shared<Script>();
+			Other->SetName("MovementOther");
+			Other->SetRunContext(Enums::RunContext::Server);
+			Other->SetParent(Space);
+			Other->SetSource(R"lua(
+local Ticket = require("@game/Workspace/MovementFixtureState").Ticket
+assert(not pcall(function() Ticket:Cancel() end))
+assert(not pcall(function() Ticket:GetStatus() end))
+script:SetAttribute("Isolated", true)
+)lua");
+			ServerRuntime.Script->RunBootstrapScript(Other);
+			if (Other->Status == ScriptStatus::Error) throw std::runtime_error(Other->ErrorMessage);
+			Require(Other->GetAttributeValue("Isolated").has_value(), "another Script acquired the actor's ticket");
+		} else {
+			Require(
+				Server.RequestSpatialTransfer(*Connection, Room->GetObjectId(), Target, Bounds) ==
+					SpatialTransferStatus::Progress,
+				"movement request failed"
+			);
+		}
 		Require(
 			Server.RequestSpatialTransfer(*Connection, Room->GetObjectId(), Target, Bounds) ==
 				SpatialTransferStatus::Busy,
@@ -281,6 +328,13 @@ namespace {
 			},
 			"bilateral movement did not converge"
 		);
+		if (Creator) {
+			ServerRuntime.Script->Step();
+			Require(
+				Creator->GetAttributeValue("ObservedApplied").has_value(),
+				"creator did not observe its terminal native result"
+			);
+		}
 		Require(SawScopedGrid, "owner moved without an observed installed landing grid");
 		const auto ReplicaRoom = std::dynamic_pointer_cast<SpatialRegion>(Find(*OwnerRuntime, "LandingRoom"));
 		if (CharacterProfile) {

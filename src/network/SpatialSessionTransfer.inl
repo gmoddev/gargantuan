@@ -18,11 +18,7 @@ std::shared_ptr<Player> TransferPlayer(ConnectionId Connection, const Peer &Valu
 	const auto PlayerValue = Runtime->Players->GetLocalPlayer().value_or(nullptr);
 	return PlayerValue && PlayerValue == Replica.Resolve(Value.PlayerObject) ? PlayerValue : nullptr;
 }
-static std::shared_ptr<BasePart> TransferSubject(const Player &PlayerValue) {
-	if (const auto Entity = GenericPossession(PlayerValue)) return std::dynamic_pointer_cast<BasePart>(Entity);
-	const auto CharacterValue = std::dynamic_pointer_cast<KinematicCharacter>(PlayerValue.GetCharacter().value_or(nullptr));
-	return CharacterValue ? CharacterValue->GetRootPart().value_or(nullptr) : nullptr;
-}
+
 std::shared_ptr<Instance> ResolveTransferObject(WireObjectId Id) const {
 	if (!Runtime || !Id.IsValid()) return {};
 	auto Value = Configuration.Role == GameSessionRole::Server ? ObjectRegistry::Get().Lookup(Id.ToObjectId()) : Replica.Resolve(Id.ToObjectId());
@@ -39,7 +35,12 @@ bool TransferScopeCurrent(ConnectionId Connection, const Peer &Value, const Sess
 	if (!PlayerValue || Value.SessionEpoch != Scope.SessionEpoch || Value.Replication.Value() != Scope.WorldEpoch ||
 		Value.PlayerId != Scope.PlayerId || Scope.FocusEpoch != Request.Serial ||
 		PlayerValue->GetPossessionRevision() != Request.PossessionRevision || Value.TransferFocusRevision != Request.FocusRevision) return false;
-	const auto Subject = TransferSubject(*PlayerValue);
+	if (Request.Issuer.Owner.IsValid()) {
+		const auto ScriptValue = std::dynamic_pointer_cast<Script>(ObjectRegistry::Get().Lookup(Request.Issuer.Owner));
+		if (!ScriptValue || !ScriptValue->IsCurrentExecution(Request.Issuer.Epoch) ||
+			SpatialRegion::FindAttachedWorld(*ScriptValue) != Runtime->DataModel) return false;
+	}
+	const auto Subject = GetSpatialTransferSubject(*PlayerValue);
 	if (!Subject || TransferIdentity(Subject) != Scope.Subject) return false;
 	const auto Controller = LegacyCharacter(PlayerValue);
 	if (TransferIdentity(Controller) != Scope.Controller) return false;
@@ -179,6 +180,7 @@ void RetireSessionTransfer(ConnectionId Connection, Peer &Value) {
 		Value.SpatialTransfer->Server.Reset();
 		Value.SpatialTransfer->Replica.Reset();
 		FenceTransferMotion(Connection, Value, Request.Scope, false);
+		if (Request.Observation) *Request.Observation = Request.Committed ? SpatialTransferStatus::CommittedUnconfirmed : SpatialTransferStatus::Canceled;
 		// TearDownPeer removes the structural audience and retires both content subscriptions locally.
 		Value.SpatialTransfer->Pending.reset();
 	}
@@ -198,19 +200,20 @@ void FinishTransfer(ConnectionId Connection, Peer &Value, SpatialTransferStatus 
 	Value.SpatialTransfer->Replica.Reset();
 	Value.SpatialTransfer->Pending.reset();
 	Value.SpatialTransfer->Result = Status;
+	if (Request.Observation) *Request.Observation = Status;
 	FenceTransferMotion(Connection, Value, Request.Scope, false);
 	if (Status == SpatialTransferStatus::CommittedUnconfirmed)
 		PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::ProtocolViolation,
 			"[Spatial:Transfer] Committed actor requires controlling replica resynchronization"});
 }
-SpatialTransferStatus CancelTransfer(ConnectionId Connection, Peer &Value) {
+SpatialTransferStatus CancelTransfer(ConnectionId Connection, Peer &Value, SpatialTransferStatus Reason = SpatialTransferStatus::Canceled) {
 	if (!HasTransfer(Value)) return SpatialTransferStatus::Stale;
 	auto &Lane = *Value.SpatialTransfer;
 	auto Step = Configuration.Role == GameSessionRole::Server ? Lane.Server.Cancel() : Lane.Replica.Cancel();
 	if (Step.Status == SpatialTransferStatus::Busy) return Step.Status;
 	if (Step.Reply) (void)SendTransferFrame(Connection, Value, *Step.Reply);
 	const auto Status = Lane.Pending->Committed || Step.Status == SpatialTransferStatus::CommittedUnconfirmed ?
-		SpatialTransferStatus::CommittedUnconfirmed : SpatialTransferStatus::Canceled;
+		SpatialTransferStatus::CommittedUnconfirmed : Reason;
 	FinishTransfer(Connection, Value, Status);
 	return Status;
 }
@@ -231,7 +234,7 @@ void AdvanceTransfer(ConnectionId Connection, Peer &Value, const SpatialTransfer
 	}
 }
 SpatialTransferStatus StartSpatialTransfer(ConnectionId Connection, ObjectId DestinationId, const CFrame &Pose,
-	const SpatialDestinationBounds &Bounds) {
+	const SpatialDestinationBounds &Bounds, SpatialResidencyAudience Issuer = {}, std::shared_ptr<SpatialTransferStatus> Observation = {}) {
 	if (GetCurrentExecutionDomain() != ExecutionDomain::Main || Configuration.Role != GameSessionRole::Server ||
 		!Configuration.SpatialContent || !SpatialProtection) return SpatialTransferStatus::Denied;
 	const auto Found = Peers.find(Connection);
@@ -239,7 +242,7 @@ SpatialTransferStatus StartSpatialTransfer(ConnectionId Connection, ObjectId Des
 	auto &Value = Found->second;
 	if (HasTransfer(Value)) return SpatialTransferStatus::Busy;
 	const auto PlayerValue = TransferPlayer(Connection, Value);
-	const auto Subject = PlayerValue ? TransferSubject(*PlayerValue) : nullptr;
+	const auto Subject = PlayerValue ? GetSpatialTransferSubject(*PlayerValue) : nullptr;
 	const auto Source = Subject ? WorldRoot::GetEffectiveWorld(*Subject) : nullptr;
 	const auto Destination = std::dynamic_pointer_cast<WorldRoot>(ResolveTransferObject(WireObjectId::FromObjectId(DestinationId)));
 	const auto Profile = WorldRoot::DescribeSpatialMovement(Subject);
@@ -262,7 +265,8 @@ SpatialTransferStatus StartSpatialTransfer(ConnectionId Connection, ObjectId Des
 		.Bounds = Bounds, .Serial = Serial, .PossessionRevision = PlayerValue->GetPossessionRevision(),
 		.FocusRevision = Value.TransferFocusRevision, .SourceActivation = Source->GetSpatialActivation(),
 		.DestinationActivation = Destination->GetSpatialActivation(),
-		.SourcePose = Movement.SourcePose, .DestinationPose = Pose, .Deadline = SpatialTransferClock::now() + std::chrono::seconds(15)});
+		.SourcePose = Movement.SourcePose, .DestinationPose = Pose, .Deadline = SpatialTransferClock::now() + std::chrono::seconds(15),
+		.Issuer = Issuer, .Observation = std::move(Observation)});
 	const auto Scope = Lane.Pending->Scope;
 	if (!TransferScopeCurrent(Connection, Value, *Lane.Pending) || !StageTransferDomain(Connection, Scope.Destination, Bounds, Serial)) {
 		Lane.Pending.reset();
@@ -306,7 +310,7 @@ void ReceiveSpatialTransfer(const ReceivedMessageEvent &Message, Peer &Value) {
 		Scope.PlayerId != Value.PlayerId || Scope.FocusEpoch != Frame->Serial) return;
 	if (!Server && Frame->Phase == SpatialTransferPhase::Offer && !HasTransfer(Value)) {
 		const auto PlayerValue = TransferPlayer(Connection, Value);
-		if (!PlayerValue || TransferIdentity(TransferSubject(*PlayerValue)) != Scope.Subject ||
+		if (!PlayerValue || TransferIdentity(GetSpatialTransferSubject(*PlayerValue)) != Scope.Subject ||
 			TransferIdentity(LegacyCharacter(PlayerValue)) != Scope.Controller ||
 			!HasTransferDomain(Connection, Scope.Destination, Frame->Bounds, Frame->Serial)) return;
 		if (!Value.SpatialTransfer) Value.SpatialTransfer = std::make_unique<SessionSpatialTransfer>();
@@ -352,7 +356,7 @@ void PumpSessionTransfer(ConnectionId Connection, Peer &Value) {
 		const auto Domain = ResolveTransferObject(Request.Scope.Destination);
 		const auto Expected = Domain == Runtime->Workspace ? ObjectId{} : Request.Scope.Destination.ToObjectId();
 		const auto Owner = TransferPlayer(Connection, Value);
-		const auto Subject = Owner ? TransferSubject(*Owner) : nullptr;
+		const auto Subject = Owner ? GetSpatialTransferSubject(*Owner) : nullptr;
 		const bool Moved = Subject && TransferIdentity(Subject) == Request.Scope.Subject && Domain &&
 			WorldRoot::GetEffectiveWorld(*Subject) == Domain && Value.AuthorizedSpatialRegion == Expected;
 		FinishTransfer(Connection, Value, Moved ? SpatialTransferStatus::Applied : SpatialTransferStatus::CommittedUnconfirmed);
@@ -364,7 +368,7 @@ void PumpSessionTransfer(ConnectionId Connection, Peer &Value) {
 		return;
 	}
 	if (Now >= Request.Deadline) {
-		if (CancelTransfer(Connection, Value) == SpatialTransferStatus::Canceled) Lane.Result = SpatialTransferStatus::Expired;
+		(void)CancelTransfer(Connection, Value, SpatialTransferStatus::Expired);
 		return;
 	}
 	const auto Adapters = SessionTransferAdapters(Connection);
@@ -393,6 +397,25 @@ void PumpSessionTransfer(ConnectionId Connection, Peer &Value) {
 	Request.Started = Step.Status == SpatialTransferStatus::Progress;
 	if (Request.Started) Request.Deadline = Now + std::chrono::seconds(3);
 	AdvanceTransfer(Connection, Value, Step);
+}
+void BindCreatorTransfers() {
+	SpatialProtection->RequestCreatorTransfer = [this](const Player &PlayerValue, ObjectId Destination, const CFrame &Pose,
+		const SpatialDestinationBounds &Bounds, SpatialResidencyAudience Issuer) -> std::expected<SpatialTransferTicket,SpatialTransferStatus> {
+		const auto Peer = ResolveRemotePeer(PlayerValue);
+		if (!Peer || !Issuer.Owner.IsValid() || !Issuer.Epoch) return std::unexpected(SpatialTransferStatus::Denied);
+		auto Result = std::make_shared<SpatialTransferStatus>(SpatialTransferStatus::Progress);
+		const auto Started = StartSpatialTransfer(Peer->Connection, Destination, Pose, Bounds, Issuer, Result);
+		if (Started != SpatialTransferStatus::Progress) return std::unexpected(Started);
+		const auto &Value = Peers.at(Peer->Connection);
+		return SpatialTransferTicket{std::move(Result), Peer->Connection, Value.SessionEpoch, Value.SpatialTransfer->LastSerial};
+	};
+	SpatialProtection->CancelCreatorTransfer = [this](const SpatialTransferTicket &Ticket) {
+		const auto Found = Peers.find(Ticket.Connection);
+		if (Found == Peers.end() || Found->second.SessionEpoch != Ticket.SessionEpoch || !HasTransfer(Found->second)) return;
+		const auto &Pending = *Found->second.SpatialTransfer->Pending;
+		if (Ticket.Serial == Pending.Serial && Ticket.Result == Pending.Observation)
+			(void)CancelTransfer(Ticket.Connection, Found->second);
+	};
 }
 void PumpSpatialTransfers() {
 	for (auto &[Connection, Value] : Peers) if (HasTransfer(Value) && !PendingPeerFailures.contains(Connection))
