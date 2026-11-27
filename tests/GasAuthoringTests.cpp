@@ -16,6 +16,8 @@
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/Sound.hpp"
 #include "gargantuan/classes/Terrain.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
+#include "serialization/JsonCodec.hpp"
 #include "gargantuan/classes/TextLabel.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/editor/EditorHost.hpp"
@@ -856,6 +858,38 @@ namespace {
 		Require(Call("CancelTerrainEdit", {{"Scope", Scope}, {"Ticket", Pending}}).at("Result").at("Status") ==
 			"CancelRequested" && Await(Pending).at("Status") == "Canceled" && ReadState().at("TerrainRevision") == "4",
 			"Cancel ends pending work without changing the field");
+		const auto Game = std::dynamic_pointer_cast<DataModel>(ObjectRegistry::Get().Lookup(
+			JsonCodec::DecodeObjectId(Scope).value().ToObjectId()));
+		const auto Space = GetWorkspace(*Game);
+		const auto Domain = std::make_shared<SpatialRegion>();
+		Domain->SetParent(Space);
+		Space->SetCurrentSpatialRegion(Domain);
+		const auto Local = ReadState();
+		const auto LocalScope = Local.at("Scope");
+		Require(LocalScope != Scope && Local.at("TerrainRevision") == "0" && Local.at("CanUndo") == false,
+			"an independently selected terrain starts empty and cannot replay the default terrain history");
+		Require(Call("RaycastTerrainSurface", Ray).at("Error").at("Code") == "StaleTerrainScope",
+			"an old default viewport ray cannot target the new domain");
+		const auto LocalSubmit = Call("SubmitTerrainBrush", {{"Scope", LocalScope}, {"ExpectedTerrainRevision", "0"},
+			{"ExpectedRevision", Local.at("ProjectState").at("AuthoritativeRevision")}, {"Brush", Fill}});
+		Require(LocalSubmit.at("Ok") == true, "selected domain admits a local brush");
+		const auto DomainTicket = LocalSubmit.at("Result").at("Ticket");
+		Space->SetCurrentSpatialRegion(std::nullopt);
+		Require(Call("CancelTerrainEdit", {{"Scope", Scope}, {"Ticket", DomainTicket}}).at("Ok") == false,
+			"a same-number ticket in another terrain cannot cancel the editing domain");
+		const auto Limit = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+		Json LocalReceipt;
+		do {
+			LocalReceipt = Call("GetTerrainEditStatus", {{"Scope", LocalScope}, {"Ticket", DomainTicket}}).at("Result");
+			if (LocalReceipt.at("Status") != "Pending") break;
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		} while (std::chrono::steady_clock::now() < Limit);
+		Require(LocalReceipt.at("Status") == "Committed" && LocalReceipt.at("TerrainRevision") == "1" &&
+			ReadState().at("TerrainRevision") == "4" && ReadState().at("CanUndo") == false,
+			"an edit can finish on its addressed domain after the camera returns to Workspace");
+		Domain->Destroy();
+		Require(Call("GetTerrainEditStatus", {{"Scope", LocalScope}, {"Ticket", DomainTicket}}).at("Ok") == false,
+			"a retired domain receipt cannot resolve to another terrain");
 		Require(Call("OpenProject", {{"Root", Directory.Root.generic_string()}}).at("Ok") == true &&
 			ReadState().at("CanUndo") == false &&
 			Call("GetTerrainEditStatus", {{"Scope", Scope}, {"Ticket", Pending}}).at("Error").at("Code") == "StaleTerrainScope",
