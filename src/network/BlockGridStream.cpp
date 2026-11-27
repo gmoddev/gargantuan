@@ -10,13 +10,15 @@
 namespace gargantuan::network {
 	namespace {
 		constexpr std::uint32_t Magic = 0x53474247; // GBGS
-		constexpr std::uint16_t Version = 3;
+		constexpr std::uint16_t Version = 4;
 		bool ValidScope(const GridStreamScope &Scope) {
 			return Scope.Epoch && Scope.Grid.IsValid() && (Scope.Domain.IsValid() || Scope.Domain == ObjectId{}) &&
 				   Scope.Domain != Scope.Grid;
 		}
 		bool Valid(const GridStreamMessage &Message) {
 			if (!ValidScope(Message.Scope) || !Message.Serial || !Message.Subscription) return false;
+			if (Message.Fence.Other!=ObjectId{} && (!Message.Fence.Generation || !Message.Fence.Other.IsValid() ||
+				Message.Fence.Other==Message.Scope.Grid)) return false;
 			switch (Message.Kind) {
 			case GridStreamKind::Request:
 			case GridStreamKind::Forget:
@@ -26,6 +28,17 @@ namespace gargantuan::network {
 				return Message.Target.IsValid() && Message.Placement.IsValid() && Message.Revision &&
 					   Message.Configuration && Message.MotionRevision;
 			case GridStreamKind::Offer:
+				if (Message.Reuse.size()>blockgrid::MaximumReplicaPages || (!Message.Reuse.empty() && !Message.Base.IsValid()) ||
+					Message.Suffix>Message.Size || Message.Prefix>Message.Size-Message.Suffix) return false;
+				{
+					auto End=Message.Prefix;
+					for (const auto R:Message.Reuse) {
+						if (!R.Length || R.To<End || R.To>Message.Size-Message.Suffix ||
+							R.Length>Message.Size-Message.Suffix-R.To || R.From>MaximumGridReplicaBytes ||
+							R.Length>MaximumGridReplicaBytes-R.From) return false;
+						End=R.To+R.Length;
+					}
+				}
 				return Message.Assembly && blockgrid::ValidAssemblyProjection(*Message.Assembly) &&
 					   Message.MotionRevision == Message.Assembly->Revision && Message.Revision &&
 					   Message.Configuration && Message.Placement.IsValid() && Message.Target.IsValid() &&
@@ -77,6 +90,9 @@ namespace gargantuan::network {
 			Writer.Integer(Value.MotionRevision);
 			Writer.Append(std::as_bytes(std::span(Value.Target.Bytes)));
 			Writer.Append(std::as_bytes(std::span(Value.Placement.Bytes)));
+			Writer.Integer(Value.Fence.Generation);
+			Writer.Integer(Value.Fence.Other.Slot);
+			Writer.Integer(Value.Fence.Other.Generation);
 		}
 		if (Value.Kind == GridStreamKind::Offer) {
 			const auto &Assembly = *Value.Assembly;
@@ -90,6 +106,8 @@ namespace gargantuan::network {
 			Writer.Integer(Value.Size);
 			Writer.Integer(Value.Prefix);
 			Writer.Integer(Value.Suffix);
+			Writer.Integer(static_cast<std::uint8_t>(Value.Reuse.size()));
+			for (const auto R:Value.Reuse) { Writer.Integer(R.From);Writer.Integer(R.To);Writer.Integer(R.Length); }
 		} else if (Value.Kind == GridStreamKind::Fragment) {
 			Writer.Integer(Value.Offset);
 			Writer.Append(std::as_bytes(Value.Fragment));
@@ -113,7 +131,8 @@ namespace gargantuan::network {
 		if (M.Kind == GridStreamKind::Request && !ReadDigest(Reader, M.Base)) return {};
 		if ((M.Kind == GridStreamKind::Installed || M.Kind == GridStreamKind::Offer) &&
 			(!Reader.Integer(M.Revision) || !Reader.Integer(M.Configuration) || !Reader.Integer(M.MotionRevision) ||
-			 !ReadDigest(Reader, M.Target) || !ReadDigest(Reader, M.Placement)))
+			 !ReadDigest(Reader, M.Target) || !ReadDigest(Reader, M.Placement) || !Reader.Integer(M.Fence.Generation) ||
+			 !Reader.Integer(M.Fence.Other.Slot) || !Reader.Integer(M.Fence.Other.Generation)))
 			return {};
 		if (M.Kind == GridStreamKind::Offer) {
 			auto &Assembly = M.Assembly.emplace();
@@ -127,6 +146,12 @@ namespace gargantuan::network {
 		if (M.Kind == GridStreamKind::Offer && (!ReadDigest(Reader, M.Base) || !Reader.Integer(M.Size) ||
 												!Reader.Integer(M.Prefix) || !Reader.Integer(M.Suffix)))
 			return {};
+		if (M.Kind==GridStreamKind::Offer) {
+			std::uint8_t Count{};
+			if (!Reader.Integer(Count) || Count>blockgrid::MaximumReplicaPages || Count>Reader.Remaining()/12) return {};
+			M.Reuse.resize(Count);
+			for (auto& R:M.Reuse) if (!Reader.Integer(R.From) || !Reader.Integer(R.To) || !Reader.Integer(R.Length)) return {};
+		}
 		if (M.Kind == GridStreamKind::Fragment) {
 			std::span<const std::byte> Raw;
 			if (!Reader.Integer(M.Offset) || !Reader.Take(Reader.Remaining(), Raw)) return {};
@@ -135,12 +160,25 @@ namespace gargantuan::network {
 		return Reader.Complete() && Valid(M) ? std::optional(M) : std::nullopt;
 	}
 	GridReplicaContent CaptureGridReplica(const blockgrid::Field &Field) {
-		auto Bytes = std::make_shared<const std::vector<std::uint8_t>>(
-			blockgrid::Encode(Field, blockgrid::DataProfile::RelevantPeers)
-		);
-		if (Bytes->size() > MaximumGridReplicaBytes)
-			throw std::length_error("[BlockGrid:Network] Grid exceeds scoped replica limit");
-		return {AssetContentId::Hash(*Bytes), std::move(Bytes)};
+		return *CaptureGridReplica(Field,blockgrid::ReplicaCoverage{true},{});
+	}
+	std::optional<GridReplicaContent> CaptureGridReplica(const blockgrid::Field& Field,
+		const blockgrid::ReplicaCoverage& Coverage,const std::function<bool(const blockgrid::Field&)>& AdmitSchema) {
+		auto Pages=Field.CapturePages(Coverage,AdmitSchema);
+		if (!Pages) return {};
+		if (Pages->Bytes.size()>MaximumGridReplicaBytes) throw std::length_error("[BlockGrid:Network] Regional page budget exceeded");
+		auto Bytes=std::make_shared<const std::vector<std::uint8_t>>(std::move(Pages->Bytes));
+		return GridReplicaContent{AssetContentId::Hash(*Bytes),std::move(Bytes),
+			std::make_shared<const blockgrid::ReplicaCoverage>(Coverage),
+			std::make_shared<const std::vector<blockgrid::ReplicaPageRange>>(std::move(Pages->Records))};
+	}
+	std::pair<std::size_t,std::size_t> NextGridLiteral(const GridStreamMessage& Offer,std::size_t Cursor) {
+		const auto End=Offer.Size-Offer.Suffix;
+		for (const auto R:Offer.Reuse) {
+			if (Cursor<R.To) return {Cursor,R.To-Cursor};
+			if (Cursor<R.To+R.Length) Cursor=R.To+R.Length;
+		}
+		return {Cursor,End-Cursor};
 	}
 	GridStreamMessage MakeGridOffer(
 		GridStreamScope Scope,
@@ -183,6 +221,19 @@ namespace gargantuan::network {
 															   (*Known->Bytes)[Known->Bytes->size() - 1 - Offer.Suffix])
 				++Offer.Suffix;
 			if (Offer.Prefix || Offer.Suffix) Offer.Base = Known->Digest;
+			if (Next.Records && Known->Records) for (const auto& Page:*Next.Records) {
+				const auto End=std::min(Page.Offset+Page.Length,Offer.Size-Offer.Suffix);
+				const auto Start=std::max(Page.Offset,Offer.Prefix);
+				if (End<=Start || End-Start<16) continue;
+				const auto It=std::ranges::lower_bound(*Known->Records,Page.Origin,blockgrid::CellOrder{},&blockgrid::ReplicaPageRange::Origin);
+				if (It==Known->Records->end() || It->Origin!=Page.Origin || It->Length!=Page.Length) continue;
+				const auto Old=It->Offset+(Start-Page.Offset);
+				if (!std::equal(Next.Bytes->begin()+Start,Next.Bytes->begin()+End,Known->Bytes->begin()+Old)) continue;
+				if (!Offer.Reuse.empty() && Offer.Reuse.back().To+Offer.Reuse.back().Length==Start &&
+					Offer.Reuse.back().From+Offer.Reuse.back().Length==Old) Offer.Reuse.back().Length+=End-Start;
+				else Offer.Reuse.push_back({Old,Start,End-Start});
+				Offer.Base=Known->Digest;
+			}
 		}
 		if (!Valid(Offer)) throw std::invalid_argument("[BlockGrid:Network] Invalid source binding");
 		return Offer;
@@ -200,17 +251,22 @@ namespace gargantuan::network {
 		if (Offer.Prefix) std::copy_n(Known->Bytes->begin(), Offer.Prefix, Staged.begin());
 		if (Offer.Suffix)
 			std::copy(Known->Bytes->end() - Offer.Suffix, Known->Bytes->end(), Staged.end() - Offer.Suffix);
+		for (const auto R:Offer.Reuse) {
+			if (R.From>Known->Bytes->size() || R.Length>Known->Bytes->size()-R.From)
+				throw std::invalid_argument("[BlockGrid:Network] Invalid prior page reference");
+			std::copy_n(Known->Bytes->begin()+R.From,R.Length,Staged.begin()+R.To);
+		}
 		Bytes = std::move(Staged);
-		Written = Offer.Prefix;
+		Written = NextGridLiteral(Offer,Offer.Prefix).first;
 		Active = Offer;
 	}
 	void GridStreamReceiver::Append(const GridStreamMessage &Part) {
 		if (!Active || Part.Kind != GridStreamKind::Fragment || !Valid(Part) || Part.Scope != Active->Scope ||
 			Part.Subscription != Active->Subscription || Part.Serial != Active->Serial || Part.Offset != Written ||
-			Part.Fragment.size() > Bytes.size() - Active->Suffix - Written)
+			Part.Fragment.size() > NextGridLiteral(*Active,Written).second)
 			throw std::invalid_argument("[BlockGrid:Network] Out-of-order or stale fragment");
 		std::copy(Part.Fragment.begin(), Part.Fragment.end(), Bytes.begin() + Written);
-		Written += Part.Fragment.size();
+		Written = NextGridLiteral(*Active,Written+Part.Fragment.size()).first;
 	}
 	bool GridStreamReceiver::Complete() const {
 		return Active && Written == Bytes.size() - Active->Suffix;
@@ -218,10 +274,10 @@ namespace gargantuan::network {
 	GridStreamReceiver::Result GridStreamReceiver::Finish() {
 		if (!Complete() || AssetContentId::Hash(Bytes) != Active->Target)
 			throw std::invalid_argument("[BlockGrid:Network] Incomplete or corrupt replica");
-		auto Field = blockgrid::Decode(Bytes);
-		if (blockgrid::Encode(Field, blockgrid::DataProfile::RelevantPeers) != Bytes)
-			throw std::invalid_argument("[BlockGrid:Network] Noncanonical public channel projection");
-		GridReplicaContent Content{Active->Target, std::make_shared<const std::vector<std::uint8_t>>(std::move(Bytes))};
+		blockgrid::ReplicaCoverage Coverage;
+		auto Field=blockgrid::Field::DecodePages(Bytes,Coverage);
+		GridReplicaContent Content{Active->Target,std::make_shared<const std::vector<std::uint8_t>>(std::move(Bytes)),
+			std::make_shared<const blockgrid::ReplicaCoverage>(std::move(Coverage))};
 		Cancel();
 		return {std::move(Field), std::move(Content)};
 	}

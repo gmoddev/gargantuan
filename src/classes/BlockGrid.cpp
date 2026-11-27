@@ -213,7 +213,11 @@ namespace gargantuan {
 		Admission=std::move(BeforeCommit);
 		WorldOwnedAdmission=false;
 	}
-	void BlockGrid::InstallReplicaField(blockgrid::Field Value) {
+	void BlockGrid::RequireReplicaCoverage(blockgrid::Region Bounds) const {
+		if (IsReplicaMaterialization() && (!ReplicaFieldAvailable || (InstalledCoverage && !InstalledCoverage->Contains(Bounds))))
+			throw std::runtime_error("[BlockGrid:Unavailable] Requested cells are outside installed replica coverage");
+	}
+	void BlockGrid::InstallReplicaField(blockgrid::Field Value,std::shared_ptr<const blockgrid::ReplicaCoverage> Coverage) {
 		AssertCanMutate();
 		if (!IsReplicaMaterialization() || !GetDataModel() || Editing) throw std::logic_error("[BlockGrid:Replica] Shell is unavailable");
 		if (const auto Protection=GetDataModel()->GetSpatialTransferProtection(); Protection && !Protection->AllowsResource(*this))
@@ -224,6 +228,7 @@ namespace gargantuan {
 		AssetsReady = false;
 		LastCellEdit.reset();
 		ReplicaFieldAvailable = true;
+		InstalledCoverage=std::move(Coverage);
 		NotifyPropertyCommitted("BlockRevision");
 	}
 	void BlockGrid::RetireReplicaContent() {
@@ -235,6 +240,7 @@ namespace gargantuan {
 			LastCellEdit.reset();
 			AssetsReady = false;
 			ReplicaFieldAvailable = false;
+			InstalledCoverage.reset();
 			NotifyPropertyCommitted("BlockRevision");
 		}
 		ClearReplicaAssemblyProjection();
@@ -405,7 +411,8 @@ namespace gargantuan {
 	}
 	int BlockGrid::GetBlock(lua_State* L,Instance* Object) {
 		const auto& Grid=ReadTarget(L,Object);
-		PushBlock(L,Grid.Cells,Grid.Cells.Get(ReadCell(L,2))); return 1;
+		const auto P=ReadCell(L,2);Grid.RequireReplicaCoverage(SingleCell(P));
+		PushBlock(L,Grid.Cells,Grid.Cells.Get(P)); return 1;
 	}
 	int BlockGrid::Fill(lua_State* L,Instance* Object) {
 		auto& Grid=ReadTarget(L,Object,true);
@@ -419,6 +426,7 @@ namespace gargantuan {
 		const auto& Grid=ReadTarget(L,Object);
 		const Region R{ReadCell(L,2),ReadCell(L,3,true)};
 		(void)Volume(R,MaximumReadCells);
+		Grid.RequireReplicaCoverage(R);
 		const auto Select=ReadFilter(L,4,Grid.Cells);
 		lua_createtable(L,0,2);
 		PushText(L,Grid.GetBlockRevision()); lua_setfield(L,-2,"Revision");

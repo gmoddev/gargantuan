@@ -189,7 +189,7 @@ std::optional<SpatialAppliedBinding> GetTransferGridBinding(ConnectionId Connect
 	const auto &Value=It->second;
 	if (Value.Staging && HasTransferDomain(Connection,WireObjectId::FromObjectId(Value.Staging->Frame.Destination),Bounds,Value.Staging->Frame.Serial) &&
 		ResolveGrid(Connection,Value,*Id,true)==Grid)
-		return Value.Staging->Grids->GetBinding(*Id,*Grid,Provider.AuthoritativeEmpty && Provider.Installed.empty());
+		return Value.Staging->Grids->GetBinding(*Id,*Grid,Provider.AuthoritativeEmpty && Provider.Installed.empty(),Bounds);
 	if (!Value.Grids || ResolveGrid(Connection,Value,*Id,false)!=Grid) return {};
-	return Value.Grids->GetBinding(*Id,*Grid,Provider.AuthoritativeEmpty && Provider.Installed.empty());
+	return Value.Grids->GetBinding(*Id,*Grid,Provider.AuthoritativeEmpty && Provider.Installed.empty(),Bounds);
 }

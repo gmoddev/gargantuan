@@ -17,6 +17,7 @@ namespace gargantuan {
 		std::uint64_t WorldRevision{};
 		std::array<ObjectId,2> Grids;
 		std::array<std::string,2> PublicRevisions;
+		ObjectId Domain;
 	};
 	class BlockGrid final : public Instance, public SpatialDomainMember {
 		I_BlockGrid;
@@ -37,13 +38,15 @@ namespace gargantuan {
 		[[nodiscard]] static bool HasParkedTransfers() noexcept;
 		// Trusted publication metadata. Each identity still requires its own recipient interest and scope check.
 		[[nodiscard]] std::shared_ptr<const BlockGridTransferStamp> GetLastTransfer() const;
+		[[nodiscard]] std::shared_ptr<const BlockGridTransferStamp> GetPublicationTransfer() const;
 		[[nodiscard]] std::optional<blockgrid::AssemblyProjection> GetAssemblyProjection() const;
 		bool ApplyReplicaAssemblyProjection(const blockgrid::AssemblyProjection& Value);
 		void ClearReplicaAssemblyProjection();
 		// Trusted asset materialization, before adoption or publication.
 		void RestoreField(blockgrid::Field Value);
 		// Used only after the authenticated content receiver resolves the live structural shell.
-		void InstallReplicaField(blockgrid::Field Value);
+		void InstallReplicaField(blockgrid::Field Value,std::shared_ptr<const blockgrid::ReplicaCoverage> Coverage={});
+		void RequireReplicaCoverage(blockgrid::Region Bounds) const;
 		void RetireReplicaContent();
 		[[nodiscard]] bool HasReplicaField() const { return ReplicaFieldAvailable; }
 		void SetAdmission(blockgrid::Field::Admission BeforeCommit);
@@ -69,6 +72,7 @@ namespace gargantuan {
 		float Size{1.0f};
 		bool IsVisible{true}, Collides{true}, Queryable{true}, Editing{};
 		bool ReplicaFieldAvailable{};
+		std::shared_ptr<const blockgrid::ReplicaCoverage> InstalledCoverage;
 		bool DynamicAssembly{};
 		std::uint64_t AssemblyRevision{1};
 		std::unique_ptr<blockgrid::AssemblyProjection> AssemblyState;

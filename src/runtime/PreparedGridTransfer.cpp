@@ -79,6 +79,11 @@ namespace gargantuan {
 	}
 	GridTransferHistory::~GridTransferHistory() { if (Parked) --ParkedShells; }
 	bool BlockGrid::HasParkedTransfers() noexcept { return ParkedShells.load(std::memory_order_relaxed)!=0; }
+	std::shared_ptr<const BlockGridTransferStamp> BlockGrid::GetPublicationTransfer() const {
+		if (!LastTransfer || GetReplicationScopeId()!=LastTransfer->Scope) return {};
+		const auto Domain=WorldRoot::GetEffectiveWorld(*this);
+		return Domain && Domain->GetObjectId()==LastTransfer->Domain?LastTransfer:nullptr;
+	}
 	std::shared_ptr<const BlockGridTransferStamp> BlockGrid::GetLastTransfer() const {
 		if (!LastTransfer) return {};
 		const auto Index=LastTransfer->Grids[0]==GetObjectId()?0u:1u;
@@ -188,7 +193,8 @@ namespace gargantuan {
 				auto Coverage=Domain->PrepareBlockGridTransfer(*Source,Next.Source,*Destination,Next.Destination,Motion);
 				auto Stamp=std::make_shared<const BlockGridTransferStamp>(BlockGridTransferStamp{
 					World.GetObjectId(),Starting+1,{Source->GetObjectId(),Destination->GetObjectId()},
-					{Source->RevisionToken(Next.Source.GetPublicRevision())+"/peers",Destination->RevisionToken(Next.Destination.GetPublicRevision())+"/peers"}});
+					{Source->RevisionToken(Next.Source.GetPublicRevision())+"/peers",Destination->RevisionToken(Next.Destination.GetPublicRevision())+"/peers"},
+					Domain->GetObjectId()});
 				auto S=Source->RevisionToken(Next.Source.GetRevision()),D=Destination->RevisionToken(Next.Destination.GetRevision());
 				Records.push_back({{},Source->GetObjectId(),PropertyUpdatedChange{"BlockRevision",std::move(S),false}});
 				Records.push_back({{},Destination->GetObjectId(),PropertyUpdatedChange{"BlockRevision",D,false}});

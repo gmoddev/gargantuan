@@ -12,6 +12,14 @@ namespace gargantuan {
 	class BlockGrid;
 }
 namespace gargantuan::network {
+	struct GridInterest {
+		std::array<glm::vec3,4> Centers{};
+		std::size_t Count{};
+		std::optional<SpatialDestinationBounds> Destination;
+	};
+	[[nodiscard]] blockgrid::ReplicaCoverage SelectGridCoverage(const blockgrid::Field& Field,const CFrame& Pose,
+		float CellSize,const GridInterest& Interest);
+	[[nodiscard]] std::optional<blockgrid::Region> GridLocalBounds(const CFrame& Pose,float CellSize,const SpatialDestinationBounds& Bounds);
 	// One live transfer per peer, at most eight reusable public baselines.
 	class BlockGridPeer {
 	  public:
@@ -24,18 +32,23 @@ namespace gargantuan::network {
 		void Forget(ObjectId Grid);
 		void Retire();
 		void Receive(const GridStreamMessage &Message, const Resolve &Find, std::uint64_t Tick);
-		void Pump(const Resolve &Find, const Send &Queue, std::uint64_t Tick);
+		void Pump(const Resolve &Find, const Send &Queue, std::uint64_t Tick,const GridInterest& Interest={});
 		[[nodiscard]] bool IsInstalled(ObjectId Source, const BlockGrid &Grid) const;
 		[[nodiscard]] std::optional<SpatialAppliedBinding> GetBinding(ObjectId Source, const BlockGrid &Grid, bool Empty) const;
+		[[nodiscard]] std::optional<SpatialAppliedBinding> GetBinding(ObjectId Source,const BlockGrid& Grid,bool Empty,
+			const SpatialDestinationBounds& Bounds) const;
 
 	  private:
 		struct Entry {
 			std::uint64_t Subscription{}, Revision{}, Configuration{}, MotionRevision{}, LastSerial{}, MotionTick{};
 			AssetContentId Placement;
 			std::weak_ptr<BlockGrid> Replica;
+			std::weak_ptr<BlockGrid> Owner;
 			bool Requested{};
-			std::uint64_t CheckedPublicRevision{};
-			bool AssetsGranted{}, Unavailable{};
+			std::uint64_t SourceRevision{};
+			bool Unavailable{};
+			std::shared_ptr<const blockgrid::ReplicaCoverage> DeniedCoverage;
+			GridTransferFence Fence;
 			GridReplicaContent Known;
 		};
 		struct Transfer {
@@ -44,6 +57,7 @@ namespace gargantuan::network {
 			std::optional<blockgrid::Field> PendingField;
 			std::size_t Cursor{};
 			std::uint64_t ProgressTick{};
+			std::uint64_t SourceRevision{};
 			bool Offered{}, Installed{};
 		};
 		bool Server;
@@ -54,6 +68,10 @@ namespace gargantuan::network {
 		std::map<ObjectId, Entry> Grids;
 		std::optional<Transfer> Active;
 		GridStreamReceiver Receiver;
+		[[nodiscard]] bool FencesInstalled(ObjectId Source) const;
+		[[nodiscard]] GridTransferFence CurrentFence(ObjectId Id,const BlockGrid& Grid,const Resolve& Find) const;
+		[[nodiscard]] std::optional<SpatialAppliedBinding> Binding(ObjectId Source,const BlockGrid& Grid,bool Empty,
+			const SpatialDestinationBounds* Bounds) const;
 		[[nodiscard]] std::uint64_t Token();
 		void ReceiveServer(const GridStreamMessage &Message, const Resolve &Find);
 		void ReceiveClient(const GridStreamMessage &Message, const Resolve &Find, std::uint64_t Tick);

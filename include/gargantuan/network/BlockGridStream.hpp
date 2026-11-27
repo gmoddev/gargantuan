@@ -21,13 +21,21 @@ namespace gargantuan::network {
 		std::uint64_t GrantGeneration{};
 		bool operator==(const GridStreamScope &) const = default;
 	};
+	struct GridReuseRange { std::uint32_t From{}, To{}, Length{}; };
+	struct GridTransferFence {
+		std::uint64_t Generation{};
+		ObjectId Other;
+		bool operator==(const GridTransferFence&) const = default;
+	};
 	struct GridStreamMessage {
 		GridStreamKind Kind{};
 		GridStreamScope Scope;
 		std::uint64_t Subscription{}, Serial{}, Revision{}, Configuration{}, MotionRevision{};
 		AssetContentId Base, Target, Placement;
 		std::optional<blockgrid::AssemblyProjection> Assembly;
+		GridTransferFence Fence;
 		std::uint32_t Size{}, Prefix{}, Suffix{}, Offset{};
+		std::vector<GridReuseRange> Reuse;
 		std::span<const std::uint8_t> Fragment;
 	};
 	[[nodiscard]] bool IsGridStream(std::span<const std::byte> Bytes);
@@ -36,8 +44,13 @@ namespace gargantuan::network {
 	struct GridReplicaContent {
 		AssetContentId Digest;
 		std::shared_ptr<const std::vector<std::uint8_t>> Bytes;
+		std::shared_ptr<const blockgrid::ReplicaCoverage> Coverage;
+		std::shared_ptr<const std::vector<blockgrid::ReplicaPageRange>> Records;
 	};
 	[[nodiscard]] GridReplicaContent CaptureGridReplica(const blockgrid::Field &Field);
+	[[nodiscard]] std::optional<GridReplicaContent> CaptureGridReplica(const blockgrid::Field &Field,
+		const blockgrid::ReplicaCoverage &Coverage, const std::function<bool(const blockgrid::Field&)>& AdmitSchema);
+	[[nodiscard]] std::pair<std::size_t,std::size_t> NextGridLiteral(const GridStreamMessage& Offer,std::size_t Cursor);
 	[[nodiscard]] GridStreamMessage MakeGridOffer(
 		GridStreamScope Scope,
 		std::uint64_t Subscription,

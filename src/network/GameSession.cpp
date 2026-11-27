@@ -1021,6 +1021,7 @@ namespace gargantuan::network {
 			return Source && *Source == Region ? Grid : nullptr;
 		}
 
+#include "BlockGridInterest.inl"
 		void PumpGrids(ConnectionId Connection, Peer &Value) {
 			if (!Value.Grids || Value.Phase != PeerPhase::Ready || PendingPeerFailures.contains(Connection)) return;
 			try {
@@ -1029,13 +1030,15 @@ namespace gargantuan::network {
 				};
 				PumpSpatialMotion(Connection,Value);
 				PumpDomainTerrain(Connection, Value, Value.NamedTerrain, Value.AuthorizedSpatialRegion, Value.CurrentGrantGeneration, nullptr);
-				Value.Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, false); }, Send, CurrentTick);
+				Value.Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, false); }, Send, CurrentTick,
+					GetGridInterest(Connection,Value,false));
 				if (Value.Staging) {
 					const auto Now = SpatialTransferClock::now();
 					if (Now < Value.Staging->Expires) {
 						PumpDomainTerrain(Connection, Value, Value.Staging->Terrain, Value.Staging->Grant->Region,
 							Value.Staging->Frame.Serial, &Value.Staging->Frame.Bounds);
-						Value.Staging->Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, true); }, Send, CurrentTick);
+						Value.Staging->Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, true); }, Send, CurrentTick,
+							GetGridInterest(Connection,Value,true));
 					} else if (Configuration.Role == GameSessionRole::Server) {
 						if (!ReleaseTransferDomain(Connection, Value.Staging->Frame.Serial))
 							throw std::runtime_error("[Spatial:Network] Expired audience could not be released");

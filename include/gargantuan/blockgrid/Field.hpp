@@ -33,6 +33,19 @@ namespace gargantuan::blockgrid {
 		bool operator()(Cell Left, Cell Right) const noexcept;
 	};
 	struct Region { Cell Min, MaxExclusive; };
+	// Positive coverage includes certified air. Every listed origin is an aligned 8³ native leaf.
+	inline constexpr std::size_t MaximumReplicaPages=108, WholeReplicaPages=32;
+	struct ReplicaCoverage {
+		bool Whole{};
+		std::vector<Cell> Origins;
+		bool operator==(const ReplicaCoverage&) const = default;
+		[[nodiscard]] bool Contains(Region Bounds) const;
+	};
+	struct ReplicaPageRange { Cell Origin; std::uint32_t Offset{},Length{}; };
+	struct ReplicaPages {
+		std::vector<std::uint8_t> Bytes;
+		std::vector<ReplicaPageRange> Records;
+	};
 	struct Block {
 		std::uint16_t Definition{};
 		std::uint8_t Orientation{};
@@ -173,6 +186,9 @@ namespace gargantuan::blockgrid {
 		void UndoChannelInsertion(const ChannelSpec& Expected);
 		[[nodiscard]] std::size_t GetOccupiedCount() const noexcept { return Occupied; }
 		[[nodiscard]] std::size_t GetLeafCount() const noexcept { return Leaves.size(); }
+		[[nodiscard]] std::optional<ReplicaPages> CapturePages(const ReplicaCoverage& Coverage,
+			const std::function<bool(const Field&)>& AdmitSchema={}) const;
+		[[nodiscard]] static Field DecodePages(std::span<const std::uint8_t> Bytes,ReplicaCoverage& Coverage);
 		// Visits immutable values in this Main-owned snapshot. The cell argument is the leaf's grid-local minimum.
 		void ForEachLeaf(const std::function<void(Cell, const Leaf&)>& Visit) const;
 		void ForEachOccupied(const std::function<void(Cell, Block)>& Visit) const;
