@@ -21,6 +21,8 @@ namespace gargantuan::network {
 		StaleSequence,
 		OutOfOrderSequence,
 		SemanticRejection,
+		// The receiver and sequence advanced before a local native observer threw.
+		CommittedObserverFailure,
 	};
 
 	struct ReplicaApplyResult {

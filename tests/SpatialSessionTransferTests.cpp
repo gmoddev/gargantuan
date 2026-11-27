@@ -130,7 +130,7 @@ namespace {
 		const auto Actor = MakePart("TransferBody", SourcePose, Space);
 		const auto ActorId = Actor->GetObjectId();
 		MakePart("LandingWall", CFrame(-5, 30, 0), Room);
-		MakePart("GalleryWall", CFrame(-5, 30, 0), Gallery);
+		const auto GalleryWall = MakePart("GalleryWall", CFrame(-5, 30, 0), Gallery);
 		MakeGrid("LandingGrid", CFrame(5, 30, 0), Room);
 		MakeGrid("DistantGrid", CFrame(10500, 30, 0), Room);
 		std::shared_ptr<KinematicCharacter> Avatar;
@@ -494,6 +494,38 @@ script:SetAttribute("Isolated", true)
 				ReplicaActor->GetCFrame().FuzzyEq(Target),
 			"late ordinary journal/control frames undid the handoff"
 		);
+		if (!CharacterProfile) {
+			const auto LocalWall = Find(*SpectatorRuntime, "GalleryWall");
+			Require(bool(LocalWall), "spectator lacks its ordinary observed Part");
+			unsigned Calls = 0, RetirementCalls = 0;
+			const auto Observer = LocalWall->GetPropertyChangedSignal("Name")->Once([&](std::monostate) {
+				++Calls;
+				throw std::runtime_error("injected local native observer failure");
+			});
+			Require(SpectatorRuntime->Players->GetLocalPlayer().has_value(), "spectator lacks a live player binding");
+			const auto Retirement = SpectatorRuntime->Players->GetPropertyChangedSignal("LocalPlayer")->Once([&](std::monostate) {
+				++RetirementCalls;
+				throw std::runtime_error("injected retirement observer failure");
+			});
+			GalleryWall->SetName("GalleryWallAfterPublication");
+			Wait([&] { return Spectator.GetStatus() == GameSessionStatus::Failed; },
+				"an ordinary structural observer escaped polling or left its client ready");
+			Observer->Disconnect();
+			Retirement->Disconnect();
+			Require(Calls == 1 && RetirementCalls == 1 && Spectator.GetFailure() == "Local structural replication observer failed after frame publication" &&
+				!Spectator.GetClientDataModel() && !Spectator.GetPrimaryConnection(),
+				"local observer failure retained a session binding or was reported as a protocol rejection");
+			Actor->SetName("ControllerAfterObserver");
+			const auto OwnerUpdated = [&] {
+				const auto Active = Server.GetPeerIdentities();
+				return Active.size() == 1 && Active.front().Ready && Active.front().Connection == *Connection &&
+					Owner.GetStatus() == GameSessionStatus::Ready && ReplicaActor->GetName() == Actor->GetName() &&
+					Find(*OwnerRuntime, "ControllerAfterObserver") == ReplicaActor && WorldRoot::GetEffectiveWorld(*ReplicaActor) == ReplicaRoom;
+			};
+			for (unsigned I = 0; I < 800 && !OwnerUpdated(); ++I) Exchange();
+			Require(OwnerUpdated(),
+				"observer failure affected structural updates or domain membership on another connection");
+		}
 		if (Avatar) {
 			const auto LocalAvatar = std::dynamic_pointer_cast<KinematicCharacter>(
 				Find(*OwnerRuntime, "TransferCharacter")

@@ -1,5 +1,6 @@
 #include "gargantuan/network/ReplicaApplier.hpp"
 #include "gargantuan/network/SpatialTransferProtection.hpp"
+#include "ReplicaNotifications.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 #include "../runtime/SnapshotValidation.hpp"
 
@@ -259,7 +260,9 @@ namespace gargantuan::network {
 			})) {
 			auto Encoded = EncodeReplicationFrame(Frame);
 			if (!Encoded) return {ReplicaApplyStatus::MalformedFrame, 0, Encoded.error().Format()};
-			return ApplyBytes(*Encoded);
+			auto Decoded = DecodeReplicationFrame(*Encoded);
+			if (!Decoded) return {ReplicaApplyStatus::MalformedFrame, 0, Decoded.error().Format()};
+			return ApplyFrame(*Decoded, Prepare);
 		}
 		if (!Frame.IsValid()) return {ReplicaApplyStatus::MalformedFrame, 0, "Replication frame is invalid"};
 		if (Frame.Kind == ReplicationMessageKind::Baseline) {
@@ -610,11 +613,12 @@ namespace gargantuan::network {
 
 	ReplicaApplyResult ReplicaApplier::ApplyFrameWithDeferredSignals(const ReplicationFrame &Frame, const BeforePublish &Prepare) {
 		ScopedSignalDeferral Signals;
-		auto Result=ApplyFrame(Frame,Prepare);
-		if (Result.Succeeded()) {
-			ScopedChangeJournalSuppression SuppressReplicaJournal(Receiver.Root ? Receiver.Root->GetObjectId() : ObjectId{});
-			Signals.Commit();
-		}
+		auto Result = ApplyFrame(Frame, Prepare);
+		if (!Result.Succeeded()) return Result;
+
+		ScopedChangeJournalSuppression SuppressReplicaJournal(Receiver.Root ? Receiver.Root->GetObjectId() : ObjectId{});
+		if (!detail::DispatchReplicaNotifications(Signals, "structural publication"))
+			return {ReplicaApplyStatus::CommittedObserverFailure, Result.AppliedOperations, detail::CommittedObserverFailureMessage};
 		return Result;
 	}
 

@@ -10,6 +10,7 @@
 
 #include "GameSessionTestAccess.hpp"
 #include "BlockGridPeer.hpp"
+#include "ReplicaNotifications.hpp"
 #include "SpatialAudience.hpp"
 #include "DomainTerrainEnvelope.hpp"
 #include "SpatialMotionWindow.hpp"
@@ -1725,6 +1726,10 @@ namespace gargantuan::network {
 			if (DeferSignals && !Peers.contains(Message.Connection)) return;
 			Metrics.ClientStructuralApplyNanoseconds += static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - ApplyStarted).count());
+			if (Result.Status == ReplicaApplyStatus::CommittedObserverFailure) {
+				FailSession({DisconnectReason::LocalShutdown, std::move(Result.Message)});
+				return;
+			}
 			if (!Result.Succeeded()) {
 				Reject(
 					Message.Connection,
@@ -1844,7 +1849,10 @@ namespace gargantuan::network {
 				Iterator = ClientKnownObjects.erase(Iterator);
 			}
 			if (GridRetirements) {
-				GridRetirements->Commit();
+				if (!detail::DispatchReplicaNotifications(*GridRetirements, "content retirement after structural publication")) {
+					FailSession({DisconnectReason::LocalShutdown, detail::CommittedObserverFailureMessage});
+					return;
+				}
 				if (!Peers.contains(Message.Connection)) return;
 			}
 			BaselineApplied = BaselineApplied || Frame->Kind == ReplicationMessageKind::Baseline;
@@ -2866,7 +2874,10 @@ namespace gargantuan::network {
 				ClientGuiCharacter = {};
 				PrimaryConnection.reset();
 			}
-			if (GridRetirements) GridRetirements->Commit();
+			if (GridRetirements) {
+				// These observers run after local slot retirement. Finish the session teardown even if one throws.
+				(void)detail::DispatchReplicaNotifications(*GridRetirements, "peer retirement");
+			}
 		}
 
 		void ObserveOrdinaryQueue(ConnectionId Connection, Peer &PeerValue, std::uint64_t Now) {
