@@ -506,6 +506,24 @@ namespace {
 		using enum SpatialTransferPhase;
 		{
 			Pair P;
+			auto &Local = P.Authority;
+			const CFrame Redirect(6,3,0);
+			unsigned Published{};
+			const auto PoseSignal = Local.Actor->GetPropertyChangedSignal("CFrame")->Connect([&](std::monostate) {
+				if (Local.Actor->GetCFrame().Position == Redirect.Position) ++Published;
+			});
+			const auto DomainSignal = Local.Actor->GetPropertyChangedSignal("SpatialRegion")->Connect([&](std::monostate) {
+				Local.Actor->SetCFrame(Redirect);
+			});
+			const auto Receipt = Local.Destination->PrepareSpatialDestination(Bounds);
+			Check(Receipt && Local.Destination->CommitSpatialTransfer(Local.Actor, Local.Movement(), *Receipt).Succeeded() &&
+				Local.AtDestination() && Local.Actor->GetCFrame().Position == Redirect.Position && Published == 1,
+				"a domain callback superseded the pose but the old transfer still published it");
+			DomainSignal->Disconnect();
+			PoseSignal->Disconnect();
+		}
+		{
+			Pair P;
 			const auto OfferPacket = Packet(P.Begin(), Offer);
 			auto Bytes = EncodeSpatialTransfer(OfferPacket);
 			Bytes.push_back(std::byte{0});
