@@ -488,12 +488,43 @@ namespace {
 		RuntimeAddress["Cell"] = {7,8,9};
 		Require(Ok("ReadBlockGridCell",RuntimeAddress).at("Definition") == "Air", "Play cell leaked into authoring state");
 		Require(Ok("ReadBlockGridCell",InitialAddress).at("Definition") == "Brick", "Play changed authoring state");
+		const auto OriginalPreRun = Ok("GetPreRunSource",Empty);
 		Ok("OpenProject",Open);
 		const auto NewAddress = Address();
 		Require(NewAddress.at("Scope") != InitialAddress.at("Scope") &&
 			!Call("ReadBlockGridCell",InitialAddress).at("Ok").get<bool>(), "EditorHost reused a replaced world scope");
 		Read = Ok("ReadBlockGridCell",NewAddress);
 		Require(Read.at("Definition") == "Brick" && Read.at("Orientation") == 7, "EditorHost reopen lost the authored edit");
+		const auto EqualSource = Ok("GetPreRunSource",Empty);
+		Require(EqualSource.at("ProjectRoot") != OriginalPreRun.at("ProjectRoot") &&
+			EqualSource.at("SchemaGeneration") == OriginalPreRun.at("SchemaGeneration") &&
+			EqualSource.at("SourceRevision") == OriginalPreRun.at("SourceRevision"),
+			"equal-source replacement failed to retire the world or reuse its frozen schema");
+		const auto StaleValidation = [&](const Json &State) {
+			const auto Reply = Call("ValidatePreRun",{{"ProjectRoot",State.at("ProjectRoot")},
+				{"ExpectedSourceRevision",State.at("SourceRevision")},{"SourceBase64",State.at("SourceBase64")}});
+			Require(!Reply.at("Ok").get<bool>() && Reply.at("Error").at("Code") == "StaleProject",
+				"PreRun accepted a buffer bound to the previous world");
+		};
+		StaleValidation(OriginalPreRun);
+		DiskFilesystem Files(Root);
+		auto DiskProject = Project::fromExisting(&Files);
+		constexpr auto ChangedSource = R"(Schema:RegisterClass({Namespace="Game", Name="SpatialTestMarker",
+			Version=1, Base="Engine.Folder", Properties={}}))";
+		Require(DiskProject.ReplacePreRunSource(std::nullopt,ChangedSource), "PreRun project source change was not admitted");
+		Ok("OpenProject",Open);
+		const auto ChangedSourceState = Ok("GetPreRunSource",Empty);
+		Require(ChangedSourceState.at("ProjectRoot") != EqualSource.at("ProjectRoot") &&
+			ChangedSourceState.at("SchemaGeneration").get<std::uint64_t>() > EqualSource.at("SchemaGeneration").get<std::uint64_t>() &&
+			ChangedSourceState.at("SourceRevision") != EqualSource.at("SourceRevision"),
+			"changed-source replacement failed to publish a new schema generation");
+		StaleValidation(EqualSource);
+		const auto Schema = Ok("GetSchema",Empty);
+		bool Activated = false;
+		for (const auto &Row : Schema.at("Definitions"))
+			if (Row.value("Namespace","") == "Game" && Row.value("Name","") == "SpatialTestMarker") Activated = true;
+		Require(Activated && Ok("ReadBlockGridCell",Address()).at("Definition") == "Brick",
+			"changed PreRun registration or saved grid was absent after reopen");
 	}
 
 	void WritePackageProject(const std::filesystem::path &Root) {
