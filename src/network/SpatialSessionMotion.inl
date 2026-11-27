@@ -74,8 +74,9 @@ static bool EnclosesMotion(const SpatialDestinationBounds &Bounds,glm::vec3 From
 bool CheckMotionWindow(ConnectionId Connection,const Peer &Value,WorldRoot &World,const BasePart &Subject,
 	const SpatialMotionWindow &Frame) const {
 	const auto PlayerValue=TransferPlayer(Connection,Value);
+	const auto Controlled=PlayerValue?GetSpatialTransferSubject(*PlayerValue):nullptr;
 	if (!PlayerValue || HasTransfer(Value) || Frame.Epoch!=Value.SessionEpoch || Frame.Grant!=Value.CurrentGrantGeneration ||
-		TransferSubject(*PlayerValue).get()!=&Subject || TransferIdentity(TransferSubject(*PlayerValue)).ToObjectId()!=Frame.Subject ||
+		Controlled.get()!=&Subject || TransferIdentity(Controlled).ToObjectId()!=Frame.Subject ||
 		TransferIdentity(WorldRoot::GetEffectiveWorld(Subject)).ToObjectId()!=Frame.Domain ||
 		(&World!=Runtime->Workspace.get() ? Frame.Domain : ObjectId{})!=Value.AuthorizedSpatialRegion ||
 		(Configuration.Role==GameSessionRole::Server && Frame.Possession!=PlayerValue->GetPossessionRevision())) return false;
@@ -87,7 +88,7 @@ bool AdmitSpatialMotion(WorldRoot &World,ObjectId Actor,glm::vec3 From,glm::vec3
 	if (Configuration.Role!=GameSessionRole::Server || !Runtime || World.GetDataModel()!=Runtime->DataModel) return false;
 	for (auto &[Connection,Value]:Peers) {
 		const auto PlayerValue=Value.PlayerValue;
-		const auto Subject=PlayerValue?TransferSubject(*PlayerValue):nullptr;
+		const auto Subject=PlayerValue?GetSpatialTransferSubject(*PlayerValue):nullptr;
 		const auto Controller=PlayerValue?LegacyCharacter(PlayerValue):nullptr;
 		if ((!Subject || Subject->GetObjectId()!=Actor) && (!Controller || Controller->GetObjectId()!=Actor)) continue;
 		if (!Subject || WorldRoot::GetEffectiveWorld(*Subject).get()!=&World || !Value.MotionWindow || !Value.MotionWindow->Installed ||
@@ -114,7 +115,7 @@ void PumpSpatialMotion(ConnectionId Connection,Peer &Value) {
 	const bool Server=Configuration.Role==GameSessionRole::Server;
 	if (HasTransfer(Value) || (Server && Value.Staging)) { Value.MotionWindow.reset(); return; }
 	const auto PlayerValue=TransferPlayer(Connection,Value);
-	const auto Subject=PlayerValue?TransferSubject(*PlayerValue):nullptr;
+	const auto Subject=PlayerValue?GetSpatialTransferSubject(*PlayerValue):nullptr;
 	const auto Domain=Subject?WorldRoot::GetEffectiveWorld(*Subject):nullptr;
 	if (!Subject || !Domain) return;
 	const auto Wire=TransferIdentity(Subject).ToObjectId(), WorldId=TransferIdentity(Domain).ToObjectId();
