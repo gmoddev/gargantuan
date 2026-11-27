@@ -1030,14 +1030,14 @@ namespace gargantuan::network {
 				};
 				PumpSpatialMotion(Connection,Value);
 				PumpDomainTerrain(Connection, Value, Value.NamedTerrain, Value.AuthorizedSpatialRegion, Value.CurrentGrantGeneration, nullptr);
-				Value.Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, false); }, Send, CurrentTick,
+				Value.Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, false); }, Send, TerrainTick,
 					GetGridInterest(Connection,Value,false));
 				if (Value.Staging) {
 					const auto Now = SpatialTransferClock::now();
 					if (Now < Value.Staging->Expires) {
 						PumpDomainTerrain(Connection, Value, Value.Staging->Terrain, Value.Staging->Grant->Region,
 							Value.Staging->Frame.Serial, &Value.Staging->Frame.Bounds);
-						Value.Staging->Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, true); }, Send, CurrentTick,
+						Value.Staging->Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, true); }, Send, TerrainTick,
 							GetGridInterest(Connection,Value,true));
 					} else if (Configuration.Role == GameSessionRole::Server) {
 						if (!ReleaseTransferDomain(Connection, Value.Staging->Frame.Serial))
@@ -1068,7 +1068,7 @@ namespace gargantuan::network {
 					throw std::invalid_argument("[BlockGrid:Network] Unissued audience generation");
 				}
 				auto &Lane = Staged ? Value.Staging->Grids : Value.Grids;
-				Lane->Receive(*Parsed, [&](ObjectId Id) { return ResolveGrid(Message.Connection, Value, Id, Staged); }, CurrentTick);
+				Lane->Receive(*Parsed, [&](ObjectId Id) { return ResolveGrid(Message.Connection, Value, Id, Staged); }, TerrainTick);
 			} catch (const std::exception &Error) {
 				Reject(Message.Connection,DisconnectReason::ProtocolViolation,Error.what());
 			}
@@ -2839,7 +2839,7 @@ namespace gargantuan::network {
 				return;
 			if (!DrainFailures()) return;
 			// PlayerHost switches from its bootstrap counter to Engine ticks at runtime attachment.
-			if (Configuration.TerrainBootstrap)
+			if (Configuration.TerrainBootstrap || Configuration.SpatialContent)
 				SaturatingAdd(TerrainTick, SimulationTick > CurrentTick ? SimulationTick - CurrentTick : std::uint64_t{1});
 			CurrentTick = SimulationTick;
 			if (Configuration.SpatialContent) PumpSpatialTransfers();
