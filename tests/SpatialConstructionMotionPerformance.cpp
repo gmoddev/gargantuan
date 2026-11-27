@@ -1,10 +1,11 @@
 // Copyright (c) 2026 Team Fireworks
 // SPDX-License-Identifier: MPL-2.0
 #include "gargantuan/blockgrid/Edit.hpp"
+#include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/JointConstraint.hpp"
 #include "gargantuan/classes/Part.hpp"
-#include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/services/Workspace.hpp"
@@ -45,7 +46,7 @@ namespace {
 		for (unsigned I = 0; I < Count; ++I)
 			Cells.push_back({static_cast<int>(2 * (I % 8)), 0, static_cast<int>(2 * (I / 8))});
 		const auto Center = [](blockgrid::Cell Cell) { return glm::vec3(Cell.X + 0.5f, Cell.Y + 0.5f, Cell.Z + 0.5f); };
-		Json Result{{"Trial", Trial}, {"Cubes", Count}, {"Representation", UseGrid ? "BlockGrid" : "WeldedParts"}};
+		Json Result{{"Trial", Trial}, {"Cubes", Count}, {"Representation", UseGrid ? "BlockGrid" : "LockedJointParts"}};
 		Result["PrepareUs"] = TimeUs([&] {
 			if (UseGrid) {
 				Grid = std::make_shared<BlockGrid>();
@@ -74,10 +75,22 @@ namespace {
 					Piece->SetCFrame(CFrame(Center(Cell) + glm::vec3(0, 4, 0)));
 					Piece->SetParent(World);
 					if (!Parts.empty()) {
-						auto Weld = std::make_shared<WeldConstraint>();
-						Weld->SetPart0(Parts.front());
-						Weld->SetPart1(Piece);
-						Weld->SetParent(World);
+						const auto Neighbor = Parts.size() % 8 == 0 ? Parts.size() - 8 : Parts.size() - 1;
+						const auto Offset = (Piece->GetCFrame().Position - Parts[Neighbor]->GetCFrame().Position) / 2.f;
+						auto A = std::make_shared<Attachment>();
+						auto B = std::make_shared<Attachment>();
+						A->SetCFrame(CFrame(Offset));
+						B->SetCFrame(CFrame(-Offset));
+						A->SetParent(Parts[Neighbor]);
+						B->SetParent(Piece);
+						auto Joint = std::make_shared<JointConstraint>();
+						Joint->SetJointType("Hinge");
+						Joint->SetEnableLimit(true);
+						Joint->SetLowerLimit(0.f);
+						Joint->SetUpperLimit(0.f);
+						Joint->SetAttachment0(A);
+						Joint->SetAttachment1(B);
+						Joint->SetParent(World);
 					}
 					Parts.push_back(std::move(Piece));
 				}
@@ -129,12 +142,12 @@ namespace {
 				)
 			);
 			const auto Hit = World->ResolveRaycast(P + glm::vec3(0, 3, 0), {0, -6, 0}, Params);
-			Require(
-				Hit.HasHit() && (Grid ? (Hit.GridInstance == Grid &&
-										 Hit.Cell == std::optional(glm::ivec3(Cells[I].X, Cells[I].Y, Cells[I].Z)))
-									  : Hit.Instance == Parts[I]),
-				"settled shape lost its physical ray owner"
-			);
+			const bool Matched = Grid ? Hit.GridInstance == Grid &&
+				Hit.Cell == std::optional(glm::ivec3(Cells[I].X, Cells[I].Y, Cells[I].Z)) : Hit.Instance == Parts[I];
+			if (!Hit.HasHit() || !Matched)
+				throw std::runtime_error("settled shape lost its physical ray owner: " + Result.dump() +
+					" cell=" + std::to_string(I) + " y=" + std::to_string(P.y) +
+					" separationError=" + std::to_string(RigidError));
 		}
 		Result["MaximumFloorError"] = FloorError;
 		Result["MaximumSeparationError"] = RigidError;
