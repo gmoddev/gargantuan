@@ -25,9 +25,12 @@ def Create(Host, Project, Names, Network=False):
     Schema = {Row["Name"]: Row for Row in Host.Call("GetSchema")["Definitions"]
               if Row["Kind"] == "Class" and Row["Namespace"] == "Engine"}
     if Network:
-        Region = Schema["SpatialRegion"]
-        Host.Call("CreateInstance", ClassSchemaId=Region["SchemaId"], DefinitionVersion=Region["DefinitionVersion"],
-                  Parent=Workspace, Name="ReaderPackageSpatialProfile")
+        Grid = Schema["BlockGrid"]
+        Floor = Host.Call("CreateInstance", ClassSchemaId=Grid["SchemaId"], DefinitionVersion=Grid["DefinitionVersion"],
+                          Parent=Workspace, Name="StationarySpawnFloor")["Object"]
+        Address = dict(Scope=Snapshot["Cursor"]["Scope"], Object=Floor, Cell=[-6, -1, -6])
+        Revision = Host.Call("ReadBlockGridCell", **Address)["Revision"]
+        Host.Call("EditBlockGridRegion", **Address, Revision=Revision, MaxExclusive=[7, 0, 7], Definition="Stone")
     Script = Schema["Script"]
     for Name in Names:
         Context = "Client" if Name.endswith(".client") else "Server"

@@ -19,7 +19,33 @@ sys.path.insert(0, str(Samples / "TerrainQuarry"))
 from BuildProject import EditorHost
 
 
-ServerProbe = r'''
+TerrainProof = r'''
+local Lo, Hi = Vector3.new(-8,-6,-8), Vector3.new(9,6,9)
+local function Signature(Bytes)
+	local Sum=0
+	for I=1,#Bytes do Sum=(Sum*131+string.byte(Bytes,I))%4294967291 end
+	return string.format("%.0f",Sum)
+end
+local function Surface()
+	local Space=game.Workspace
+	local Params=RaycastParams.new()
+	Params.IncludeTerrain=true
+	Params.FilterType=Enum.RaycastFilterType.Include
+	Params.FilterDescendantsInstances={Space.Terrain}
+	local Rows={}
+	local HasHit=false
+	for Z=-6,6,2 do
+		for X=-6,6,2 do
+			local Hit=Space:Raycast(Vector3.new(X,10,Z),Vector3.new(0,-20,0),Params)
+			table.insert(Rows,if Hit then tostring(math.round(Hit.Position.Y*32)) else ".")
+			HasHit=HasHit or Hit~=nil
+		end
+	end
+	return if HasHit then Signature(table.concat(Rows,",")) else nil
+end
+'''
+
+ServerProbe = TerrainProof + r'''
 local Probe = game.ReplicatedStorage.YardProcessProbe
 local Players = game:GetService("Players")
 local Space = game.Workspace
@@ -53,8 +79,15 @@ Probe.OnPlayerEvent:Connect(function(Player, Kind)
 			elseif not Second then Second = Player; Roles[Player] = "digger"
 			else Roles[Player] = "rejoin" end
 		end
-		Probe:TryFireClient(Player, Roles[Player])
+		local Expected
+		if Restored then
+			Expected=Surface()
+			if not Expected then return end
+			warn("[Spatial:YardField] "..Signature(buffer.tostring(Space.Terrain:ReadRegion(Lo,Hi))))
+		end
+		Probe:TryFireClient(Player, Roles[Player], Expected)
 	elseif Kind == "dig-visible" and Player == Second then
+		warn("[Spatial:YardField] "..Signature(buffer.tostring(Space.Terrain:ReadRegion(Lo,Hi))))
 		DigConfirmed = true
 	elseif Kind == "return-visible" and Player == First then
 		assert(Space.RetainingWall:GetBlock(Cell).Definition == "Brick")
@@ -68,18 +101,17 @@ Probe.OnPlayerEvent:Connect(function(Player, Kind)
 end)
 '''
 
-ClientProbe = r'''
+ClientProbe = TerrainProof + r'''
 local Space = game.Workspace
 local Player = game:GetService("Players").LocalPlayer
 local Probe = game.ReplicatedStorage.YardProcessProbe
 local Actions = game.ReplicatedStorage.YardRequest
 local Cell = Vector3.new(-2,2,-5)
-local Lo, Hi = Vector3.new(-8,-6,-8), Vector3.new(9,6,9)
-local Role, DigVisible, Rejoined
-Probe.OnClientEvent:Connect(function(Value)
+local Role, DigVisible, Rejoined, RestoredSurface
+Probe.OnClientEvent:Connect(function(Value, Expected)
 	if Value=="dig-visible" then DigVisible=true
 	elseif Value=="rejoined" then Rejoined=true
-	else Role=Value end
+	else Role=Value; RestoredSurface=Expected end
 end)
 local function Wait(Predicate)
 	for _=1,800 do
@@ -96,14 +128,7 @@ local function Tile(Grid)
 	local Block=Grid and Grid:GetBlock(Cell)
 	return Block and Block.Definition=="Brick"
 end
-local function TerrainSamples()
-	return buffer.tostring(Space.Terrain:ReadRegion(Lo,Hi))
-end
-local function Signature(Bytes)
-	local Sum=0
-	for I=1,#Bytes do Sum=(Sum*131+string.byte(Bytes,I))%4294967291 end
-	return string.format("%.0f",Sum)
-end
+
 local function Outside()
 	return Player and Player.Character and Player.Character.RootPart and
 		Player.Character.RootPart.SpatialRegion==nil and Space:FindFirstChild("RetainingWall")
@@ -126,13 +151,13 @@ task.spawn(function()
 	elseif Role=="digger" then
 		Wait(function() return Tile(Space.RetainingWall) end)
 		assert(not Space:FindFirstChild("Workshop"))
-		local Before=Wait(TerrainSamples)
+		local Before=Wait(Surface)
 		Send(Actions,"YardDig")
 		local After=Wait(function()
-			local Value=TerrainSamples()
+			local Value=Surface()
 			return Value~=Before and Value
 		end)
-		warn("[Spatial:YardSamples] "..Signature(After))
+		warn("[Spatial:YardSurface] "..After)
 		Send(Probe,"dig-visible")
 		warn("[Spatial:YardProcess] Second Player observed the brick and excavated replicated terrain")
 	elseif Role=="rejoin" then
@@ -140,7 +165,8 @@ task.spawn(function()
 		warn("[Spatial:YardProcess] Reconnected Player materialized the edited yard")
 	elseif Role=="restart" then
 		Wait(function() return Tile(Space.RetainingWall) end)
-		warn("[Spatial:YardSamples] "..Signature(Wait(TerrainSamples)))
+		Wait(function() return RestoredSurface and Surface()==RestoredSurface end)
+		warn("[Spatial:YardSurface] "..RestoredSurface)
 		Send(Actions,"YardDoor")
 		Wait(function() return Player.Character.RootPart.SpatialRegion~=nil and Tile(Space.Workshop.WorkshopBlocks) end)
 		warn("[Spatial:YardProcess] Fresh Server replayed both constructions")
@@ -230,14 +256,17 @@ def RunYard(Options, Root):
             First = Processes.enter_context(Launch(ClientArgs,Root,Env,f"first-{Round}"))
             if Round == 2:
                 Await(First,"[Spatial:YardProcess] Fresh Server replayed both constructions",(Host,))
-                Samples = re.findall(r"\[Spatial:YardSamples\] (\d+)",First[1].read_text(errors="replace"))
-                if not Samples or Samples[-1] != DigSignature:
-                    raise RuntimeError("Fresh Player terrain samples differ from the second Player's committed excavation")
+                Surfaces = re.findall(r"\[Spatial:YardSurface\] (\d+)",First[1].read_text(errors="replace"))
+                Fields = re.findall(r"\[Spatial:YardField\] (\d+)",Host[1].read_text(errors="replace"))
+                if not Surfaces or not Fields or (Surfaces[-1], Fields[-1]) != DigSignature:
+                    raise RuntimeError("Restart diverged from the observed client surface or authoritative terrain samples")
                 break
             Await(First,"[Spatial:YardProcess] Builder placed exterior brick",(Host,))
             with Launch(ClientArgs,Root,Env,"second") as Second:
                 Await(Second,"[Spatial:YardProcess] Second Player observed the brick and excavated replicated terrain",(Host,First))
-                DigSignature = re.findall(r"\[Spatial:YardSamples\] (\d+)",Second[1].read_text(errors="replace"))[-1]
+                Await(Host,"[Spatial:YardField] ",(First,Second))
+                DigSignature = (re.findall(r"\[Spatial:YardSurface\] (\d+)",Second[1].read_text(errors="replace"))[-1],
+                                re.findall(r"\[Spatial:YardField\] (\d+)",Host[1].read_text(errors="replace"))[-1])
             Await(Host,"[Spatial:YardProcess] Builder returned with two persisted constructions",(First,))
             Rejoin = Processes.enter_context(Launch(ClientArgs,Root,Env,"rejoin"))
             Await(Rejoin,"[Spatial:YardProcess] Reconnected Player materialized the edited yard",(Host,First))
