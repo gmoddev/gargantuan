@@ -1,8 +1,11 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/ModuleScript.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include <array>
 #include <iostream>
@@ -13,6 +16,113 @@ namespace {
 	using namespace std::chrono_literals;
 	void Check(bool Value, const char *Reason) {
 		if (!Value) throw std::runtime_error(Reason);
+	}
+	void CreatorBinding() {
+		const auto Game = std::make_shared<DataModel>();
+		const auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		const auto Domain = std::make_shared<SpatialRegion>();
+		Domain->SetName("Room");
+		Domain->SetParent(World);
+		const auto Shared = std::make_shared<ModuleScript>();
+		Shared->SetName("Shared");
+		Shared->SetSource("return {}");
+		Shared->SetParent(World);
+		const auto First = std::make_shared<Script>(), Other = std::make_shared<Script>();
+		First->SetName("First");
+		Other->SetName("Other");
+		First->SetParent(World);
+		Other->SetParent(World);
+		First->SetRunContext(Enums::RunContext::Server);
+		Other->SetRunContext(Enums::RunContext::Server);
+		First->SetSource(R"lua(
+local State = require("@game/Workspace/Shared")
+local Room = game:GetService("Workspace"):FindFirstChild("Room")
+local Lo, Hi = Vector3.new(-2,-2,-2), Vector3.new(2,2,2)
+if State.First then
+    assert(not pcall(function() State.First:Renew(2) end))
+    local Fresh = assert(Room:RequestCollisionArea(Lo,Hi))
+    Fresh:Release()
+    assert(Fresh:GetStatus().Life == "Released")
+    script:SetAttribute("Restarted",true)
+    return
+end
+local First, Reason = Room:RequestCollisionArea(Lo,Hi,5,"Interactive")
+assert(First and not Reason and typeof(First)=="SpatialCollisionLease")
+assert(First:GetStatus().Collision=="Pending")
+assert(not pcall(function() First:GetStatus().Collision="Ready" end))
+local None, Invalid=Room:RequestCollisionArea(Hi,Lo,-1)
+assert(None==nil and Invalid=="Invalid")
+State.First=First
+task.defer(function()
+    local Snapshot=First:GetStatus()
+    assert(Snapshot.Life=="Active" and Snapshot.Collision=="Ready" and type(Snapshot.Revision)=="string")
+    assert(First:SetArea(Vector3.new(30,0,0),Vector3.new(33,3,3)) and First:SetPriority("Background") and First:Renew(4))
+    assert(First:GetStatus().Collision=="Pending")
+    script:SetAttribute("Deferred",true)
+end)
+)lua");
+		Other->SetSource(R"lua(
+local State = require("@game/Workspace/Shared")
+assert(State.First and not pcall(function() State.First:Release() end))
+local Room = game:GetService("Workspace"):FindFirstChild("Room")
+local Mine = assert(Room:RequestCollisionArea(Vector3.new(-2,-2,-2),Vector3.new(2,2,2)))
+State.Other=Mine
+task.defer(function()
+    assert(Mine:GetStatus().Collision=="Ready")
+    script:SetAttribute("Independent",true)
+end)
+)lua");
+		{
+			ScriptEngine Runtime(Game);
+			Runtime.RunBootstrapScript(First);
+			Runtime.RunBootstrapScript(Other);
+			if (First->Status == ScriptStatus::Error) throw std::runtime_error(First->ErrorMessage);
+			if (Other->Status == ScriptStatus::Error) throw std::runtime_error(Other->ErrorMessage);
+			const auto Both = Domain->PumpSpatialCollision(SpatialResidencyClock::now(), 1);
+			Check(
+				Both.Holders == 2 && Both.DistinctRequests == 1 && Both.Captures == 1,
+				"managed server scripts must contribute independently to one native capture"
+			);
+			Runtime.Step();
+			Check(
+				First->GetAttributeValue("Deferred").has_value() && Other->GetAttributeValue("Independent").has_value(),
+				"deferred callbacks lost their issuing script capability"
+			);
+			First->SetEnabled(false);
+			First->SetEnabled(true);
+			Runtime.RunBootstrapScript(First);
+			if (First->Status == ScriptStatus::Error) throw std::runtime_error(First->ErrorMessage);
+			Check(
+				First->GetAttributeValue("Restarted").has_value(),
+				"restarted script reused an old native collision grant"
+			);
+			const auto Left = Domain->PumpSpatialCollision(SpatialResidencyClock::now(), 2);
+			Check(
+				Left.Holders == 1 && Left.DistinctRequests == 1,
+				"one script's retirement released another script's holder"
+			);
+			Runtime.ShutdownRuntime();
+			Check(
+				Domain->PumpSpatialCollision(SpatialResidencyClock::now(), 2).Holders == 0,
+				"stopped runtime retained collision demand"
+			);
+		}
+		const auto Client = std::make_shared<Script>();
+		Client->SetName("Client");
+		Client->SetRunContext(Enums::RunContext::Client);
+		Client->SetParent(World);
+		Client->SetSource(R"lua(
+local Room=game:GetService("Workspace"):FindFirstChild("Room")
+local Request,Reason=Room:RequestCollisionArea(Vector3.new(0,0,0),Vector3.new(2,2,2))
+assert(Request==nil and Reason=="Unavailable")
+)lua");
+		{
+			ScriptEngine Runtime(Game, {}, RuntimeMode::NetworkClient);
+			Runtime.RunBootstrapScript(Client);
+			if (Client->Status == ScriptStatus::Error) throw std::runtime_error(Client->ErrorMessage);
+			Check(Client->Status == ScriptStatus::Finished, "client scoped denial did not run");
+		}
+		Game->Destroy();
 	}
 	void Run() {
 		const auto Game = std::make_shared<DataModel>(), ForeignGame = std::make_shared<DataModel>();
@@ -142,6 +252,7 @@ namespace {
 int main() try {
 	gargantuan::BootstrapNativeRuntimeSchema();
 	Run();
+	CreatorBinding();
 	std::cout << "[Spatial:Residency] Shared native demand, independent audiences and lifecycle passed.\n";
 	return 0;
 } catch (const std::exception &Error) {

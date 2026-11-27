@@ -6,6 +6,7 @@
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <lua.h>
 #include <stdexcept>
 
@@ -26,6 +27,7 @@ namespace gargantuan {
 			Status = ScriptStatus::Idle;
 		} else if (Status != ScriptStatus::Disabled && !enabled) {
 			Status = ScriptStatus::Disabled;
+			RetireExecution();
 			Cleanup();
 		}
 		NotifyPropertyCommitted("Enabled");
@@ -72,10 +74,11 @@ namespace gargantuan {
 		if (!ShouldStep() || Thread) return Status;
 		Status = ScriptStatus::Running;
 
-		ScriptSecurityScope SecurityScope(
-			GetRunContext() == Enums::RunContext::Client ? ScriptSecurityContext::ClientRuntime()
-														 : ScriptSecurityContext::ServerRuntime()
-		);
+		if (ExecutionGeneration==std::numeric_limits<std::uint64_t>::max()) throw std::overflow_error("[Script:Runtime] Execution generation exhausted");
+		++ExecutionGeneration; ExecutionActive=true;
+		auto Security=GetRunContext()==Enums::RunContext::Client?ScriptSecurityContext::ClientRuntime():ScriptSecurityContext::ServerRuntime();
+		Security.IssuingScript=GetObjectId(); Security.ExecutionGeneration=ExecutionGeneration;
+		ScriptSecurityScope SecurityScope(Security);
 
 		auto scriptEngine = ScriptEngine::Get(L);
 		[[maybe_unused]] auto KeepRuntimeAlive = scriptEngine->weak_from_this().lock();
@@ -87,6 +90,7 @@ namespace gargantuan {
 		if (BytecodeCompileStatus != BytecodeCompileStatus::Success) {
 			Status = ScriptStatus::Error;
 			ErrorMessage = BytecodeCompileError.value();
+			RetireExecution();
 			return Status;
 		}
 
@@ -100,6 +104,7 @@ namespace gargantuan {
 		if (loadError.has_value()) {
 			Status = ScriptStatus::Error;
 			ErrorMessage = loadError.value();
+			RetireExecution();
 			Cleanup();
 			return Status;
 		}
@@ -121,7 +126,8 @@ namespace gargantuan {
 			throw std::logic_error("[Editor:PlayDebugger] Suspended Script is no longer owned");
 		[[maybe_unused]] auto KeepScriptAlive = weak_from_this().lock();
 		[[maybe_unused]] auto KeepRuntimeAlive = ScriptEngine::Get(L)->weak_from_this().lock();
-		ScriptSecurityScope SecurityScope(Security);
+		auto Bound=Security; Bound.IssuingScript=GetObjectId(); Bound.ExecutionGeneration=ExecutionGeneration;
+		ScriptSecurityScope SecurityScope(Bound);
 		Status = ScriptStatus::Running;
 		return ResumeOwnedThread(L, FailureLine, &Budget, StepLine);
 	}
@@ -194,6 +200,7 @@ namespace gargantuan {
 		}
 		// A completed coroutine no longer needs Script's registry root. Tasks,
 		// signal callbacks, and Remote requests retain their own Lua references.
+		if (Status == ScriptStatus::Error) RetireExecution();
 		if (Status == ScriptStatus::Finished || Status == ScriptStatus::Error) Cleanup();
 
 		return Status;

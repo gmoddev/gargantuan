@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "gargantuan/runtime/ObjectId.hpp"
 #include <cstdint>
 #include <initializer_list>
 #include <string_view>
@@ -57,6 +58,8 @@ namespace gargantuan {
 		ScriptExecutionDomain Domain = ScriptExecutionDomain::Core;
 		ScriptCapabilitySet Capabilities;
 		bool AllowsTaskSchedulerYield = true;
+		ObjectId IssuingScript{};
+		std::uint64_t ExecutionGeneration{};
 
 		[[nodiscard]] bool HasCapability(ScriptCapability capability) const;
 		[[nodiscard]] static ScriptSecurityContext CoreTrusted();

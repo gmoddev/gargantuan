@@ -6,7 +6,10 @@
 #include <optional>
 #include <span>
 
+struct lua_State;
+
 namespace gargantuan {
+	void RegisterSpatialCollisionUserdata(lua_State *L);
 	class WorldRoot;
 	struct SpatialCollisionQueue;
 	using SpatialResidencyClock = std::chrono::steady_clock;

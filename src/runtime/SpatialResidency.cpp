@@ -1,5 +1,6 @@
 #include "gargantuan/runtime/SpatialResidency.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 
@@ -42,6 +43,10 @@ namespace gargantuan {
 			SpatialCollisionCondition Condition{SpatialCollisionCondition::Pending};
 			std::uint64_t Revision{}, LastCapture{};
 		};
+		bool CurrentIssuer(const Instance &Owner, std::uint64_t Epoch) {
+			const auto *ScriptOwner = dynamic_cast<const Script *>(&Owner);
+			return !ScriptOwner || ScriptOwner->IsCurrentExecution(Epoch);
+		}
 		void Main() {
 			if (GetCurrentExecutionDomain() != ExecutionDomain::Main)
 				throw std::logic_error("[Spatial:Residency] Main owns collision requests");
@@ -71,6 +76,7 @@ namespace gargantuan {
 				if (!Target || !Issuer || Target->GetDestroyed() || Target->IsDestroying() || Issuer->GetDestroyed() ||
 					Issuer->IsDestroying() || Target->GetSpatialActivation() != Activation ||
 					Target->GetReplicationScopeId() != Realm || Issuer->GetReplicationScopeId() != Realm ||
+					!CurrentIssuer(*Issuer, Audience.Epoch) ||
 					(!dynamic_cast<DataModel *>(Issuer.get()) && !SpatialRegion::FindAttachedWorld(*Issuer)))
 					Close(SpatialLeaseLife::Stale);
 				else if (Now >= Deadline)
@@ -180,7 +186,7 @@ namespace gargantuan {
 		const auto Realm = SpatialRegion::FindAttachedWorld(*this);
 		const auto Issuer = ObjectRegistry::Get().Lookup(Audience.Owner);
 		if (!Realm || !SpatialActivation || !Issuer || Issuer->GetDestroyed() || Issuer->IsDestroying() ||
-			Issuer->GetReplicationScopeId() != Realm->GetObjectId() ||
+			Issuer->GetReplicationScopeId() != Realm->GetObjectId() || !CurrentIssuer(*Issuer, Audience.Epoch) ||
 			(Issuer != Realm && !SpatialRegion::FindAttachedWorld(*Issuer)))
 			return std::unexpected(Unavailable);
 		auto Owners = CanonicalOwners(RequiredOwners);
