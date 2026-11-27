@@ -499,6 +499,7 @@ namespace gargantuan {
 				Method == "DuplicateInstance" || Method == "ReparentInstance" ||
 				Method == "ImportAsset" || Method == "ReimportAsset" || Method == "DeleteAsset" ||
 				Method == "StartPackageBuild" || Method == "SubmitTerrainBrush" || Method == "EditBlockGridRegion" ||
+				Method == "DefineBlockGridBlock" ||
 				Method == "UndoTerrainEdit" || Method == "RedoTerrainEdit" || Method == "CancelTerrainEdit";
 		}
 
@@ -1850,7 +1851,7 @@ namespace gargantuan {
 					"TerrainGasPlaceV2", "TerrainMaterialBindingsV1", "TerrainProjectGridV1",
 					"TerrainAuthoringV1", "GetTerrainAuthoringState", "SubmitTerrainBrush",
 					"GetTerrainEditStatus", "CancelTerrainEdit", "UndoTerrainEdit", "RedoTerrainEdit", "RaycastTerrainSurface",
-					"ReadBlockGridCell", "EditBlockGridRegion",
+					"ReadBlockGridCell", "EditBlockGridRegion", "ReadBlockGridPalette", "DefineBlockGridBlock",
 					"BeginTransaction",
 					"CommitTransaction",
 					"AuthoritativeTransactions",
@@ -3812,8 +3813,11 @@ namespace gargantuan {
 				);
 			};
 
-			if (method == "ReadBlockGridCell" || method == "EditBlockGridRegion") {
-				const bool Edit = method == "EditBlockGridRegion";
+			if (method == "ReadBlockGridCell" || method == "EditBlockGridRegion" ||
+				method == "ReadBlockGridPalette" || method == "DefineBlockGridBlock") {
+				const bool Define = method == "DefineBlockGridBlock";
+				const bool Palette = method == "ReadBlockGridPalette";
+				const bool Edit = method == "EditBlockGridRegion" || Define;
 				const auto Fail = [&](std::string Code, std::string Message) {
 					return SerializeBoundedResponse(ErrorResponse(requestId, std::move(Code), std::move(Message)));
 				};
@@ -3822,16 +3826,53 @@ namespace gargantuan {
 					!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel) ||
 					(Edit && !StudioSecurity.HasCapability(ScriptCapability::MutateDataModel)))
 					return Fail("Unauthorized", "BlockGrid authoring requires Studio capabilities");
-				if (!parameters.contains("Scope") || !parameters.contains("Object") || !parameters.contains("Cell"))
+				if (!parameters.contains("Scope") || !parameters.contains("Object") ||
+					(!Define && !Palette && !parameters.contains("Cell")))
 					return Fail("MalformedRequest", "A scoped grid identity and integer Cell are required");
 				const auto Scope = JsonCodec::DecodeObjectId(parameters["Scope"]);
 				const auto Id = JsonCodec::DecodeObjectId(parameters["Object"]);
-				const auto Cell = DecodeGridCell(parameters["Cell"]);
-				if (!Id || !Cell || !Scope || Scope->ToObjectId() != World->GetObjectId())
+				if (!Id || !Scope || Scope->ToObjectId() != World->GetObjectId())
 					return Fail("InvalidGridRequest", "The scope, grid identity or cell is invalid");
 				auto Grid = std::dynamic_pointer_cast<BlockGrid>(ObjectRegistry::Get().Lookup(Id->ToObjectId()));
 				if (!Grid || Grid->GetDataModel() != World || Grid->IsDestroying() || Grid->GetDestroyed())
 					return Fail("StaleObject", "The selected BlockGrid is unavailable in this project");
+				if (Palette) {
+					if (!HasOnlyFields(parameters, {"Scope","Object"})) return Fail("MalformedRequest","Unknown palette field");
+					Json Keys = Json::array();
+					const auto &Field = Grid->GetField();
+					for (std::uint16_t Index = blockgrid::Stone; Index <= blockgrid::Brick + Field.GetDefinitionCount(); ++Index)
+						Keys.push_back(Field.GetDefinition(Index).Key);
+					return SerializeBoundedResponse(SuccessResponse(requestId, {{"Revision",Grid->GetBlockRevision()},{"Definitions",std::move(Keys)}}));
+				}
+				if (Define) {
+					if (HasRevisionConflict()) return Fail("RevisionConflict","The project changed before the definition edit");
+					if (!HasOnlyFields(parameters, {"Scope","Object","Definition","Shape","Color","Revision","ExpectedRevision","TransactionId"}) ||
+						!parameters.contains("Definition") || !parameters["Definition"].is_string() ||
+						!parameters.contains("Revision") || !parameters["Revision"].is_string() ||
+						!parameters.contains("Shape") || !parameters["Shape"].is_string() ||
+						!parameters.contains("Color") || !parameters["Color"].is_array() || parameters["Color"].size() != 3)
+						return Fail("MalformedRequest","Provide a project definition key, primitive shape, RGB color and grid revision");
+					static constexpr std::array<std::string_view,4> Shapes{"Cube","Slab","Wedge","Stairs"};
+					const auto Found = std::ranges::find(Shapes, parameters["Shape"].get_ref<const std::string &>());
+					if (Found == Shapes.end()) return Fail("InvalidGridRequest","Unknown block shape");
+					blockgrid::Definition Spec;
+					Spec.Key = parameters["Definition"].get<std::string>();
+					Spec.Geometry = static_cast<blockgrid::Shape>(Found - Shapes.begin());
+					for (unsigned Index = 0; Index < 3; ++Index) {
+						const auto &Channel = parameters["Color"][Index];
+						if (!Channel.is_number_unsigned() || Channel.get<std::uint64_t>() > 255)
+							return Fail("InvalidGridRequest","RGB channels must be integers from 0 through 255");
+						Spec.Color[Index] = Channel.get<unsigned>() / 255.0f;
+					}
+					auto Request = std::make_shared<blockgrid::EditRequest>();
+					Request->ExpectedRevision = parameters["Revision"].get<std::string>();
+					Request->Binding = blockgrid::BindingEdit{std::move(Spec), false};
+					const auto Result = Mutations.Apply(SubmitBlockGridEditCommand{Grid->GetObjectId(), World->GetObjectId(), Request}, StudioMutationAuthority());
+					if (!Result.Succeeded()) return Fail(MutationStatusName(Result.Status),Result.Message);
+					return SerializeBoundedResponse(SuccessResponse(requestId, {{"Revision",Grid->GetBlockRevision()}}));
+				}
+				const auto Cell = DecodeGridCell(parameters["Cell"]);
+				if (!Cell) return Fail("InvalidGridRequest","Expected integer grid coordinates");
 				if (Edit) {
 					if (HasRevisionConflict()) return Fail("RevisionConflict", "The project changed before the grid edit");
 					if (!HasOnlyFields(parameters, {"Scope", "Object", "Cell", "MaxExclusive", "Definition", "Orientation",
@@ -3841,8 +3882,8 @@ namespace gargantuan {
 						return Fail("MalformedRequest", "Grid edits require MaxExclusive, Definition and Revision");
 					const auto Max = DecodeGridCell(parameters["MaxExclusive"], true);
 					const auto &Name = parameters["Definition"].get_ref<const std::string &>();
-					const auto Definition = Name == "Stone" ? blockgrid::Stone : Name == "Brick" ? blockgrid::Brick : blockgrid::Air;
-					if (!Max || (Definition == blockgrid::Air && Name != "Air"))
+					const auto Definition = Name == "Air" ? std::optional(blockgrid::Air) : Grid->GetField().FindDefinitionId(Name);
+					if (!Max || !Definition)
 						return Fail("InvalidGridRequest", "Invalid grid extent or block definition");
 					int Rotation = 0;
 					if (auto It = parameters.find("Orientation"); It != parameters.end()) {
@@ -3852,7 +3893,7 @@ namespace gargantuan {
 					}
 					auto Request = std::make_shared<blockgrid::EditRequest>();
 					Request->ExpectedRevision = parameters["Revision"].get<std::string>();
-					Request->Writes.push_back({{*Cell, *Max}, {Definition, static_cast<std::uint8_t>(Rotation)}});
+					Request->Writes.push_back({{*Cell, *Max}, {*Definition, static_cast<std::uint8_t>(Rotation)}});
 					auto Result = Mutations.Apply(SubmitBlockGridEditCommand{Grid->GetObjectId(), World->GetObjectId(), Request},
 						StudioMutationAuthority());
 					if (!Result.Succeeded()) return Fail(MutationStatusName(Result.Status), Result.Message);
@@ -3860,8 +3901,8 @@ namespace gargantuan {
 					return Fail("MalformedRequest", "Unknown cell read field");
 				const auto Value = Grid->GetField().Get(*Cell);
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
-					{"Revision", Grid->GetBlockRevision()}, {"Definition", Value.Definition == blockgrid::Stone ? "Stone" :
-						Value.Definition == blockgrid::Brick ? "Brick" : "Air"}, {"Orientation", Value.Orientation}
+					{"Revision", Grid->GetBlockRevision()}, {"Definition", Value.Definition == blockgrid::Air ? "Air" :
+						Grid->GetField().GetDefinition(Value.Definition).Key}, {"Orientation", Value.Orientation}
 				}));
 			}
 
