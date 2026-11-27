@@ -55,19 +55,27 @@ local First, Second, DigConfirmed, HasReturn
 local Restored
 task.spawn(function()
 	local Store=game:GetService("DataStoreService"):GetDocumentStore("ConstructionYard")
-	local Read=Store:GetAsync("YardV1")
-	for _=1,400 do
-		local Result=Read:Poll()
-		if Result.Status=="Missing" then Restored=false return end
-		if Result.Status=="Ok" then
-			local Events=Result.Record.Value.Events
-			assert(#Events==3 and Events[1].Kind=="wall" and Events[2].Kind=="dig" and Events[3].Kind=="floor")
-			Restored=true
-			return
+	local LastStatus
+	for Attempt=1,3 do
+		local Read=Store:GetAsync("YardV1",2000)
+		for _=1,400 do
+			local Result=Read:Poll()
+			LastStatus=Result.Status
+			if LastStatus=="Missing" then Restored=false return end
+			if LastStatus=="Ok" then
+				local Events=Result.Record.Value.Events
+				assert(#Events==3 and Events[1].Kind=="wall" and Events[2].Kind=="dig" and Events[3].Kind=="floor")
+				Restored=true
+				return
+			end
+			if LastStatus=="Busy" or LastStatus=="Deadline" then break end
+			assert(LastStatus=="Pending",LastStatus)
+			task.wait(.04)
 		end
-		assert(Result.Status=="Pending")
-		task.wait(.04)
+		if LastStatus=="Pending" then Read:Cancel() end
+		if Attempt<3 then task.wait(.1*Attempt) end
 	end
+	error("Yard recovery observer could not read its baseline: "..tostring(LastStatus))
 end)
 Probe.OnPlayerEvent:Connect(function(Player, Kind)
 	if Kind == "join" then
