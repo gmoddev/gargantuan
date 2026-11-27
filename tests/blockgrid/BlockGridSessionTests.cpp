@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Team Fireworks
 // SPDX-License-Identifier: MPL-2.0
 #include "gargantuan/Engine.hpp"
+#include "gargantuan/Log.hpp"
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/network/BlockGridStream.hpp"
@@ -183,6 +184,8 @@ namespace {
 	}
 }
 int main(int Count, char **Arguments) {
+	SDL_SetLogOutputFunction([](void *,int,SDL_LogPriority,const char *Text) { std::cerr << Text << '\n'; },nullptr);
+	SDL_SetLogPriority(LogCategory::App,SDL_LOG_PRIORITY_WARN);
 	try {
 		Run(Count > 1 && std::string_view(Arguments[1]) == "--gns");
 		std::cout << "[BlockGrid:Session] Two scoped peers installed collision, public state and live edits\n";
