@@ -44,13 +44,19 @@ namespace gargantuan {
 		for (const auto &Mesh : Publication->MeshCreates) State.Meshes.insert_or_assign(Mesh.Mesh, Mesh);
 		for (const auto &Update : Publication->MeshVertexUpdates) {
 			const auto Found = State.Meshes.find(Update.Mesh);
-			if (Found == State.Meshes.end() || Update.FirstVertex != 0 || !Update.Vertices ||
-				Found->second.Vertices->size() != Update.Vertices->size()) {
+			if (Found == State.Meshes.end() || !Found->second.Vertices || !Update.Vertices ||
+				Update.FirstVertex > Found->second.Vertices->size() ||
+				Update.Vertices->size() > Found->second.Vertices->size() - Update.FirstVertex) {
 				State.Publisher.RequestFullResync();
 				return std::nullopt;
 			}
 			Found->second.VertexRevision = Update.VertexRevision;
-			Found->second.Vertices = Update.Vertices;
+			if (Found->second.Vertices->size() == Update.Vertices->size()) Found->second.Vertices = Update.Vertices;
+			else {
+				auto Vertices = std::make_shared<std::vector<RenderVertex>>(*Found->second.Vertices);
+				std::copy(Update.Vertices->begin(), Update.Vertices->end(), Vertices->begin() + Update.FirstVertex);
+				Found->second.Vertices = std::move(Vertices);
+			}
 			Found->second.Bounds = Update.Bounds;
 		}
 		if (Publication->TerrainDraws) State.Terrain = Publication->TerrainDraws;

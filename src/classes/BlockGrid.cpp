@@ -191,6 +191,13 @@ namespace gargantuan {
 		if (!World || Editing) throw std::logic_error("[BlockGrid:Edit] Grid is unavailable for admission");
 		if (Expected && *Expected!=GetBlockRevision()) throw std::domain_error("[BlockGrid:Conflict] Revision changed");
 		World->EnsureAuthoritativeRevisionAvailable();
+		std::optional<blockgrid::CellDelta> PointEdit;
+		if (!Binding && !ReplayBinding && Writes.size() == 1) {
+			const auto &Write = Writes.front();
+			if (blockgrid::ValidCell(Write.Bounds.Min) &&
+				blockgrid::SingleCell(Write.Bounds.Min).MaxExclusive == Write.Bounds.MaxExclusive)
+				PointEdit = blockgrid::CellDelta{Write.Bounds.Min, Cells.Get(Write.Bounds.Min), Write.Value};
+		}
 		bool Changed;
 		{
 			struct Guard { bool& Flag; ~Guard(){ Flag=false; } } Reset{Editing};
@@ -208,6 +215,7 @@ namespace gargantuan {
 		}
 		const auto Revision=GetBlockRevision();
 		if (Changed) {
+			LastCellEdit = PointEdit;
 			World->AdvanceAuthoritativeRevision();
 			NotifyPropertyCommitted("BlockRevision");
 		}

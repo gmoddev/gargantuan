@@ -15,6 +15,7 @@ namespace gargantuan {
 	  public:
 		BlockGrid();
 		[[nodiscard]] const blockgrid::Field& GetField() const;
+		[[nodiscard]] const std::optional<blockgrid::CellDelta>& GetLastCellEdit() const { return LastCellEdit; }
 		// Trusted asset materialization, before adoption or publication.
 		void RestoreField(blockgrid::Field Value);
 		void SetAdmission(blockgrid::Field::Admission BeforeCommit);
@@ -27,6 +28,7 @@ namespace gargantuan {
 		void CheckConfigurationWrite() const;
 		void NotifyConfiguration(std::string_view Name);
 		blockgrid::Field Cells;
+		std::optional<blockgrid::CellDelta> LastCellEdit;
 		blockgrid::Field::Admission Admission;
 		gargantuan::CFrame Transform;
 		float Size{1.0f};
