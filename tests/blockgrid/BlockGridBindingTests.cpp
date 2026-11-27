@@ -211,6 +211,13 @@ namespace {
 		auto Grid=std::dynamic_pointer_cast<BlockGrid>(Room->FindFirstChild("Carriage",false));
 		auto Prior=Grid->GetAssemblyProjection();
 		Check(Prior && blockgrid::ValidAssemblyProjection(*Prior),"invalid initial motion receipt");
+		const std::array Required{Grid->GetObjectId()};
+		const auto Receipt=Room->PrepareSpatialDestination({{-1,3,-1},{4,6,2}},Required);
+		Check(Receipt.has_value() && !Room->CanHoldSpatialCollision({}),"dynamic collision provided a static reservation");
+		const auto Body=std::ranges::find(Receipt->Providers,Grid->GetObjectId(),&SpatialProviderReceipt::Owner);
+		Check(Body!=Receipt->Providers.end() && !Body->AuthoritativeEmpty && Body->Shape==PhysicsShapeKind::ConvexAssembly &&
+			Body->Installed.size()==2 && Body->Installed[0].Body==Body->Installed[1].Body &&
+			Body->Installed[0].Piece!=Body->Installed[1].Piece,"native two-hull receipt lost a child or its owning body");
 		const auto Data=blockgrid::Encode(Grid->GetField());
 		const auto Cells=Grid->GetField().GetRevision(),Geometry=Grid->GetField().GetGeometryRevision();
 		const auto Token=Grid->GetBlockRevision();

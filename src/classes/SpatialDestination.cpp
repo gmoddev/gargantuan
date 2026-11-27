@@ -120,13 +120,31 @@ namespace gargantuan {
 		if (BlockGridState) for (const auto &[Id, Member] : BlockGridState->Members) {
 			const auto &Grid = *Member.Grid;
 			if (!Grid.GetCanCollide() && !Required(Id)) continue;
-			if (!Member.Ready || Member.Revision != Grid.GetField().GetRevision()) return std::unexpected(BackendFailure);
+			if (!Member.Ready || Member.Revision != Grid.GetField().GetGeometryRevision()) return std::unexpected(BackendFailure);
 			if (Member.Bodies.size() > MaximumInspectedColliders - Inspected) return std::unexpected(ResourceLimit);
 			Inspected += Member.Bodies.size();
 			SpatialProviderReceipt Proof{.Owner = Id, .Provider = SpatialCollisionProvider::BlockGrid,
 				.ContentRevision = *Member.Revision, .Pose = Member.Pose, .Size = glm::vec3(Member.CellSize),
 				.AuthoritativeEmpty = !Member.Collidable || Grid.GetField().GetOccupiedCount() == 0};
 			bool HasPhysicalPiece = false;
+			if (Member.Assembly) {
+				const auto &Assembly = *Member.Assembly;
+				const auto Native = Physics.GetBodyState(Assembly.Body);
+				if (!Native || !Native->Description.CanCollide || Native->Description.Shape.Kind != PhysicsShapeKind::ConvexAssembly ||
+					!Assembly.Hulls || Assembly.Hulls->empty() || Native->Description.Shape.Hulls != Assembly.Hulls)
+					return std::unexpected(BackendFailure);
+				if (Assembly.Hulls->size() > MaximumInspectedColliders - Inspected) return std::unexpected(ResourceLimit);
+				Inspected += Assembly.Hulls->size();
+				HasPhysicalPiece = true;
+				Proof.Shape = PhysicsShapeKind::ConvexAssembly;
+				Proof.Pose = Native->Transform;
+				for (std::size_t I = 0; I < Assembly.Hulls->size(); ++I) {
+					const auto &Hull = (*Assembly.Hulls)[I];
+					if (OverlapsBody(Bounds, Native->Transform * Hull.Local, Hull.Size))
+						Proof.Installed.push_back({Assembly.Body, {}, *Member.Revision,
+							static_cast<std::uint8_t>(Hull.Kind), 0, static_cast<std::uint8_t>(I)});
+				}
+			}
 			for (const auto &[Piece, Body] : Member.Bodies) {
 				if ((Piece.Participation & 1u) == 0) continue;
 				HasPhysicalPiece = true;
@@ -251,6 +269,7 @@ namespace gargantuan {
 	}
 	bool WorldRoot::CanHoldSpatialCollision(ObjectId Subject) const {
 		if (GetCurrentExecutionDomain()!=ExecutionDomain::Main || TrackedParts.size()>MaximumInspectedColliders || !IdDeformables.empty()) return false;
+		if (BlockGridState && !BlockGridState->Assemblies.empty()) return false;
 		for (const auto &[Id,Weak]:TrackedParts) {
 			if (Id==Subject) continue;
 			const auto Part=Weak.lock();
