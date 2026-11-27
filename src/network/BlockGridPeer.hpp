@@ -61,6 +61,7 @@ namespace gargantuan::network {
 			GridStreamMessage Offer;
 			GridReplicaContent Content;
 			std::optional<blockgrid::Field> PendingField;
+			std::optional<std::uint64_t> InstalledFieldRevision;
 			std::size_t Cursor{};
 			std::uint64_t ProgressTick{};
 			std::uint64_t SourceRevision{};

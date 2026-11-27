@@ -290,12 +290,13 @@ namespace gargantuan::network {
 	}
 	void BlockGridPeer::Prune(const Resolve &Find) {
 		// Forget publishes replica retirement. Its callbacks may remove further subscriptions.
-		std::optional<ObjectId> Previous;
-		for (;;) {
-			const auto Current=Previous ? Grids.upper_bound(*Previous) : Grids.begin();
-			if (Current==Grids.end()) break;
-			const auto Id=Current->first;
-			Previous=Id;
+		std::array<ObjectId,MaximumGrids> Original{};
+		std::size_t Count{};
+		for (const auto &[Id,Entry] : Grids) Original[Count++]=Id;
+		for (std::size_t I=0;I<Count;++I) {
+			const auto Id=Original[I];
+			const auto Current=Grids.find(Id);
+			if (Current==Grids.end()) continue;
 			const auto Grid=Find(Id);
 			if (!Grid) Forget(Id);
 			else if (!Server && Current->second.LocalMembership && Current->second.LocalMembership!=Grid->GetDomainMembershipRevision()) {
@@ -334,11 +335,16 @@ namespace gargantuan::network {
 					Held->PendingField.reset();
 				}
 				(void)Grid->ApplyReplicaAssemblyProjection(*Offer.Assembly);
-				const auto FieldRevision=Grid->GetField().GetRevision();
+				if (!Held->InstalledFieldRevision) Held->InstalledFieldRevision=Grid->GetField().GetRevision();
 				const auto Configuration=Grid->GetConfigurationRevision();
 				Signals.Commit();
-				if (!Current() || !Grid->HasReplicaField() || Grid->GetField().GetRevision()!=FieldRevision ||
-					Grid->GetConfigurationRevision()!=Configuration || PlacementDigest(*Grid,Grid->GetCFrame())!=Offer.Placement) return;
+				if (!Current()) return;
+				if (!Grid->HasReplicaField() || Grid->GetField().GetRevision()!=*Held->InstalledFieldRevision) {
+					Forget(Id);
+					if (Find(Id)==Grid) Track(Id);
+					return;
+				}
+				if (Grid->GetConfigurationRevision()!=Configuration || PlacementDigest(*Grid,Grid->GetCFrame())!=Offer.Placement) return;
 				const auto InstalledMotion=Grid->GetAssemblyProjection();
 				const auto World=WorldRoot::GetEffectiveWorld(*Grid);
 				if (!InstalledMotion || InstalledMotion->Revision!=Offer.MotionRevision || !World ||
