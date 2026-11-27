@@ -231,7 +231,7 @@ namespace gargantuan::network {
 			struct Request {
 				SpatialTransferScope Scope;
 				SpatialDestinationBounds Bounds;
-				std::uint64_t Serial{}, PossessionRevision{};
+				std::uint64_t Serial{}, PossessionRevision{}, FocusRevision{}, SourceActivation{}, DestinationActivation{};
 				CFrame SourcePose, DestinationPose;
 				SpatialTransferClock::time_point Deadline;
 				std::optional<SpatialTransferFrame> WaitingOffer;
@@ -286,6 +286,7 @@ namespace gargantuan::network {
 			ObjectId PlayerObject;
 			ObjectId AuthorizedSpatialRegion;
 			std::unique_ptr<SessionSpatialTransfer> SpatialTransfer;
+			std::uint64_t TransferFocusRevision{1};
 			std::unique_ptr<BlockGridPeer> Grids;
 			std::unique_ptr<TransferDomain> Staging;
 			std::shared_ptr<DomainTerrainDelivery> NamedTerrain;
@@ -3958,8 +3959,14 @@ namespace gargantuan::network {
 		bool Changed{};
 		if (State->Configuration.Role != GameSessionRole::Server || !State->Relevance ||
 			!State->Relevance->SetTrustedFocus(Connection, FocusPoints, &Changed)) return false;
-		if (auto Found = State->Peers.find(Connection); Changed && Found != State->Peers.end() && State->HasTransfer(Found->second))
-			(void)State->CancelTransfer(Connection, Found->second);
+		if (auto Found = State->Peers.find(Connection); Changed && Found != State->Peers.end()) {
+			if (++Found->second.TransferFocusRevision == 0) {
+				State->PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::ResourceExhaustion,
+					"[Spatial:Transfer] Trusted focus generation exhausted"});
+				return false;
+			}
+			if (State->HasTransfer(Found->second)) (void)State->CancelTransfer(Connection, Found->second);
+		}
 		return true;
 	}
 

@@ -38,13 +38,17 @@ bool TransferScopeCurrent(ConnectionId Connection, const Peer &Value, const Sess
 	const auto &Scope = Request.Scope;
 	if (!PlayerValue || Value.SessionEpoch != Scope.SessionEpoch || Value.Replication.Value() != Scope.WorldEpoch ||
 		Value.PlayerId != Scope.PlayerId || Scope.FocusEpoch != Request.Serial ||
-		PlayerValue->GetPossessionRevision() != Request.PossessionRevision) return false;
+		PlayerValue->GetPossessionRevision() != Request.PossessionRevision || Value.TransferFocusRevision != Request.FocusRevision) return false;
 	const auto Subject = TransferSubject(*PlayerValue);
 	if (!Subject || TransferIdentity(Subject) != Scope.Subject) return false;
 	const auto Controller = LegacyCharacter(PlayerValue);
 	if (TransferIdentity(Controller) != Scope.Controller) return false;
 	const auto Origin = std::dynamic_pointer_cast<WorldRoot>(ResolveTransferObject(Scope.Source));
-	if (!Origin || !Origin->GetSpatialActivation()) return false;
+	if (!Origin || !Request.SourceActivation || Origin->GetSpatialActivation() != Request.SourceActivation) return false;
+	if (Request.DestinationActivation) {
+		const auto Destination = std::dynamic_pointer_cast<WorldRoot>(ResolveTransferObject(Scope.Destination));
+		if (!Destination || Destination->GetSpatialActivation() != Request.DestinationActivation) return false;
+	}
 	const auto AuthorizedSource = Origin == Runtime->Workspace ? ObjectId{} : Scope.Source.ToObjectId();
 	if (Value.AuthorizedSpatialRegion != AuthorizedSource) return false;
 	const auto CurrentDomain = TransferIdentity(WorldRoot::GetEffectiveWorld(*Subject));
@@ -175,7 +179,7 @@ void RetireSessionTransfer(ConnectionId Connection, Peer &Value) {
 		Value.SpatialTransfer->Server.Reset();
 		Value.SpatialTransfer->Replica.Reset();
 		FenceTransferMotion(Connection, Value, Request.Scope, false);
-		if (Configuration.Role == GameSessionRole::Server) (void)ReleaseTransferDomain(Connection, Request.Serial);
+		// TearDownPeer removes the structural audience and retires both content subscriptions locally.
 		Value.SpatialTransfer->Pending.reset();
 	}
 }
@@ -184,8 +188,11 @@ void FinishTransfer(ConnectionId Connection, Peer &Value, SpatialTransferStatus 
 	const auto Request = *Value.SpatialTransfer->Pending;
 	if (Configuration.Role == GameSessionRole::Server) {
 		const bool Promote = Status == SpatialTransferStatus::Applied;
-		if (!ReleaseTransferDomain(Connection, Request.Serial, Promote) && Promote)
-			Status = SpatialTransferStatus::CommittedUnconfirmed;
+		if (!ReleaseTransferDomain(Connection, Request.Serial, Promote)) {
+			if (Promote) Status = SpatialTransferStatus::CommittedUnconfirmed;
+			PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::ProtocolViolation,
+				"[Spatial:Transfer] Destination audience disposition requires resynchronization"});
+		}
 	}
 	Value.SpatialTransfer->Server.Reset();
 	Value.SpatialTransfer->Replica.Reset();
@@ -253,7 +260,9 @@ SpatialTransferStatus StartSpatialTransfer(ConnectionId Connection, ObjectId Des
 		.Scope = {Value.SessionEpoch, Value.Replication.Value(), Serial, Value.PlayerId,
 			TransferIdentity(Subject), TransferIdentity(Source), TransferIdentity(Destination), WireObjectId::FromObjectId(Profile->Controller)},
 		.Bounds = Bounds, .Serial = Serial, .PossessionRevision = PlayerValue->GetPossessionRevision(),
-		.SourcePose = Movement.SourcePose, .DestinationPose = Pose, .Deadline = SpatialTransferClock::now() + std::chrono::seconds(3)});
+		.FocusRevision = Value.TransferFocusRevision, .SourceActivation = Source->GetSpatialActivation(),
+		.DestinationActivation = Destination->GetSpatialActivation(),
+		.SourcePose = Movement.SourcePose, .DestinationPose = Pose, .Deadline = SpatialTransferClock::now() + std::chrono::seconds(15)});
 	const auto Scope = Lane.Pending->Scope;
 	if (!TransferScopeCurrent(Connection, Value, *Lane.Pending) || !StageTransferDomain(Connection, Scope.Destination, Bounds, Serial)) {
 		Lane.Pending.reset();
@@ -303,8 +312,11 @@ void ReceiveSpatialTransfer(const ReceivedMessageEvent &Message, Peer &Value) {
 		if (!Value.SpatialTransfer) Value.SpatialTransfer = std::make_unique<SessionSpatialTransfer>();
 		auto &Lane = *Value.SpatialTransfer;
 		if (Frame->Serial <= Lane.LastSerial) return;
+		const auto Origin = std::dynamic_pointer_cast<WorldRoot>(ResolveTransferObject(Scope.Source));
+		if (!Origin || !Origin->GetSpatialActivation()) return;
 		Lane.Pending.emplace(SessionTransferRequest{
 			.Scope = Scope, .Bounds = Frame->Bounds, .Serial = Frame->Serial, .PossessionRevision = PlayerValue->GetPossessionRevision(),
+			.FocusRevision = Value.TransferFocusRevision, .SourceActivation = Origin->GetSpatialActivation(),
 			.SourcePose = GetSpatialTransferPose(Frame->SourcePose), .DestinationPose = GetSpatialTransferPose(Frame->DestinationPose),
 			.Deadline = SpatialTransferClock::now() + std::chrono::seconds(3), .WaitingOffer = *Frame});
 		if (!TransferScopeCurrent(Connection, Value, *Lane.Pending)) { Lane.Pending.reset(); return; }
@@ -364,6 +376,7 @@ void PumpSessionTransfer(ConnectionId Connection, Peer &Value) {
 	const auto Source = std::dynamic_pointer_cast<WorldRoot>(ResolveTransferObject(Request.Scope.Source));
 	const auto Destination = std::dynamic_pointer_cast<WorldRoot>(ResolveTransferObject(Request.Scope.Destination));
 	if (!Destination || !Source || !Subject) return;
+	if (!Request.DestinationActivation) Request.DestinationActivation = Destination->GetSpatialActivation();
 	if (!Server) {
 		if (!Request.WaitingOffer || !IsSpatialOfferInstalled(*Request.WaitingOffer, *Destination, Adapters)) return;
 		auto Frame = std::move(*Request.WaitingOffer);
@@ -378,6 +391,7 @@ void PumpSessionTransfer(ConnectionId Connection, Peer &Value) {
 	const auto Step = Lane.Server.Begin(Connection, Request.Scope, Subject, Destination, Movement, Request.Bounds, {}, Adapters, Now, Request.Serial);
 	if (Step.Status == SpatialTransferStatus::Denied) return;
 	Request.Started = Step.Status == SpatialTransferStatus::Progress;
+	if (Request.Started) Request.Deadline = Now + std::chrono::seconds(3);
 	AdvanceTransfer(Connection, Value, Step);
 }
 void PumpSpatialTransfers() {
