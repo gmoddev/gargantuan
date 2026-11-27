@@ -10,6 +10,10 @@ deprecated APIs, historical quirks, or exact bug compatibility.
 
 Focused proposals:
 
+- [PreRun as an Explorer service](PreRunExplorerService.md) describes a
+  top-level authoring service with a pinned Default document and ordered,
+  named bootstrap scripts.
+
 - [Runtime Distribution Foundation 1](../../docs/adr/Runtime-Distribution-1.md)
   implements the first managed package candidate. Native promotion gates,
   external entitlement-backed key release, lazy protected loading, extensions,
