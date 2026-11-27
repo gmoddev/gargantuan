@@ -231,6 +231,24 @@ namespace gargantuan {
 		SpatialDemandScheduled = true;
 		return std::shared_ptr<SpatialCollisionLease>(new SpatialCollisionLease(std::move(Holder)));
 	}
+	SpatialDemandStatistics WorldRoot::GetSpatialDemandStatistics(SpatialResidencyClock::time_point Now) const {
+		Main();
+		SpatialDemandStatistics Result;
+		if (!CollisionDemand) return Result;
+		for (const auto &Entry : CollisionDemand->Holders) {
+			const auto Holder = Entry.lock();
+			if (!Holder) continue;
+			const auto Status = Holder->Inspect(Now);
+			if (Status.Life != SpatialLeaseLife::Active) continue;
+			switch (Status.Collision) {
+			case SpatialCollisionCondition::Pending: ++Result.Pending; break;
+			case SpatialCollisionCondition::Ready: ++Result.Ready; break;
+			case SpatialCollisionCondition::Unavailable: ++Result.Unavailable; break;
+			}
+		}
+		return Result;
+	}
+
 	SpatialCollisionWork
 	WorldRoot::PumpSpatialCollision(SpatialResidencyClock::time_point Now, std::size_t MaximumCaptures) {
 		Main();

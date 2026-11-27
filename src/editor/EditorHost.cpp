@@ -1859,7 +1859,7 @@ namespace gargantuan {
 					"CreateInstance", "DestroyInstance", "DuplicateInstance", "ReparentInstance",
 					"ExportGasModel", "ImportGasModel", "ExportGasPlace", "OpenGasPlace",
 					"TerrainGasPlaceV2", "TerrainMaterialBindingsV1", "TerrainProjectGridV1",
-					"TerrainAuthoringV1", "GetTerrainAuthoringState", "SubmitTerrainBrush",
+					"GetSpatialDomainState", "SetEditorSpatialView", "TerrainAuthoringV1", "GetTerrainAuthoringState", "SubmitTerrainBrush",
 					"GetTerrainEditStatus", "CancelTerrainEdit", "UndoTerrainEdit", "RedoTerrainEdit", "RaycastTerrainSurface",
 					"ReadBlockGridCell", "EditBlockGridRegion", "ReadBlockGridPalette", "DefineBlockGridBlock",
 					"CopyBlockGridRegion", "PreviewBlockGridPaste", "PasteBlockGridRegion", "BlockGridDefinitionAssets",
@@ -2508,6 +2508,66 @@ namespace gargantuan {
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"PlaySessionId", std::to_string(Id->Value)},
 					{"Diagnostics", EncodeStreamingDiagnosticsSnapshot(ActivePlaySession->GetStreamingDiagnostics({*Start, *Units, *Samples}))}}));
+			}
+
+			if (method == "GetSpatialDomainState" || method == "SetEditorSpatialView") {
+				const bool SetView = method == "SetEditorSpatialView";
+				const auto Fail = [&](std::string Code, std::string Message) {
+					return SerializeBoundedResponse(ErrorResponse(requestId, std::move(Code), std::move(Message)));
+				};
+				if (StudioSecurity.Domain != ScriptExecutionDomain::Studio ||
+					!StudioSecurity.HasCapability(ScriptCapability::EditorCommands) ||
+					!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
+					return Fail("Unauthorized", "Domain inspection requires Studio read access");
+				const bool Play = parameters.contains("PlaySessionId");
+				if (SetView && !StudioSecurity.HasCapability(ScriptCapability::ViewportControl))
+					return Fail("Unauthorized", "Changing the editor view requires ViewportControl");
+				if (SetView && (Play || ActivePlaySession || ActiveAnimationPreview || GuiPreview))
+					return Fail("ViewUnavailable", "Change the edit view after leaving Play or preview");
+				auto Realm = World;
+				std::shared_ptr<WorldRoot> Selected;
+				if (Play) {
+					const auto Id = DecodePlaySessionId(parameters["PlaySessionId"]);
+					if (!HasOnlyFields(parameters, {"PlaySessionId"}) || !Id)
+						return Fail("MalformedRequest", "Use only the active PlaySessionId to inspect the Play view");
+					if (!ActivePlaySession || ActivePlaySession->GetId().Value != Id->Value ||
+						ActivePlaySession->GetState() != PlaySessionState::Running)
+						return Fail("StalePlaySession", "The selected Play session is no longer running");
+					Realm = ActivePlaySession->GetWorld();
+				} else {
+					if (!parameters.contains("Object") || !parameters.contains("Scope") ||
+						!HasOnlyFields(parameters, {"Scope", "Object"}))
+						return Fail("MalformedRequest", "The selected domain requires an edit-world scope and object");
+					const auto Scope = JsonCodec::DecodeObjectId(parameters["Scope"]);
+					const auto Id = JsonCodec::DecodeObjectId(parameters["Object"]);
+					if (!Scope || !Id || !Realm || Scope->ToObjectId() != Realm->GetObjectId())
+						return Fail("StaleDomain", "The edit-world scope is no longer current");
+					Selected = std::dynamic_pointer_cast<WorldRoot>(ObjectRegistry::Get().Lookup(Id->ToObjectId()));
+					if (!Selected || SpatialRegion::FindAttachedWorld(*Selected) != Realm)
+						return Fail("StaleDomain", "The selected domain is no longer attached to this world");
+				}
+				const auto Default = Realm ? std::dynamic_pointer_cast<Workspace>(Realm->FindFirstChildOfClass("Workspace", false)) : nullptr;
+				if (!Default) return Fail("DomainUnavailable", "The world has no Workspace");
+				if (!Play && Selected != Default && !std::dynamic_pointer_cast<SpatialRegion>(Selected))
+					return Fail("InvalidDomain", "Select Workspace or an independent SpatialRegion");
+				if (SetView) {
+					const auto Region = std::dynamic_pointer_cast<SpatialRegion>(Selected);
+					Default->SetCurrentSpatialRegion(Region ? std::optional(Region) : std::nullopt);
+					LastViewportPublication.reset();
+				}
+				const auto Viewed = Default->GetCurrentSpatialRegion();
+				const std::shared_ptr<WorldRoot> View = Viewed ? std::static_pointer_cast<WorldRoot>(*Viewed) : Default;
+				if (Play) Selected = View;
+				const auto Requests = Selected->GetSpatialDemandStatistics(SpatialResidencyClock::now());
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"Scope", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Realm->GetObjectId()))},
+					{"Object", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Selected->GetObjectId()))},
+					{"Name", Selected->GetName()}, {"World", Play ? "Play" : "Edit"}, {"Viewed", Selected == View},
+					{"Activation", std::to_string(Selected->GetSpatialActivation())},
+					{"TrackedParts", Selected->TrackedParts.size()}, {"RegisteredGrids", Selected->GetRegisteredBlockGridCount()},
+					{"TerrainCollision", Selected->IsTerrainCollisionReady()},
+					{"Requests", {{"Pending", Requests.Pending}, {"Ready", Requests.Ready}, {"Unavailable", Requests.Unavailable}}}
+				}));
 			}
 
 			if (method == "GetPlayInputSnapshot") {

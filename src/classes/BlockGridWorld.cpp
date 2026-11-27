@@ -414,6 +414,10 @@ namespace gargantuan {
 		if (WasDynamic && !ShuttingDownPhysics && !Leaving->GetDestroyed() && !Leaving->IsDestroying()) Leaving->NotifyConfiguration("MotionMode");
 	}
 
+	std::size_t WorldRoot::GetRegisteredBlockGridCount() const {
+		return BlockGridState ? BlockGridState->Members.size() : 0;
+	}
+
 	void WorldRoot::ForEachBlockGrid(const std::function<void(const BlockGrid &)> &Visit) const {
 		if (BlockGridState)
 			for (const auto &[Id, Member] : BlockGridState->Members) Visit(*Member.Grid);

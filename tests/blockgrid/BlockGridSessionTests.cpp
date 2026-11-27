@@ -129,6 +129,12 @@ namespace {
 			Rejected = true;
 		}
 		Require(Rejected && !Out.IsInstalled(Id, *Source), "changed placement digest was accepted");
+		Forged=Ack;
+		++Forged.Membership;
+		Rejected=false;
+		try { Out.Receive(Forged,ResolveSource,8); }
+		catch (const std::invalid_argument&) { Rejected=true; }
+		Require(Rejected && !Out.IsInstalled(Id,*Source),"changed native membership was accepted");
 		Out.Receive(Ack, ResolveSource, 8);
 		Require(Out.IsInstalled(Id, *Source), "verified current placement did not open");
 		Source->SetCanCollide(false);
@@ -146,10 +152,12 @@ namespace {
 		ReplicaRuntime.Destroy();
 	}
 #include "PairedGridStream.inl"
+#include "ControllerGridStream.inl"
 	void Run(bool Socket) {
 		BootstrapNativeRuntimeSchema();
 		CheckInstallationRaces();
 		CheckPairedInstallations();
+		CheckControllerGridStream();
 		auto Sim = SimulatedNetwork::Create({.BaseLatency = 1ms});
 		auto Transport = [&]() -> std::shared_ptr<IGameTransport> {
 #if defined(GARGANTUAN_WITH_GNS)

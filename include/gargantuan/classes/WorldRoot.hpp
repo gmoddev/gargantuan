@@ -98,6 +98,7 @@ namespace gargantuan {
 			SpatialResidencyAudience Audience,const SpatialDestinationBounds &Bounds,std::span<const ObjectId> RequiredOwners,
 			SpatialDemandPriority Priority,std::chrono::milliseconds Duration,SpatialResidencyClock::time_point Now);
 		[[nodiscard]] SpatialCollisionWork PumpSpatialCollision(SpatialResidencyClock::time_point Now,std::size_t MaximumCaptures=2);
+		[[nodiscard]] SpatialDemandStatistics GetSpatialDemandStatistics(SpatialResidencyClock::time_point Now) const;
 		void RetireSpatialAudience(SpatialResidencyAudience Audience);
 		// Main-only checked teleport for one ordinary rigid Part. Clearance uses its conservative oriented box.
 		[[nodiscard]] PhysicsOperationResult CommitSpatialTransfer(const std::shared_ptr<BasePart> &Member,
@@ -174,6 +175,7 @@ namespace gargantuan {
 		std::map<ObjectId, std::weak_ptr<ReflectionProbe>> ReflectionProbes;
 		void ForEachBlockGrid(const std::function<void(const BlockGrid &)> &Visit) const;
 		[[nodiscard]] bool HasBlockGrids() const { return BlockGridState != nullptr; }
+		[[nodiscard]] std::size_t GetRegisteredBlockGridCount() const;
 		[[nodiscard]] bool VerifyReplicaGridInstallation(const BlockGrid &Grid);
 
 		void StepPhysics(double DeltaTime, std::optional<std::vector<std::shared_ptr<Instance>>> Instances);

@@ -32,12 +32,14 @@ namespace gargantuan::blockgrid {
 	struct CellOrder {
 		bool operator()(Cell Left, Cell Right) const noexcept;
 	};
-	struct Region { Cell Min, MaxExclusive; };
+	struct Region { Cell Min, MaxExclusive; bool operator==(const Region&) const = default; };
 	// Positive coverage includes certified air. Every listed origin is an aligned 8³ native leaf.
 	inline constexpr std::size_t MaximumReplicaPages=108, WholeReplicaPages=32;
+	inline constexpr std::size_t MaximumReplicaRectanglePages=1'024;
 	struct ReplicaCoverage {
 		bool Whole{};
 		std::vector<Cell> Origins;
+		std::optional<Region> Rectangle;
 		bool operator==(const ReplicaCoverage&) const = default;
 		[[nodiscard]] bool Contains(Region Bounds) const;
 	};
@@ -188,6 +190,7 @@ namespace gargantuan::blockgrid {
 		void UndoChannelInsertion(const ChannelSpec& Expected);
 		[[nodiscard]] std::size_t GetOccupiedCount() const noexcept { return Occupied; }
 		[[nodiscard]] std::size_t GetLeafCount() const noexcept { return Leaves.size(); }
+		[[nodiscard]] bool HasOccupiedPage(Cell Origin) const { return Leaves.contains(Origin); }
 		[[nodiscard]] std::optional<ReplicaPages> CapturePages(const ReplicaCoverage& Coverage,
 			const std::function<bool(const Field&)>& AdmitSchema={}) const;
 		[[nodiscard]] static Field DecodePages(std::span<const std::uint8_t> Bytes,ReplicaCoverage& Coverage);

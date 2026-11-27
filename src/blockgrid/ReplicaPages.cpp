@@ -33,11 +33,26 @@ namespace gargantuan::blockgrid {
 					std::bit_cast<std::int32_t>(Number(4))};
 			}
 		};
+		bool Encloses(Region Box,Region R) {
+			return Box.Min.X<=R.Min.X && Box.Min.Y<=R.Min.Y && Box.Min.Z<=R.Min.Z &&
+				Box.MaxExclusive.X>=R.MaxExclusive.X && Box.MaxExclusive.Y>=R.MaxExclusive.Y && Box.MaxExclusive.Z>=R.MaxExclusive.Z;
+		}
+		std::size_t RectanglePages(Region Box) {
+			const auto A=Box.Min,B=Box.MaxExclusive;
+			if (!ValidCell(A) || B.X>CoordinateLimit || B.Y>CoordinateLimit || B.Z>CoordinateLimit ||
+				A.X>=B.X || A.Y>=B.Y || A.Z>=B.Z || LeafOrigin(A)!=A || LeafOrigin(B)!=B) return 0;
+			return std::size_t((B.X-A.X)/LeafSide)*((B.Y-A.Y)/LeafSide)*((B.Z-A.Z)/LeafSide);
+		}
 		bool ValidCoverage(const ReplicaCoverage& C) {
-			if (C.Origins.size()>MaximumReplicaPages || (C.Whole && !C.Origins.empty())) return false;
+			if (C.Origins.size()>MaximumReplicaPages || (C.Whole && (!C.Origins.empty() || C.Rectangle))) return false;
+			if (C.Rectangle) {
+				const auto Count=RectanglePages(*C.Rectangle);
+				if (!Count || Count>MaximumReplicaRectanglePages) return false;
+			}
 			for (std::size_t I=0;I<C.Origins.size();++I) {
 				const auto P=C.Origins[I];
-				if (!ValidCell(P) || LeafOrigin(P)!=P || (I && !CellOrder{}(C.Origins[I-1],P))) return false;
+				if (!ValidCell(P) || LeafOrigin(P)!=P || (C.Rectangle && Encloses(*C.Rectangle,SingleCell(P))) ||
+					(I && !CellOrder{}(C.Origins[I-1],P))) return false;
 			}
 			return true;
 		}
@@ -46,14 +61,17 @@ namespace gargantuan::blockgrid {
 		const auto A=Bounds.Min,B=Bounds.MaxExclusive;
 		if (!ValidCell(A) || B.X>CoordinateLimit || B.Y>CoordinateLimit || B.Z>CoordinateLimit ||
 			A.X>=B.X || A.Y>=B.Y || A.Z>=B.Z) return false;
-		if (Whole) return true;
+		const auto RectPages=Rectangle?RectanglePages(*Rectangle):0;
+		if (Rectangle && (!RectPages || RectPages>MaximumReplicaRectanglePages)) return false;
+		if (Whole || (Rectangle && Encloses(*Rectangle,Bounds))) return true;
 		const auto First=LeafOrigin(A),Last=LeafOrigin({B.X-1,B.Y-1,B.Z-1});
 		constexpr auto Side=static_cast<int>(LeafSide);
 		const auto Count=std::uint64_t((Last.X-First.X)/Side+1)*((Last.Y-First.Y)/Side+1)*((Last.Z-First.Z)/Side+1);
-		if (Count>Origins.size()) return false;
+		if (Count>Origins.size()+RectPages) return false;
 		for (int Z=First.Z;Z<=Last.Z;Z+=Side) for (int Y=First.Y;Y<=Last.Y;Y+=Side)
 			for (int X=First.X;X<=Last.X;X+=Side)
-				if (!std::ranges::binary_search(Origins,Cell{X,Y,Z},CellOrder{})) return false;
+				if (!(Rectangle && Encloses(*Rectangle,SingleCell({X,Y,Z}))) &&
+					!std::ranges::binary_search(Origins,Cell{X,Y,Z},CellOrder{})) return false;
 		return true;
 	}
 	std::optional<ReplicaPages> Field::CapturePages(const ReplicaCoverage& Coverage,
@@ -64,6 +82,17 @@ namespace gargantuan::blockgrid {
 			for (auto It=Leaves.begin();It!=Leaves.end();++It) Selected.push_back(It);
 		} else for (const auto P:Coverage.Origins) {
 			if (const auto It=Leaves.find(P);It!=Leaves.end()) Selected.push_back(It);
+		}
+		if (Coverage.Rectangle) {
+			const auto [A,B]=*Coverage.Rectangle;
+			constexpr int Side=LeafSide;
+			for (int Z=A.Z;Z<B.Z;Z+=Side) for (int Y=A.Y;Y<B.Y;Y+=Side) for (int X=A.X;X<B.X;X+=Side) {
+				const auto It=Leaves.find({X,Y,Z});
+				if (It==Leaves.end()) continue;
+				if (Selected.size()==MaximumReplicaPages) return {};
+				Selected.push_back(It);
+			}
+			std::ranges::sort(Selected,CellOrder{},[](auto It){ return It->first; });
 		}
 		std::array<std::uint16_t,MaximumDefinitions+Brick+1> IdMap{};
 		IdMap[Stone]=Stone;IdMap[Brick]=Brick;
@@ -84,7 +113,8 @@ namespace gargantuan::blockgrid {
 		if (AdmitSchema && !AdmitSchema(Schema)) return {};
 		ReplicaPages Result;
 		auto& Out=Result.Bytes;
-		Out={'B','G','R','W',1,static_cast<std::uint8_t>(Coverage.Whole)};
+		Out={'B','G','R','W',static_cast<std::uint8_t>(Coverage.Rectangle?2:1),static_cast<std::uint8_t>(Coverage.Whole)};
+		if (Coverage.Rectangle) { PutCell(Out,Coverage.Rectangle->Min); PutCell(Out,Coverage.Rectangle->MaxExclusive); }
 		Put(Out,static_cast<unsigned>(Coverage.Origins.size()),1);
 		for (auto P:Coverage.Origins) PutCell(Out,P);
 		const auto Header=Encode(Schema,DataProfile::RelevantPeers);
@@ -119,12 +149,15 @@ namespace gargantuan::blockgrid {
 		return Result;
 	}
 	Field Field::DecodePages(std::span<const std::uint8_t> Data,ReplicaCoverage& Coverage) {
-		constexpr std::array<std::uint8_t,5> Magic{'B','G','R','W',1};
+		constexpr std::array<std::uint8_t,4> Magic{'B','G','R','W'};
 		Reader In{Data};
 		if (!std::ranges::equal(In.Take(Magic.size()),Magic)) Invalid();
-		const auto Whole=In.Number(1),Covered=In.Number(1);
-		if (Whole>1 || Covered>MaximumReplicaPages) Invalid();
+		const auto Version=In.Number(1),Whole=In.Number(1);
+		if ((Version!=1 && Version!=2) || Whole>1 || (Version==2 && Whole)) Invalid();
 		ReplicaCoverage Checked{Whole!=0};
+		if (Version==2) Checked.Rectangle=Region{In.Position(),In.Position()};
+		const auto Covered=In.Number(1);
+		if (Covered>MaximumReplicaPages) Invalid();
 		for (unsigned I=0;I<Covered;++I) Checked.Origins.push_back(In.Position());
 		if (!ValidCoverage(Checked)) Invalid();
 		const auto Header=In.Take(In.Number(4));
@@ -132,7 +165,7 @@ namespace gargantuan::blockgrid {
 		if (Schema.GetLeafCount() || Schema.GetOverrideCount() ||
 			!std::ranges::equal(Encode(Schema,DataProfile::RelevantPeers),Header)) Invalid();
 		const auto PageCount=In.Number(1);
-		if (PageCount>(Checked.Whole?WholeReplicaPages:Covered)) Invalid();
+		if (PageCount>(Checked.Whole?WholeReplicaPages:Checked.Rectangle?MaximumReplicaPages:Covered)) Invalid();
 		auto Base=EncodeBase(Schema);
 		Base.resize(Base.size()-4);Put(Base,PageCount,4);
 		std::array<Bytes,MaximumChannels> Overrides;
@@ -141,7 +174,7 @@ namespace gargantuan::blockgrid {
 			const auto Geometry=In.Take(In.Number(2));
 			Reader GeometryHeader{Geometry}; const auto Origin=GeometryHeader.Position();
 			if (Geometry.size()>13+3*LeafVolume || !ValidCell(Origin) || LeafOrigin(Origin)!=Origin ||
-				(!Checked.Whole && !std::ranges::binary_search(Checked.Origins,Origin,CellOrder{}))) Invalid();
+				!Checked.Contains(SingleCell(Origin))) Invalid();
 			Base.insert(Base.end(),Geometry.begin(),Geometry.end());
 			const auto Mask=In.Number(2);
 			if (Mask>>Schema.GetChannelCount()) Invalid();
