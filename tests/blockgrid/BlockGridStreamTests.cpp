@@ -20,6 +20,9 @@ namespace {
 		unsigned Serial,std::size_t* Reused=nullptr) {
 		const auto Scope=GridStreamScope{77,{9,1},{10,1},6};
 		const auto Source=MakeGridOffer(Scope,7,Serial,Serial,1,AssetContentId::Hash(*Data.Bytes),AssemblyProjection{},Data,Base);
+		auto InvalidSource=Source;
+		InvalidSource.Membership=0;
+		Reject([&]{ (void)EncodeGridStream(InvalidSource); });
 		const auto Packet=EncodeGridStream(Source);
 		const auto Offer=DecodeGridStream(Packet);
 		Check(Offer && Offer->Scope==Scope && Offer->Target==Data.Digest,"invalid scoped offer");
@@ -93,7 +96,44 @@ int main() try {
 	Check(!Exhausted.Whole && Exhausted.Origins.empty() && !Exhausted.Contains(SingleCell({12,12,12})),"oversized landing claimed coverage");
 	Landing.Destination=SpatialDestinationBounds{NearInterest.Centers[0]-.1f,NearInterest.Centers[0]+.1f};
 	const auto Exact=SelectGridCoverage(Grid,Pose,2,Landing);
-	Check(Exact.Origins.size()==1 && Exact.Contains(SingleCell({12,12,12})),"exact staged destination failed");
+	Check(Exact.Rectangle && Exact.Origins.empty() && Exact.Contains(SingleCell({12,12,12})),"exact staged destination failed");
+	// Default capsule, legal half-unit blocks and a camera-independent chart rotation.
+	const glm::mat3 Y{.9659258f,0,-.2588190f,0,1,0,.2588190f,0,.9659258f};
+	const glm::mat3 X{1,0,0,0,.7071068f,.7071068f,0,-.7071068f,.7071068f};
+	CFrame Tilt;Tilt.Rotation=Y*X;
+	GridInterest Actor;Actor.ControlledMotion=SpatialDestinationBounds{{-3,-4,-3},{7,8,7}};
+	Field Sparse;
+	const Cell Distant{90000,0,0};
+	const std::array<Write,2> Blocks{{{SingleCell({0,0,0}),{Stone,0}},{SingleCell(Distant),{Brick,5}}}};
+	Check(Sparse.Apply(Blocks),"sparse fixture did not install");
+	const auto Rect=SelectGridCoverage(Sparse,Tilt,.5f,Actor);
+	Check(Rect.Rectangle && !Rect.Whole && Rect.Contains(*GridLocalBounds(Tilt,.5f,*Actor.ControlledMotion)) &&
+		!Rect.Contains(SingleCell(Distant)),"sparse tilted chart failed to authorize exact controller bounds");
+	auto Pages=Sparse.CapturePages(Rect).value();
+	ReplicaCoverage Admitted;
+	const auto Decoded=Field::DecodePages(Pages.Bytes,Admitted);
+	Check(Pages.Bytes[4]==2 && Admitted==Rect && Pages.Records.size()==1 && Decoded.Get({0,0,0}).Definition==Stone &&
+		Decoded.Get(Distant).Definition==Air,"compact rectangle disclosed distant occupied geometry");
+	auto Broken=Pages.Bytes;
+	Broken[6]|=1;
+	Reject([&]{ (void)Field::DecodePages(Broken,Admitted); });
+	Broken=Pages.Bytes; // max X, little endian: vastly more than 1,024 addressable pages
+	Broken[18]=0;Broken[19]=0;Broken[20]=1;Broken[21]=0;
+	Reject([&]{ (void)Field::DecodePages(Broken,Admitted); });
+	Broken=Pages.Bytes;
+	Broken[4]=3;
+	Reject([&]{ (void)Field::DecodePages(Broken,Admitted); });
+	Broken=Pages.Bytes;
+	const auto XOffset=Pages.Records.front().Offset+2;
+	for (unsigned I=0;I<4;++I) Broken[XOffset+I]=static_cast<std::uint8_t>(Distant.X>>(I*8));
+	Reject([&]{ (void)Field::DecodePages(Broken,Admitted); });
+	Field Dense;
+	std::vector<Write> DenseWrites;
+	const auto [Low,High]=*Rect.Rectangle;
+	for(int Z=Low.Z;Z<High.Z;Z+=LeafSide) for(int V=Low.Y;V<High.Y;V+=LeafSide) for(int U=Low.X;U<High.X;U+=LeafSide)
+		DenseWrites.push_back({SingleCell({U,V,Z}),{Stone,0}});
+	Check(DenseWrites.size()==120 && Dense.Apply(DenseWrites) && !Dense.CapturePages(Rect),
+		"occupied-page exhaustion must fail without certifying any partial rectangle");
 	std::cout<<"[BlockGrid:RegionalWire] canonical="<<Canonical.size()<<" firstWire="<<A.Wire<<" firstFragments="<<A.Fragments
 		<<" editWire="<<B.Wire<<" editLiterals="<<B.Literal<<" editPageReuse="<<Reused
 		<<" shiftWire="<<C.Wire<<" shiftLiterals="<<C.Literal<<" shiftPageReuse="<<Overlap<<" lateWire="<<Late.Wire<<"\n";

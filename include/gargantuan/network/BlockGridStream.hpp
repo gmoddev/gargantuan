@@ -31,6 +31,8 @@ namespace gargantuan::network {
 		GridStreamKind Kind{};
 		GridStreamScope Scope;
 		std::uint64_t Subscription{}, Serial{}, Revision{}, Configuration{}, MotionRevision{};
+		std::uint64_t Membership{1};
+		bool RetainsController{};
 		AssetContentId Base, Target, Placement;
 		std::optional<blockgrid::AssemblyProjection> Assembly;
 		GridTransferFence Fence;

@@ -10,13 +10,14 @@
 namespace gargantuan::network {
 	namespace {
 		constexpr std::uint32_t Magic = 0x53474247; // GBGS
-		constexpr std::uint16_t Version = 4;
+		constexpr std::uint16_t Version = 5;
 		bool ValidScope(const GridStreamScope &Scope) {
 			return Scope.Epoch && Scope.Grid.IsValid() && (Scope.Domain.IsValid() || Scope.Domain == ObjectId{}) &&
 				   Scope.Domain != Scope.Grid;
 		}
 		bool Valid(const GridStreamMessage &Message) {
 			if (!ValidScope(Message.Scope) || !Message.Serial || !Message.Subscription) return false;
+			if ((Message.Kind==GridStreamKind::Offer || Message.Kind==GridStreamKind::Installed) && !Message.Membership) return false;
 			if (Message.Fence.Other!=ObjectId{} && (!Message.Fence.Generation || !Message.Fence.Other.IsValid() ||
 				Message.Fence.Other==Message.Scope.Grid)) return false;
 			switch (Message.Kind) {
@@ -88,6 +89,8 @@ namespace gargantuan::network {
 			Writer.Integer(Value.Revision);
 			Writer.Integer(Value.Configuration);
 			Writer.Integer(Value.MotionRevision);
+			Writer.Integer(Value.Membership);
+			Writer.Integer<std::uint8_t>(Value.RetainsController);
 			Writer.Append(std::as_bytes(std::span(Value.Target.Bytes)));
 			Writer.Append(std::as_bytes(std::span(Value.Placement.Bytes)));
 			Writer.Integer(Value.Fence.Generation);
@@ -129,11 +132,14 @@ namespace gargantuan::network {
 			return {};
 		M.Kind = static_cast<GridStreamKind>(Kind);
 		if (M.Kind == GridStreamKind::Request && !ReadDigest(Reader, M.Base)) return {};
-		if ((M.Kind == GridStreamKind::Installed || M.Kind == GridStreamKind::Offer) &&
-			(!Reader.Integer(M.Revision) || !Reader.Integer(M.Configuration) || !Reader.Integer(M.MotionRevision) ||
-			 !ReadDigest(Reader, M.Target) || !ReadDigest(Reader, M.Placement) || !Reader.Integer(M.Fence.Generation) ||
-			 !Reader.Integer(M.Fence.Other.Slot) || !Reader.Integer(M.Fence.Other.Generation)))
-			return {};
+		if (M.Kind==GridStreamKind::Installed || M.Kind==GridStreamKind::Offer) {
+			std::uint8_t Retained{};
+			if (!Reader.Integer(M.Revision) || !Reader.Integer(M.Configuration) || !Reader.Integer(M.MotionRevision) ||
+				!Reader.Integer(M.Membership) || !Reader.Integer(Retained) || Retained>1 || !ReadDigest(Reader,M.Target) ||
+				!ReadDigest(Reader,M.Placement) || !Reader.Integer(M.Fence.Generation) ||
+				!Reader.Integer(M.Fence.Other.Slot) || !Reader.Integer(M.Fence.Other.Generation)) return {};
+			M.RetainsController=Retained!=0;
+		}
 		if (M.Kind == GridStreamKind::Offer) {
 			auto &Assembly = M.Assembly.emplace();
 			std::uint8_t Dynamic{};

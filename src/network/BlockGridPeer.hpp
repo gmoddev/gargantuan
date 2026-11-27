@@ -48,10 +48,14 @@ namespace gargantuan::network {
 			std::weak_ptr<BlockGrid> Owner;
 			bool Requested{};
 			std::uint64_t SourceRevision{};
+			std::uint64_t LocalMembership{},WireMembership{};
 			bool Unavailable{};
 			std::shared_ptr<const blockgrid::ReplicaCoverage> DeniedCoverage;
 			GridTransferFence Fence;
 			GridReplicaContent Known;
+			mutable std::optional<blockgrid::Region> ReceiptRectangle;
+			mutable std::uint64_t ReceiptFieldRevision{},ReceiptMotionRevision{},ReceiptFenceGeneration{};
+			mutable AssetContentId ReceiptDigest;
 		};
 		struct Transfer {
 			GridStreamMessage Offer;
