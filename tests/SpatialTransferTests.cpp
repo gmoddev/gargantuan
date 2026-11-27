@@ -14,6 +14,7 @@
 
 #include <array>
 #include <iostream>
+#include <source_location>
 #include <stdexcept>
 
 namespace {
@@ -194,8 +195,13 @@ namespace {
 			);
 		}
 	};
-	SpatialTransferFrame Packet(const SpatialTransferStep &Step, SpatialTransferPhase Phase) {
-		Check(Step.Reply && Step.Reply->Phase == Phase, "unexpected transfer phase");
+	SpatialTransferFrame Packet(const SpatialTransferStep &Step, SpatialTransferPhase Phase,
+		const std::source_location Location = std::source_location::current()) {
+		if (!Step.Reply || Step.Reply->Phase != Phase)
+			throw std::runtime_error("unexpected transfer phase at test line " + std::to_string(Location.line()) +
+				": expected " + std::to_string(static_cast<int>(Phase)) + ", received " +
+				(Step.Reply ? std::to_string(static_cast<int>(Step.Reply->Phase)) : "no frame") +
+				", status " + std::to_string(static_cast<int>(Step.Status)));
 		const auto Bytes = EncodeSpatialTransfer(*Step.Reply);
 		Check(
 			!Bytes.empty() && Bytes.size() <= MaximumSpatialTransferBytes && IsSpatialTransfer(Bytes), "wire envelope"
@@ -381,9 +387,16 @@ namespace {
 			const SpatialDestinationBounds Headroom{{9.8f,4.15f,-.75f},{11.2f,5.4f,.75f}};
 			const SpatialWireProvider SourceTerrain{SourceKey, SpatialCollisionProvider::Terrain};
 			const auto Terrain = P.Replica.Source->GetTerrain();
+			constexpr WireObjectId NeighbourKey{16,1};
+			const auto OtherPart = std::make_shared<Part>();
+			OtherPart->SetAnchored(true);
+			OtherPart->SetSize({1,1,1});
+			OtherPart->SetCFrame(CFrame(20,3,0));
+			OtherPart->SetParent(P.Replica.Source);
+			OtherPart->SetSpatialRegion(P.Replica.Destination);
 			auto SecondAdapters = P.Replica.Adapters;
 			SecondAdapters.ResolveObject = [&](WireObjectId Id) -> std::optional<ObjectId> {
-				return Id == FloorKey ? P.Replica.Floor->GetObjectId() : P.Replica.Adapters.ResolveObject(Id);
+				return Id == NeighbourKey ? OtherPart->GetObjectId() : P.Replica.Adapters.ResolveObject(Id);
 			};
 			SecondAdapters.Resolve = [&](SpatialWireProvider Key) -> std::optional<ObjectId> {
 				return Key == SourceTerrain ? std::optional(Terrain->GetObjectId()) : std::nullopt;
@@ -393,12 +406,12 @@ namespace {
 				return SpatialAppliedBinding{SourceTerrain, AssetContentId::Hash(std::array<std::uint8_t,1>{7}), 1, 1, true, true};
 			};
 			SecondAdapters.Reserve = [&](const SpatialTransferFrame &Frame, const SpatialDestinationReceipt &Receipt) {
-				return P.Replica.Protection->Reservations.Reserve(P.Replica.Floor->GetObjectId(), Frame, Receipt, [] { return true; });
+				return P.Replica.Protection->Reservations.Reserve(OtherPart->GetObjectId(), Frame, Receipt, [] { return true; });
 			};
 			SpatialTransferServer Second;
-			const SpatialMovementRequest Neighbour{P.Replica.Floor->GetObjectId(), P.Replica.Destination->GetObjectId(),
-				P.Replica.Destination->GetSpatialActivation(), P.Replica.Floor->GetCFrame(), CFrame(10.5f,4.75f,0)};
-			(void)Packet(Second.Begin(OtherPeer, {6,7,12,10,FloorKey,DestinationKey,SourceKey}, P.Replica.Floor,
+			const SpatialMovementRequest Neighbour{OtherPart->GetObjectId(), P.Replica.Destination->GetObjectId(),
+				P.Replica.Destination->GetSpatialActivation(), OtherPart->GetCFrame(), CFrame(10.5f,4.75f,0)};
+			(void)Packet(Second.Begin(OtherPeer, {6,7,12,10,NeighbourKey,DestinationKey,SourceKey}, OtherPart,
 				P.Replica.Source, Neighbour, Headroom, {}, SecondAdapters, P.Now), Offer);
 			Check(InstallSpatialControllerCheckpoint(OfferPacket,*P.Replica.Destination,P.Replica.Adapters) &&
 				P.Replica.Actor->GetCFrame().Position==glm::vec3(10,3,0), "source correction crossed another capsule reservation");
