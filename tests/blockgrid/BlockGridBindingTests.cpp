@@ -4,6 +4,7 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/blockgrid/Edit.hpp"
 #include "gargantuan/blockgrid/Assets.hpp"
+#include "../../src/network/BlockGridPeer.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/services/AssetService.hpp"
@@ -104,6 +105,31 @@ namespace {
 		const auto& F=Grid->GetField();
 		const auto& Binding=*F.GetDefinition(F.GetDefinitionId("project:tile")).Assets;
 		const auto& D=*Binding.Resolved;
+		auto Shared=std::make_shared<blockgrid::SharedAssetPins>();
+		for (std::size_t I=0; I<F.GetDefinitionCount(); ++I) {
+			const auto &Assets=F.GetDefinition(static_cast<std::uint16_t>(blockgrid::Brick+1+I)).Assets;
+			if (Assets) for (const auto &Pin:Assets->Pins) Shared->emplace(Pin.Id,Pin.Digest);
+		}
+		auto FirstFrame=[&](std::shared_ptr<const blockgrid::SharedAssetPins> Pins) {
+			using namespace network;
+			BlockGridPeer Peer(true,31,{},std::move(Pins));
+			const auto Id=Grid->GetObjectId();
+			auto Find=[&](ObjectId Source) { return Source==Id?Grid:nullptr; };
+			Peer.Receive({.Kind=GridStreamKind::Request,.Scope={31,Id,{}},.Subscription=1,.Serial=1},Find,1);
+			std::vector<std::byte> Packet;
+			Peer.Pump(Find,[&](const GridStreamMessage &M){ Packet=EncodeGridStream(M); return true; },2);
+			return Packet;
+		};
+		auto Admit=network::DecodeGridStream(FirstFrame(Shared));
+		Check(Admit && Admit->Kind==network::GridStreamKind::Offer,"explicit transitive pins did not authorize the native source");
+		const auto Unshared=FirstFrame({});
+		Shared->erase(Binding.Pins.back().Id);
+		Check(FirstFrame(Shared)==Unshared,"partial allowlist disclosed an asset dependency");
+		(*Shared)[Binding.Pins.back().Id]=std::string(64,'a');
+		Check(FirstFrame(Shared)==Unshared,"stale allowed dependency digest authorized content");
+		const auto Closed=network::DecodeGridStream(Unshared);
+		Check(Closed && Closed->Kind==network::GridStreamKind::Unavailable && Unshared.size()<64,
+			"unavailable shell leaked catalog metadata");
 		auto Space=std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
 		RenderPublisher Publisher;
 		auto Textures=Service->DrainTextureChanges();

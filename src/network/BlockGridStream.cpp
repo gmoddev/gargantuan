@@ -20,6 +20,7 @@ namespace gargantuan::network {
 			switch (Message.Kind) {
 			case GridStreamKind::Request:
 			case GridStreamKind::Forget:
+			case GridStreamKind::Unavailable:
 				return true;
 			case GridStreamKind::Installed:
 				return Message.Target.IsValid() && Message.Placement.IsValid() && Message.Revision &&

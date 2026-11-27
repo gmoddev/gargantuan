@@ -123,6 +123,7 @@ namespace gargantuan::runtime_distribution {
 		if (Value.SpatialContent) {
 			Result["Version"] = 2u;
 			Result["SpatialContent"] = "BlockGrid1";
+			if (!Value.SharedGridAssets.empty()) Result["SharedGridAssets"] = Value.SharedGridAssets;
 			if (!Value.WorkspaceTerrainManifest.empty())
 				Result["WorkspaceTerrain"] = {{"Manifest",Value.WorkspaceTerrainManifest},{"SpacingShift",Value.WorkspaceTerrainSpacingShift}};
 		}
@@ -132,12 +133,25 @@ namespace gargantuan::runtime_distribution {
 	Metadata DecodeMetadata(const Json &Value) {
 		const bool Spatial = Value.is_object() && Value.value("Version", 0u) == 2;
 		const bool Terrain = Spatial && Value.contains("WorkspaceTerrain");
-		if (!Value.is_object() || Value.size() != (Spatial ? (Terrain ? 12u : 11u) : 10u) ||
+		const bool Shared = Spatial && Value.contains("SharedGridAssets");
+		if (!Value.is_object() || Value.size() != (Spatial ? (11u + unsigned(Terrain) + unsigned(Shared)) : 10u) ||
 			(!Spatial && Value.value("Version", 0u) != 1) || (Spatial && String(Value,"SpatialContent") != "BlockGrid1") ||
 			String(Value, "ScriptCatalog") != CodeCatalogPath)
 			Reject("InvalidPolicy", "Runtime distribution manifest metadata is unsupported.");
 		Metadata Result;
 		Result.SpatialContent = Spatial;
+		if (Shared) {
+			const auto &Pins = Value.at("SharedGridAssets");
+			if (!Pins.is_object() || Pins.empty() || Pins.size() > AssetLimits::MaximumCatalogRecords)
+				Reject("InvalidPolicy","Shared grid asset pins exceed the package bound.");
+			for (const auto &[Key, Digest] : Pins.items()) {
+				const auto Id = AssetId::Parse(Key);
+				const auto Hash = Digest.is_string() ? AssetContentId::Parse(Digest.get_ref<const std::string &>()) : std::nullopt;
+				if (!Id || !Id->IsValid() || Id->ToString()!=Key || !Hash || !Hash->IsValid() || Hash->ToString()!=Digest.get<std::string>())
+					Reject("InvalidPolicy","Shared grid asset pins are invalid.");
+				Result.SharedGridAssets.emplace(Key, Hash->ToString());
+			}
+		}
 		if (Terrain) {
 			const auto &Pin = Value.at("WorkspaceTerrain");
 			if (!Pin.is_object() || Pin.size()!=2 || !Pin.contains("SpacingShift") || !Pin["SpacingShift"].is_number_integer())

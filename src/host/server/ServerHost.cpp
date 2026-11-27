@@ -773,6 +773,7 @@ namespace gargantuan::host {
 							Payload->Inspection.Revision, Payload->TerrainArtifacts, true) : nullptr,
 						.RuntimeDistributionIdentity = Payload->ClientCodeIdentity,
 						.SpatialContent = SpatialContent,
+						.SharedGridAssets = SpatialContent ? std::make_shared<const blockgrid::SharedAssetPins>(Payload->SharedGridAssets) : nullptr,
 					},
 					Runtime.get()
 				);

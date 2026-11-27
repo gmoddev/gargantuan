@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Team Fireworks
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
+#include "gargantuan/blockgrid/AssetAudience.hpp"
 #include "gargantuan/network/BlockGridStream.hpp"
 
 #include <functional>
@@ -16,7 +17,8 @@ namespace gargantuan::network {
 		static constexpr std::size_t MaximumGrids = 8;
 		using Resolve = std::function<std::shared_ptr<BlockGrid>(ObjectId)>;
 		using Send = std::function<bool(const GridStreamMessage &)>;
-		BlockGridPeer(bool Server, std::uint64_t Epoch, ObjectId Domain);
+		BlockGridPeer(bool Server, std::uint64_t Epoch, ObjectId Domain,
+			std::shared_ptr<const blockgrid::SharedAssetPins> SharedAssets = {});
 		void Track(ObjectId Grid);
 		void Forget(ObjectId Grid);
 		void Retire();
@@ -30,6 +32,8 @@ namespace gargantuan::network {
 			AssetContentId Placement;
 			std::weak_ptr<BlockGrid> Replica;
 			bool Requested{};
+			std::uint64_t CheckedPublicRevision{};
+			bool AssetsGranted{}, Unavailable{};
 			GridReplicaContent Known;
 		};
 		struct Transfer {
@@ -43,6 +47,7 @@ namespace gargantuan::network {
 		bool Server;
 		std::uint64_t Epoch{}, NextToken{1};
 		ObjectId Domain, LastServed;
+		std::shared_ptr<const blockgrid::SharedAssetPins> SharedAssets;
 		std::map<ObjectId, Entry> Grids;
 		std::optional<Transfer> Active;
 		GridStreamReceiver Receiver;

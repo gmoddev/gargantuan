@@ -1710,6 +1710,11 @@ namespace gargantuan {
 		}
 		auto Assets = std::dynamic_pointer_cast<AssetService>(World->FindFirstChildOfClass("AssetService", false));
 		if (!Assets) throw std::runtime_error("Project has no canonical AssetService");
+		std::optional<AssetRuntimeSnapshot> SharedSnapshot;
+		if (SpatialContent && World->Filesystem && World->Filesystem->Exists(".gargantuan/package-audience.json")) {
+			const auto SharedIds = client_package::ReadSharedAssets(*World->Filesystem);
+			SharedSnapshot = Assets->CaptureRuntimeAssets(std::span<const AssetId>(SharedIds));
+		}
 		GamePayload Result{
 			.Identity = ProjectValue.Identity,
 			.DisplayName = World->GetName(),
@@ -1734,6 +1739,11 @@ namespace gargantuan {
 				throw RuntimeDistributionError("AudienceViolation", "The runtime distribution target and package audience disagree.");
 			Result.DistributionPlan = CaptureRuntimeDistribution(ProjectValue, World, *RuntimeDistribution, true);
 			Result.DistributionPlan->SpatialContent = SpatialContent;
+			if (SharedSnapshot) {
+				const auto Catalog = Json::parse(SharedSnapshot->CatalogJson);
+				for (const auto &Asset : Catalog.at("Assets"))
+					Result.DistributionPlan->SharedGridAssets.emplace(Asset.at("AssetId").get<std::string>(), Asset.at("ContentId").get<std::string>());
+			}
 			if (SpatialContent && Terrain) {
 				Result.DistributionPlan->WorkspaceTerrainManifest = TerrainManifest->ToString();
 				Result.DistributionPlan->WorkspaceTerrainSpacingShift = Terrain->Index.Grid.SpacingShift;
@@ -1744,11 +1754,14 @@ namespace gargantuan {
 				std::ranges::sort(ClientScripts, {}, &RuntimeDistributionScript::SourceId);
 				for (const auto &Script : ClientScripts)
 					Bindings.push_back({Script.SourceId, Script.Path, Script.Class});
-				Result.DistributionPlan->ClientCodeIdentity = HashText(Json{
+				Json Identity{
 					{"Domain", SpatialContent ? "GargantuanSpatialClientCodeV1" : "GargantuanClientCodeV1"}, {"Project", Result.Identity.ToString()},
 					{"Session", Result.DistributionPlan->SessionIdentity}, {"Scripts", std::move(Bindings)},
 					{"Projection", HashText(client_package::CaptureCode(*World))},
-				}.dump());
+				};
+				if (!Result.DistributionPlan->SharedGridAssets.empty())
+					Identity["SharedGridAssets"] = Result.DistributionPlan->SharedGridAssets;
+				Result.DistributionPlan->ClientCodeIdentity = HashText(Identity.dump());
 			}
 			if (Result.PreRunSource && (RuntimeDistribution->Preset != RuntimeDistributionPreset::Open ||
 				std::ranges::any_of(Result.DistributionPlan->Scripts, [](const auto &Script) {
@@ -1764,10 +1777,13 @@ namespace gargantuan {
 					return GetSchemaDefinitionProvenance(*Definition) != SchemaProvenance::NativeEngine;
 				}))
 				throw std::runtime_error("Distributed Player packages currently require the native schema without PreRun");
-			const auto SharedAssets = client_package::ReadSharedAssets(*World->Filesystem);
+			if (!SharedSnapshot) {
+				const auto SharedAssets = client_package::ReadSharedAssets(*World->Filesystem);
+				SharedSnapshot = Assets->CaptureRuntimeAssets(std::span<const AssetId>(SharedAssets));
+			}
 			Result.DistributedPlayer = std::shared_ptr<const DistributedPlayerCapture>(new DistributedPlayerCapture(
 				Result.Identity, Result.AuthoritativeRevision, client_package::CaptureCode(*World),
-				Assets->CaptureRuntimeAssets(std::span<const AssetId>(SharedAssets))
+				std::move(*SharedSnapshot)
 			));
 			return Result;
 		}
@@ -1986,6 +2002,7 @@ namespace gargantuan {
 						.ContentKeyId = Policy.ContentKeyId, .Compiler = std::string(GetRuntimeScriptCompilerIdentity()),
 						.ClientCodeIdentity = Plan->ClientCodeIdentity,
 						.SpatialContent = Plan->SpatialContent,
+						.SharedGridAssets = Plan->SharedGridAssets,
 						.WorkspaceTerrainManifest = Plan->WorkspaceTerrainManifest,
 						.WorkspaceTerrainSpacingShift = Plan->WorkspaceTerrainSpacingShift,
 					};
@@ -2563,6 +2580,7 @@ namespace gargantuan {
 			if (Manifest->RuntimeDistribution) {
 				Result.ClientCodeIdentity = Manifest->RuntimeDistribution->ClientCodeIdentity;
 				Result.SpatialContent = Manifest->RuntimeDistribution->SpatialContent;
+				Result.SharedGridAssets = Manifest->RuntimeDistribution->SharedGridAssets;
 				Result.WorkspaceTerrainManifest = Manifest->RuntimeDistribution->WorkspaceTerrainManifest;
 				Result.WorkspaceTerrainSpacingShift = Manifest->RuntimeDistribution->WorkspaceTerrainSpacingShift;
 				auto Catalog = std::move(*Manifest->ScriptCatalog);

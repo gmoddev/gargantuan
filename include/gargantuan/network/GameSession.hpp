@@ -1,4 +1,5 @@
 #pragma once
+#include "gargantuan/blockgrid/AssetAudience.hpp"
 
 #include "gargantuan/network/Limits.hpp"
 #include "gargantuan/network/GameplayInput.hpp"
@@ -73,6 +74,7 @@ namespace gargantuan::network {
 		// Trusted native startup policy. Only the server chooses the initial coordinate domain.
 		bool SpatialContent{};
 		std::function<ObjectId(const Player &)> ResolveInitialSpatialAudience;
+		std::shared_ptr<const blockgrid::SharedAssetPins> SharedGridAssets;
 
 		[[nodiscard]] bool IsValid() const;
 		[[nodiscard]] static NetworkLimits DefaultLimits();

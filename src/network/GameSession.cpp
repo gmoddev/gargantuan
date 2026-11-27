@@ -1423,7 +1423,7 @@ namespace gargantuan::network {
 						PeerValue.AuthorizedSpatialRegion = Configuration.ResolveInitialSpatialAudience(*PeerValue.PlayerValue);
 					if (Configuration.TerrainBootstrap && PeerValue.AuthorizedSpatialRegion.IsValid())
 						throw std::invalid_argument("[Spatial:Network] Workspace terrain window requires a Workspace grant");
-					PeerValue.Grids = std::make_unique<BlockGridPeer>(true,PeerValue.SessionEpoch,PeerValue.AuthorizedSpatialRegion);
+					PeerValue.Grids = std::make_unique<BlockGridPeer>(true,PeerValue.SessionEpoch,PeerValue.AuthorizedSpatialRegion,Configuration.SharedGridAssets);
 				}
 			} catch (const std::exception &) {
 				++Metrics.RejectedHandshakes;

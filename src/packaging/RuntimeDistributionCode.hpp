@@ -39,6 +39,7 @@ namespace gargantuan {
 			std::string Compiler;
 			std::string ClientCodeIdentity;
 			bool SpatialContent{};
+			blockgrid::SharedAssetPins SharedGridAssets;
 			std::string WorkspaceTerrainManifest;
 			int WorkspaceTerrainSpacingShift{};
 		};
