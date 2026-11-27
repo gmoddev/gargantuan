@@ -85,7 +85,7 @@ namespace {
 		Require(Imported.Ok && Imported.Record.has_value(),"offset mesh import failed");
 		return Imported.Record->Reference.Value;
 	}
-	void Run(bool CharacterProfile, bool Socket) {
+	void Run(bool CharacterProfile, bool Socket, bool Reactivate = false) {
 		auto Sim = SimulatedNetwork::Create(
 			{.BaseLatency = 2ms, .MaximumReorderDelay = 5ms, .UnreliableReorderProbability = .25}
 		);
@@ -497,6 +497,15 @@ script:SetAttribute("Isolated", true)
 				return Advanced;
 			}, "ordinary movement never received matching collision coverage after the handoff");
 			const auto Before=Avatar->GetCFrame().Position;
+			if (Reactivate) {
+				const auto Previous = Room->GetSpatialActivation();
+				Room->SetParent(nullptr);
+				Room->SetParent(Space);
+				Require(Room->GetSpatialActivation() != Previous &&
+					!Avatar->AdmitMotion(*Room, Step).Succeeded() && Avatar->GetCFrame().Position == Before,
+					"reactivated domain accepted motion under a retired receipt");
+				return;
+			}
 			auto NewWall=MakePart("ChangedCoverage",CFrame(2,30,1),Room);
 			Require(!Avatar->AdmitMotion(*Room,Step).Succeeded() && Avatar->GetCFrame().Position==Before,
 				"new authority geometry failed to invalidate the acknowledged movement area");
@@ -535,6 +544,7 @@ int main(int Count, char **Args) {
 		const bool Socket = Count > 1 && std::string_view(Args[1]) == "--gns";
 		Run(false, Socket);
 		Run(true, Socket);
+		Run(true, Socket, true);
 		std::cout
 			<< "[Spatial:Session] Controlled rigid and character transfers converged with an isolated spectator\n";
 		return 0;

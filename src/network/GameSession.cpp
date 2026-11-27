@@ -298,7 +298,7 @@ namespace gargantuan::network {
 			std::shared_ptr<DomainTerrainDelivery> NamedTerrain;
 			std::uint64_t CurrentGrantGeneration{}, LastStagingSerial{};
 			std::optional<SpatialMotionWindow> MotionWindow;
-			std::uint64_t LastMotionSerial{}, NextMotionCheckTick{};
+			std::uint64_t LastMotionSerial{}, NextMotionCheckTick{}, MotionDomainActivation{};
 			std::uint32_t PlayerId = 0;
 			std::optional<TerrainSessionWindow> TerrainWindow;
 			TerrainWindowIdentity TerrainIdentity;

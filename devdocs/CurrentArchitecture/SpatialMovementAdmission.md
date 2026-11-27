@@ -55,6 +55,8 @@ The protected network profile accepts an anchored or stationary kinematic source
 
 The host owns wire dispatch, authenticated epoch selection, reconnect and revocation, installed content provenance, subject control and reconciliation. Transport bindings must use the current controlling session when calling the state machine. A selected viewport or a client-supplied scope never grants movement authority.
 
+The server records the native domain activation when it issues an ordinary movement window. Detaching and reattaching a named space requires a new receipt even if the domain identity, bounds, owner list and cell contents coincide. The activation is local runtime state and adds no packet bytes.
+
 ### Requesting a player transfer
 
 A running server Script with MutateDataModel can call `Player:RequestSpatialTransfer(Destination, DestinationPose, Minimum, Maximum)`. The player and destination must belong to that Script's DataModel. Supply a Workspace or SpatialRegion, a rigid destination CFrame and strictly increasing corners in destination coordinates. Each axis supports a maximum extent of 512 units. The bounds must contain the complete landing box and controller capsule. The method returns a request handle and nil, or nil and a reason such as `Invalid`, `Unavailable`, `Denied` or `Busy`.
