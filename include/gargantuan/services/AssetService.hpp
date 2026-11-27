@@ -71,7 +71,9 @@ namespace gargantuan {
 		void LoadProjectAssetSnapshot(const AssetProjectSnapshot &Snapshot);
 		[[nodiscard]] AssetProjectSnapshot CaptureProjectAssets() const;
 		void LoadRuntimeAssetSnapshot(const AssetRuntimeSnapshot &Snapshot);
-		[[nodiscard]] AssetRuntimeSnapshot CaptureRuntimeAssets() const;
+		[[nodiscard]] AssetRuntimeSnapshot CaptureRuntimeAssets(
+			std::optional<std::span<const AssetId>> SharedAssets = std::nullopt
+		) const;
 
 	  private:
 		struct Impl;

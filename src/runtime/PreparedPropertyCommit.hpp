@@ -41,7 +41,7 @@ namespace gargantuan {
 		// Discovery only; Apply always revalidates authority, identity, and values.
 		static bool SupportsProperty(const InstanceProperty &Property) noexcept;
 		static PreparedPropertyResult Apply(DataModel &World, std::uint64_t ExpectedRevision,
-			std::span<const PreparedPropertyWrite> Writes, const ScriptSecurityContext &Security);
+			std::span<const PreparedPropertyWrite> Writes, const ScriptSecurityContext &Security, std::uint64_t Author = 0);
 		static TransactionResult Replay(DataModel &World, const ScriptSecurityContext &Security, bool Redo);
 
 		// Qualification seams are thread-local, native-only, and never request data.
@@ -58,6 +58,6 @@ namespace gargantuan {
 			const PreparedPropertyWrite &Write, const ScriptSecurityContext &Security, std::any &Native, WireValue &After);
 		static PreparedPropertyResult Execute(DataModel &World, std::uint64_t ExpectedRevision,
 			std::span<const PreparedPropertyWrite> Writes, const ScriptSecurityContext &Security,
-			const CommittedTransaction *ReplayAction, bool Redo);
+			const CommittedTransaction *ReplayAction, bool Redo, std::uint64_t Author = 0);
 	};
 }

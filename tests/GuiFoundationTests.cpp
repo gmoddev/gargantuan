@@ -263,6 +263,38 @@ namespace {
 		Check(Activations == 0, "ancestor rectangular clipping excludes overflow from hit testing as well as rendering");
 	}
 
+	void TestAutomaticSizePolicyTransition() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		Game->InitializeLoadedProjectRevision();
+		const auto Starter = Game->FindFirstChildOfClass("StarterGui", false);
+		auto Screen = std::make_shared<ScreenGui>();
+		Screen->SetParent(Starter);
+		auto Panel = std::make_shared<Frame>();
+		Panel->SetSize(UDim2::fromOffset(150, 70));
+		Panel->SetParent(Screen);
+		auto Child = std::make_shared<Frame>();
+		Child->SetSize(UDim2::fromOffset(32, 20));
+		Child->SetPosition(UDim2::fromOffset(5, 4));
+		Child->SetParent(Panel);
+		GuiRuntime Runtime(Game, std::filesystem::path(DefaultGuiFontPath), GuiRuntimeMode::AuthoringPreview);
+		Runtime.SetViewport({400, 300, 1.0f, {}});
+		const auto CheckLayout = [&](float Width, bool Automatic, const char *Message) {
+			(void)Runtime.Reconcile();
+			const auto Snapshot = Runtime.GetPresentedLayout();
+			const auto *Node = Snapshot ? FindNode(Snapshot, Panel->GetObjectId()) : nullptr;
+			Check(Node && Near(Node->Bounds.Width, Width) && Near(Node->Bounds.Height, 70.0f) &&
+				Node->LayoutSizesX == Automatic && !Node->LayoutSizesY, Message);
+		};
+		CheckLayout(150.0f, false, "independent layout keeps the authored size before AutomaticSize changes");
+		Panel->SetAutomaticSize(Enums::AutomaticSize::X);
+		CheckLayout(37.0f, true, "enabling AutomaticSize on an independent root rebuilds the presented size and ownership");
+		Child->SetPosition(UDim2::fromOffset(13, 4));
+		CheckLayout(45.0f, true, "child placement changes remeasure the now-dependent root");
+		Panel->SetAutomaticSize(Enums::AutomaticSize::None);
+		CheckLayout(150.0f, false, "disabling AutomaticSize retires layout ownership and restores the authored size");
+	}
+
 	void TestRotationOrderingAndAlpha() {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
@@ -1542,6 +1574,7 @@ int main() {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		RunTest("LayoutTextPresentationAndResources", TestLayoutTextPresentationAndResources);
 		RunTest("AutomaticSizeListAndClipping", TestAutomaticSizeListAndClipping);
+		RunTest("AutomaticSizePolicyTransition", TestAutomaticSizePolicyTransition);
 		RunTest("RotationOrderingAndAlpha", TestRotationOrderingAndAlpha);
 		RunTest("StarterGuiPreviewAndRuntimeRoots", TestStarterGuiPreviewAndRuntimeRoots);
 		RunTest("InputRoutingFocusAndMutationSafety", TestInputRoutingFocusAndMutationSafety);

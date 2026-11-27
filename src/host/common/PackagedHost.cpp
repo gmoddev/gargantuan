@@ -41,21 +41,25 @@ namespace gargantuan::host {
 		void ValidateNativeRuntimeClosure(const std::filesystem::path &RuntimeRoot) {
 #if defined(_WIN32)
 			const auto CanonicalRoot = std::filesystem::weakly_canonical(RuntimeRoot);
-			for (const auto *ModuleName : {
-					 L"SDL3.dll",
-					 L"MSVCP140.dll",
-					 L"VCRUNTIME140.dll",
-					 L"VCRUNTIME140_1.dll",
-				 }) {
-				const auto Module = GetModuleHandleW(ModuleName);
+			std::wstring SystemPath(32'768, L'\0');
+			const auto SystemLength = GetSystemDirectoryW(SystemPath.data(), static_cast<UINT>(SystemPath.size()));
+			if (SystemLength == 0 || SystemLength >= SystemPath.size())
+				throw std::runtime_error("the system runtime directory is unavailable");
+			SystemPath.resize(SystemLength);
+			const auto VerifyLocation = [&](HMODULE Module, const std::filesystem::path &ExpectedRoot) {
 				std::wstring Buffer(32'768, L'\0');
 				const auto Length = Module ? GetModuleFileNameW(Module, Buffer.data(), static_cast<DWORD>(Buffer.size())) : 0;
 				if (Length == 0 || Length == Buffer.size())
 					throw std::runtime_error("a required native runtime module is unavailable");
 				Buffer.resize(Length);
-				if (std::filesystem::weakly_canonical(Buffer).parent_path() != CanonicalRoot)
-					throw std::runtime_error("a required native runtime module was not loaded from the runtime root");
-			}
+				if (!std::filesystem::equivalent(std::filesystem::path(Buffer).parent_path(), ExpectedRoot))
+					throw std::runtime_error("a native module was loaded outside its required directory");
+			};
+			VerifyLocation(GetModuleHandleW(L"SDL3.dll"), CanonicalRoot);
+			for (const auto *Name : {L"MSVCP140.dll", L"VCRUNTIME140.dll", L"VCRUNTIME140_1.dll"})
+				VerifyLocation(GetModuleHandleW(Name), SystemPath);
+			for (const auto *Name : {L"libcrypto-3-x64.dll", L"libcrypto-3-arm64.dll", L"libcrypto-3.dll"})
+				if (const auto Module = GetModuleHandleW(Name)) VerifyLocation(Module, CanonicalRoot);
 #else
 			(void)RuntimeRoot;
 #endif
@@ -67,15 +71,21 @@ namespace gargantuan::host {
 		const std::filesystem::path &RuntimeRoot,
 		std::string_view HostName,
 		int &ExitCode,
+		const RuntimeDistributionAdmission &Admission,
 		PackageRuntimeLoadMode Mode
 	) {
 		std::vector<PackageDiagnostic> Diagnostics;
-		auto Payload = PackageBuilder::Load(PackageRoot, Diagnostics, Mode);
+		auto Payload = PackageBuilder::Load(PackageRoot, Diagnostics, Admission, Mode);
 		if (!Payload) {
 			std::cerr << HostName << " could not validate this game package.\n";
 			for (const auto &Diagnostic : Diagnostics)
 				if (Diagnostic.Severity == PackageDiagnosticSeverity::Error)
 					std::cerr << "[Package:" << Diagnostic.Category << "] " << Diagnostic.Message << '\n';
+			ExitCode = 3;
+			return std::nullopt;
+		}
+		if (Payload->Inspection.Audience == PackageAudience::DistributedPlayer && HostName != "GargantuanPlayer") {
+			std::cerr << "[Package:Audience] This package requires the Player host.\n";
 			ExitCode = 3;
 			return std::nullopt;
 		}

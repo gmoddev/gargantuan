@@ -80,7 +80,8 @@ namespace gargantuan {
 	}
 
 	TransactionResult AuthoritativeTransactionHistory::BeginInternal(
-		DataModel &World, std::uint64_t Owner, std::string Label, TransactionOrigin Origin, bool Implicit
+		DataModel &World, std::uint64_t Owner, std::string Label, TransactionOrigin Origin, bool Implicit,
+		std::uint64_t Author
 	) {
 		if (Owner == 0) return Failure(TransactionStatus::WrongOwner, {}, "Transaction owner is invalid");
 		if (Label.empty() || Label.size() > MaximumTransactionLabelBytes)
@@ -101,6 +102,7 @@ namespace gargantuan {
 				.StartingRevision = World.GetAuthoritativeRevision(),
 				.Implicit = Implicit,
 				.OpenedAt = std::chrono::steady_clock::now(),
+				.Author = Author,
 			}
 		);
 		return {
@@ -114,13 +116,13 @@ namespace gargantuan {
 	TransactionResult AuthoritativeTransactionHistory::Begin(
 		DataModel &World, std::uint64_t Owner, std::string Label, TransactionOrigin Origin
 	) {
-		return BeginInternal(World, Owner, std::move(Label), Origin, false);
+		return BeginInternal(World, Owner, std::move(Label), Origin, false, 0);
 	}
 
 	TransactionResult AuthoritativeTransactionHistory::BeginImplicit(
-		DataModel &World, std::uint64_t Owner, std::string Label, TransactionOrigin Origin
+		DataModel &World, std::uint64_t Owner, std::string Label, TransactionOrigin Origin, std::uint64_t Author
 	) {
-		return BeginInternal(World, Owner, std::move(Label), Origin, true);
+		return BeginInternal(World, Owner, std::move(Label), Origin, true, Author);
 	}
 
 	TransactionResult AuthoritativeTransactionHistory::ValidateMutation(
@@ -354,6 +356,7 @@ namespace gargantuan {
 				.ResultingRevision = ResultingRevision,
 				.Changes = std::move(Open->Changes),
 				.SemanticBytes = Open->SemanticBytes,
+				.Author = Open->Author,
 			}
 		);
 		Open.reset();

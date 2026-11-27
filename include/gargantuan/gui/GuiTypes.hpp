@@ -128,6 +128,10 @@ namespace gargantuan {
 		bool FocusEligible = false;
 		Enums::InputSink InputSink = Enums::InputSink::None;
 		bool ScrollContainer = false;
+		bool LayoutPositionsX = false;
+		bool LayoutPositionsY = false;
+		bool LayoutSizesX = false;
+		bool LayoutSizesY = false;
 		Vector2 ScrollOffset;
 		Vector2 ContentExtent;
 		GuiResolvedPresentation Presentation;

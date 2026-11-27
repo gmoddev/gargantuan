@@ -438,7 +438,12 @@ int main() {
 
 	const auto Unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
 	const auto Root = std::filesystem::temp_directory_path() / ("gargantuan-assets-" + Unique);
-	const auto Relocated = std::filesystem::temp_directory_path() / ("gargantuan-assets-relocated-" + Unique);
+	auto Relocated = std::filesystem::temp_directory_path() / ("gargantuan assets relocated-" + Unique);
+	// The canonical asset filename still fits the legacy Windows path budget.
+	// Appending the old temporary suffix to its full name would exceed it.
+	constexpr std::size_t RelocatedRootLength = 150;
+	if (Relocated.native().size() < RelocatedRootLength)
+		Relocated += std::string(RelocatedRootLength - Relocated.native().size(), 'x');
 	struct Cleanup {
 		std::filesystem::path First;
 		std::filesystem::path Second;
@@ -1320,6 +1325,17 @@ int main() {
 	auto RelocatedReimport = RelocatedAssets->ReimportProjectAsset(RelocatedMount, PersistentImageReference);
 	Check(RelocatedReimport.Ok && RelocatedReimport.Record && RelocatedReimport.Record->Id == SuccessfulReimport.Record->Id,
 		"project-relative source identity survives root relocation");
+	const auto RelocatedSnapshot = RelocatedProject.CaptureGame(RelocatedWorld, Snapshot.Revision);
+	RelocatedProject.PersistGameAtomically(RelocatedSnapshot);
+	RelocatedProject.PersistGameAtomically(RelocatedSnapshot);
+	{
+		DiskFilesystem SavedFilesystem(Relocated);
+		auto SavedProject = Project::fromExisting(&SavedFilesystem);
+		auto SavedWorld = SavedProject.DeserializeGame();
+		Check(GetAssets(SavedWorld)->IsAvailable(PersistentImageReference),
+			"repeated atomic saves in a deep project preserve the canonical asset on reopen");
+		SavedWorld->Destroy();
+	}
 
 	const auto ArtifactPath = Relocated / ".gargantuan" / "assets" / "artifacts" /
 		(SuccessfulReimport.Record->ContentId.ToString() + ".gasset");

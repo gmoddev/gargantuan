@@ -60,6 +60,7 @@ namespace gargantuan {
 
 		[[nodiscard]] std::shared_ptr<const GuiLayoutSnapshot> GetCommittedLayout() const;
 		[[nodiscard]] std::shared_ptr<const GuiLayoutSnapshot> GetPresentedLayout() const;
+		[[nodiscard]] bool IsPresentedLayoutCurrent() const;
 		[[nodiscard]] std::shared_ptr<const GuiPresentationSnapshot> GetCommittedPresentation() const;
 		[[nodiscard]] std::shared_ptr<const GuiAccessibilitySnapshot> GetAccessibilitySnapshot() const;
 		[[nodiscard]] GuiRuntimeProfile GetLastProfile() const;

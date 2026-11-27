@@ -1,5 +1,7 @@
 #include "gargantuan/packaging/PackageBuilder.hpp"
 
+#include "ClientPackage.hpp"
+#include "RuntimeDistributionCode.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/ModuleScript.hpp"
@@ -8,12 +10,15 @@
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/content/ResidencySpatialMetadata.hpp"
 #include "gargantuan/filesystem/Project.hpp"
+#include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/gui/PlayerGuiScope.hpp"
 #include "gargantuan/reflection/PreRunRegistration.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
+#include "gargantuan/runtime/ServicePolicy.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/scripting/RuntimeScriptCode.hpp"
 #include "assets/AssetImporter.hpp"
 #include "assets/PreparedInstanceSerialization.hpp"
 #include "serialization/JsonCodec.hpp"
@@ -115,6 +120,62 @@ namespace gargantuan {
 			std::vector<RuntimeDistributionEntry> Files;
 		};
 
+		bool IsPlayerExecutable(std::string_view Path) {
+			return Path == "GargantuanPlayer" || Path == "GargantuanPlayer.exe";
+		}
+
+		bool IsServerExecutable(std::string_view Path) {
+			return Path == "GargantuanServer" || Path == "GargantuanServer.exe";
+		}
+
+		bool IsDistributedEngineFile(std::string_view Path, std::string_view Category) {
+			constexpr std::array RuntimeResources{
+				"runtime/DefaultActionMap.luau", "runtime/DefaultInteractionRuntime.luau",
+				"runtime/DefaultCamera.luau", "runtime/DefaultCharacterRuntime.luau",
+				"runtime/DefaultCharacterAssembly.luau", "runtime/DefaultCharacterAnimation.luau",
+				"runtime/DefaultLocomotion.luau", "runtime/DefaultNetworkLocomotion.luau",
+				"runtime/DefaultNetworkCharacterRuntime.luau", "runtime/DefaultPlayerRuntime.luau",
+				"runtime/DefaultNetworkClientRuntime.luau", "runtime/DefaultNetworkServerRuntime.luau",
+				"runtime/GargantuanSans.ttf",
+			};
+			constexpr std::array Shaders{
+				"shaders/gui.frag.spv", "shaders/gui.vert.spv", "shaders/ibl_brdf.frag.spv",
+				"shaders/ibl_convolve.frag.spv", "shaders/ibl_fullscreen.vert.spv", "shaders/ibl_source.frag.spv",
+				"shaders/opaque-instanced.vert.spv", "shaders/opaque-portable.frag.spv", "shaders/opaque.frag.spv",
+				"shaders/opaque.vert.spv", "shaders/scene-resolve.frag.spv", "shaders/scene-resolve.vert.spv",
+				"shaders/shadow-instanced.vert.spv", "shaders/shadow-opaque.frag.spv", "shaders/shadow.frag.spv",
+				"shaders/shadow.vert.spv", "shaders/sky.frag.spv", "shaders/sky.vert.spv",
+			};
+			constexpr std::array Notices{
+				"notices/Gargantuan.txt", "notices/argparse.txt", "notices/Box3D.txt", "notices/Manifold.txt",
+				"notices/Manifold-Authors.txt", "notices/GLM.txt", "notices/nlohmann-json.txt", "notices/Luau.txt",
+				"notices/magic-enum.txt", "notices/SDL3.txt", "notices/SDL3_image.txt", "notices/SDL3_ttf.txt",
+				"notices/Tracy.txt", "notices/GameNetworkingSockets.txt", "notices/ProtocolBuffers.txt",
+				"notices/MSVC-Runtime.txt", "notices/openssl.txt",
+			};
+			constexpr std::array Libraries{
+				"SDL3.dll", "libprotobuf.dll", "libprotobufd.dll", "concrt140.dll", "msvcp140.dll",
+				"msvcp140_1.dll", "msvcp140_2.dll", "msvcp140_atomic_wait.dll", "msvcp140_codecvt_ids.dll",
+				"vccorlib140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "vcruntime140_threads.dll",
+				"libSDL3.so", "libSDL3.dylib", "libprotobuf.so", "libprotobuf.dylib", "libprotobuf.a",
+				"libcrypto-3-x64.dll", "libcrypto-3.dll", "libcrypto-3-arm64.dll", "libcrypto.so.3", "libcrypto.3.dylib",
+			};
+			auto Contains = [Path](const auto &Names) { return std::ranges::find(Names, Path) != Names.end(); };
+			if (Category == "Shader") return Contains(Shaders);
+			if (Category == "Notice") return Contains(Notices);
+			if (Category != "Runtime") return false;
+			if (IsPlayerExecutable(Path) || Contains(RuntimeResources) || Contains(Libraries)) return true;
+			const auto Versioned = [Path](std::string_view Prefix, std::string_view Suffix) {
+				if (!Path.starts_with(Prefix) || !Path.ends_with(Suffix) ||
+					Path.size() <= Prefix.size() + Suffix.size()) return false;
+				const auto Version = Path.substr(Prefix.size(), Path.size() - Prefix.size() - Suffix.size());
+				return Version.front() >= '0' && Version.front() <= '9' &&
+					std::ranges::all_of(Version, [](char Digit) { return (Digit >= '0' && Digit <= '9') || Digit == '.'; });
+			};
+			return Versioned("libSDL3.so.", "") || Versioned("libSDL3.", ".dylib") ||
+				Versioned("libprotobuf.so.", "") || Versioned("libprotobuf.", ".dylib");
+		}
+
 		struct ParsedPackageManifest {
 			PackageInspection Inspection;
 			std::string ProjectPath;
@@ -124,6 +185,10 @@ namespace gargantuan {
 			AssetContentId ContentManifestDigest;
 			std::string ContentTableSha256;
 			std::vector<ContentEntry> Content;
+			std::optional<runtime_distribution::Metadata> RuntimeDistribution;
+			bool TrustedCompiler = false;
+			RuntimePackageProvisionedSecurity DistributionSecurity;
+			std::optional<RuntimeDistributionCodeCatalog> ScriptCatalog;
 		};
 
 		struct SerializedSubtreeInspection final {
@@ -535,17 +600,53 @@ namespace gargantuan {
 			}
 		}
 
+		std::string ReadDistributedPlayerDigest(const std::filesystem::path &Root) {
+			const auto Path = ResolvePackageFile(Root, "distributed-player-capability.json", true);
+			if (!Path) throw std::runtime_error("Distributed Player requires a current GNS-enabled Player distribution");
+			const auto Capability = JsonCodec::Parse(ReadBoundedText(*Path, 1024), 1024, "distributed Player runtime");
+			if (!Capability || !Capability->is_object() || Capability->size() != 2 ||
+				!Capability->contains("PackageFormatVersion") || !(*Capability)["PackageFormatVersion"].is_number_unsigned() ||
+				(*Capability)["PackageFormatVersion"] != DistributedPlayerPackageFormatVersion ||
+				!Capability->contains("PlayerSha256") || !(*Capability)["PlayerSha256"].is_string())
+				throw std::runtime_error("Distributed Player runtime capability is invalid");
+			const auto Digest = (*Capability)["PlayerSha256"].get<std::string>();
+			if (!AssetContentId::Parse(Digest)) throw std::runtime_error("Distributed Player runtime digest is invalid");
+			return Digest;
+		}
+
+		std::string ReadRuntimeDistributionDigest(const std::filesystem::path &Root) {
+			const auto File = ResolvePackageFile(Root, "runtime-distribution-capability.json", true);
+			if (!File) throw RuntimeDistributionError("UnsupportedRuntime", "The selected runtime distribution has no format-4 capability.");
+			const auto Value = JsonCodec::Parse(ReadBoundedText(*File, 4096), 4096, "runtime distribution capability");
+			if (!Value || !Value->is_object() || Value->size() != 3 || Value->value("Version", 0u) != 1 ||
+				Value->value("PackageFormatVersion", 0u) != RuntimeDistributionPackageFormatVersion ||
+				!Value->contains("ExecutableSha256") || !(*Value)["ExecutableSha256"].is_string() ||
+				!AssetContentId::Parse((*Value)["ExecutableSha256"].get_ref<const std::string &>()))
+				throw RuntimeDistributionError("UnsupportedRuntime", "The selected runtime capability is invalid.");
+			return (*Value)["ExecutableSha256"].get<std::string>();
+		}
+
+		bool CanDeferTerrain(const ParsedPackageManifest &Manifest, PackageRuntimeLoadMode Mode) {
+			return Mode == PackageRuntimeLoadMode::LoopbackDevelopmentClient &&
+				Manifest.Inspection.Configuration == PackageConfiguration::Development &&
+				Manifest.Inspection.Audience == PackageAudience::Trusted && !Manifest.Inspection.Target;
+		}
+
 		std::optional<ParsedPackageManifest> ParseManifest(
 			const std::filesystem::path &Root, std::vector<PackageDiagnostic> &Diagnostics, bool VerifyContent,
+			const RuntimeDistributionAdmission &Admission = {},
 			PackageRuntimeLoadMode Mode = PackageRuntimeLoadMode::Complete
 		) {
 			try {
+				const auto ManifestPath = ResolvePackageFile(Root, "game.package.json", true);
+				if (!ManifestPath) throw std::runtime_error("Package manifest file is unsafe");
+				const auto Raw = ReadBoundedText(*ManifestPath, MaximumManifestBytes);
 				auto Parsed = JsonCodec::Parse(
-					ReadBoundedText(Root / "game.package.json", MaximumManifestBytes),
+					Raw,
 					MaximumManifestBytes,
 					"game package manifest"
 				);
-				if (!Parsed || !Parsed->is_object() || Parsed->size() != 12 || !Parsed->contains("Format") ||
+				if (!Parsed || !Parsed->is_object() || !Parsed->contains("Format") ||
 					!(*Parsed)["Format"].is_string() ||
 					(*Parsed)["Format"].get_ref<const std::string &>() != PackageFormat ||
 					!Parsed->contains("PackageFormatVersion") ||
@@ -562,10 +663,21 @@ namespace gargantuan {
 					!(*Parsed)["ContentTableSha256"].is_string() || !Parsed->contains("Content") ||
 					!(*Parsed)["Content"].is_array())
 					throw std::runtime_error("Package manifest shape is invalid");
-				const auto FormatVersion = (*Parsed)["PackageFormatVersion"].get<std::uint32_t>();
-				if (FormatVersion != 1 && FormatVersion != GamePackageFormatVersion)
+				const auto FormatVersion = (*Parsed)["PackageFormatVersion"].get<std::uint64_t>();
+				const bool Managed = FormatVersion == RuntimeDistributionPackageFormatVersion;
+				if (Managed) (void)runtime_distribution::ParseStrictJson(Raw, MaximumManifestBytes);
+				const bool Distributed = FormatVersion == DistributedPlayerPackageFormatVersion ||
+					(Managed && Parsed->contains("Audience"));
+				if (FormatVersion != 1 && FormatVersion != GamePackageFormatVersion && !Distributed && !Managed)
 					throw std::runtime_error("Package format version is unsupported");
-				const auto Compatibility = (*Parsed)["RuntimeCompatibility"].get<std::uint32_t>();
+				if (Parsed->size() != (Distributed ? 13u : 12u) + (Managed ? 1u : 0u) ||
+					(Distributed && (!Parsed->contains("Audience") ||
+						!(*Parsed)["Audience"].is_string() ||
+						(*Parsed)["Audience"].get_ref<const std::string &>() !=
+							GetPackageAudienceName(PackageAudience::DistributedPlayer))) ||
+					(Managed && !Parsed->contains("RuntimeDistribution")))
+					throw std::runtime_error("Package audience metadata is invalid");
+				const auto Compatibility = (*Parsed)["RuntimeCompatibility"].get<std::uint64_t>();
 				if (Compatibility != RuntimeCompatibilityVersion)
 					throw std::runtime_error("Runtime compatibility version is unsupported");
 				auto Identity = ProjectId::Parse((*Parsed)["ProjectId"].get_ref<const std::string &>());
@@ -577,27 +689,83 @@ namespace gargantuan {
 				const auto &Startup = (*Parsed)["Startup"];
 				if (!Identity || !Configuration || DisplayName.empty() ||
 					DisplayName.size() > MaximumDisplayNameBytes || !IsSafeRelativePath(Player) ||
-					Startup.size() != (FormatVersion == 1 ? 3 : 4) || !Startup.contains("Project") || !Startup["Project"].is_string() ||
-					!Startup.contains("AssetCatalog") || !Startup["AssetCatalog"].is_string() ||
-					!Startup.contains("PreRun") || (!Startup["PreRun"].is_null() && !Startup["PreRun"].is_string()) ||
-					(FormatVersion >= 2 && (!Startup.contains("ContentManifest") || !Startup["ContentManifest"].is_string())))
+					!Startup.contains("AssetCatalog") || !Startup["AssetCatalog"].is_string())
 					throw std::runtime_error("Package startup metadata is invalid");
+				if (Distributed) {
+					if (!IsPlayerExecutable(Player) || Startup.size() != 2 || !Startup.contains("ClientCode") ||
+						!Startup["ClientCode"].is_string() ||
+						Startup["ClientCode"].get_ref<const std::string &>() != client_package::CodePath ||
+						Startup["AssetCatalog"].get_ref<const std::string &>() != client_package::CatalogPath)
+						throw std::runtime_error("Distributed Player startup metadata is invalid");
+				} else if (Startup.size() != (FormatVersion == 1 ? 3 : 4) ||
+					!Startup.contains("Project") || !Startup["Project"].is_string() ||
+					!Startup.contains("PreRun") || (!Startup["PreRun"].is_null() && !Startup["PreRun"].is_string()) ||
+					(FormatVersion != 1 && (!Startup.contains("ContentManifest") || !Startup["ContentManifest"].is_string()))) {
+					throw std::runtime_error("Package startup metadata is invalid");
+				}
 
 				ParsedPackageManifest Result;
 				Result.Inspection = {
 					.Identity = *Identity,
 					.DisplayName = DisplayName,
 					.Configuration = *Configuration,
-					.FormatVersion = FormatVersion,
-					.RuntimeCompatibility = Compatibility,
+					.FormatVersion = static_cast<std::uint32_t>(FormatVersion),
+					.RuntimeCompatibility = static_cast<std::uint32_t>(Compatibility),
 					.Revision = (*Parsed)["Revision"].get<std::uint64_t>(),
 					.PlayerExecutable = Root / std::filesystem::path(Player),
+					.Audience = Distributed ? PackageAudience::DistributedPlayer : PackageAudience::Trusted,
+					.ManifestSha256 = HashText(Raw),
 				};
+				if (Managed) {
+					Result.RuntimeDistribution = runtime_distribution::DecodeMetadata((*Parsed)["RuntimeDistribution"]);
+					const auto &Metadata = *Result.RuntimeDistribution;
+					Result.Inspection.Target = Metadata.Target;
+					if ((Metadata.Target == RuntimeDistributionTarget::DistributedPlayer) != Distributed ||
+						(Metadata.Target == RuntimeDistributionTarget::DedicatedServer ? !IsServerExecutable(Player) :
+							!IsPlayerExecutable(Player)))
+						throw RuntimeDistributionError("AudienceViolation", "Runtime distribution target does not match its manifest and executable.");
+				}
+				if (VerifyContent) {
+					if (Admission.ExpectedManifestSha256) {
+						if (*Admission.ExpectedManifestSha256 != Result.Inspection.ManifestSha256)
+							throw RuntimeDistributionError("ManifestDigestMismatch", "The package does not match its provisioned manifest digest.");
+						Result.TrustedCompiler = true;
+					}
+					const bool Signed = Result.RuntimeDistribution && !Result.RuntimeDistribution->SigningKeyId.empty();
+					if (Admission.RequirePublisher && !Signed)
+						throw RuntimeDistributionError("PublisherRequired", "Deployment requires a publisher-signed package.");
+					if (Result.RuntimeDistribution && (Signed || !Result.RuntimeDistribution->ContentKeyId.empty())) {
+						Result.DistributionSecurity = Admission.Security ? *Admission.Security :
+							LoadProvisionedRuntimePackageSecurity(RuntimePackageProvisioningUse::Runtime);
+					}
+					if (Signed) {
+						const auto &Metadata = *Result.RuntimeDistribution;
+						const auto Project = Identity->ToString();
+						RuntimePackagePublicKey Key;
+						if (!IsRuntimePackageCryptoAvailable())
+							throw RuntimeDistributionError("UnsupportedRuntime", "Publisher verification is unavailable in this runtime.");
+						if (!Result.DistributionSecurity.Trust ||
+							Result.DistributionSecurity.Trust->GetPublicKey(
+								{Project, Metadata.ReleaseId, Metadata.PublisherId, Metadata.SigningKeyId}, Key
+							) != RuntimePackageCryptoStatus::Ok)
+							throw RuntimeDistributionError("PublisherKeyUnavailable", "The package publisher is not enrolled for this release.");
+						const auto SignaturePath = ResolvePackageFile(Root, runtime_distribution::SignaturePath, true);
+						if (!SignaturePath)
+							throw RuntimeDistributionError("InvalidSignature", "The publisher signature is missing or unsafe.");
+						const auto Signature = ReadBoundedText(*SignaturePath, RuntimePackageSignature{}.size());
+						if (VerifyRuntimePackageManifest(Raw, Key,
+							{reinterpret_cast<const unsigned char *>(Signature.data()), Signature.size()}) !=
+							RuntimePackageCryptoStatus::Ok)
+							throw RuntimeDistributionError("InvalidSignature", "The publisher signature did not verify.");
+						Result.TrustedCompiler = true;
+					}
+				}
 				if (Result.Inspection.Revision == 0) throw std::runtime_error("Package revision is invalid");
-				Result.ProjectPath = Startup["Project"].get<std::string>();
+				Result.ProjectPath = Startup[Distributed ? "ClientCode" : "Project"].get<std::string>();
 				Result.AssetCatalogPath = Startup["AssetCatalog"].get<std::string>();
-				if (Startup["PreRun"].is_string()) Result.PreRunPath = Startup["PreRun"].get<std::string>();
-				if (FormatVersion >= 2) Result.ContentManifestPath = Startup["ContentManifest"].get<std::string>();
+				if (!Distributed && Startup["PreRun"].is_string())
+					Result.PreRunPath = Startup["PreRun"].get<std::string>();
+				if (!Distributed && FormatVersion != 1) Result.ContentManifestPath = Startup["ContentManifest"].get<std::string>();
 				if (!IsSafeRelativePath(Result.ProjectPath) || !IsSafeRelativePath(Result.AssetCatalogPath) ||
 					(Result.PreRunPath && !IsSafeRelativePath(*Result.PreRunPath)) ||
 					(Result.ContentManifestPath && !IsSafeRelativePath(*Result.ContentManifestPath)))
@@ -628,6 +796,18 @@ namespace gargantuan {
 						(Entry.Category != "Runtime" && Entry.Category != "Project" && Entry.Category != "Asset" &&
 						 Entry.Category != "Shader" && Entry.Category != "Notice"))
 						throw std::runtime_error("Package content record identity or bounds are invalid");
+					if (Distributed) {
+						const bool ProjectCode = Entry.Path == client_package::CodePath && Entry.Category == "Project";
+						const bool Catalog = Entry.Path == client_package::CatalogPath && Entry.Category == "Asset";
+						const bool Artifact = std::string_view(Entry.Path).starts_with("content/assets/artifacts/") &&
+							Entry.Category == "Asset";
+						const bool EngineFile = IsDistributedEngineFile(Entry.Path, Entry.Category);
+						const bool RuntimeCode = Managed && Entry.Category == "Project" &&
+							(Entry.Path == runtime_distribution::CodeCatalogPath ||
+								std::string_view(Entry.Path).starts_with("content/scripts/"));
+						if (!ProjectCode && !Catalog && !Artifact && !EngineFile && !RuntimeCode)
+							throw std::runtime_error("Distributed Player package contains an unexpected entry");
+					}
 					if (Aggregate > MaximumAggregateContentBytes - Entry.Size)
 						throw std::runtime_error("Package aggregate content size exceeds its bound");
 					Aggregate += Entry.Size;
@@ -681,11 +861,12 @@ namespace gargantuan {
 				Result.Inspection.ContentCount = Result.Content.size();
 				Result.Inspection.ContentBytes = Aggregate;
 
-				if (VerifyContent && (Mode != PackageRuntimeLoadMode::LoopbackDevelopmentClient ||
-					Result.Inspection.Configuration != PackageConfiguration::Development))
+				if (VerifyContent && !CanDeferTerrain(Result, Mode))
 					VerifyContentFiles(Root, Result, {});
 				if (VerifyContent) {
 					std::unordered_set<std::string> AllowedFiles{LowerPath("game.package.json")};
+					if (Result.RuntimeDistribution && !Result.RuntimeDistribution->SigningKeyId.empty())
+						AllowedFiles.insert(std::string(runtime_distribution::SignaturePath));
 					std::unordered_set<std::string> AllowedDirectories;
 					for (const auto &Entry : Result.Content) {
 						AllowedFiles.insert(LowerPath(Entry.Path));
@@ -697,7 +878,7 @@ namespace gargantuan {
 					}
 					std::size_t SeenEntries = 0;
 					for (const auto &Entry : std::filesystem::recursive_directory_iterator(Root)) {
-						if (++SeenEntries > MaximumContentEntries + AllowedDirectories.size() + 1 ||
+						if (++SeenEntries > MaximumContentEntries + AllowedDirectories.size() + 2 ||
 							IsReparseOrLink(Entry.path()))
 							throw std::runtime_error(
 								"Package directory closure exceeds its bounds or contains redirection"
@@ -710,6 +891,9 @@ namespace gargantuan {
 					}
 				}
 				return Result;
+			} catch (const RuntimeDistributionError &Error) {
+				AddDiagnostic(Diagnostics, PackageDiagnosticSeverity::Error, "Integrity", Error.Code, Error.what());
+				return std::nullopt;
 			} catch (const std::exception &) {
 				AddDiagnostic(
 					Diagnostics,
@@ -743,6 +927,7 @@ namespace gargantuan {
 				for (const auto &Entry : Manifest.Content)
 					ContentHashes.emplace(LowerPath(Entry.Path), Entry.Sha256);
 				std::unordered_set<std::string> AssetIdentities;
+				std::unordered_set<std::string> ArtifactPaths;
 				std::vector<std::string> ReferencedDependencies;
 				for (const auto &Asset : (*Parsed)["Assets"]) {
 					if (!Asset.is_object() || Asset.size() != 8 || !Asset.contains("AssetId") ||
@@ -773,6 +958,7 @@ namespace gargantuan {
 						else
 							ReferencedDependencies.push_back(Dependency.get<std::string>());
 					const auto ContentId = Asset["ContentId"].get<std::string>();
+					ArtifactPaths.insert("content/assets/artifacts/" + ContentId + ".gasset");
 					const auto Content = ContentHashes.find(
 						LowerPath("content/assets/artifacts/" + ContentId + ".gasset")
 					);
@@ -794,6 +980,11 @@ namespace gargantuan {
 				for (const auto &Dependency : ReferencedDependencies)
 					if (!AssetIdentities.contains(Dependency))
 						throw std::runtime_error("Runtime asset dependency is absent");
+				if (Manifest.Inspection.Audience == PackageAudience::DistributedPlayer)
+					for (const auto &Entry : Manifest.Content)
+						if (Entry.Category == "Asset" && Entry.Path != Manifest.AssetCatalogPath &&
+							!ArtifactPaths.contains(Entry.Path))
+							throw std::runtime_error("Distributed Player package contains an unreferenced asset artifact");
 			} catch (const std::exception &) {
 				AddDiagnostic(
 					Diagnostics,
@@ -803,11 +994,6 @@ namespace gargantuan {
 					"The packaged runtime asset catalog is malformed or references missing canonical content."
 				);
 			}
-		}
-
-		bool IsRecognizedPackageDirectory(const std::filesystem::path &Path) {
-			if (!std::filesystem::is_directory(Path)) return false;
-			return !HasErrors(PackageBuilder::Validate(Path));
 		}
 
 		std::filesystem::path UniqueSibling(const std::filesystem::path &Destination, std::string_view Kind) {
@@ -821,11 +1007,32 @@ namespace gargantuan {
 			return Destination.parent_path() / Suffix;
 		}
 
+		class PackagePublication final {
+		  public:
+			explicit PackagePublication(const std::filesystem::path &Destination) : Lease(Destination) {
+				Lease += ".gpk-publish";
+				if (!std::filesystem::create_directory(Lease))
+					throw std::runtime_error("Another package publication holds this destination");
+			}
+
+			PackagePublication(const PackagePublication &) = delete;
+			PackagePublication &operator=(const PackagePublication &) = delete;
+
+			~PackagePublication() {
+				std::error_code Ignored;
+				std::filesystem::remove(Lease, Ignored);
+			}
+
+		  private:
+			std::filesystem::path Lease;
+		};
+
 		void ValidateStagingPaths(
 			const std::filesystem::path &Destination,
 			const std::filesystem::path &Candidate,
 			const RuntimeDistributionDescription &Distribution,
-			const GamePayload &Payload
+			const GamePayload &Payload,
+			const AssetRuntimeSnapshot &Assets
 		) {
 #if defined(_WIN32)
 			constexpr std::size_t MaximumSupportedStagingPath = 240;
@@ -835,13 +1042,16 @@ namespace gargantuan {
 					throw std::runtime_error("Package output path is too long for this Windows runtime");
 			};
 			Check("game.package.json");
-			Check("content/game.instance.json");
-			Check("content/content.manifest.json");
+			if (Payload.DistributedPlayer) Check(client_package::CodePath);
+			else {
+				Check("content/game.instance.json");
+				Check("content/content.manifest.json");
+			}
 			Check("content/assets/catalog.json");
 			if (Payload.PreRunSource) Check("content/prerun.luau");
 			for (const auto &File : Distribution.Files)
 				Check(File.Path);
-			for (const auto &Artifact : Payload.Assets.Artifacts)
+			for (const auto &Artifact : Assets.Artifacts)
 				Check("content/" + Artifact.RelativePath);
 			for (const auto &Unit : Payload.ContentUnits) Check(Unit.Entry.BlobReference);
 			for (const auto &Artifact : Payload.TerrainArtifacts) Check(GetPackageTerrainPath(Artifact.Id));
@@ -850,6 +1060,7 @@ namespace gargantuan {
 			(void)Candidate;
 			(void)Distribution;
 			(void)Payload;
+			(void)Assets;
 #endif
 		}
 
@@ -1343,6 +1554,20 @@ namespace gargantuan {
 		return std::nullopt;
 	}
 
+	std::string_view GetPackageAudienceName(PackageAudience Audience) {
+		switch (Audience) {
+		case PackageAudience::Trusted: return "Trusted";
+		case PackageAudience::DistributedPlayer: return "DistributedPlayer";
+		}
+		return "Unknown";
+	}
+
+	std::optional<PackageAudience> ParsePackageAudience(std::string_view Value) {
+		if (Value == "Trusted") return PackageAudience::Trusted;
+		if (Value == "DistributedPlayer") return PackageAudience::DistributedPlayer;
+		return std::nullopt;
+	}
+
 	std::string_view GetPackagePhaseName(PackagePhase Phase) {
 		switch (Phase) {
 		case PackagePhase::Snapshot:
@@ -1391,21 +1616,71 @@ namespace gargantuan {
 		return Result;
 	}
 
+	RuntimeDistributionPlan PackageBuilder::CaptureRuntimeDistribution(
+		const Project &ProjectValue, const std::shared_ptr<DataModel> &World,
+		const RuntimeDistributionRequest &Request, bool RetainSource
+	) {
+		AssertAuthoritativeMutation("PackageBuilder::CaptureRuntimeDistribution");
+		if (!World) throw RuntimeDistributionError("InvalidPolicy", "Runtime distribution requires a loaded project.");
+		const bool Distributed = Request.Target == RuntimeDistributionTarget::DistributedPlayer;
+		std::set<std::string, std::less<>> Public;
+		if (Distributed)
+			for (const auto &Script : client_package::CaptureEligibleScripts(*World))
+				Public.insert(Script.SourceId);
+		RuntimeDistributionPlan Plan{.Request = Request};
+		std::vector<std::shared_ptr<LuaSourceContainer>> Objects;
+		std::vector<std::string> Path;
+		std::size_t Nodes = 0;
+		const auto Walk = [&](auto &Self, const std::shared_ptr<Instance> &Object, bool Authored) -> void {
+			if (++Nodes > MaximumPersistenceObjects || Path.size() == MaximumProtocolJsonDepth)
+				throw RuntimeDistributionError("InvalidPolicy", "The script capture exceeds its object or depth bound.");
+			Authored = Authored && Object->GetArchivable();
+			Path.push_back(Object->GetName());
+			if (auto Script = std::dynamic_pointer_cast<LuaSourceContainer>(Object)) {
+				if (Plan.Scripts.size() == 4096)
+					throw RuntimeDistributionError("InvalidPolicy", "The script catalog exceeds its entry bound.");
+				auto Id = Script->GetSourceId();
+				const bool Eligible = Authored && (!Distributed || Public.contains(Id));
+				Plan.Scripts.push_back({.SourceId = std::move(Id), .Path = Path,
+					.Class = std::string(Object->GetClassName()), .Eligible = Eligible});
+				Objects.push_back(std::move(Script));
+			}
+			for (const auto &Child : Object->Children) Self(Self, Child, Authored);
+			Path.pop_back();
+		};
+		for (const auto &Child : World->Children) Walk(Walk, Child, true);
+		DiskFilesystem Filesystem(ProjectValue.Root);
+		ResolveRuntimeDistributionPolicy(Filesystem, Plan);
+		std::size_t SourceBytes = 0;
+		for (std::size_t Index = 0; RetainSource && Index < Plan.Scripts.size(); ++Index) {
+			auto &Script = Plan.Scripts[Index];
+			if (!Script.Eligible) continue;
+			Script.Source = Objects[Index]->GetSource();
+			if (Script.Source.size() > MaximumScriptSourceBytes ||
+				Script.Source.size() > MaximumProjectSnapshotBytes - SourceBytes)
+				throw RuntimeDistributionError("InvalidPolicy", "The script capture exceeds its source byte bound.");
+			SourceBytes += Script.Source.size();
+		}
+		return Plan;
+	}
+
 	GamePayload PackageBuilder::Capture(
 		const Project &ProjectValue,
 		const std::shared_ptr<DataModel> &World,
 		std::uint64_t AuthoritativeRevision,
-		std::uint64_t PersistedRevision
+		std::uint64_t PersistedRevision,
+		PackageAudience Audience,
+		std::optional<RuntimeDistributionRequest> RuntimeDistribution
 	) {
 		AssertAuthoritativeMutation("PackageBuilder::Capture schema snapshot");
 		if (!World || !ProjectValue.Identity.IsValid() || AuthoritativeRevision == 0 || PersistedRevision == 0)
 			throw std::invalid_argument("Package snapshot source is invalid");
 		auto Terrain = terrain::CaptureSceneTerrain(*World, ProjectValue.Identity);
 		const auto TerrainManifest = Terrain ? std::optional(Terrain->ManifestDigest) : std::nullopt;
-		auto Root = std::static_pointer_cast<Instance>(World);
-		auto ProjectJson = InstanceSerialization::Serialize(ProjectValue.InstanceFileFormat, Root, TerrainManifest);
-		if (ProjectJson.size() > MaximumProjectSnapshotBytes)
-			throw std::length_error("Project snapshot exceeds the package byte limit");
+		if (Terrain && (Audience != PackageAudience::Trusted ||
+			(RuntimeDistribution && RuntimeDistribution->Target != RuntimeDistributionTarget::OfflinePlayer)))
+			throw RuntimeDistributionError("UnsupportedTerrainTarget",
+				"Terrain requires a trusted package or a managed Offline Player.");
 		auto Assets = std::dynamic_pointer_cast<AssetService>(World->FindFirstChildOfClass("AssetService", false));
 		if (!Assets) throw std::runtime_error("Project has no canonical AssetService");
 		GamePayload Result{
@@ -1414,14 +1689,56 @@ namespace gargantuan {
 			.AuthoritativeRevision = AuthoritativeRevision,
 			.UnsavedChanges = AuthoritativeRevision != PersistedRevision ||
 				(Terrain && ProjectValue.GetPersistedTerrainManifest() != TerrainManifest),
-			.ProjectJson = std::move(ProjectJson),
 			.PreRunSource = ReadProjectPreRunSource(ProjectValue.Root),
-			.Assets = Assets->CaptureRuntimeAssets(),
 			.SchemaSnapshot = GetRuntimeSchemaLifecycle().GetActiveRegistry(),
 			.TerrainArtifacts = Terrain ? std::move(Terrain->Artifacts) : std::vector<terrain::TerrainArtifact>{},
 		};
 		if (Result.DisplayName.empty() || Result.DisplayName.size() > MaximumDisplayNameBytes)
 			throw std::runtime_error("Project display name exceeds the package bound");
+		if (RuntimeDistribution) {
+			const bool Distributed = RuntimeDistribution->Target == RuntimeDistributionTarget::DistributedPlayer;
+			if (Distributed != (Audience == PackageAudience::DistributedPlayer))
+				throw RuntimeDistributionError("AudienceViolation", "The runtime distribution target and package audience disagree.");
+			Result.DistributionPlan = CaptureRuntimeDistribution(ProjectValue, World, *RuntimeDistribution, true);
+			if (RuntimeDistribution->Target != RuntimeDistributionTarget::OfflinePlayer) {
+				Json Bindings = Json::array();
+				auto ClientScripts = client_package::CaptureEligibleScripts(*World);
+				std::ranges::sort(ClientScripts, {}, &RuntimeDistributionScript::SourceId);
+				for (const auto &Script : ClientScripts)
+					Bindings.push_back({Script.SourceId, Script.Path, Script.Class});
+				Result.DistributionPlan->ClientCodeIdentity = HashText(Json{
+					{"Domain", "GargantuanClientCodeV1"}, {"Project", Result.Identity.ToString()},
+					{"Session", Result.DistributionPlan->SessionIdentity}, {"Scripts", std::move(Bindings)},
+					{"Projection", HashText(client_package::CaptureCode(*World))},
+				}.dump());
+			}
+			if (Result.PreRunSource && (RuntimeDistribution->Preset != RuntimeDistributionPreset::Open ||
+				std::ranges::any_of(Result.DistributionPlan->Scripts, [](const auto &Script) {
+					return Script.Eligible && Script.Representation != RuntimeDistributionRepresentation::Source;
+				})))
+				throw RuntimeDistributionError("UnsupportedRuntime", "Compiled and protected packages currently require native schema without PreRun.");
+		}
+		if (Audience == PackageAudience::DistributedPlayer) {
+			if (!World->Filesystem || World->Root != ProjectValue.Root || !Result.SchemaSnapshot)
+				throw std::invalid_argument("Distributed Player capture requires the loaded project origin");
+			if (Result.PreRunSource || std::ranges::any_of(Result.SchemaSnapshot->EnumerateDefinitions(),
+				[](const SchemaDefinition *Definition) {
+					return GetSchemaDefinitionProvenance(*Definition) != SchemaProvenance::NativeEngine;
+				}))
+				throw std::runtime_error("Distributed Player packages currently require the native schema without PreRun");
+			const auto SharedAssets = client_package::ReadSharedAssets(*World->Filesystem);
+			Result.DistributedPlayer = std::shared_ptr<const DistributedPlayerCapture>(new DistributedPlayerCapture(
+				Result.Identity, Result.AuthoritativeRevision, client_package::CaptureCode(*World),
+				Assets->CaptureRuntimeAssets(std::span<const AssetId>(SharedAssets))
+			));
+			return Result;
+		}
+		if (Audience != PackageAudience::Trusted) throw std::invalid_argument("Unknown package audience");
+		auto Root = std::static_pointer_cast<Instance>(World);
+		Result.ProjectJson = InstanceSerialization::Serialize(ProjectValue.InstanceFileFormat, Root, TerrainManifest);
+		if (Result.ProjectJson.size() > MaximumProjectSnapshotBytes)
+			throw std::length_error("Project snapshot exceeds the package byte limit");
+		Result.Assets = Assets->CaptureRuntimeAssets();
 		auto Meshes = SnapshotSpatialMeshes(Result.Assets);
 		PartitionPackageContent(Result, Meshes);
 		PackageContentManifest Manifest{{Result.Identity, Result.AuthoritativeRevision},
@@ -1437,12 +1754,22 @@ namespace gargantuan {
 	}
 
 	PackageBuildResult PackageBuilder::Build(const PackageBuildRequest &Request) {
+		const auto &Client = Request.Payload.DistributedPlayer;
+		const auto &Plan = Request.Payload.DistributionPlan;
+		const bool Distributed = static_cast<bool>(Client);
+		const auto Audience = Distributed ? PackageAudience::DistributedPlayer : PackageAudience::Trusted;
+		const auto &PackageAssets = Distributed ? Client->Assets : Request.Payload.Assets;
 		PackageBuildResult Result{
 			.Identity = Request.Payload.Identity,
 			.PackagedRevision = Request.Payload.AuthoritativeRevision,
 			.PackagedUnsavedChanges = Request.Payload.UnsavedChanges,
 		};
 		std::filesystem::path Candidate;
+		std::filesystem::path PrivateDiagnosticsCandidate;
+		std::filesystem::path PrivateDiagnosticsTempDirectory;
+		std::filesystem::path NewPrivateDiagnosticsPath;
+		std::optional<runtime_distribution::Metadata> DistributionMetadata;
+		RuntimePackageProvisionedSecurity DistributionSecurity;
 		auto CurrentPhase = PackagePhase::Snapshot;
 		try {
 			auto RunPhase = [&](PackagePhase Phase, auto &&Work) {
@@ -1463,9 +1790,23 @@ namespace gargantuan {
 					Request.Payload.AuthoritativeRevision == 0 ||
 					Request.Payload.DisplayName.empty() ||
 					Request.Payload.DisplayName.size() > MaximumDisplayNameBytes ||
-					Request.Payload.ProjectJson.empty() ||
+					PackageAssets.CatalogJson.size() > 1024 * 1024)
+					throw std::runtime_error("Package payload snapshot is invalid or exceeds its bounds");
+				if (!Request.Payload.TerrainArtifacts.empty() && (Distributed ||
+					(Plan && Plan->Request.Target != RuntimeDistributionTarget::OfflinePlayer)))
+					throw RuntimeDistributionError("UnsupportedTerrainTarget",
+						"Terrain requires a trusted package or a managed Offline Player.");
+				if (Distributed) {
+					if (!Request.Payload.ProjectJson.empty() || Request.Payload.PreRunSource ||
+						!Request.Payload.ContentUnits.empty() || !Request.Payload.Assets.CatalogJson.empty() ||
+						!Request.Payload.Assets.Artifacts.empty() || Client->Project != Request.Payload.Identity ||
+						Client->Revision != Request.Payload.AuthoritativeRevision)
+						throw std::runtime_error("Distributed Player package contains trusted project payload");
+					client_package::ValidateCode(Client->Code);
+					return;
+				}
+				if (Request.Payload.ProjectJson.empty() ||
 					Request.Payload.ProjectJson.size() > MaximumProjectSnapshotBytes ||
-					Request.Payload.Assets.CatalogJson.size() > 1024 * 1024 ||
 					Request.Payload.ContentUnits.size() > MaximumPackageContentUnits ||
 					(Request.Payload.ContentInstanceSchemaVersion != 4 &&
 						Request.Payload.ContentInstanceSchemaVersion != PackageContentInstanceSchemaVersion) ||
@@ -1495,7 +1836,29 @@ namespace gargantuan {
 			});
 
 			std::optional<RuntimeDistributionDescription> Distribution;
+			std::optional<std::string> DistributedRuntimeDigest;
+			std::optional<std::string> ManagedRuntimeDigest;
 			std::filesystem::path Destination;
+			auto CheckDestination = [&](bool VerifyExisting) {
+				const auto Parent = Destination.parent_path();
+				if (!std::filesystem::is_directory(Parent) || IsReparseOrLink(Parent))
+					throw std::runtime_error("Package output parent is unavailable or redirected");
+				if (!std::filesystem::exists(Destination)) return;
+				if (!std::filesystem::is_directory(Destination) || IsReparseOrLink(Destination))
+					throw std::runtime_error("Package output destination is unavailable or redirected");
+				if (std::filesystem::directory_iterator(Destination) == std::filesystem::directory_iterator{}) return;
+				if (VerifyExisting) {
+					if (!HasErrors(Validate(Destination, Audience, {
+						.Security = Plan ? std::optional(DistributionSecurity) : std::nullopt,
+						.VerifyExecutableArtifacts = false,
+					}))) return;
+				} else {
+					std::vector<PackageDiagnostic> Diagnostics;
+					const auto Existing = Inspect(Destination, Diagnostics);
+					if (Existing && Existing->Audience == Audience) return;
+				}
+				throw std::runtime_error("Package output contains unrelated files or has a different audience");
+			};
 			RunPhase(PackagePhase::Validate, [&] {
 				InjectFailure(Request.FailurePoint, PackageFailurePoint::Validate);
 				if (!Request.RuntimeDistributionRoot.is_absolute() || !Request.OutputDirectory.is_absolute())
@@ -1503,20 +1866,33 @@ namespace gargantuan {
 				Destination = Request.OutputDirectory.lexically_normal();
 				if (Destination == Destination.root_path() || Destination.filename().empty())
 					throw std::runtime_error("Package output destination is unsafe");
-				const auto Parent = Destination.parent_path();
-				if (!std::filesystem::is_directory(Parent) || IsReparseOrLink(Parent))
-					throw std::runtime_error("Package output parent is unavailable or redirected");
-				if (std::filesystem::exists(Destination)) {
-					if (!std::filesystem::is_directory(Destination))
-						throw std::runtime_error("Package output destination is not a directory");
-					if (std::filesystem::directory_iterator(Destination) != std::filesystem::directory_iterator{} &&
-						!IsRecognizedPackageDirectory(Destination))
-						throw std::runtime_error("Package output contains unrelated files");
-				}
+				CheckDestination(false);
 				Distribution = ParseRuntimeDistribution(Request.RuntimeDistributionRoot, Result.Diagnostics);
 				if (!Distribution) throw std::runtime_error("Runtime distribution validation failed");
+				if (Plan) {
+					const auto &Policy = Plan->Request;
+					if (Distributed != (Policy.Target == RuntimeDistributionTarget::DistributedPlayer) ||
+						(Policy.Target == RuntimeDistributionTarget::DedicatedServer ? !IsServerExecutable(Distribution->Player) :
+							!IsPlayerExecutable(Distribution->Player)))
+						throw RuntimeDistributionError("AudienceViolation", "Package target does not match the selected runtime closure.");
+					ManagedRuntimeDigest = ReadRuntimeDistributionDigest(Request.RuntimeDistributionRoot);
+					if (Policy.RequirePublisher || Policy.KeyAccess != RuntimeDistributionKeyAccess::None)
+						DistributionSecurity = Request.DistributionSecurity ? *Request.DistributionSecurity :
+							LoadProvisionedRuntimePackageSecurity(RuntimePackageProvisioningUse::Build);
+					if (Policy.RequirePublisher && (!IsRuntimePackageCryptoAvailable() || !DistributionSecurity.Signer))
+						throw RuntimeDistributionError("SigningFailed", "A native publisher signer is unavailable.");
+					Result.Target = Policy.Target;
+				}
+				if (Distributed) {
+					if (!IsPlayerExecutable(Distribution->Player) ||
+						std::ranges::any_of(Distribution->Files, [](const auto &File) {
+							return !IsDistributedEngineFile(File.Path, File.Category);
+						}))
+						throw std::runtime_error("Distributed Player requires an Engine Player-only runtime distribution");
+					DistributedRuntimeDigest = ReadDistributedPlayerDigest(Request.RuntimeDistributionRoot);
+				}
 				Candidate = UniqueSibling(Destination, "gargantuan-package-tmp");
-				ValidateStagingPaths(Destination, Candidate, *Distribution, Request.Payload);
+				ValidateStagingPaths(Destination, Candidate, *Distribution, Request.Payload, PackageAssets);
 				std::filesystem::create_directory(Candidate);
 			});
 
@@ -1528,6 +1904,51 @@ namespace gargantuan {
 					auto Target = ResolvePackageFile(Candidate, File.Path, false);
 					if (!Source || !Target) throw std::runtime_error("Runtime distribution path is unsafe");
 					Entries.push_back(CopyAndHash(*Source, *Target, File.Path, File.Category, Request.Cancellation));
+				}
+				if (DistributedRuntimeDigest) {
+					const auto PlayerFile = std::ranges::find(Entries, Distribution->Player, &ContentEntry::Path);
+					if (PlayerFile == Entries.end() || PlayerFile->Sha256 != *DistributedRuntimeDigest)
+						throw std::runtime_error("Distributed Player capability does not match the staged executable");
+				}
+				if (ManagedRuntimeDigest) {
+					const auto Executable = std::ranges::find(Entries, Distribution->Player, &ContentEntry::Path);
+					if (Executable == Entries.end() || Executable->Sha256 != *ManagedRuntimeDigest)
+						throw RuntimeDistributionError("UnsupportedRuntime", "The runtime capability does not match the staged executable.");
+					const auto &Policy = Plan->Request;
+					const auto Project = Request.Payload.Identity.ToString();
+					Json Identity{
+						{"ProjectId", Project}, {"Revision", Request.Payload.AuthoritativeRevision},
+						{"Target", GetRuntimeDistributionName(Policy.Target)}, {"Executable", Executable->Sha256},
+						{"Project", HashText(Distributed ? Client->Code : Request.Payload.ProjectJson)},
+						{"AssetCatalog", HashText(PackageAssets.CatalogJson)}, {"SigningKey", Policy.SigningKeyId},
+						{"KeyAccess", GetRuntimeDistributionName(Policy.KeyAccess)}, {"ContentKey", Policy.ContentKeyId},
+						{"Compiler", GetRuntimeScriptCompilerIdentity()},
+						{"ClientCodeIdentity", Plan->ClientCodeIdentity},
+					};
+					std::string ReleaseId;
+					if (std::ranges::any_of(Plan->Scripts, [](const auto &Script) {
+						return Script.Eligible && Script.Representation == RuntimeDistributionRepresentation::Protected;
+					})) {
+						std::array<unsigned char, 32> Random{};
+						if (GenerateRuntimePackageReleaseSalt(Random) != RuntimePackageCryptoStatus::Ok)
+							throw RuntimeDistributionError("EncryptionFailed", "A secure release identity could not be generated.");
+						ReleaseId = HashText({reinterpret_cast<const char *>(Random.data()), Random.size()});
+					} else {
+						Json Scripts = Json::array();
+						for (const auto &Script : Plan->Scripts)
+							if (Script.Eligible)
+								Scripts.push_back({Script.SourceId, GetRuntimeDistributionName(Script.Representation),
+									GetRuntimeDistributionName(Script.Diagnostics), HashText(Script.Source)});
+						Identity["Scripts"] = std::move(Scripts);
+						ReleaseId = HashText(Identity.dump());
+					}
+					DistributionMetadata = runtime_distribution::Metadata{
+						.Target = Policy.Target, .KeyAccess = Policy.KeyAccess, .ReleaseId = std::move(ReleaseId),
+						.PublisherId = Project, .SigningKeyId = Policy.SigningKeyId,
+						.ContentKeyId = Policy.ContentKeyId, .Compiler = std::string(GetRuntimeScriptCompilerIdentity()),
+						.ClientCodeIdentity = Plan->ClientCodeIdentity,
+					};
+					Result.PlayerExecutableSha256 = Executable->Sha256;
 				}
 			});
 
@@ -1543,20 +1964,35 @@ namespace gargantuan {
 						std::span(reinterpret_cast<const std::uint8_t *>(Text.data()), Text.size())
 					));
 				};
-				AddText("content/game.instance.json", "Project", Request.Payload.ProjectJson);
-				PackageContentManifest ContentManifest{
-					.Package = {Request.Payload.Identity, Request.Payload.AuthoritativeRevision},
-					.InstanceSchemaVersion = Request.Payload.ContentInstanceSchemaVersion,
-				};
-				for (const auto &Unit : Request.Payload.ContentUnits) {
-					ContentManifest.Entries.push_back(Unit.Entry);
-					AddText(Unit.Entry.BlobReference, "Project", Unit.Payload);
+				if (Plan) {
+					auto Index = runtime_distribution::BuildCatalog(*Plan, *DistributionMetadata,
+						Request.Payload.Identity.ToString(), DistributionSecurity, [&](std::string Relative, std::string_view Bytes) {
+							if (Request.Cancellation.IsCancelled()) throw std::runtime_error("Package build cancelled");
+							AddText(std::move(Relative), "Project", Bytes);
+						});
+					AddText(std::string(runtime_distribution::CodeCatalogPath), "Project", Index);
 				}
-				AddText("content/content.manifest.json", "Project", EncodePackageContentManifest(ContentManifest));
-				AddText("content/assets/catalog.json", "Asset", Request.Payload.Assets.CatalogJson);
-				if (Request.Payload.PreRunSource)
-					AddText("content/prerun.luau", "Project", *Request.Payload.PreRunSource);
-				for (const auto &Artifact : Request.Payload.Assets.Artifacts) {
+				if (Distributed) {
+					AddText(std::string(client_package::CodePath), "Project",
+						Plan ? runtime_distribution::RemoveCompiledSource(Client->Code, *Plan, true) : Client->Code);
+				} else {
+					AddText("content/game.instance.json", "Project", Plan ?
+						runtime_distribution::RemoveCompiledSource(Request.Payload.ProjectJson, *Plan, false) :
+						Request.Payload.ProjectJson);
+					PackageContentManifest ContentManifest{
+						.Package = {Request.Payload.Identity, Request.Payload.AuthoritativeRevision},
+						.InstanceSchemaVersion = Request.Payload.ContentInstanceSchemaVersion,
+					};
+					for (const auto &Unit : Request.Payload.ContentUnits) {
+						ContentManifest.Entries.push_back(Unit.Entry);
+						AddText(Unit.Entry.BlobReference, "Project", Unit.Payload);
+					}
+					AddText("content/content.manifest.json", "Project", EncodePackageContentManifest(ContentManifest));
+					if (Request.Payload.PreRunSource)
+						AddText("content/prerun.luau", "Project", *Request.Payload.PreRunSource);
+				}
+				AddText(std::string(client_package::CatalogPath), "Asset", PackageAssets.CatalogJson);
+				for (const auto &Artifact : PackageAssets.Artifacts) {
 					if (!Artifact.Bytes || !IsSafeRelativePath(Artifact.RelativePath) ||
 						!std::string_view(Artifact.RelativePath).starts_with("assets/artifacts/"))
 						throw std::runtime_error("Runtime asset snapshot contains an invalid artifact");
@@ -1594,7 +2030,10 @@ namespace gargantuan {
 				}
 				const auto Content = EncodeContent(Entries);
 				const auto ContentHash = HashText(Content.dump());
-				Json Startup{
+				Json Startup = Distributed ? Json{
+					{"ClientCode", client_package::CodePath},
+					{"AssetCatalog", client_package::CatalogPath},
+				} : Json{
 					{"Project", "content/game.instance.json"},
 					{"ContentManifest", "content/content.manifest.json"},
 					{"AssetCatalog", "content/assets/catalog.json"},
@@ -1602,7 +2041,8 @@ namespace gargantuan {
 				};
 				Json Manifest{
 					{"Format", PackageFormat},
-					{"PackageFormatVersion", GamePackageFormatVersion},
+					{"PackageFormatVersion", Plan ? RuntimeDistributionPackageFormatVersion :
+						(Distributed ? DistributedPlayerPackageFormatVersion : GamePackageFormatVersion)},
 					{"RuntimeCompatibility", RuntimeCompatibilityVersion},
 					{"ProjectId", Request.Payload.Identity.ToString()},
 					{"DisplayName", Request.Payload.DisplayName},
@@ -1614,6 +2054,8 @@ namespace gargantuan {
 					{"ContentTableSha256", ContentHash},
 					{"Content", Content},
 				};
+				if (Distributed) Manifest["Audience"] = GetPackageAudienceName(Audience);
+				if (DistributionMetadata) Manifest["RuntimeDistribution"] = runtime_distribution::EncodeMetadata(*DistributionMetadata);
 				auto Encoded = JsonCodec::Encode(Manifest, "game package manifest");
 				if (!Encoded || Encoded->size() > MaximumManifestBytes)
 					throw std::runtime_error("Generated package manifest exceeds its bound");
@@ -1621,11 +2063,35 @@ namespace gargantuan {
 				std::ofstream Output(Candidate / "game.package.json", std::ios::binary | std::ios::trunc);
 				if (!Output) throw std::runtime_error("Could not create the package manifest");
 				Output.write(Encoded->data(), static_cast<std::streamsize>(Encoded->size()));
-				Output.flush();
+				Output.close();
 				if (!Output) throw std::runtime_error("Could not finish the package manifest");
+				Result.ManifestSha256 = HashText(*Encoded);
 				Result.Size.OtherBytes += Encoded->size();
 				Result.Size.TotalBytes = Aggregate + Encoded->size();
-				auto CandidateDiagnostics = Validate(Candidate);
+				if (DistributionMetadata && !DistributionMetadata->SigningKeyId.empty()) {
+					const auto &Metadata = *DistributionMetadata;
+					const auto Project = Request.Payload.Identity.ToString();
+					RuntimePackageSignature Signature;
+					RuntimePackageCryptoStatus SignedStatus;
+					try {
+						SignedStatus = DistributionSecurity.Signer->Sign({Project, Metadata.ReleaseId, Metadata.PublisherId,
+							Metadata.SigningKeyId}, *Encoded, Signature);
+					} catch (...) {
+						throw RuntimeDistributionError("SigningFailed", "The package publisher signing provider failed.");
+					}
+					if (SignedStatus != RuntimePackageCryptoStatus::Ok)
+						throw RuntimeDistributionError("SigningFailed", "The package publisher could not sign this release.");
+					std::ofstream Signed(Candidate / runtime_distribution::SignaturePath, std::ios::binary | std::ios::trunc);
+					Signed.write(reinterpret_cast<const char *>(Signature.data()), static_cast<std::streamsize>(Signature.size()));
+					Signed.close();
+					if (!Signed) throw RuntimeDistributionError("SigningFailed", "The package signature could not be staged.");
+					Result.Size.OtherBytes += Signature.size();
+					Result.Size.TotalBytes += Signature.size();
+				}
+				auto CandidateDiagnostics = Validate(Candidate, Audience, {
+					.ExpectedManifestSha256 = Plan ? std::optional(Result.ManifestSha256) : std::nullopt,
+					.Security = Plan ? std::optional(DistributionSecurity) : std::nullopt,
+				});
 				Result.Diagnostics.insert(
 					Result.Diagnostics.end(), CandidateDiagnostics.begin(), CandidateDiagnostics.end()
 				);
@@ -1635,6 +2101,64 @@ namespace gargantuan {
 			RunPhase(PackagePhase::Finalize, [&] {
 				InjectFailure(Request.FailurePoint, PackageFailurePoint::Finalize);
 				if (Request.Cancellation.IsCancelled()) throw std::runtime_error("Package build cancelled");
+				PackagePublication Publication(Destination);
+				CheckDestination(true);
+				std::filesystem::path PrivateDiagnosticsPath;
+				if (Plan && DistributionMetadata) {
+					Json Scripts = Json::array();
+					for (const auto &Script : Plan->Scripts) {
+						if (!Script.Eligible || Script.Diagnostics != RuntimeDistributionDiagnostics::PrivateSymbols) continue;
+						Scripts.push_back({
+							{"Id", Script.SourceId}, {"Path", Script.Path}, {"Class", Script.Class},
+							{"SourceSha256", HashText(Script.Source)},
+						});
+					}
+					if (!Scripts.empty()) {
+						const auto Symbols = Json{
+							{"Format", "GargantuanPrivateScriptSymbols"}, {"Version", 1u},
+							{"ProjectId", Request.Payload.Identity.ToString()}, {"Revision", Request.Payload.AuthoritativeRevision},
+							{"ReleaseId", DistributionMetadata->ReleaseId}, {"ManifestSha256", Result.ManifestSha256},
+							{"Compiler", DistributionMetadata->Compiler}, {"Scripts", std::move(Scripts)},
+						}.dump();
+						if (Symbols.size() > runtime_distribution::MaximumCatalogBytes)
+							throw RuntimeDistributionError("PrivateDiagnosticsFailed", "The private diagnostic index exceeds its bound.");
+						PrivateDiagnosticsPath = Destination.parent_path() /
+							("gargantuan-private-symbols-" + HashText(Destination.filename().generic_string()).substr(0, 16) +
+								"-" + Result.ManifestSha256 + ".json");
+						if (std::filesystem::exists(PrivateDiagnosticsPath)) {
+							if (IsReparseOrLink(PrivateDiagnosticsPath) ||
+								ReadBoundedText(PrivateDiagnosticsPath, runtime_distribution::MaximumCatalogBytes) != Symbols)
+								throw RuntimeDistributionError("PrivateDiagnosticsFailed", "A conflicting private diagnostic artifact already exists.");
+						} else {
+							PrivateDiagnosticsTempDirectory = UniqueSibling(PrivateDiagnosticsPath, "gargantuan-symbols-tmp");
+							if (!std::filesystem::create_directory(PrivateDiagnosticsTempDirectory)) {
+								PrivateDiagnosticsTempDirectory.clear();
+								throw RuntimeDistributionError("PrivateDiagnosticsFailed", "The private diagnostics staging directory is unavailable.");
+							}
+#if !defined(_WIN32)
+							std::filesystem::permissions(PrivateDiagnosticsTempDirectory, std::filesystem::perms::owner_all);
+#endif
+							PrivateDiagnosticsCandidate = PrivateDiagnosticsTempDirectory / "symbols.json";
+							std::ofstream Index(PrivateDiagnosticsCandidate, std::ios::binary | std::ios::trunc);
+							if (!Index)
+								throw RuntimeDistributionError("PrivateDiagnosticsFailed", "The private diagnostic artifact could not be opened.");
+#if !defined(_WIN32)
+							std::filesystem::permissions(PrivateDiagnosticsCandidate,
+								std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+#endif
+							Index.write(Symbols.data(), static_cast<std::streamsize>(Symbols.size()));
+							Index.close();
+							if (!Index)
+								throw RuntimeDistributionError("PrivateDiagnosticsFailed", "The private diagnostic artifact could not be written.");
+							std::filesystem::create_hard_link(PrivateDiagnosticsCandidate, PrivateDiagnosticsPath);
+							NewPrivateDiagnosticsPath = PrivateDiagnosticsPath;
+							std::filesystem::remove(PrivateDiagnosticsCandidate);
+							PrivateDiagnosticsCandidate.clear();
+							std::filesystem::remove(PrivateDiagnosticsTempDirectory);
+							PrivateDiagnosticsTempDirectory.clear();
+						}
+					}
+				}
 				std::filesystem::path Backup;
 				if (std::filesystem::exists(Destination)) {
 					Backup = UniqueSibling(Destination, "gargantuan-package-backup");
@@ -1648,9 +2172,16 @@ namespace gargantuan {
 						std::filesystem::rename(Backup, Destination);
 					throw;
 				}
-				if (!Backup.empty()) std::filesystem::remove_all(Backup);
+				if (!Backup.empty()) {
+					std::error_code Cleanup;
+					std::filesystem::remove_all(Backup, Cleanup);
+					if (Cleanup)
+						AddDiagnostic(Result.Diagnostics, PackageDiagnosticSeverity::Warning, "Filesystem",
+							"BackupCleanup", "The validated package was installed, but prior backup cleanup did not complete.");
+				}
 				Result.OutputDirectory = Destination;
 				Result.PlayerExecutable = Destination / std::filesystem::path(Distribution->Player);
+				Result.PrivateDiagnosticsPath = std::move(PrivateDiagnosticsPath);
 			});
 
 			if (Request.Progress) Request.Progress(PackagePhase::Complete);
@@ -1663,6 +2194,7 @@ namespace gargantuan {
 				"The standalone game package was built and validated."
 			);
 		} catch (const std::exception &Error) {
+			const auto *DistributionError = dynamic_cast<const RuntimeDistributionError *>(&Error);
 			Result.Cancelled = Request.Cancellation.IsCancelled() ||
 							   std::string_view(Error.what()) == "Package build cancelled";
 			std::string FailureDetail = std::string(GetPackagePhaseName(CurrentPhase)) + ": ";
@@ -1670,11 +2202,13 @@ namespace gargantuan {
 				FailureDetail += FilesystemError->code().message();
 			else
 				FailureDetail += Error.what();
+			if (DistributionError && !DistributionError->Item.empty())
+				FailureDetail += " [" + DistributionError->Item + "]";
 			AddDiagnostic(
 				Result.Diagnostics,
 				PackageDiagnosticSeverity::Error,
 				"Packaging",
-				Result.Cancelled ? "Cancelled" : "BuildFailed",
+				Result.Cancelled ? "Cancelled" : (DistributionError ? DistributionError->Code : "BuildFailed"),
 				Result.Cancelled ? "The package build was cancelled before finalization."
 								 : "The package build failed; the previous valid destination was preserved.",
 				std::move(FailureDetail)
@@ -1683,6 +2217,11 @@ namespace gargantuan {
 				std::error_code Ignored;
 				std::filesystem::remove_all(Candidate, Ignored);
 			}
+			std::error_code Ignored;
+			if (!PrivateDiagnosticsCandidate.empty()) std::filesystem::remove(PrivateDiagnosticsCandidate, Ignored);
+			if (!PrivateDiagnosticsTempDirectory.empty()) std::filesystem::remove(PrivateDiagnosticsTempDirectory, Ignored);
+			if (!NewPrivateDiagnosticsPath.empty() && !Candidate.empty())
+				std::filesystem::remove(NewPrivateDiagnosticsPath, Ignored);
 		}
 		return Result;
 	}
@@ -1719,8 +2258,58 @@ namespace gargantuan {
 		return {Id, std::move(Bytes)};
 	}
 
+
+	static std::string ReadPinnedPackageFile(const std::filesystem::path &PackageRoot, const ParsedPackageManifest &Manifest,
+		std::string_view RelativePath, std::size_t MaximumBytes) {
+		const auto Entry = std::ranges::find(Manifest.Content, RelativePath, &ContentEntry::Path);
+		const auto Path = ResolvePackageFile(PackageRoot, RelativePath, true);
+		if (Entry == Manifest.Content.end() || !Path)
+			throw RuntimeDistributionError("InvalidPackage", "The package payload has no pinned content entry.");
+		auto Bytes = ReadBoundedText(*Path, MaximumBytes);
+		if (Bytes.size() != Entry->Size || HashText(Bytes) != Entry->Sha256)
+			throw RuntimeDistributionError("InvalidPackage", "The package payload changed after validation.");
+		return Bytes;
+	}
+
+	static RuntimeDistributionCodeCatalog ReadDistributionCatalog(const std::filesystem::path &PackageRoot,
+		const ParsedPackageManifest &Manifest) {
+		auto Catalog = runtime_distribution::DecodeCatalog(ReadPinnedPackageFile(PackageRoot, Manifest,
+			runtime_distribution::CodeCatalogPath, runtime_distribution::MaximumCatalogBytes));
+		std::set<std::string, std::less<>> Links;
+		for (const auto &[Id, Script] : Catalog.Scripts) {
+			if (Script.Representation == RuntimeDistributionRepresentation::Source) continue;
+			auto Path = "content/scripts/" + Id +
+				(Script.Representation == RuntimeDistributionRepresentation::Protected ? ".gse" : ".luac");
+			const auto Match = std::ranges::find(Manifest.Content, Path, &ContentEntry::Path);
+			if (Match == Manifest.Content.end() || Match->Category != "Project" || Match->Size == 0 ||
+				Match->Size > MaximumRuntimePackageScriptContainerBytes)
+				throw RuntimeDistributionError("InvalidScriptCatalog", "A runtime script artifact is missing or exceeds its bound.");
+			Links.insert(std::move(Path));
+		}
+		for (const auto &Entry : Manifest.Content)
+			if (std::string_view(Entry.Path).starts_with("content/scripts/") && !Links.contains(Entry.Path))
+				throw RuntimeDistributionError("InvalidScriptCatalog", "The package contains an unexpected runtime script artifact.");
+		if (Manifest.Inspection.Audience == PackageAudience::DistributedPlayer) {
+			const auto Projection = client_package::DecodeCode(ReadPinnedPackageFile(PackageRoot, Manifest,
+				Manifest.ProjectPath, client_package::MaximumCodeBytes));
+			std::set<client_package::CodeKey> Bound;
+			if (Projection.size() != Catalog.Scripts.size())
+				throw RuntimeDistributionError("AudienceViolation", "The script catalog and audience projection disagree.");
+			for (const auto &[Id, Script] : Catalog.Scripts) {
+				auto Key = client_package::CodeKey{Script.Path, Script.Class};
+				const auto Found = Projection.find(Key);
+				if (Found == Projection.end() || !Bound.insert(std::move(Key)).second ||
+					(Script.Representation != RuntimeDistributionRepresentation::Source && !Found->second.empty()))
+					throw RuntimeDistributionError("AudienceViolation", "The audience projection has an incompatible script entry.");
+			}
+		}
+		return Catalog;
+	}
+
 	static std::vector<PackageDiagnostic> ValidatePackageRoot(const std::filesystem::path &PackageRoot,
 		std::optional<ParsedPackageManifest> *VerifiedManifest,
+		std::optional<PackageAudience> ExpectedAudience = std::nullopt,
+		const RuntimeDistributionAdmission &Admission = {},
 		std::vector<terrain::TerrainArtifact> *TerrainArtifacts = nullptr,
 		PackageRuntimeLoadMode Mode = PackageRuntimeLoadMode::Complete) {
 		std::vector<PackageDiagnostic> Diagnostics;
@@ -1734,29 +2323,64 @@ namespace gargantuan {
 			);
 			return Diagnostics;
 		}
-		auto Manifest = ParseManifest(PackageRoot, Diagnostics, true, Mode);
+		auto Manifest = ParseManifest(PackageRoot, Diagnostics, true, Admission, Mode);
 		if (!Manifest) return Diagnostics;
-		const bool IsLoopbackClient = Mode == PackageRuntimeLoadMode::LoopbackDevelopmentClient &&
-			Manifest->Inspection.Configuration == PackageConfiguration::Development;
+		if (Manifest->RuntimeDistribution) {
+			try {
+				auto Catalog = ReadDistributionCatalog(PackageRoot, *Manifest);
+				if (!VerifiedManifest && Admission.VerifyExecutableArtifacts)
+					runtime_distribution::AdmitCatalog(Catalog, *Manifest->RuntimeDistribution,
+						Manifest->Inspection.Identity.ToString(), Manifest->DistributionSecurity, Manifest->TrustedCompiler,
+						[&](std::string_view Path, std::size_t Bound) {
+							return ReadPinnedPackageFile(PackageRoot, *Manifest, Path, Bound);
+						});
+				if (VerifiedManifest) Manifest->ScriptCatalog = std::move(Catalog);
+			} catch (const RuntimeDistributionError &Error) {
+				AddDiagnostic(Diagnostics, PackageDiagnosticSeverity::Error, "RuntimeDistribution", Error.Code, Error.what());
+				return Diagnostics;
+			} catch (const std::exception &) {
+				AddDiagnostic(Diagnostics, PackageDiagnosticSeverity::Error, "RuntimeDistribution", "InvalidScriptCatalog",
+					"The runtime script catalog could not be validated safely.");
+				return Diagnostics;
+			}
+		}
+		if (ExpectedAudience && Manifest->Inspection.Audience != *ExpectedAudience) {
+			AddDiagnostic(Diagnostics, PackageDiagnosticSeverity::Error, "Validation", "AudienceMismatch",
+				"The package has a different audience from the one requested.");
+			return Diagnostics;
+		}
+		const bool Distributed = Manifest->Inspection.Audience == PackageAudience::DistributedPlayer;
+		const bool IsLoopbackClient = CanDeferTerrain(*Manifest, Mode);
 		std::optional<AssetContentId> TerrainDigest;
 		try {
-			const auto ProjectText = ReadPinnedText(PackageRoot, *Manifest, Manifest->ProjectPath, MaximumProjectSnapshotBytes);
-			auto ProjectJson = JsonCodec::Parse(ProjectText, MaximumProjectSnapshotBytes, "packaged project snapshot");
-			if (!ProjectJson || !ProjectJson->is_object() || !ProjectJson->contains("Version") ||
-				!(*ProjectJson)["Version"].is_number_unsigned() || !ProjectJson->contains("ClassName") ||
-				!(*ProjectJson)["ClassName"].is_string() || (*ProjectJson)["ClassName"] != "DataModel")
-				throw std::runtime_error("Packaged project snapshot is malformed");
-			const auto Digest = InstanceSerialization::InspectTerrainManifest(ProjectText);
-			if (!Digest) throw std::runtime_error(Digest.error());
-			TerrainDigest = *Digest;
+			if (Distributed) {
+				client_package::ValidateCode(ReadPinnedPackageFile(
+					PackageRoot, *Manifest, Manifest->ProjectPath, client_package::MaximumCodeBytes));
+			} else {
+				const auto ProjectText = ReadPinnedText(PackageRoot, *Manifest, Manifest->ProjectPath, MaximumProjectSnapshotBytes);
+				auto ProjectJson = JsonCodec::Parse(ProjectText, MaximumProjectSnapshotBytes, "packaged project snapshot");
+				if (!ProjectJson || !ProjectJson->is_object() || !ProjectJson->contains("Version") ||
+					!(*ProjectJson)["Version"].is_number_unsigned() || !ProjectJson->contains("ClassName") ||
+					!(*ProjectJson)["ClassName"].is_string() || (*ProjectJson)["ClassName"] != "DataModel")
+					throw std::runtime_error("Packaged project snapshot is malformed");
+				const auto Digest = InstanceSerialization::InspectTerrainManifest(ProjectText);
+				if (!Digest) throw std::runtime_error(Digest.error());
+				TerrainDigest = *Digest;
+			}
 		} catch (const std::exception &) {
 			AddDiagnostic(
 				Diagnostics,
 				PackageDiagnosticSeverity::Error,
 				"Validation",
-				"InvalidProject",
-				"The packaged project snapshot is malformed or exceeds its bounds."
+				Distributed ? "InvalidClientCode" : "InvalidProject",
+				"The packaged project payload is malformed or exceeds its bounds."
 			);
+		}
+		if (TerrainDigest && Manifest->Inspection.Target &&
+			Manifest->Inspection.Target != RuntimeDistributionTarget::OfflinePlayer) {
+			AddDiagnostic(Diagnostics, PackageDiagnosticSeverity::Error, "Content", "UnsupportedTerrainTarget",
+				"Terrain requires a trusted package or a managed Offline Player.");
+			return Diagnostics;
 		}
 		std::set<std::string> DeferredChunks;
 		if (!HasErrors(Diagnostics)) {
@@ -1856,8 +2480,9 @@ namespace gargantuan {
 		return Diagnostics;
 	}
 
-	std::vector<PackageDiagnostic> PackageBuilder::Validate(const std::filesystem::path &PackageRoot) {
-		return ValidatePackageRoot(PackageRoot, nullptr);
+	std::vector<PackageDiagnostic> PackageBuilder::Validate(const std::filesystem::path &PackageRoot,
+		std::optional<PackageAudience> ExpectedAudience, const RuntimeDistributionAdmission &Admission) {
+		return ValidatePackageRoot(PackageRoot, nullptr, ExpectedAudience, Admission);
 	}
 
 	std::optional<PackageInspection>
@@ -1869,24 +2494,33 @@ namespace gargantuan {
 
 	std::optional<RuntimePackagePayload>
 	PackageBuilder::Load(const std::filesystem::path &PackageRoot, std::vector<PackageDiagnostic> &Diagnostics,
-		PackageRuntimeLoadMode Mode) {
+		const RuntimeDistributionAdmission &Admission, PackageRuntimeLoadMode Mode) {
 		std::optional<ParsedPackageManifest> Manifest;
 		std::vector<terrain::TerrainArtifact> TerrainArtifacts;
-		Diagnostics = ValidatePackageRoot(PackageRoot, &Manifest, &TerrainArtifacts, Mode);
+		Diagnostics = ValidatePackageRoot(PackageRoot, &Manifest, std::nullopt, Admission, &TerrainArtifacts, Mode);
 		if (HasErrors(Diagnostics)) return std::nullopt;
 		if (!Manifest) return std::nullopt;
 		try {
-			const auto ReadPinned = [&](std::string_view Relative, std::size_t MaximumBytes) {
-				return ReadPinnedText(PackageRoot, *Manifest, Relative, MaximumBytes);
+			auto ReadPinned = [&](std::string_view RelativePath, std::size_t MaximumBytes) {
+				return ReadPinnedPackageFile(PackageRoot, *Manifest, RelativePath, MaximumBytes);
 			};
 			RuntimePackagePayload Result{.Inspection = Manifest->Inspection};
-			if (Mode == PackageRuntimeLoadMode::LoopbackDevelopmentClient &&
-				Manifest->Inspection.Configuration == PackageConfiguration::Development)
+			if (CanDeferTerrain(*Manifest, Mode) && !TerrainArtifacts.empty())
 				Result.LoadMode = PackageRuntimeLoadMode::LoopbackDevelopmentClient;
 			Result.TerrainArtifacts = std::move(TerrainArtifacts);
+			if (Manifest->RuntimeDistribution) {
+				Result.ClientCodeIdentity = Manifest->RuntimeDistribution->ClientCodeIdentity;
+				auto Catalog = std::move(*Manifest->ScriptCatalog);
+				runtime_distribution::AdmitCatalog(Catalog, *Manifest->RuntimeDistribution,
+					Result.Inspection.Identity.ToString(), Manifest->DistributionSecurity, Manifest->TrustedCompiler, ReadPinned);
+				Result.RuntimeCode = std::make_shared<RuntimeDistributionCodeCatalog>(std::move(Catalog));
+			}
 			Result.ContentManifestReference = Manifest->ContentManifestPath;
 			Result.ContentManifestDigest = Manifest->ContentManifestDigest;
-			Result.ProjectJson = ReadPinned(Manifest->ProjectPath, MaximumProjectSnapshotBytes);
+			if (Result.Inspection.Audience == PackageAudience::DistributedPlayer)
+				Result.ClientCodeJson = ReadPinned(Manifest->ProjectPath, client_package::MaximumCodeBytes);
+			else
+				Result.ProjectJson = ReadPinned(Manifest->ProjectPath, MaximumProjectSnapshotBytes);
 			Result.Assets.CatalogJson = ReadPinned(Manifest->AssetCatalogPath, 1024 * 1024);
 			if (Manifest->PreRunPath)
 				Result.PreRunSource = ReadPinned(*Manifest->PreRunPath, MaximumPreRunSourceBytes);
@@ -1912,6 +2546,9 @@ namespace gargantuan {
 				Result.Assets.Artifacts.push_back({"assets/artifacts/" + ContentId + ".gasset", std::move(Bytes)});
 			}
 			return Result;
+		} catch (const RuntimeDistributionError &Error) {
+			AddDiagnostic(Diagnostics, PackageDiagnosticSeverity::Error, "RuntimeDistribution", Error.Code, Error.what());
+			return std::nullopt;
 		} catch (const std::exception &) {
 			AddDiagnostic(
 				Diagnostics,
@@ -1937,6 +2574,10 @@ namespace gargantuan {
 		World->MarkPersistenceSubtreeArchivable();
 		World->Root = PackageRoot / "content";
 		World->Filesystem = nullptr;
+		if (Payload.Inspection.Target == RuntimeDistributionTarget::DedicatedServer)
+			World->PackagedClientCodeIdentity = Payload.ClientCodeIdentity;
+		if (Payload.RuntimeCode)
+			(void)runtime_distribution::BindCatalog(*Payload.RuntimeCode, World, false);
 		auto Assets = std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
 		if (!Assets) throw std::runtime_error("The packaged project has no canonical AssetService");
 		Assets->LoadRuntimeAssetSnapshot(Payload.Assets);
@@ -1945,6 +2586,8 @@ namespace gargantuan {
 
 	std::shared_ptr<DataModel>
 	PackageBuilder::LoadWorld(const RuntimePackagePayload &Payload, const std::filesystem::path &PackageRoot) {
+		if (Payload.Inspection.Audience == PackageAudience::DistributedPlayer)
+			throw std::invalid_argument("A distributed Player package requires a replicated world");
 		if (Payload.LoadMode != PackageRuntimeLoadMode::Complete)
 			throw std::invalid_argument("[Package:Terrain] A complete payload is required to load a gameplay world");
 		return LoadPackagedScene(Payload, PackageRoot, terrain::GetSceneTerrainAdmission(Payload.Inspection.Identity,
@@ -2058,5 +2701,108 @@ namespace gargantuan {
 				Found->second.Digest == Target->GetGuiTemplateSourceDigest() &&
 				Target->HydrateGuiTemplateSource(Found->second.Source);
 		};
+	}
+
+	std::function<bool(const std::shared_ptr<LuaSourceContainer> &)>
+	PackageBuilder::MakeDistributedPlayerGuiCodeHydrator(const RuntimePackagePayload &Payload) {
+		if (!Payload.RuntimeCode || !Payload.ClientCodeJson) return {};
+		auto Projection = client_package::DecodeCode(*Payload.ClientCodeJson);
+		auto Catalog = Payload.RuntimeCode;
+		return [Catalog = std::move(Catalog), Projection = std::move(Projection), Identity = Payload.ClientCodeIdentity](
+			const std::shared_ptr<LuaSourceContainer> &Target
+		) {
+			if (!Target) return false;
+			const auto Found = Catalog->Scripts.find(Target->GetGuiTemplateSourceId());
+			if (Found == Catalog->Scripts.end()) return true;
+			if (!IsClientPlayerGuiSource(*Target) || Target->GetGuiTemplateSourceVersion() != Target->GetSourceVersion() ||
+				Found->second.Path.empty() ||
+				Found->second.Path.front() != "StarterGui" || Found->second.Class != (Target->GetClassName)())
+				return false;
+			if (Target->GetGuiTemplateSourceDigest() != GetRuntimeDistributionGuiDigest(
+				Identity, Found->second.SourceId, Target->GetGuiTemplateSourceVersion())) return false;
+			if (Found->second.Code) {
+				if (Target->HasRuntimeScriptCode()) return true;
+				if (!Target->GetSource().empty()) return false;
+				Target->BindRuntimeScriptCode(Found->second.Code);
+				return true;
+			}
+			const auto Source = Projection.find({Found->second.Path, Found->second.Class});
+			if (Source != Projection.end() && !Target->GetSource().empty())
+				return Target->GetSource() == Source->second;
+			if (Source == Projection.end() || !Target->HydrateGuiTemplateSource(Source->second)) return false;
+			Target->SetRuntimeSourceDiagnostics(Found->second.Diagnostics == RuntimeDistributionDiagnostics::Minimal ?
+				RuntimeScriptDiagnostics::Stripped : RuntimeScriptDiagnostics::LineInfo);
+			return true;
+		};
+	}
+
+	std::function<void(ObjectId, const std::shared_ptr<LuaSourceContainer> &, bool)>
+	PackageBuilder::MakeDistributedCodeHydrator(const RuntimePackagePayload &Payload) {
+		if (!Payload.RuntimeCode || !Payload.ClientCodeJson) return {};
+		auto Projection = client_package::DecodeCode(*Payload.ClientCodeJson);
+		std::map<client_package::CodeKey, RuntimeDistributionArtifact> Bindings;
+		for (const auto &[Id, Entry] : Payload.RuntimeCode->Scripts) {
+			(void)Id;
+			Bindings.emplace(client_package::CodeKey{Entry.Path, Entry.Class}, Entry);
+		}
+		return [Bindings = std::move(Bindings), Projection = std::move(Projection),
+			ProvisionedObjects = std::map<client_package::CodeKey, ObjectId>{}, ProvisionedWorld = ObjectId{}](
+			ObjectId ReplicaSource, const std::shared_ptr<LuaSourceContainer> &Target, bool BeforeRuntimeAttach
+		) mutable {
+			if (!Target || !Target->GetGuiTemplateSourceId().empty() || Target->HasRuntimeScriptCode()) return;
+			if (const auto Script = std::dynamic_pointer_cast<gargantuan::Script>(Target);
+				Script && Script->GetRunContext() != Enums::RunContext::Client) return;
+			if (std::dynamic_pointer_cast<ModuleScript>(Target) &&
+				GetInstanceServicePolicy(*Target) != SchemaServicePolicy::Replicated) return;
+			std::vector<std::string> Path;
+			auto Current = std::static_pointer_cast<Instance>(Target);
+			while (Current && !std::dynamic_pointer_cast<DataModel>(Current)) {
+				if (Path.size() == MaximumProtocolJsonDepth)
+					throw RuntimeDistributionError("AudienceViolation", "A runtime script path exceeds its depth bound.");
+				Path.push_back(Current->GetName());
+				Current = Current->GetParent().value_or(nullptr);
+			}
+			if (!Current) return;
+			const auto WorldIdentity = Current->GetObjectId();
+			if (WorldIdentity != ProvisionedWorld) {
+				if (!BeforeRuntimeAttach)
+					throw RuntimeDistributionError("AudienceViolation", "Managed script bindings belong to a different replica world.");
+				ProvisionedObjects.clear();
+				ProvisionedWorld = WorldIdentity;
+			}
+			std::ranges::reverse(Path);
+			const client_package::CodeKey Key{std::move(Path), (Target->GetClassName)()};
+			const auto Bound = Bindings.find(Key);
+			if (Bound == Bindings.end()) return;
+			if (BeforeRuntimeAttach) {
+				const auto [Position, Inserted] = ProvisionedObjects.emplace(Key, ReplicaSource);
+				if (!Inserted && Position->second != ReplicaSource)
+					throw RuntimeDistributionError("AudienceViolation", "Two replica objects claimed the same package binding.");
+				return;
+			}
+			const auto Provisioned = ProvisionedObjects.find(Key);
+			if (Provisioned == ProvisionedObjects.end() || Provisioned->second != ReplicaSource)
+				throw RuntimeDistributionError("AudienceViolation", "A new replica generation cannot assume an existing package binding.");
+			if (!Target->GetSource().empty())
+				throw RuntimeDistributionError("AudienceViolation", "A materialized script already contains clear source.");
+			if (Bound->second.Code) Target->BindRuntimeScriptCode(Bound->second.Code);
+			else {
+				Target->SetSource(Projection.at(Key));
+				Target->SetRuntimeSourceDiagnostics(Bound->second.Diagnostics == RuntimeDistributionDiagnostics::Minimal ?
+					RuntimeScriptDiagnostics::Stripped : RuntimeScriptDiagnostics::LineInfo);
+			}
+		};
+	}
+
+	std::size_t PackageBuilder::HydrateDistributedClientCode(
+		const RuntimePackagePayload &Payload, const std::shared_ptr<DataModel> &ReplicatedWorld
+	) {
+		if (!ReplicatedWorld || Payload.Inspection.Audience != PackageAudience::DistributedPlayer ||
+			!Payload.ClientCodeJson)
+			throw std::invalid_argument("Distributed Player code requires a client package and replicated world");
+		const auto Hydrated = client_package::HydrateCode(*Payload.ClientCodeJson, *ReplicatedWorld);
+		if (Payload.RuntimeCode)
+			(void)runtime_distribution::BindCatalog(*Payload.RuntimeCode, ReplicatedWorld, true);
+		return Hydrated;
 	}
 }

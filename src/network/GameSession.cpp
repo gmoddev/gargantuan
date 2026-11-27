@@ -157,12 +157,13 @@ namespace gargantuan::network {
 			   (!ReliableService || (Role == GameSessionRole::Server && ReliableService->IsValid() &&
 				ReliableService->MaximumConnections <= MaximumGameSessionPeers)) &&
 			   (!DeclareNormalOrdinaryService || Role == GameSessionRole::Client) &&
-			   (!TerrainBootstrap || (IsLoopbackTransportEndpoint(Endpoint) && !ReliableService &&
+			   (!TerrainBootstrap || (IsLoopbackTransportEndpoint(Endpoint) && !ReliableService && RuntimeDistributionIdentity.empty() &&
 				TerrainBootstrap->Binding.IsValid() && TerrainBootstrap->Directory.Project.IsValid() &&
 				TerrainBootstrap->Directory.Grid.IsValid() &&
 				Limits.MaximumReliableMessageBytes >= TerrainFragmentHeaderBytes + MaximumTerrainFragmentBytes &&
 				(Role == GameSessionRole::Server ? TerrainBootstrap->Source.size() == TerrainBootstrap->Directory.Chunks.size()
 												 : TerrainBootstrap->Source.empty()))) &&
+			   (RuntimeDistributionIdentity.empty() || IsGameSessionDistributionIdentity(RuntimeDistributionIdentity)) &&
 			   (AllowInsecureDevelopmentNetwork || IsLoopbackTransportEndpoint(Endpoint));
 	}
 
@@ -1287,7 +1288,8 @@ namespace gargantuan::network {
 								  ? Configuration.ClientNonce
 								  : (static_cast<std::uint64_t>(Connection.Generation) << 32) | Connection.Slot;
 			if (!QueueSession(
-					Connection, GameSessionClientHello{PeerValue.Nonce, Configuration.Limits, GetTerrainBinding()}, Configuration.Limits
+					Connection, GameSessionClientHello{PeerValue.Nonce, Configuration.Limits,
+						GetTerrainBinding(), Configuration.RuntimeDistributionIdentity}, Configuration.Limits
 				))
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Client hello could not be queued");
 		}
@@ -1303,6 +1305,12 @@ namespace gargantuan::network {
 			if (Hello.TerrainBinding != GetTerrainBinding()) {
 				++Metrics.RejectedHandshakes;
 				Reject(Connection, DisconnectReason::IncompatibleVersion, "Client terrain package does not match the server");
+				return;
+			}
+			}
+			if (Hello.RuntimeDistributionIdentity != Configuration.RuntimeDistributionIdentity) {
+				++Metrics.RejectedHandshakes;
+				Reject(Connection, DisconnectReason::ProtocolViolation, "Client runtime distribution identity is incompatible");
 				return;
 			}
 			auto Limits = NegotiateNetworkLimits(Configuration.Limits, Hello.AdvertisedLimits);
@@ -1399,6 +1407,11 @@ namespace gargantuan::network {
 				return;
 			}
 			auto Expected = NegotiateNetworkLimits(Configuration.Limits, Accepted.NegotiatedLimits);
+			if (Accepted.RuntimeDistributionIdentity != Configuration.RuntimeDistributionIdentity) {
+				++Metrics.RejectedHandshakes;
+				Reject(Connection, DisconnectReason::ProtocolViolation, "Server runtime distribution identity is incompatible");
+				return;
+			}
 			if (!Expected || *Expected != Accepted.NegotiatedLimits) {
 				++Metrics.RejectedHandshakes;
 				Reject(Connection, DisconnectReason::ProtocolViolation, "Server returned invalid negotiated limits");
@@ -1435,7 +1448,45 @@ namespace gargantuan::network {
 				);
 				return;
 			}
-			auto Result = Replica.ApplyFrame(*Frame);
+			if (!Configuration.RuntimeDistributionIdentity.empty()) {
+				const auto IsSource = [](std::string_view Name, const WireValue &Value) {
+					if (Name != "Source" && Name != "ReplicatedSource") return false;
+					const auto *Text = std::get_if<std::string>(&Value);
+					return !Text || !Text->empty();
+				};
+				for (const auto &Operation : Frame->Operations) {
+					bool Invalid = false;
+					if (const auto *Publish = std::get_if<PublishReplication>(&Operation.Intent)) {
+						for (const auto &[Name, Value] : Publish->Properties)
+							Invalid = Invalid || IsSource(Name, Value);
+					} else if (const auto *Property = std::get_if<PropertyReplicationUpdate>(&Operation.Intent)) {
+						Invalid = IsSource(Property->PropertyName, Property->Value);
+					}
+					if (Invalid) {
+						Reject(Message.Connection, DisconnectReason::ProtocolViolation,
+							"Managed runtime distribution received unauthorized script source");
+						return;
+					}
+				}
+			}
+			ReplicaApplier::BeforePublish Prepare;
+			if (Configuration.HydratePackagedCode) {
+				Prepare = [&](ObjectId Identity, const std::shared_ptr<Instance> &Object) {
+					const auto Source = std::dynamic_pointer_cast<LuaSourceContainer>(Object);
+					if (!Source) return;
+					Configuration.HydratePackagedCode(Identity, Source, !ClientRuntimeAttached);
+					if (!ClientRuntimeAttached || !Configuration.HydratePlayerGuiCode ||
+						Source->GetGuiTemplateSourceId().empty() || !PrimaryConnection) return;
+					const auto Peer = Peers.find(*PrimaryConnection);
+					const auto Gui = FindPlayerGuiScope(*Source);
+					const auto Owner = Gui ? std::dynamic_pointer_cast<Player>(Gui->GetParent().value_or(nullptr)) : nullptr;
+					if (Peer != Peers.end() && Owner &&
+						static_cast<std::uint32_t>(Owner->GetPlayerId()) == Peer->second.PlayerId &&
+						!Configuration.HydratePlayerGuiCode(Source))
+						throw std::runtime_error("Managed PlayerGui script binding is incompatible");
+				};
+			}
+			auto Result = Replica.ApplyFrame(*Frame, Prepare);
 			Metrics.ClientStructuralApplyNanoseconds += static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - ApplyStarted).count());
 			if (!Result.Succeeded()) {
@@ -1552,8 +1603,15 @@ namespace gargantuan::network {
 				const auto Source = std::dynamic_pointer_cast<LuaSourceContainer>(Replica.Resolve(Object));
 				if (!Source || FindPlayerGuiScope(*Source) != Gui) continue;
 				try {
-					(void)Configuration.HydratePlayerGuiCode(Source);
+					if (!Configuration.HydratePlayerGuiCode(Source) && !Configuration.RuntimeDistributionIdentity.empty()) {
+						FailSession({DisconnectReason::ProtocolViolation, "Managed PlayerGui script binding is incompatible"});
+						return;
+					}
 				} catch (const std::exception &Error) {
+					if (!Configuration.RuntimeDistributionIdentity.empty()) {
+						FailSession({DisconnectReason::ProtocolViolation, "Managed PlayerGui script binding failed"});
+						return;
+					}
 					LOG_WARN(App, "[Gui:Provision] Client GUI code hydration failed: %.160s", Error.what());
 				}
 			}
@@ -1623,6 +1681,7 @@ namespace gargantuan::network {
 				return;
 			}
 			ReconcileClientGui(PlayerValue, Gui, InitialLocalBinding || CharacterProjected);
+			if (Status == GameSessionStatus::Failed) return;
 			if (AlreadyReady) return;
 			if (InjectFailure(detail::GameSessionFailurePoint::LocalPlayerResolution)) {
 				FailSession({DisconnectReason::ResourceExhaustion, "Injected LocalPlayer resolution failure"});
@@ -3082,6 +3141,7 @@ namespace gargantuan::network {
 											.Identity = SessionIdentityKind::DevelopmentLocal,
 											.NegotiatedLimits = Peer->second.Limits,
 											.TerrainBinding = GetTerrainBinding(),
+											.RuntimeDistributionIdentity = Configuration.RuntimeDistributionIdentity,
 										},
 										Peer->second.Limits
 									)) {

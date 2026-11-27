@@ -1,14 +1,20 @@
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/FileLink.hpp"
+#include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
+#include "gargantuan/classes/ModuleScript.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
+#include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/platform/HostEvent.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/Renderer.hpp"
+#include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
 #include <SDL3/SDL.h>
@@ -80,6 +86,15 @@ namespace {
 		return std::ranges::any_of(Diagnostics, [&](const PackageDiagnostic &Diagnostic) {
 			return Diagnostic.Code == Code;
 		});
+	}
+
+	template <typename Operation> void RequireRejected(Operation &&Run, std::string_view Message) {
+		try {
+			Run();
+		} catch (const std::exception &) {
+			return;
+		}
+		throw std::runtime_error(std::string(Message));
 	}
 
 	PackageBuildResult Build(
@@ -160,7 +175,7 @@ namespace {
 		Require(!PackageBuilder::Load(Development, Diagnostics), "offline startup accepted a missing terrain leaf");
 
 		using enum PackageRuntimeLoadMode;
-		const auto Client = PackageBuilder::Load(Development, Diagnostics, LoopbackDevelopmentClient);
+		const auto Client = PackageBuilder::Load(Development, Diagnostics, {}, LoopbackDevelopmentClient);
 		Require(Client && Client->LoadMode == LoopbackDevelopmentClient && Client->TerrainArtifacts.size() == 1 &&
 			Client->TerrainArtifacts.front().Id == Payload.TerrainArtifacts.back().Id &&
 			Client->PreRunSource == FullPackage->PreRunSource && Client->Assets.CatalogJson == FullPackage->Assets.CatalogJson,
@@ -175,11 +190,11 @@ namespace {
 		catch (const std::invalid_argument &) { Denied = true; }
 		Require(Denied, "manifest-only payload cannot enter the complete gameplay loader");
 
-		const auto ReleaseClient = PackageBuilder::Load(Release, Diagnostics, LoopbackDevelopmentClient);
+		const auto ReleaseClient = PackageBuilder::Load(Release, Diagnostics, {}, LoopbackDevelopmentClient);
 		Require(ReleaseClient && ReleaseClient->LoadMode == PackageRuntimeLoadMode::Complete &&
 			ReleaseClient->TerrainArtifacts.size() == 3, "Release packages always perform complete admission");
 		Require(std::filesystem::remove(Release / Leaf) &&
-			!PackageBuilder::Load(Release, Diagnostics, LoopbackDevelopmentClient),
+			!PackageBuilder::Load(Release, Diagnostics, {}, LoopbackDevelopmentClient),
 			"Release packages cannot opt into missing terrain leaves");
 
 		auto Metadata = Json::parse(ReadText(Development / "game.package.json"));
@@ -190,13 +205,13 @@ namespace {
 		Metadata["ContentTableSha256"] = AssetContentId::Hash(std::span(
 			reinterpret_cast<const std::uint8_t *>(Content.data()), Content.size())).ToString();
 		WriteText(Development / "game.package.json", Metadata.dump());
-		Require(!PackageBuilder::Load(Development, Diagnostics, LoopbackDevelopmentClient) &&
+		Require(!PackageBuilder::Load(Development, Diagnostics, {}, LoopbackDevelopmentClient) &&
 			HasDiagnostic(Diagnostics, "InvalidTerrainClosure"), "scoped admission rejects leaf metadata inconsistent with GTMF");
 		WriteText(Development / "game.package.json", OriginalMetadata);
 		auto ManifestBytes = ReadText(Development / Manifest);
 		ManifestBytes.front() ^= 1;
 		WriteText(Development / Manifest, ManifestBytes);
-		Require(!PackageBuilder::Load(Development, Diagnostics, LoopbackDevelopmentClient),
+		Require(!PackageBuilder::Load(Development, Diagnostics, {}, LoopbackDevelopmentClient),
 			"scoped admission still rejects corrupt manifest bytes");
 		std::cout << "[Package:Terrain] Client verified its manifest and code without local GTCH leaves\n";
 	}
@@ -219,6 +234,395 @@ namespace {
 				"generic package included a private backend adapter, schema, or configuration artifact"
 			);
 		}
+	}
+
+	void CheckDistributedPlayerPackage(const TestWorkspace &Paths, const std::filesystem::path &Runtime,
+		DiskFilesystem &Filesystem, const Project &ProjectValue, const std::shared_ptr<DataModel> &World) {
+		const auto Audience = PackageAudience::DistributedPlayer;
+		const auto Policy = Paths.ProjectRoot / ".gargantuan/package-audience.json";
+		const auto Assets = std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
+		const auto Records = Assets->GetCatalog(false);
+		const auto SharedAsset = std::ranges::find_if(Records, [](const auto &Record) {
+			return Record.Dependencies.empty();
+		});
+		Require(SharedAsset != Records.end(), "audience fixture has no dependency-free shared asset");
+		const auto PrivateAsset = std::ranges::find_if(Records, [&](const auto &Record) {
+			return Record.ContentId != SharedAsset->ContentId;
+		});
+		Require(PrivateAsset != Records.end(), "audience fixture has no distinct private asset");
+
+		const auto MakeFolder = [](const auto &Parent) {
+			auto FolderValue = std::make_shared<Folder>();
+			FolderValue->SetName("Audience.Fixture");
+			FolderValue->SetArchivable(true);
+			FolderValue->SetParent(Parent);
+			return FolderValue;
+		};
+		const auto MakeScript = [](const auto &Parent, std::string Name, Enums::RunContext Role,
+			std::string Source) {
+			auto ScriptValue = std::make_shared<Script>();
+			ScriptValue->SetName(std::move(Name));
+			ScriptValue->SetRunContext(Role);
+			ScriptValue->SetSource(std::move(Source));
+			ScriptValue->SetArchivable(true);
+			ScriptValue->SetParent(Parent);
+			return ScriptValue;
+		};
+		const auto FolderValue = MakeFolder(World);
+		(void)MakeScript(FolderValue, "ClientFixture", Enums::RunContext::Client, "-- shared-client-marker");
+		(void)MakeScript(FolderValue, "ServerFixture", Enums::RunContext::Server, "-- server-fixture-marker");
+		auto Module = std::make_shared<ModuleScript>();
+		Module->SetName("SharedFixture");
+		Module->SetSource("return 'shared-module-marker'");
+		Module->SetArchivable(true);
+		auto SharedStorage = World->GetService("ReplicatedStorage");
+		SharedStorage->SetArchivable(true);
+		Module->SetParent(SharedStorage);
+		auto PrivateModule = std::make_shared<ModuleScript>();
+		PrivateModule->SetName("ServerModuleFixture");
+		PrivateModule->SetSource("return 'server-module-marker'");
+		PrivateModule->SetArchivable(true);
+		PrivateModule->SetParent(FolderValue);
+		const auto MountedDirectory = Paths.ProjectRoot / "AudienceMountFixture";
+		std::filesystem::create_directory(MountedDirectory);
+		WriteText(MountedDirectory / "MountFixture.client.luau", "-- mounted-source-marker");
+		auto Link = std::make_shared<FileLink>();
+		Link->SetName("PrivateSourceMount");
+		Link->SetPath("AudienceMountFixture");
+		Link->SetArchivable(true);
+		Link->SetParent(FolderValue);
+		SourceMount Mount(Filesystem);
+		const auto Mounted = Link->Synchronize(Mount);
+		Require(Mounted && *Mounted == 1, "audience fixture could not mount its ordinary client source");
+
+		const auto Revision = World->GetAuthoritativeRevision();
+		const auto Capture = [&] { return PackageBuilder::Capture(ProjectValue, World, Revision, Revision, Audience); };
+		RequireRejected(Capture, "distributed capture accepted a missing asset audience policy");
+		const auto WritePolicy = [&](AssetId Chosen) {
+			WriteText(Policy, Json({{"Version", 1}, {"SharedAssets", Json::array({Chosen.ToString()})}}).dump());
+		};
+		const auto DependentAsset = std::ranges::find_if(Records, [](const auto &Record) {
+			return !Record.Dependencies.empty();
+		});
+		Require(DependentAsset != Records.end(), "audience fixture has no dependency-bearing asset");
+		WritePolicy(DependentAsset->Id);
+		RequireRejected(Capture, "a shared asset silently pulled in an unlisted dependency");
+		WritePolicy(SharedAsset->Id);
+		const auto Payload = Capture();
+		const auto Output = Paths.Root / "DistributedPlayer";
+		if (!std::filesystem::exists(Runtime / "distributed-player-capability.json")) {
+			Require(!Build(Payload, Runtime, Output).Ok && !std::filesystem::exists(Output),
+				"a runtime without the distributed Player capability published an artifact");
+			return;
+		}
+
+		Require(Build(Payload, Runtime, Output).Ok, "distributed Player package failed to build");
+		Require(!HasError(PackageBuilder::Validate(Output, Audience)), "distributed Player validation failed");
+		Require(HasDiagnostic(PackageBuilder::Validate(Output, PackageAudience::Trusted), "AudienceMismatch"),
+			"trusted validation accepted a distributed Player artifact");
+		const auto ManifestText = ReadText(Output / "game.package.json");
+		const auto Manifest = Json::parse(ManifestText);
+		const auto Code = ReadText(Output / "content/client-code.json");
+		Require(Manifest["Audience"] == "DistributedPlayer" && Manifest["PackageFormatVersion"] == 3 &&
+			Code.contains("shared-client-marker") && Code.contains("shared-module-marker") &&
+			!Code.contains("server-fixture-marker") && !Code.contains("server-module-marker") &&
+			!Code.contains("AudienceMountFixture") && !Code.contains("mounted-source-marker") &&
+			!std::filesystem::exists(Output / "content/game.instance.json") &&
+			!std::filesystem::exists(Output / "content/prerun.luau") &&
+			!std::filesystem::exists(Output / "content/regions") &&
+			!std::filesystem::exists(Output / ".gargantuan"),
+			"distributed Player project bytes did not match their audience");
+		const auto Catalog = Json::parse(ReadText(Output / "content/assets/catalog.json"));
+		Require(Catalog["Assets"].size() == 1 && Catalog["Assets"][0]["AssetId"] == SharedAsset->Id.ToString() &&
+			std::filesystem::exists(Output / ("content/assets/artifacts/" + SharedAsset->ContentId.ToString() + ".gasset")) &&
+			!std::filesystem::exists(Output / ("content/assets/artifacts/" + PrivateAsset->ContentId.ToString() + ".gasset")),
+			"distributed Player artifact closure did not match the explicit shared asset");
+
+		std::vector<PackageDiagnostic> Diagnostics;
+		const auto Loaded = PackageBuilder::Load(Output, Diagnostics);
+		Require(Loaded && Loaded->Assets.Artifacts.size() == 1 && Loaded->ProjectJson.empty() && !Loaded->PreRunSource,
+			"distributed Player load did not retain only its client payload");
+		auto Replica = std::make_shared<DataModel>();
+		const auto ReplicaFolder = MakeFolder(Replica);
+		const auto ClientTarget = MakeScript(ReplicaFolder, "ClientFixture", Enums::RunContext::Client, "");
+		auto ReplicaModule = std::make_shared<ModuleScript>();
+		ReplicaModule->SetName("SharedFixture");
+		ReplicaModule->SetSource("return 'shared-module-marker'");
+		ReplicaModule->SetParent(Replica->GetService("ReplicatedStorage"));
+		Require(PackageBuilder::HydrateDistributedClientCode(*Loaded, Replica) >= 2 &&
+			ClientTarget->GetSource() == "-- shared-client-marker" &&
+			ReplicaModule->GetSource() == "return 'shared-module-marker'", "legitimate client and shared code did not hydrate");
+		Replica->Destroy();
+
+		const auto Trusted = PackageBuilder::Capture(ProjectValue, World, Revision, Revision);
+		Require(!Build(Trusted, Runtime, Output).Ok && ReadText(Output / "game.package.json") == ManifestText,
+			"a trusted build replaced the distributed destination");
+		const auto TrustedOutput = Paths.Root / "TrustedAudience";
+		Require(Build(Trusted, Runtime, TrustedOutput).Ok &&
+			HasDiagnostic(PackageBuilder::Validate(TrustedOutput, Audience), "AudienceMismatch") &&
+			std::filesystem::exists(TrustedOutput / "content/game.instance.json"),
+			"trusted offline package behavior changed or passed the distribution gate");
+		const auto ConcurrentOutput = Paths.Root / "ConcurrentAudience";
+		bool PublishedDuringStaging = false;
+		const auto Superseded = PackageBuilder::Build({
+			.Payload = Trusted,
+			.RuntimeDistributionRoot = Runtime,
+			.OutputDirectory = ConcurrentOutput,
+			.Progress = [&](PackagePhase Phase) {
+				if (Phase == PackagePhase::Finalize)
+					PublishedDuringStaging = Build(Payload, Runtime, ConcurrentOutput).Ok;
+			},
+		});
+		Require(PublishedDuringStaging && !Superseded.Ok &&
+			!HasError(PackageBuilder::Validate(ConcurrentOutput, Audience)),
+			"a staged trusted build replaced a distributed artifact published before finalization");
+
+		const auto OlderRuntime = Paths.Root / "OlderRuntime";
+		CopyPackage(Runtime, OlderRuntime);
+		std::filesystem::remove(OlderRuntime / "distributed-player-capability.json");
+		const auto OldRuntimeOutput = Paths.Root / "OldRuntimeOutput";
+		Require(!Build(Payload, OlderRuntime, OldRuntimeOutput).Ok && !std::filesystem::exists(OldRuntimeOutput),
+			"a Player runtime without the package format capability published a distributed artifact");
+		WriteText(OlderRuntime / "distributed-player-capability.json", Json({
+			{"PackageFormatVersion", DistributedPlayerPackageFormatVersion}, {"PlayerSha256", std::string(64, 'a')},
+		}).dump());
+		const auto WrongDigest = Build(Payload, OlderRuntime, OldRuntimeOutput);
+		Require(!WrongDigest.Ok && !std::filesystem::exists(OldRuntimeOutput) &&
+			std::ranges::any_of(WrongDigest.Diagnostics, [](const PackageDiagnostic &Diagnostic) {
+				return Diagnostic.Item.ends_with("Distributed Player capability does not match the staged executable");
+			}), "a capability for different executable bytes passed the staging check");
+
+		const auto PreRun = Paths.ProjectRoot / ".gargantuan/prerun.luau";
+		Require(!std::filesystem::exists(PreRun), "audience fixture unexpectedly has PreRun");
+		WriteText(PreRun, "-- trusted-schema-fixture");
+		RequireRejected(Capture, "distributed capture accepted unsplit project schema source");
+	}
+
+	std::string PackageTextHash(std::string_view Bytes) {
+		return AssetContentId::Hash(std::span(reinterpret_cast<const std::uint8_t *>(Bytes.data()), Bytes.size())).ToString();
+	}
+
+	void CheckManagedRuntimeDistribution(const std::filesystem::path &StagedRuntime) {
+		TestWorkspace Paths;
+		auto Runtime = StagedRuntime;
+		if (!std::filesystem::exists(Runtime / "runtime-distribution-capability.json")) {
+			Runtime = Paths.Root / "ManagedRuntimeFixture";
+			CopyPackage(StagedRuntime, Runtime);
+			const auto Distribution = Json::parse(ReadText(Runtime / "runtime-distribution.json"));
+			const auto Executable = Runtime / Distribution["Player"].get<std::string>();
+			WriteText(Runtime / "runtime-distribution-capability.json", Json({
+				{"Version", 1}, {"PackageFormatVersion", RuntimeDistributionPackageFormatVersion},
+				{"ExecutableSha256", PackageTextHash(ReadText(Executable))},
+			}).dump());
+		}
+		DiskFilesystem Filesystem(Paths.ProjectRoot);
+		auto ProjectValue = Project::fromExisting(&Filesystem);
+		auto World = ProjectValue.DeserializeGame();
+		World->InitializeLoadedProjectRevision();
+		const auto SharedStorage = World->GetService("ReplicatedStorage");
+		SharedStorage->SetArchivable(true);
+		const auto AddModule = [&](std::string Name, std::string Source) {
+			auto Module = std::make_shared<ModuleScript>();
+			Module->SetName(std::move(Name));
+			Module->SetSource(std::move(Source));
+			Module->SetArchivable(true);
+			Module->SetParent(SharedStorage);
+			return Module->GetSourceId();
+		};
+		const auto OpenId = AddModule("ManagedCraftFixture", "return 'RDP_OPEN_CRAFT_MARKER'");
+		const auto CompiledId = AddModule("ManagedMovementFixture", "-- RDP_COMPILED_SOURCE_MARKER\nreturn 'RDP_COMPILED_CONSTANT'");
+		const auto ProtectedId = AddModule("ManagedGenerationFixture", "-- RDP_PROTECTED_SOURCE_MARKER\nreturn 'RDP_PROTECTED_CONSTANT'");
+		auto ServerScript = std::make_shared<Script>();
+		ServerScript->SetName("ManagedServerFixture");
+		ServerScript->SetRunContext(Enums::RunContext::Server);
+		ServerScript->SetSource("-- RDP_PRIVATE_SERVER_SOURCE_MARKER\nlocal PrivateInventory = 'RDP_PRIVATE_SERVER_CONSTANT'");
+		ServerScript->SetArchivable(true);
+		ServerScript->SetParent(World);
+		const auto ServerId = ServerScript->GetSourceId();
+		const auto Persisted = World->GetAuthoritativeRevision();
+		ProjectValue.PersistGameAtomically(ProjectValue.CaptureGame(World, Persisted));
+		World->Destroy();
+		World = ProjectValue.DeserializeGame();
+		World->InitializeLoadedProjectRevision();
+		const auto Revision = World->GetAuthoritativeRevision();
+		const auto PolicyFile = Paths.ProjectRoot / ".gargantuan/runtime-distribution.json";
+		WriteText(PolicyFile, R"({"Version":1})");
+
+		const auto Capture = [&](RuntimeDistributionRequest Request) {
+			const auto Audience = Request.Target == RuntimeDistributionTarget::DistributedPlayer ?
+				PackageAudience::DistributedPlayer : PackageAudience::Trusted;
+			return PackageBuilder::Capture(ProjectValue, World, Revision, Revision, Audience, Request);
+		};
+		const auto BuildManaged = [&](const GamePayload &Payload, const std::filesystem::path &Destination,
+			std::optional<RuntimePackageProvisionedSecurity> Security = std::nullopt) {
+			return PackageBuilder::Build({.Payload = Payload, .RuntimeDistributionRoot = Runtime,
+				.OutputDirectory = Destination, .DistributionSecurity = std::move(Security)});
+		};
+		const auto CatalogPath = "content/runtime-scripts.json";
+		const auto ProjectPath = "content/game.instance.json";
+		const auto ManifestPath = "game.package.json";
+		const auto SignaturePath = "game.package.sig";
+		const auto CompiledPath = "content/scripts/" + CompiledId + ".luac";
+		const auto ProtectedPath = "content/scripts/" + ProtectedId + ".gse";
+		std::vector<PackageDiagnostic> Diagnostics;
+
+		const auto OpenOutput = Paths.Root / "ManagedOpen";
+		const auto Open = BuildManaged(Capture({.Preset = RuntimeDistributionPreset::Open}), OpenOutput);
+		Require(Open.Ok && Json::parse(ReadText(OpenOutput / ManifestPath))["PackageFormatVersion"] == RuntimeDistributionPackageFormatVersion,
+			"Open distribution publication");
+		Require(ReadText(OpenOutput / ProjectPath).contains("RDP_OPEN_CRAFT_MARKER") &&
+			ReadText(OpenOutput / ProjectPath).contains("RDP_COMPILED_SOURCE_MARKER") &&
+			!std::filesystem::exists(OpenOutput / CompiledPath), "Open distribution retains authored source");
+		Require(PackageBuilder::Load(OpenOutput, Diagnostics).has_value() && !HasError(Diagnostics), "unsigned Open admits source");
+		Require(HasDiagnostic(PackageBuilder::Validate(OpenOutput, std::nullopt, {.RequirePublisher = true}), "PublisherRequired"),
+			"signed deployment rejects unsigned Open");
+
+		const auto CompiledOutput = Paths.Root / "ManagedCompiled";
+		const auto Compiled = BuildManaged(Capture({.Preset = RuntimeDistributionPreset::Compiled}), CompiledOutput);
+		Require(Compiled.Ok && !Compiled.ManifestSha256.empty(), "compiled distribution publication");
+		const auto CompiledUntrusted = PackageBuilder::Load(CompiledOutput, Diagnostics);
+		Require(!CompiledUntrusted && HasDiagnostic(Diagnostics, "UntrustedBytecode"), "unsigned Compiled requires native provenance");
+		Require(HasDiagnostic(PackageBuilder::Validate(CompiledOutput), "UntrustedBytecode"),
+			"native admission validation reports unsigned Compiled provenance failure");
+		const auto Pinned = RuntimeDistributionAdmission{.ExpectedManifestSha256 = Compiled.ManifestSha256};
+		Require(!HasError(PackageBuilder::Validate(CompiledOutput, std::nullopt, Pinned)), "exact out-of-band manifest digest validates");
+		Require(HasDiagnostic(PackageBuilder::Validate(CompiledOutput, std::nullopt,
+			{.ExpectedManifestSha256 = std::string(64, 'a')}), "ManifestDigestMismatch"), "foreign manifest digest rejected");
+		const auto CompiledLoaded = PackageBuilder::Load(CompiledOutput, Diagnostics, Pinned);
+		Require(CompiledLoaded && CompiledLoaded->RuntimeCode && !HasError(Diagnostics) &&
+			!ReadText(CompiledOutput / ProjectPath).contains("RDP_COMPILED_SOURCE_MARKER") &&
+			ReadText(CompiledOutput / CompiledPath).contains("RDP_COMPILED_CONSTANT") &&
+			!ReadText(CompiledOutput / CompiledPath).contains("RDP_COMPILED_SOURCE_MARKER"),
+			"compiled representation has executable bytes without original source");
+		const auto Rebuilt = BuildManaged(Capture({.Preset = RuntimeDistributionPreset::Compiled}), Paths.Root / "ManagedCompiledAgain");
+		Require(Rebuilt.Ok && Rebuilt.ManifestSha256 == Compiled.ManifestSha256, "unsigned compiled builds are deterministic");
+
+		const auto SessionIdentity = ProjectId::New().ToString();
+		const auto WriteHybridPolicy = [&] {
+			WriteText(PolicyFile, Json({{"Version", 1}, {"SessionIdentity", SessionIdentity}, {"Overrides", {
+				{OpenId, {{"Representation", "Source"}}},
+				{CompiledId, {{"Representation", "Compiled"}}},
+				{ProtectedId, {{"Representation", "Protected"}}},
+			}}}).dump());
+		};
+		WriteHybridPolicy();
+		RuntimeDistributionRequest HybridRequest{.Preset = RuntimeDistributionPreset::Hybrid, .RequirePublisher = true,
+			.SigningKeyId = "TestPublisher", .KeyAccess = RuntimeDistributionKeyAccess::LocalProvisioned, .ContentKeyId = "TestContent"};
+		const auto HybridOutput = Paths.Root / "ManagedHybrid";
+		const auto HybridPayload = Capture(HybridRequest);
+		if (!IsRuntimePackageCryptoAvailable()) {
+			const auto Disabled = BuildManaged(HybridPayload, HybridOutput, RuntimePackageProvisionedSecurity{});
+			Require(!Disabled.Ok && !std::filesystem::exists(HybridOutput), "crypto-disabled build refuses signed protected publication");
+			World->Destroy();
+			return;
+		}
+
+		constexpr std::array<unsigned char, 32> SeedBytes{
+			0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
+			0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60,
+		};
+		std::array<unsigned char, 32> ContentBytes{};
+		for (std::size_t Index = 0; Index < ContentBytes.size(); ++Index) ContentBytes[Index] = static_cast<unsigned char>(Index + 1);
+		const auto ProjectIdentity = ProjectValue.Identity.ToString();
+		const RuntimePackageKeyScope SigningScope{ProjectIdentity, "", ProjectIdentity, "TestPublisher"};
+		const RuntimePackageKeyScope ContentScope{ProjectIdentity, "", ProjectIdentity, "TestContent"};
+		RuntimePackagePublicKey PublicKey{};
+		Require(GetRuntimePackagePublicKey(RuntimePackageSecret(SeedBytes), PublicKey) == RuntimePackageCryptoStatus::Ok,
+			"derive test publisher verification key");
+		const RuntimePackageProvisionedSecurity Security{
+			.Status = RuntimePackageCryptoStatus::Ok,
+			.Signer = MakeProvisionedRuntimePackageSigner(SigningScope, RuntimePackageSecret(SeedBytes)),
+			.Trust = MakeProvisionedRuntimePackageTrustProvider(SigningScope, PublicKey),
+			.Keys = MakeProvisionedRuntimePackageKeyProvider(ContentScope, RuntimePackageSecret(ContentBytes)),
+		};
+		auto RuntimeSecurity = Security;
+		RuntimeSecurity.Signer.reset();
+		const RuntimeDistributionAdmission SignedAdmission{.Security = RuntimeSecurity, .RequirePublisher = true};
+		const auto Hybrid = BuildManaged(HybridPayload, HybridOutput, Security);
+		Require(Hybrid.Ok && !HasError(PackageBuilder::Validate(HybridOutput, std::nullopt, SignedAdmission)), "signed Hybrid publication validates");
+		const auto Snapshot = ReadText(HybridOutput / ProjectPath);
+		const auto Ciphertext = ReadText(HybridOutput / ProtectedPath);
+		Require(Snapshot.contains("RDP_OPEN_CRAFT_MARKER") && !Snapshot.contains("RDP_COMPILED_SOURCE_MARKER") &&
+			!Snapshot.contains("RDP_PROTECTED_SOURCE_MARKER") && !Snapshot.contains("RDP_PROTECTED_CONSTANT") &&
+			Ciphertext.starts_with("GRS1") && !Ciphertext.contains("RDP_PROTECTED_CONSTANT"), "Hybrid source and encrypted bytes match policy");
+		const auto HybridLoaded = PackageBuilder::Load(HybridOutput, Diagnostics, SignedAdmission);
+		Require(HybridLoaded && !HasError(Diagnostics), "signed encrypted Hybrid admits without signing seed");
+		auto RuntimeWorld = PackageBuilder::LoadWorld(*HybridLoaded, HybridOutput);
+		const auto ReadModule = [&](std::string_view Name) {
+			return std::dynamic_pointer_cast<ModuleScript>(RuntimeWorld->FindFirstChild(std::string(Name), true));
+		};
+		const auto Craft = ReadModule("ManagedCraftFixture");
+		const auto Movement = ReadModule("ManagedMovementFixture");
+		const auto Generation = ReadModule("ManagedGenerationFixture");
+		Require(Craft && Movement && Generation && Craft->GetSource().contains("RDP_OPEN_CRAFT_MARKER") &&
+			Movement->GetSource().empty() && Movement->HasRuntimeScriptCode() &&
+			Generation->GetSource().empty() && Generation->HasRuntimeScriptCode(), "runtime binds mixed code without materializing protected source");
+		RuntimeWorld->Destroy();
+
+		auto Missing = SignedAdmission;
+		Missing.Security->Keys.reset();
+		Require(!PackageBuilder::Load(HybridOutput, Diagnostics, Missing) && HasDiagnostic(Diagnostics, "KeyUnavailable"),
+			"a signed release fails closed without its content key");
+		auto Wrong = SignedAdmission;
+		Wrong.Security->Keys = MakeProvisionedRuntimePackageKeyProvider(ContentScope, RuntimePackageSecret(SeedBytes));
+		Require(!PackageBuilder::Load(HybridOutput, Diagnostics, Wrong) && HasDiagnostic(Diagnostics, "ScriptAuthenticationFailed"),
+			"wrong content key cannot hydrate protected code");
+		const auto Manifest = ReadText(HybridOutput / ManifestPath);
+		const auto Signature = ReadText(HybridOutput / SignaturePath);
+		WriteText(HybridOutput / ManifestPath, Manifest + ' ');
+		Require(!PackageBuilder::Load(HybridOutput, Diagnostics, SignedAdmission) && HasDiagnostic(Diagnostics, "InvalidSignature"),
+			"publisher signs exact manifest bytes");
+		WriteText(HybridOutput / ManifestPath, Manifest);
+		auto ChangedSignature = Signature;
+		ChangedSignature.front() ^= 1;
+		WriteText(HybridOutput / SignaturePath, ChangedSignature);
+		Require(!PackageBuilder::Load(HybridOutput, Diagnostics, SignedAdmission) && HasDiagnostic(Diagnostics, "InvalidSignature"),
+			"detached signature tampering rejected");
+		WriteText(HybridOutput / SignaturePath, Signature);
+		auto ChangedCiphertext = Ciphertext;
+		ChangedCiphertext.back() ^= 1;
+		WriteText(HybridOutput / ProtectedPath, ChangedCiphertext);
+		Require(!PackageBuilder::Load(HybridOutput, Diagnostics, SignedAdmission) && HasError(Diagnostics),
+			"stored encrypted bytes must match trusted manifest digest");
+		WriteText(HybridOutput / ProtectedPath, Ciphertext);
+		Require(!BuildManaged(HybridPayload, HybridOutput, RuntimeSecurity).Ok && ReadText(HybridOutput / ManifestPath) == Manifest &&
+			ReadText(HybridOutput / SignaturePath) == Signature && ReadText(HybridOutput / ProtectedPath) == Ciphertext,
+			"failed signed build preserves previous protected output");
+
+		if (std::filesystem::exists(Runtime / "distributed-player-capability.json")) {
+			WriteText(Paths.ProjectRoot / ".gargantuan/package-audience.json", R"({"Version":1,"SharedAssets":[]})");
+			HybridRequest.Target = RuntimeDistributionTarget::DistributedPlayer;
+			const auto PlayerOutput = Paths.Root / "ManagedPlayerHybrid";
+			const auto Player = BuildManaged(Capture(HybridRequest), PlayerOutput, Security);
+			Require(Player.Ok, "signed Hybrid distributed Player publication");
+			const auto ClientCode = ReadText(PlayerOutput / "content/client-code.json");
+			const auto Catalog = ReadText(PlayerOutput / CatalogPath);
+			Require(ClientCode.contains("RDP_OPEN_CRAFT_MARKER") && !ClientCode.contains("RDP_PRIVATE_SERVER_SOURCE_MARKER") &&
+				!ClientCode.contains("RDP_PROTECTED_SOURCE_MARKER") && !Catalog.contains(ServerId) &&
+				!std::filesystem::exists(PlayerOutput / ("content/scripts/" + ServerId + ".luac")) &&
+				!std::filesystem::exists(PlayerOutput / ProjectPath) &&
+				std::filesystem::exists(PlayerOutput / ProtectedPath), "Foundation 10A excludes server code before hybrid representation");
+			const auto LoadedPlayer = PackageBuilder::Load(PlayerOutput, Diagnostics, SignedAdmission);
+			Require(LoadedPlayer && !HasError(Diagnostics), "distributed Hybrid exact signed bytes admit");
+			const auto Replica = std::make_shared<DataModel>();
+			const auto SharedReplica = Replica->GetService("ReplicatedStorage");
+			const auto ReplicaModule = [&](std::string Name) {
+				auto Module = std::make_shared<ModuleScript>();
+				Module->SetName(std::move(Name));
+				Module->SetParent(SharedReplica);
+				return Module;
+			};
+			const auto ClientCraft = ReplicaModule("ManagedCraftFixture");
+			const auto ClientMovement = ReplicaModule("ManagedMovementFixture");
+			const auto ClientGeneration = ReplicaModule("ManagedGenerationFixture");
+			Require(PackageBuilder::HydrateDistributedClientCode(*LoadedPlayer, Replica) >= 3 &&
+				ClientCraft->GetSource().contains("RDP_OPEN_CRAFT_MARKER") &&
+				ClientMovement->GetSource().empty() && ClientMovement->HasRuntimeScriptCode() &&
+				ClientGeneration->GetSource().empty() && ClientGeneration->HasRuntimeScriptCode(),
+				"replica hydrates packaged code without delivering compiled or protected source");
+			Replica->Destroy();
+		}
+		World->Destroy();
 	}
 }
 
@@ -747,6 +1151,14 @@ int main() {
 		);
 
 		World->Destroy();
+		TestWorkspace AudienceWorkspace;
+		DiskFilesystem AudienceFilesystem(AudienceWorkspace.ProjectRoot);
+		auto AudienceProject = Project::fromExisting(&AudienceFilesystem);
+		auto AudienceWorld = AudienceProject.DeserializeGame();
+		AudienceWorld->InitializeLoadedProjectRevision();
+		CheckDistributedPlayerPackage(AudienceWorkspace, Runtime, AudienceFilesystem, AudienceProject, AudienceWorld);
+		AudienceWorld->Destroy();
+		CheckManagedRuntimeDistribution(Runtime);
 		std::cout << "[Package:Test] manifestEntries=" << Manifest["Content"].size()
 				  << " totalBytes=" << First.Size.TotalBytes << " assetBytes=" << First.Size.AssetBytes
 				  << " buildMs=" << BuildMilliseconds << '\n';

@@ -31,6 +31,27 @@ observations. These dispositions apply to the 10B development branch.
 
 Public multiplayer package confidentiality remains a separate release gate.
 
+## Team Create Foundation 1
+
+- The private loopback candidate uses bounded journal delivery and a fresh
+  Studio snapshot when edits arrive. Large graphs, sustained collaborative
+  editing, and physical multi-host recovery require qualification. The
+  two-window WinUI fixture passed private loopback reconnect and draft recovery.
+- The project lease covers Team Create brokers. Keep the project closed in
+  independent offline editors during the experiment to avoid overlapping
+  saves.
+- Coordinated schema reconstruction, resource publication, remote viewport,
+  per-editor Play, and hosted admission remain future work. See the
+  [Team Create authority decision](docs/adr/D05-private-team-authoring.md).
+
+## Runtime Distribution 1 development entries
+
+Format 4 adds mixed representations, publisher signing and provisioned key
+access on the development candidate. Native Windows and Linux package
+qualification, measured gameplay overhead and the combined Foundation 10A
+public delivery gate remain open. Exact Studio pairing is also pending.
+[Native qualification record](devdocs/Validation/RuntimeDistributionFoundation1.md)
+
 ## Foundation 11 persistence entries
 
 | Issue | Disposition |

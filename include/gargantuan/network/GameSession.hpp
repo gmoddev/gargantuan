@@ -67,6 +67,9 @@ namespace gargantuan::network {
 		// supplies a clone's source identity and regular structural properties.
 		std::function<bool(const std::shared_ptr<LuaSourceContainer> &)> HydratePlayerGuiCode;
 		std::shared_ptr<const TerrainSessionData> TerrainBootstrap;
+		// Trusted package admission binds both peers before replication starts.
+		std::string RuntimeDistributionIdentity;
+		std::function<void(ObjectId, const std::shared_ptr<LuaSourceContainer> &, bool)> HydratePackagedCode;
 
 		[[nodiscard]] bool IsValid() const;
 		[[nodiscard]] static NetworkLimits DefaultLimits();

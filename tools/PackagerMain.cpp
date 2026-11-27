@@ -6,14 +6,17 @@
 #include "gargantuan/reflection/PreRunRegistration.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/serialization/GasDocument.hpp"
+#include "serialization/JsonCodec.hpp"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 
@@ -107,22 +110,51 @@ namespace {
 	}
 
 	int BuildPackage(int argc, char *argv[]) {
+		constexpr std::array<std::string_view, 7> BuildOptions{
+			"--project", "--output", "--gasp", "--runtime", "--configuration", "--audience", "--distribution",
+		};
+		std::set<std::string_view> Seen;
+		bool ValidOptions = argc % 2 == 0;
+		for (int Index = 2; ValidOptions && Index + 1 < argc; Index += 2) {
+			const std::string_view Name(argv[Index]), Value(argv[Index + 1]);
+			ValidOptions = std::ranges::contains(BuildOptions, Name) && Seen.insert(Name).second &&
+				!Value.empty() && !Value.starts_with("--");
+		}
 		auto ProjectRoot = ValueAfter(argc, argv, "--project");
 		auto Output = ValueAfter(argc, argv, "--output");
 		auto GasInput = ValueAfter(argc, argv, "--gasp");
 		auto RuntimeRoot = ValueAfter(argc, argv, "--runtime");
+		auto AudienceName = ValueAfter(argc, argv, "--audience");
+		auto Audience = ParsePackageAudience(AudienceName.value_or("Trusted"));
+		auto PolicyPath = ValueAfter(argc, argv, "--distribution");
 		auto ConfigurationName = ValueAfter(argc, argv, "--configuration").value_or("Release");
 		auto Configuration = ParsePackageConfiguration(ConfigurationName);
-		if (!ProjectRoot || !Output || !Configuration || !HasSingleValue(argc, argv, "--gasp", GasInput, false)) {
+		if (!ValidOptions || !ProjectRoot || !Output || !Configuration || !Audience) {
 			std::cerr << "Usage: gargantuan-packager build --project <root> --output <directory> "
-						 "[--gasp <file>] [--runtime <distribution>] [--configuration Development|Release]\n";
+						 "[--gasp <file>] [--runtime <distribution>] [--configuration Development|Release] "
+						 "[--audience Trusted|DistributedPlayer] [--distribution <policy-request.json>]\n";
 			return 2;
 		}
 		try {
+			std::optional<RuntimeDistributionRequest> Policy;
+			if (PolicyPath) {
+				std::ifstream PolicyFile(*PolicyPath, std::ios::binary);
+				std::array<char, 8193> Buffer{};
+				PolicyFile.read(Buffer.data(), static_cast<std::streamsize>(Buffer.size()));
+				if (PolicyFile.gcount() == 0 || PolicyFile.gcount() == Buffer.size() || PolicyFile.bad())
+					throw RuntimeDistributionError("InvalidPolicy", "The runtime distribution request could not be read safely.");
+				Policy = ParseRuntimeDistributionRequest({Buffer.data(), static_cast<std::size_t>(PolicyFile.gcount())});
+				const auto Requested = Policy->Target == RuntimeDistributionTarget::DistributedPlayer ?
+					PackageAudience::DistributedPlayer : PackageAudience::Trusted;
+				if (AudienceName && *Audience != Requested)
+					throw RuntimeDistributionError("AudienceViolation", "The requested target and audience disagree.");
+				Audience = Requested;
+			}
 			const auto ProjectPath = std::filesystem::absolute(*ProjectRoot).lexically_normal();
 			const auto OutputPath = std::filesystem::absolute(*Output).lexically_normal();
 			const auto DistributionPath = RuntimeRoot ? std::filesystem::absolute(*RuntimeRoot).lexically_normal()
-													  : Paths::GetExecutableDirectory() / "RuntimeDistribution";
+				: Paths::GetExecutableDirectory() / (Policy && Policy->Target == RuntimeDistributionTarget::DedicatedServer ?
+					"ServerRuntimeDistribution" : "RuntimeDistribution");
 			std::optional<Gas::Document> GasPlace;
 			if (GasInput) {
 				auto Parsed = ReadGasPlace(std::filesystem::absolute(*GasInput).lexically_normal());
@@ -147,7 +179,7 @@ namespace {
 			}
 			World->InitializeLoadedProjectRevision();
 			auto Payload = PackageBuilder::Capture(
-				ProjectValue, World, World->GetAuthoritativeRevision(), World->GetAuthoritativeRevision()
+				ProjectValue, World, World->GetAuthoritativeRevision(), World->GetAuthoritativeRevision(), *Audience, Policy
 			);
 			if (GasInput && Payload.PreRunSource != TrustedPreRun)
 				return GasFailure("Project PreRun source changed during package capture.");
@@ -161,6 +193,21 @@ namespace {
 				},
 			});
 			PrintDiagnostics(Result.Diagnostics);
+			if (Policy) {
+				JsonCodec::Json Codes = JsonCodec::Json::array();
+				JsonCodec::Json Timings = JsonCodec::Json::object();
+				for (const auto &Value : Result.Diagnostics) Codes.push_back(Value.Code);
+				for (const auto &Timing : Result.Timings) Timings[GetPackagePhaseName(Timing.Phase)] = Timing.Duration.count();
+				auto Receipt = JsonCodec::Json{
+					{"Ok", Result.Ok}, {"Target", GetRuntimeDistributionName(Policy->Target)},
+					{"ManifestSha256", Result.ManifestSha256}, {"ExecutableSha256", Result.PlayerExecutableSha256},
+					{"Diagnostics", std::move(Codes)}, {"PhaseMicroseconds", std::move(Timings)},
+					{"TotalBytes", Result.Size.TotalBytes}, {"ProjectBytes", Result.Size.ProjectBytes},
+				};
+				if (!Result.PrivateDiagnosticsPath.empty())
+					Receipt["PrivateDiagnosticsPath"] = Result.PrivateDiagnosticsPath.generic_string();
+				std::cout << Receipt.dump() << '\n';
+			}
 			if (!Result.Ok) return 3;
 			std::cout << "[Package:Result] revision=" << Result.PackagedRevision
 					  << " projectId=" << Result.Identity.ToString() << " totalBytes=" << Result.Size.TotalBytes
@@ -168,7 +215,16 @@ namespace {
 					  << " assetBytes=" << Result.Size.AssetBytes << " shaderBytes=" << Result.Size.ShaderBytes
 					  << " otherBytes=" << Result.Size.OtherBytes << '\n';
 			return 0;
+		} catch (const RuntimeDistributionError &Error) {
+			PrintDiagnostics({{PackageDiagnosticSeverity::Error, "RuntimeDistribution", Error.Code, Error.what(), {}}});
+			std::cout << JsonCodec::Json{{"Ok", false}, {"Diagnostics", JsonCodec::Json::array({Error.Code})}}.dump() << '\n';
+			return 3;
 		} catch (const std::exception &) {
+			if (*Audience == PackageAudience::DistributedPlayer) {
+				std::cerr << "[Package:Audience] Could not capture a distributed Player package. "
+					"Check the native schema, client code paths, and .gargantuan/package-audience.json.\n";
+				return 3;
+			}
 			if (GasInput) return GasFailure("The GAS place could not be captured or packaged safely.");
 			std::cerr << "[error][Package:Packaging] The authoring project could not be captured or packaged safely.\n";
 			return 3;
@@ -224,11 +280,27 @@ namespace {
 	}
 
 	int ValidatePackage(int argc, char *argv[]) {
-		if (argc != 3) {
-			std::cerr << "Usage: gargantuan-packager validate <package>\n";
+		std::optional<PackageAudience> Audience;
+		RuntimeDistributionAdmission Admission;
+		bool Valid = argc >= 3;
+		for (int Index = 3; Valid && Index < argc; ++Index) {
+			const std::string_view Option(argv[Index]);
+			if (Option == "--require-package-publisher" && !Admission.RequirePublisher) {
+				Admission.RequirePublisher = true;
+			} else if (Option == "--audience" && !Audience && Index + 1 < argc) {
+				Audience = ParsePackageAudience(argv[++Index]);
+				Valid = static_cast<bool>(Audience);
+			} else if (Option == "--expected-manifest-sha256" && !Admission.ExpectedManifestSha256 && Index + 1 < argc) {
+				Admission.ExpectedManifestSha256 = argv[++Index];
+				Valid = AssetContentId::Parse(*Admission.ExpectedManifestSha256).has_value();
+			} else Valid = false;
+		}
+		if (!Valid) {
+			std::cerr << "Usage: gargantuan-packager validate <package> [--audience Trusted|DistributedPlayer] "
+				"[--expected-manifest-sha256 <digest>] [--require-package-publisher]\n";
 			return 2;
 		}
-		auto Diagnostics = PackageBuilder::Validate(std::filesystem::absolute(argv[2]).lexically_normal());
+		auto Diagnostics = PackageBuilder::Validate(std::filesystem::absolute(argv[2]).lexically_normal(), Audience, Admission);
 		PrintDiagnostics(Diagnostics);
 		return std::ranges::any_of(
 				   Diagnostics,
@@ -257,7 +329,13 @@ namespace {
 		std::cout << "\",\"PackageFormatVersion\":" << Inspection->FormatVersion
 				  << ",\"RuntimeCompatibility\":" << Inspection->RuntimeCompatibility
 				  << ",\"Revision\":" << Inspection->Revision << ",\"ContentCount\":" << Inspection->ContentCount
-				  << ",\"ContentBytes\":" << Inspection->ContentBytes << "}\n";
+				  << ",\"ContentBytes\":" << Inspection->ContentBytes;
+		if (Inspection->Audience == PackageAudience::DistributedPlayer)
+			std::cout << ",\"Audience\":\"" << GetPackageAudienceName(Inspection->Audience) << '"';
+		if (Inspection->Target)
+			std::cout << ",\"Target\":\"" << GetRuntimeDistributionName(*Inspection->Target)
+				<< "\",\"ManifestSha256\":\"" << Inspection->ManifestSha256 << '"';
+		std::cout << "}\n";
 		return 0;
 	}
 }

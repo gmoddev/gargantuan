@@ -45,6 +45,7 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/scripting/ModuleResolution.hpp"
 #include "gargantuan/scripting/NativeCallback.hpp"
+#include "gargantuan/scripting/RuntimeScriptCode.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/scripting/ExecutionBudget.hpp"
 #include "gargantuan/services/ProcessService.hpp"
@@ -7246,8 +7247,24 @@ namespace {
 					{"FrameNumber", Frame["Result"]["LatestSequence"]}, {"Generation", Frame["Result"]["Generation"]}},
 					"test-token");
 				Check(Pick["Ok"].get<bool>() && Pick["Result"]["Object"] == Button["Result"]["Object"] &&
-					Pick["Result"]["Bounds"]["X"] == 110 && Pick["Result"]["Bounds"]["Width"] == 50,
+					Pick["Result"]["Bounds"]["X"] == 110 && Pick["Result"]["Bounds"]["Width"] == 50 &&
+					!Pick["Result"].contains("Layout"),
 					"preview picking uses the previously displayed layout and authoring object identity");
+				const Json LayoutRequest{{"Object", Button["Result"]["Object"]}, {"IncludeLayout", true},
+					{"FrameNumber", Frame["Result"]["LatestSequence"]}, {"Generation", Frame["Result"]["Generation"]}};
+				const auto Layout = call("PickGuiPreview", LayoutRequest, "test-token");
+				Check(Layout["Ok"] == true && Layout["Result"]["Object"] == Button["Result"]["Object"] &&
+					Layout["Result"]["Bounds"] == Pick["Result"]["Bounds"] && Layout["Result"]["Layout"]["Scale"] == 1 &&
+					Layout["Result"]["Layout"]["AxisAligned"] == true && Layout["Result"]["Layout"]["Clipped"] == false &&
+					Layout["Result"]["Layout"]["Revision"] == Baseline["Result"]["AuthoritativeRevision"] &&
+					Layout["Result"]["Layout"]["LayoutPositionsX"] == false && Layout["Result"]["Layout"]["LayoutSizesY"] == false,
+					"layout lookup uses the displayed authored revision, projection, scale and runtime restrictions");
+				auto UnrelatedLayout = LayoutRequest;
+				UnrelatedLayout["Object"] = (*Starter)["Id"];
+				const auto UnrelatedResult = call("PickGuiPreview", UnrelatedLayout, "test-token");
+				Check(UnrelatedResult["Ok"] == true && UnrelatedResult["Result"]["Object"].is_null() &&
+					UnrelatedResult["Result"]["Revision"] == Baseline["Result"]["AuthoritativeRevision"],
+					"objects outside committed layout are not exposed by layout lookup");
 				const auto WrongGeneration = call("PickGuiPreview", {{"X", 120.0}, {"Y", 10.0},
 					{"FrameNumber", Frame["Result"]["LatestSequence"]},
 					{"Generation", Frame["Result"]["Generation"].get<std::uint64_t>() + 1}}, "test-token");
@@ -7283,6 +7300,10 @@ namespace {
 						MatchingSchema ? "malformed same-schema replacement preserves the document, cursor and captured preview"
 							: "cross-schema JSON preflight preserves the document, cursor and captured preview");
 				}
+				for (int Repeat = 0; Repeat < 9; ++Repeat) host.PumpViewportPresentationForTesting();
+				const auto AgedLayout = call("PickGuiPreview", LayoutRequest, "test-token");
+				Check(AgedLayout["Ok"] == false && AgedLayout["Error"]["Code"] == "StaleFrame",
+					"layout lookup refuses a retired frame even if the authored object and revision are unchanged");
 				const auto Disabled = call("SetGuiPreview", {{"Enabled", false}}, "test-token");
 				host.PumpViewportPresentationForTesting();
 				Check(Disabled["Ok"].get<bool>() && Disabled["Result"]["Enabled"] == false &&
@@ -7290,6 +7311,34 @@ namespace {
 					call("GetProjectState", Json::object(), "test-token")["Result"] == Baseline["Result"] &&
 					call("PollChanges", Json::object(), "test-token")["Result"]["Records"].empty(),
 					"preview toggle and picking leave authored state, journal and history untouched");
+				(void)call("SetGuiPreview", {{"Enabled", true}}, "test-token");
+				host.PumpViewportPresentationForTesting();
+				for (const char *Mode : {"X", "None"}) {
+					const auto Changed = call("SetProperty", {{"Object", Button["Result"]["Object"]},
+						{"Property", "AutomaticSize"}, {"ClassSchemaId", SchemaId::FromNativeName("Engine", "TextButton").ToString()},
+						{"ClassDefinitionVersion", 1}, {"DeclaringClassSchemaId", SchemaId::FromNativeName("Engine", "GuiObject").ToString()},
+						{"DeclaringDefinitionVersion", 1}, {"Value", JsonCodec::EncodeWireValue(WireEnumItem{"AutomaticSize", Mode})}}, "test-token");
+					host.PumpViewportPresentationForTesting();
+					const auto Presented = call("GetViewportPresentationState", Json::object(), "test-token");
+					const auto LayoutMode = call("PickGuiPreview", {{"Object", Button["Result"]["Object"]}, {"IncludeLayout", true},
+						{"FrameNumber", Presented["Result"]["LatestSequence"]}, {"Generation", Presented["Result"]["Generation"]}}, "test-token");
+					Check(Changed["Ok"] == true && LayoutMode["Ok"] == true &&
+						LayoutMode["Result"]["Layout"]["LayoutSizesX"] == (std::string_view(Mode) == "X") &&
+						LayoutMode["Result"]["Layout"]["LayoutSizesY"] == false,
+						"current mailbox frame follows an authored AutomaticSize write on a previously independent root");
+				}
+				const auto List = call("CreateInstance", {{"ClassSchemaId", SchemaId::FromNativeName("Engine", "UIListLayout").ToString()},
+					{"DefinitionVersion", 1}, {"Parent", Screen["Result"]["Object"]}, {"Name", "AuthoringPreviewLayout"}}, "test-token");
+				(void)call("SetGuiPreview", {{"Enabled", true}}, "test-token");
+				host.PumpViewportPresentationForTesting();
+				const auto FitFrame = call("GetViewportPresentationState", Json::object(), "test-token");
+				const auto FitLayout = call("PickGuiPreview", {{"Object", Button["Result"]["Object"]}, {"IncludeLayout", true},
+					{"FrameNumber", FitFrame["Result"]["LatestSequence"]}, {"Generation", FitFrame["Result"]["Generation"]}}, "test-token");
+				Check(List["Ok"] == true && FitLayout["Ok"] == true && FitLayout["Result"]["Bounds"]["X"] == 0 &&
+					FitLayout["Result"]["Layout"]["LayoutPositionsY"] == true &&
+					FitLayout["Result"]["Layout"]["LayoutPositionsX"] == false,
+					"fit mode reports the actual list-controlled axis from the current committed layout");
+				(void)call("SetGuiPreview", {{"Enabled", false}}, "test-token");
 				(void)call("DestroyInstance", {{"Object", Screen["Result"]["Object"]}}, "test-token");
 			}
 			auto StoppedPresentation = call("StopViewportPresentation", Json::object(), "test-token");
@@ -8493,7 +8542,7 @@ namespace {
 		Check(ScriptCopy && ScriptCopy->GetSource() == ScriptSource->GetSource() &&
 			ScriptCopy->GetSourceVersion() > 0 && ScriptCopy->GetSourceVersion() != ScriptSource->GetSourceVersion() &&
 			ScriptCopy->Thread == nullptr &&
-			ScriptCopy->Bytecode.empty(),
+			ScriptCopy->BytecodeCompileStatus == BytecodeCompileStatus::Uncompiled,
 			"Script Clone preserves source while resetting source-version, execution, and bytecode state");
 		ScriptCopy->Destroy();
 		Check(SourceDestroyCallbacks == 0,
@@ -8503,7 +8552,8 @@ namespace {
 		ModuleSource->SetArchivable(true);
 		ModuleSource->SetSource("return { Value = 42 }\n");
 		auto ModuleCopy = std::dynamic_pointer_cast<ModuleScript>(ModuleSource->Clone());
-		Check(ModuleCopy && ModuleCopy->GetSource() == ModuleSource->GetSource() && ModuleCopy->Bytecode.empty(),
+		Check(ModuleCopy && ModuleCopy->GetSource() == ModuleSource->GetSource() &&
+			ModuleCopy->BytecodeCompileStatus == BytecodeCompileStatus::Uncompiled,
 			"ModuleScript Clone preserves exact source without copying compiled runtime state");
 
 		auto MeasurePart = std::make_shared<Part>();
@@ -8879,6 +8929,119 @@ namespace {
 		}
 	}
 
+	void TestPackagedRuntimeScriptCode() {
+		using namespace gargantuan;
+		constexpr std::string_view Source = R"(
+-- synthetic source comment
+local function HiddenDiagnosticFunction(Input)
+	local HiddenDiagnosticVariable = Input + 1
+	return HiddenDiagnosticVariable
+end
+return HiddenDiagnosticFunction(40)
+)";
+		const auto Stripped = CompileRuntimeScript(Source, RuntimeScriptDiagnostics::Stripped);
+		const auto LineInfo = CompileRuntimeScript(Source, RuntimeScriptDiagnostics::LineInfo);
+		const auto Full = CompileRuntimeScript(Source, RuntimeScriptDiagnostics::Full);
+		Check(Stripped.Error.empty() && LineInfo.Error.empty() && Full.Error.empty() &&
+			!Stripped.Bytecode.empty() && Stripped.Bytecode == CompileRuntimeScript(Source, RuntimeScriptDiagnostics::Stripped).Bytecode,
+			"Pinned release compiler emits deterministic loadable bytecode");
+		Check(Stripped.Bytecode.find("synthetic source comment") == std::string::npos &&
+			Stripped.Bytecode.find("HiddenDiagnosticFunction") == std::string::npos &&
+			LineInfo.Bytecode.find("HiddenDiagnosticFunction") != std::string::npos &&
+			LineInfo.Bytecode.find("HiddenDiagnosticVariable") == std::string::npos &&
+			Full.Bytecode.find("HiddenDiagnosticVariable") != std::string::npos,
+			"Release diagnostic policies preserve the corresponding stock Luau metadata levels");
+		const auto Invalid = CompileRuntimeScript("local =", RuntimeScriptDiagnostics::Stripped);
+		const auto Oversized = CompileRuntimeScript(std::string(MaximumScriptSourceBytes + 1, 'x'), RuntimeScriptDiagnostics::Stripped);
+		Check(Invalid.Bytecode.empty() && !Invalid.Error.empty() && Oversized.Bytecode.empty() && !Oversized.Error.empty(),
+			"Syntax errors and over-limit source produce no distributable bytecode");
+
+		const auto PublicId = ProjectId::New().ToString();
+		CheckThrows<std::invalid_argument>([&] { (void)AdmitTrustedRuntimeScriptCode(Stripped.Bytecode, "wrong", PublicId); },
+			"Trusted script adapter rejects incompatible compiler identity");
+		CheckThrows<std::invalid_argument>([&] {
+			(void)AdmitTrustedRuntimeScriptCode(std::string(2, '\0'), GetRuntimeScriptCompilerIdentity(), PublicId);
+		}, "Trusted script adapter rejects an invalid bytecode header before VM load");
+
+		auto World = std::make_shared<DataModel>();
+		{
+			ScriptEngine Engine(World);
+			std::size_t DirectSize = 0;
+			const std::unique_ptr<char, decltype(&std::free)> Direct(
+				luau_compile(Source.data(), Source.size(), &Engine.CompileOptions, &DirectSize), std::free
+			);
+			Check(Direct && std::string_view(Direct.get(), DirectSize) == Stripped.Bytecode,
+				"Package compiler matches ordinary Engine startup compiler with stripped diagnostics");
+			auto Bind = [&](const std::shared_ptr<LuaSourceContainer> &ScriptValue, std::string_view Code) {
+				auto Result = CompileRuntimeScript(Code, RuntimeScriptDiagnostics::Stripped);
+				Check(Result.Error.empty() && !Result.Bytecode.empty(), "Fixture script compiled");
+				ScriptValue->BindRuntimeScriptCode(AdmitTrustedRuntimeScriptCode(
+					std::move(Result.Bytecode), GetRuntimeScriptCompilerIdentity(), ScriptValue->GetSourceId()
+				));
+			};
+			auto OpenModule = std::make_shared<ModuleScript>();
+			OpenModule->SetName("OpenRuntimeCode");
+			OpenModule->SetSource("return { Value = 40 }");
+			OpenModule->SetParent(World);
+			auto CompiledModule = std::make_shared<ModuleScript>();
+			CompiledModule->SetName("CompiledRuntimeCode");
+			Bind(CompiledModule, "return { Value = require('./OpenRuntimeCode').Value + 1 }");
+			CompiledModule->SetParent(World);
+			auto CompiledScript = std::make_shared<Script>();
+			CompiledScript->SetName("PrivateRuntimeScriptName");
+			Bind(CompiledScript, R"(
+local Loaded = require('./CompiledRuntimeCode')
+assert(Loaded.Value == 41)
+task.wait(0)
+assert(script.Name == 'PrivateRuntimeScriptName' and Loaded == require('./CompiledRuntimeCode'))
+Loaded.Cached = true
+)");
+			CompiledScript->SetParent(World);
+			Check(CompiledScript->HasExecutableCode() && !CompiledScript->HasSource() &&
+				CompiledScript->GetRuntimeScriptChunkName().find("PrivateRuntimeScriptName") == std::string::npos &&
+				CompiledScript->GetScriptDiagnosticName() == "GScript/" + CompiledScript->GetSourceId(),
+				"Compiled execution has opaque diagnostics and a separate live navigation identity");
+			CheckThrows<std::invalid_argument>([&] { CompiledScript->SetSource("error('source fallback')"); },
+				"Admitted compiled code cannot change to clear source through source mutation");
+			CheckThrows<std::invalid_argument>([&] { CompiledScript->SetSourceVersion(2); },
+				"Admitted compiled code cannot be served for a mismatched source version");
+			{
+				ScriptSecurityScope Denied(ScriptSecurityContext::ClientRuntime());
+				const auto UntrustedTarget = std::make_shared<ModuleScript>();
+				CheckThrows<std::invalid_argument>([&] { CompiledModule->CopyRuntimeScriptCodeTo(*UntrustedTarget); },
+					"Compiled runtime code cannot be bound from a non-core execution domain");
+			}
+			auto ClonedCode = std::make_shared<ModuleScript>();
+			CompiledModule->CopyRuntimeScriptCodeTo(*ClonedCode);
+			ClonedCode->SetName("ClonedRuntimeCode");
+			ClonedCode->SetParent(World);
+			Check(ClonedCode->HasRuntimeScriptCode() && !ClonedCode->HasSource() &&
+				ClonedCode->GetScriptDiagnosticName() == CompiledModule->GetScriptDiagnosticName() &&
+				ClonedCode->GetRuntimeScriptChunkName() != CompiledModule->GetRuntimeScriptChunkName(),
+				"Trusted clone inherits script code and diagnostic identity with unique live navigation identity");
+			Engine.RunBootstrapScript(CompiledScript);
+			Check(CompiledScript->Status == ScriptStatus::Yielded, "Compiled Script can require mixed modules and suspend");
+			Engine.Threads.Step();
+			Check(CompiledScript->Status == ScriptStatus::Finished, "Compiled Script preserves its context and module identity on resume");
+			auto OpenScript = std::make_shared<Script>();
+			OpenScript->SetName("OpenScript");
+			OpenScript->SetRuntimeSourceDiagnostics(RuntimeScriptDiagnostics::LineInfo);
+			OpenScript->SetSource(R"(
+local Loaded = require('./CompiledRuntimeCode')
+local Cloned = require('./ClonedRuntimeCode')
+assert(Loaded.Value == Cloned.Value and Loaded.Cached and not Cloned.Cached and Loaded ~= Cloned)
+assert(debug.info(1, 'l') > 0)
+)");
+			OpenScript->SetParent(World);
+			Engine.RunBootstrapScript(OpenScript);
+			Check(OpenScript->Status == ScriptStatus::Finished, "Open and compiled callers share module identity, while clones remain distinct");
+			OpenScript->SetRuntimeSourceDiagnostics(RuntimeScriptDiagnostics::LineInfo);
+			CheckThrows<std::invalid_argument>([&] { OpenScript->SetRuntimeSourceDiagnostics(RuntimeScriptDiagnostics::Stripped); },
+				"Managed Open diagnostic policy is stable after activation and tolerates identical replay");
+		}
+		World->Destroy();
+	}
+
 	void TestPlayDiagnosticBounds() {
 		using namespace gargantuan;
 		auto World = std::make_shared<DataModel>();
@@ -9035,6 +9198,7 @@ int main() {
 	TestScriptQueueReentrantMutation();
 	TestServerScriptDestroysEngineDataModel();
 	TestLuauEmbeddingCompatibility();
+	TestPackagedRuntimeScriptCode();
 	TestPlayDiagnosticBounds();
 	if (Failures == 0) std::cout << "All foundation tests passed\n";
 	return Failures == 0 ? 0 : 1;

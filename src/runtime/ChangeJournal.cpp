@@ -54,7 +54,7 @@ namespace gargantuan {
 			throw std::overflow_error("Change journal sequence is exhausted");
 		const auto sequence = stream.NextSequence;
 		stream.Records.push_back(std::make_shared<const ChangeRecord>(
-			ChangeRecord{sequence, scope, object, std::move(payload)}));
+			ChangeRecord{sequence, scope, object, std::move(payload), sequence + 1}));
 		++stream.NextSequence;
 		while (stream.Records.size() > Capacity) {
 			stream.Records.pop_front();
@@ -94,7 +94,7 @@ namespace gargantuan {
 		try {
 			for (auto &[object, payload] : changes) {
 				stream.Records.push_back(std::make_shared<const ChangeRecord>(
-					ChangeRecord{stream.NextSequence + Appended, scope, object, std::move(payload)}));
+					ChangeRecord{stream.NextSequence + Appended, scope, object, std::move(payload), nextSequence}));
 				++Appended;
 			}
 		} catch (...) {
@@ -154,11 +154,12 @@ namespace gargantuan {
 					throw std::length_error("Prepared journal batch exceeds capacity");
 				if (static_cast<std::uint64_t>(Count) > std::numeric_limits<std::uint64_t>::max() - Found->NextSequence)
 					throw std::overflow_error("Change journal sequence is exhausted");
+				Found->BatchEndSequence = Found->NextSequence + static_cast<std::uint64_t>(Count);
 			}
 			// Allocate immutable payloads during PREPARE. Retained records share
 			// their existing handles; COMMIT only swaps the completed deque.
 			Found->Records.push_back(std::make_shared<const ChangeRecord>(
-				ChangeRecord{Found->NextSequence, Record.Scope, Record.Object, Record.Payload}));
+				ChangeRecord{Found->NextSequence, Record.Scope, Record.Object, Record.Payload, Found->BatchEndSequence}));
 			++Found->NextSequence;
 		}
 		for (auto &Value : Candidates)
@@ -234,7 +235,7 @@ namespace gargantuan {
 		return Result;
 	}
 
-	PinnedChangeReadResult ChangeJournal::ReadPinned(ChangeCursor Cursor, std::size_t MaximumRecords) const {
+	PinnedChangeReadResult ChangeJournal::ReadPinned(ChangeCursor Cursor, std::size_t MaximumRecords, bool WholeBatches) const {
 		std::scoped_lock Lock(Mutex);
 		PinnedChangeReadResult Result{.Cursor = Cursor};
 		auto Found = Streams.find(Cursor.Scope);
@@ -253,7 +254,18 @@ namespace gargantuan {
 		// deque therefore maps a valid sequence directly to an index. Never scan
 		// historical records before an already-current peer/catalog cursor.
 		const auto First = static_cast<std::size_t>(Cursor.NextSequence - Oldest);
-		const auto Count = std::min(MaximumRecords, Stream.Records.size() - First);
+		auto Count = std::min(MaximumRecords, Stream.Records.size() - First);
+		if (WholeBatches) {
+			while (Count != 0) {
+				const auto &Last = Stream.Records[First + Count - 1];
+				if (Last->Sequence + 1 == Last->BatchEndSequence) break;
+				--Count;
+			}
+			if (Count == 0) {
+				Result.Status = ChangeReadStatus::ResnapshotRequired;
+				return Result;
+			}
+		}
 		Result.Records.reserve(Count);
 		for (std::size_t Index = 0; Index < Count; ++Index) {
 			const auto &Record = Stream.Records[First + Index];

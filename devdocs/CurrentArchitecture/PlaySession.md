@@ -80,6 +80,16 @@ argument/message bounded, deterministic, and does not invoke user metamethods.
 Luau diagnostics and lifecycle events use this sink and never become authoring
 mutations.
 
+The optional streaming diagnostics switch also enables a 60-step local
+execution timing window. PlaySession owns the capture and its storage.
+Engine's existing work scopes supply inclusive wall time for the Engine
+step, PreSimulation, physics, animation and render publication. Disabled
+sessions run their normal step path directly and allocate no capture window.
+Stop retires the window before destroying the runtime. The [wire
+contract](EditorHostProtocol.md#streaming-diagnostics-extension-version-1)
+shares the existing exact-session authorization and flow for streaming
+inspection.
+
 Stop destroys the exact runtime Engine/VM/graph/renderer and discards all runtime
 mutation. It never saves, changes persisted revision, advances authoritative
 revision, dirties the project, or adds Undo/Redo history.

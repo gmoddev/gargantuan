@@ -18,15 +18,59 @@ if(NOT EXISTS "${GARGANTUAN_PLAYER_FILE}" OR NOT EXISTS "${GARGANTUAN_SDL_FILE}"
 endif()
 
 file(MAKE_DIRECTORY "${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}")
+include("${CMAKE_CURRENT_LIST_DIR}/CreatorMicrosoftRuntime.cmake")
+if(GARGANTUAN_SYSTEM_RUNTIME_COUNT)
+	message(FATAL_ERROR "App-local MSVC runtime staging is obsolete. Supply the minimum prerequisite version.")
+endif()
+if(GARGANTUAN_MSVC_RUNTIME_MINIMUM)
+	if(NOT GARGANTUAN_MSVC_RUNTIME_MINIMUM MATCHES "^14[.][0-9]+[.][0-9]+$")
+		message(FATAL_ERROR "Unsupported MSVC runtime family: ${GARGANTUAN_MSVC_RUNTIME_MINIMUM}")
+	endif()
+	# CMake owns the old role manifest and the Runtime entries it generated.
+	# A separately supplied file must survive a failed attempted migration.
+	set(PreviousManifest "${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}/runtime-distribution.json")
+	file(GLOB Children LIST_DIRECTORIES false "${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}/*")
+	set(OldRuntimeFiles "")
+	foreach(Child IN LISTS Children)
+		get_filename_component(Name "${Child}" NAME)
+		string(TOLOWER "${Name}" LowerName)
+		if(NOT LowerName MATCHES "${GargantuanMicrosoftRuntimePattern}")
+			continue()
+		endif()
+		if(NOT DEFINED PreviousRuntimePaths AND EXISTS "${PreviousManifest}")
+			file(READ "${PreviousManifest}" Previous)
+			string(JSON Format GET "${Previous}" Format)
+			if(NOT Format STREQUAL "GargantuanRuntimeDistribution")
+				message(FATAL_ERROR "Unrecognized previous runtime distribution in ${PreviousManifest}")
+			endif()
+			set(PreviousRuntimePaths "")
+			string(JSON Count LENGTH "${Previous}" Files)
+			if(Count GREATER 0)
+				math(EXPR Last "${Count} - 1")
+				foreach(Index RANGE 0 ${Last})
+					string(JSON Category GET "${Previous}" Files ${Index} Category)
+					if(Category STREQUAL "Runtime")
+						string(JSON OldPath GET "${Previous}" Files ${Index} Path)
+						list(APPEND PreviousRuntimePaths "${OldPath}")
+					endif()
+				endforeach()
+			endif()
+		endif()
+		if(IS_SYMLINK "${Child}" OR NOT Name IN_LIST PreviousRuntimePaths)
+			message(FATAL_ERROR "Unowned Microsoft runtime in ${Child}. Use a clean role staging directory.")
+		endif()
+		list(APPEND OldRuntimeFiles "${Child}")
+	endforeach()
+endif()
 
 function(GargantuanStageRuntimeFile Source RelativePath Category)
+	string(TOLOWER "${RelativePath}" LowerPath)
+	if(LowerPath MATCHES "${GargantuanMicrosoftRuntimePattern}")
+		message(FATAL_ERROR "Creator runtimes use Microsoft's separately acquired prerequisite: ${RelativePath}")
+	endif()
 	if(NOT EXISTS "${Source}" OR IS_DIRECTORY "${Source}")
 		message(FATAL_ERROR "Required runtime input is missing: ${Source}")
 	endif()
-	get_filename_component(DestinationDirectory
-		"${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}/${RelativePath}" DIRECTORY)
-	file(MAKE_DIRECTORY "${DestinationDirectory}")
-	file(COPY_FILE "${Source}" "${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}/${RelativePath}" ONLY_IF_DIFFERENT)
 	string(SHA256 GARGANTUAN_RUNTIME_PATH_KEY "${RelativePath}")
 	get_property(GARGANTUAN_RUNTIME_CATEGORY_SET GLOBAL
 		PROPERTY "GARGANTUAN_RUNTIME_CATEGORY_${GARGANTUAN_RUNTIME_PATH_KEY}" SET)
@@ -42,6 +86,10 @@ function(GargantuanStageRuntimeFile Source RelativePath Category)
 		endif()
 		return()
 	endif()
+	get_filename_component(DestinationDirectory
+		"${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}/${RelativePath}" DIRECTORY)
+	file(MAKE_DIRECTORY "${DestinationDirectory}")
+	file(COPY_FILE "${Source}" "${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}/${RelativePath}" ONLY_IF_DIFFERENT)
 	set_property(GLOBAL APPEND PROPERTY GARGANTUAN_RUNTIME_PATHS "${RelativePath}")
 	set_property(GLOBAL PROPERTY "GARGANTUAN_RUNTIME_CATEGORY_${GARGANTUAN_RUNTIME_PATH_KEY}" "${Category}")
 endfunction()
@@ -50,6 +98,13 @@ get_filename_component(GARGANTUAN_PLAYER_NAME "${GARGANTUAN_PLAYER_FILE}" NAME)
 get_filename_component(GARGANTUAN_SDL_NAME "${GARGANTUAN_SDL_FILE}" NAME)
 GargantuanStageRuntimeFile("${GARGANTUAN_PLAYER_FILE}" "${GARGANTUAN_PLAYER_NAME}" Runtime)
 GargantuanStageRuntimeFile("${GARGANTUAN_SDL_FILE}" "${GARGANTUAN_SDL_NAME}" Runtime)
+if(GARGANTUAN_RUNTIME_PACKAGE_OPENSSL_DLL)
+	get_filename_component(GargantuanCryptoDllName "${GARGANTUAN_RUNTIME_PACKAGE_OPENSSL_DLL}" NAME)
+	GargantuanStageRuntimeFile("${GARGANTUAN_RUNTIME_PACKAGE_OPENSSL_DLL}" "${GargantuanCryptoDllName}" Runtime)
+endif()
+if(GARGANTUAN_RUNTIME_PACKAGE_OPENSSL_NOTICE)
+	GargantuanStageRuntimeFile("${GARGANTUAN_RUNTIME_PACKAGE_OPENSSL_NOTICE}" "notices/openssl.txt" Notice)
+endif()
 if(DEFINED GARGANTUAN_SDL_SONAME_FILE AND NOT "${GARGANTUAN_SDL_SONAME_FILE}" STREQUAL "" AND
 	EXISTS "${GARGANTUAN_SDL_SONAME_FILE}")
 	get_filename_component(GARGANTUAN_SDL_SONAME "${GARGANTUAN_SDL_SONAME_FILE}" NAME)
@@ -82,19 +137,6 @@ if(DEFINED GARGANTUAN_NODE_REQUIRED_RUNTIME_COUNT AND
 		GargantuanStageRuntimeFile(
 			"${GARGANTUAN_NODE_REQUIRED_RUNTIME_FILE}"
 			"${GARGANTUAN_NODE_REQUIRED_RUNTIME_NAME}"
-			Runtime
-		)
-	endforeach()
-endif()
-if(DEFINED GARGANTUAN_SYSTEM_RUNTIME_COUNT AND GARGANTUAN_SYSTEM_RUNTIME_COUNT GREATER 0)
-	math(EXPR GARGANTUAN_SYSTEM_RUNTIME_LAST "${GARGANTUAN_SYSTEM_RUNTIME_COUNT} - 1")
-	foreach(GARGANTUAN_SYSTEM_RUNTIME_INDEX RANGE 0 ${GARGANTUAN_SYSTEM_RUNTIME_LAST})
-		set(GARGANTUAN_SYSTEM_RUNTIME_SOURCE
-			"${GARGANTUAN_SYSTEM_RUNTIME_FILE_${GARGANTUAN_SYSTEM_RUNTIME_INDEX}}")
-		get_filename_component(GARGANTUAN_SYSTEM_RUNTIME_NAME "${GARGANTUAN_SYSTEM_RUNTIME_SOURCE}" NAME)
-		GargantuanStageRuntimeFile(
-			"${GARGANTUAN_SYSTEM_RUNTIME_SOURCE}"
-			"${GARGANTUAN_SYSTEM_RUNTIME_NAME}"
 			Runtime
 		)
 	endforeach()
@@ -167,7 +209,11 @@ foreach(GARGANTUAN_SHADER
 	)
 endforeach()
 
-GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/LICENSE.md" "notices/Gargantuan.txt" Notice)
+include("${CMAKE_CURRENT_LIST_DIR}/RuntimeLegalNotices.cmake")
+GargantuanWriteRuntimeNotices("${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}.notice-inputs")
+include("${CMAKE_CURRENT_LIST_DIR}/RuntimeComponentNotices.cmake")
+GargantuanWriteComponentNotices("${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}.notice-inputs")
+GargantuanStageRuntimeFile("${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}.notice-inputs/Gargantuan.txt" "notices/Gargantuan.txt" Notice)
 GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/argparse/LICENSE" "notices/argparse.txt" Notice)
 GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/box3d/LICENSE" "notices/Box3D.txt" Notice)
 GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/manifold/LICENSE" "notices/Manifold.txt" Notice)
@@ -177,13 +223,13 @@ GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/glm/copying.txt" "no
 GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/json/LICENSE.MIT" "notices/nlohmann-json.txt" Notice)
 GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/luau/LICENSE.txt" "notices/Luau.txt" Notice)
 GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/magicenum/LICENSE" "notices/magic-enum.txt" Notice)
-GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/sdl/LICENSE.txt" "notices/SDL3.txt" Notice)
-GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/sdl_image/LICENSE.txt" "notices/SDL3_image.txt" Notice)
-GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/sdl_ttf/LICENSE.txt" "notices/SDL3_ttf.txt" Notice)
+GargantuanStageRuntimeFile("${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}.notice-inputs/SDL3.txt" "notices/SDL3.txt" Notice)
+GargantuanStageRuntimeFile("${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}.notice-inputs/SDL3_image.txt" "notices/SDL3_image.txt" Notice)
+GargantuanStageRuntimeFile("${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}.notice-inputs/SDL3_ttf.txt" "notices/SDL3_ttf.txt" Notice)
 GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/tracy/LICENSE" "notices/Tracy.txt" Notice)
 if(DEFINED GARGANTUAN_GNS_LICENSE_FILE AND NOT "${GARGANTUAN_GNS_LICENSE_FILE}" STREQUAL "")
 	GargantuanStageRuntimeFile(
-		"${GARGANTUAN_GNS_LICENSE_FILE}"
+		"${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}.notice-inputs/GameNetworkingSockets.txt"
 		"notices/GameNetworkingSockets.txt"
 		Notice
 	)
@@ -193,14 +239,16 @@ if(DEFINED GARGANTUAN_GNS_LICENSE_FILE AND NOT "${GARGANTUAN_GNS_LICENSE_FILE}" 
 		Notice
 	)
 endif()
-if(DEFINED GARGANTUAN_SYSTEM_RUNTIME_COUNT AND GARGANTUAN_SYSTEM_RUNTIME_COUNT GREATER 0)
-	GargantuanStageRuntimeFile(
-		"${GARGANTUAN_SOURCE_DIR}/cmake/notices/MSVC-Runtime.txt"
-		"notices/MSVC-Runtime.txt"
-		Notice
-	)
+if(GARGANTUAN_MSVC_RUNTIME_MINIMUM)
+	configure_file("${CMAKE_CURRENT_LIST_DIR}/notices/MSVC-Runtime.txt"
+		"${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}.notice-inputs/MSVC-Runtime.txt" @ONLY)
+	GargantuanStageRuntimeFile("${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}.notice-inputs/MSVC-Runtime.txt"
+		"notices/MSVC-Runtime.txt" Notice)
 endif()
 
+if(OldRuntimeFiles)
+	file(REMOVE ${OldRuntimeFiles})
+endif()
 get_property(GARGANTUAN_RUNTIME_PATHS GLOBAL PROPERTY GARGANTUAN_RUNTIME_PATHS)
 list(SORT GARGANTUAN_RUNTIME_PATHS)
 set(GARGANTUAN_MANIFEST_FILES "")
@@ -216,3 +264,14 @@ endforeach()
 
 file(WRITE "${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}/runtime-distribution.json"
 "{\n  \"Format\": \"GargantuanRuntimeDistribution\",\n  \"Version\": 1,\n  \"RuntimeCompatibility\": 1,\n  \"Platform\": \"${GARGANTUAN_PLATFORM}\",\n  \"Player\": \"${GARGANTUAN_PLAYER_NAME}\",\n  \"Files\": [\n${GARGANTUAN_MANIFEST_FILES}\n  ]\n}\n")
+
+file(SHA256 "${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}/${GARGANTUAN_PLAYER_NAME}" GARGANTUAN_PLAYER_DIGEST)
+file(WRITE "${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}/runtime-distribution-capability.json"
+	"{\"Version\":1,\"PackageFormatVersion\":4,\"ExecutableSha256\":\"${GARGANTUAN_PLAYER_DIGEST}\"}\n")
+set(GARGANTUAN_DISTRIBUTED_PLAYER_CAPABILITY "${GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT}/distributed-player-capability.json")
+if(GARGANTUAN_STAGE_DISTRIBUTED_PLAYER)
+	file(WRITE "${GARGANTUAN_DISTRIBUTED_PLAYER_CAPABILITY}"
+		"{\"PackageFormatVersion\":3,\"PlayerSha256\":\"${GARGANTUAN_PLAYER_DIGEST}\"}\n")
+else()
+	file(REMOVE "${GARGANTUAN_DISTRIBUTED_PLAYER_CAPABILITY}")
+endif()

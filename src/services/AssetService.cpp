@@ -1634,17 +1634,27 @@ namespace gargantuan {
 		LoadProjectAssetSnapshot(Expanded);
 	}
 
-	AssetRuntimeSnapshot AssetService::CaptureRuntimeAssets() const {
+	AssetRuntimeSnapshot AssetService::CaptureRuntimeAssets(
+		std::optional<std::span<const AssetId>> SharedAssets
+	) const {
+		std::unordered_set<AssetId, AssetIdHash> Shared;
+		if (SharedAssets) Shared.insert(SharedAssets->begin(), SharedAssets->end());
 		std::scoped_lock Lock(State->Mutex);
 		Json Assets = Json::array();
 		std::vector<const AssetRecord *> Ordered;
 		for (const auto &[Reference, Record] : State->Records) {
 			(void)Reference;
 			if (Record.BuiltIn) continue;
+			if (SharedAssets && !Shared.contains(Record.Id)) continue;
 			if (!IsAvailableRecord(Record) || !Record.ContentId.IsValid())
 				throw std::runtime_error("Runtime packaging requires every project asset to have canonical content");
+			if (SharedAssets && !std::ranges::all_of(Record.Dependencies,
+				[&](AssetId Dependency) { return Shared.contains(Dependency); }))
+				throw std::runtime_error("Distributed Player assets require explicitly shared dependencies");
 			Ordered.push_back(&Record);
 		}
+		if (SharedAssets && Ordered.size() != Shared.size())
+			throw std::runtime_error("Distributed Player policy names an unavailable or non-project asset");
 		std::ranges::sort(Ordered, {}, [](const AssetRecord *Record) { return Record->Reference.Value; });
 		std::unordered_set<std::string> RequiredArtifacts;
 		for (const auto *Record : Ordered) {

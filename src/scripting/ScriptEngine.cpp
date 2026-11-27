@@ -436,17 +436,19 @@ namespace gargantuan {
 			if (Stopping) return;
 
 			switch (status) {
-			case ScriptStatus::Error:
+			case ScriptStatus::Error: {
+				const auto DiagnosticName = script->GetScriptDiagnosticName();
 				LOG_CRITICAL(
-					Lua, "[Runtime:Luau] [%s] %s", script->GetFullName().c_str(), script->ErrorMessage.c_str()
+					Lua, "[Runtime:Luau] [%s] %s", DiagnosticName.c_str(), script->ErrorMessage.c_str()
 				);
 				if (RuntimeDiagnostic)
-					EmitRuntimeDiagnostic("Error", "[" + script->GetFullName() + "] " + script->ErrorMessage);
+					EmitRuntimeDiagnostic("Error", "[" + DiagnosticName + "] " + script->ErrorMessage);
 				[[fallthrough]];
+			}
 
 			case ScriptStatus::Finished:
 				if (status == ScriptStatus::Finished && RuntimeDiagnostic)
-					EmitRuntimeDiagnostic("Information", "[" + script->GetFullName() + "] completed");
+					EmitRuntimeDiagnostic("Information", "[" + script->GetScriptDiagnosticName() + "] completed");
 			case ScriptStatus::Disabled:
 			case ScriptStatus::Yielded:
 			case ScriptStatus::Running:
@@ -464,7 +466,7 @@ namespace gargantuan {
 			IsStarterGuiTemplate(ScriptValue)) return false;
 		if (const auto Gui = FindPlayerGuiScope(ScriptValue))
 			return Mode != RuntimeMode::NetworkServer && IsLocalPlayerGui(*Gui) &&
-				IsClientPlayerGuiSource(ScriptValue) && ScriptValue.HasSource();
+				IsClientPlayerGuiSource(ScriptValue) && ScriptValue.HasExecutableCode();
 		if (Mode == RuntimeMode::Offline) return true;
 		if (Mode == RuntimeMode::NetworkClient) return ScriptValue.GetRunContext() == Enums::RunContext::Client;
 		return ScriptValue.GetRunContext() != Enums::RunContext::Client;
@@ -479,11 +481,12 @@ namespace gargantuan {
 		const auto Status = ScriptValue->Step(L);
 		if (Stopping) return;
 		if (Status == ScriptStatus::Error) {
+			const auto DiagnosticName = ScriptValue->GetScriptDiagnosticName();
 			LOG_CRITICAL(
-				Lua, "[Runtime:Luau] [%s] %s", ScriptValue->GetFullName().c_str(), ScriptValue->ErrorMessage.c_str()
+				Lua, "[Runtime:Luau] [%s] %s", DiagnosticName.c_str(), ScriptValue->ErrorMessage.c_str()
 			);
 			if (RuntimeDiagnostic)
-				EmitRuntimeDiagnostic("Error", "[" + ScriptValue->GetFullName() + "] " + ScriptValue->ErrorMessage);
+				EmitRuntimeDiagnostic("Error", "[" + DiagnosticName + "] " + ScriptValue->ErrorMessage);
 		} else if (Status == ScriptStatus::Finished && RuntimeDiagnostic)
 			EmitRuntimeDiagnostic("Information", "[" + ScriptValue->GetFullName() + "] completed");
 		ScriptQueue.erase(ScriptValue);

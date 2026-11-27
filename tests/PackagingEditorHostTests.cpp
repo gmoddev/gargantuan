@@ -1,4 +1,5 @@
 #include "gargantuan/editor/EditorHost.hpp"
+#include "gargantuan/filesystem/Paths.hpp"
 #include "gargantuan/reflection/SchemaId.hpp"
 
 #include <SDL3/SDL.h>
@@ -90,7 +91,8 @@ int main() {
 		Require(
 			Handshake["Ok"] && std::ranges::contains(Handshake["Result"]["Capabilities"], "PackageBuild") &&
 				std::ranges::contains(Handshake["Result"]["Capabilities"], "PackageBuildProgress") &&
-				std::ranges::contains(Handshake["Result"]["Capabilities"], "PackageBuildCancellation"),
+				std::ranges::contains(Handshake["Result"]["Capabilities"], "PackageBuildCancellation") &&
+				std::ranges::contains(Handshake["Result"]["Capabilities"], "DistributedPlayerPackages"),
 			"EditorHost did not publish the complete package job capability contract"
 		);
 		auto Opened = Call("OpenProject", {{"Root", Workspace.ProjectRoot.generic_string()}});
@@ -184,6 +186,42 @@ int main() {
 			!Stale["Ok"].get<bool>() && Stale["Error"]["Code"] == "Conflict",
 			"stale Studio package capture silently overwrote a newer authoritative revision"
 		);
+
+		const auto DistributedOutput = Workspace.Root / "DistributedPlayer";
+		const Json DistributedRequest{{"OutputDirectory", DistributedOutput.generic_string()},
+			{"Configuration", "Release"}, {"Audience", "DistributedPlayer"}};
+		const auto MissingPolicy = Call("StartPackageBuild", DistributedRequest);
+		Require(!MissingPolicy["Ok"].get<bool>() && MissingPolicy["Error"]["Code"] == "PackageCaptureFailed" &&
+			!std::filesystem::exists(DistributedOutput), "Studio distributed build did not require explicit audience policy");
+		{
+			std::ofstream Policy(Workspace.ProjectRoot / ".gargantuan/package-audience.json", std::ios::binary);
+			Policy << R"({"Version":1,"SharedAssets":[]})";
+			Policy.close();
+			Require(static_cast<bool>(Policy), "could not write Studio package audience fixture");
+		}
+		const auto DistributedStarted = Call("StartPackageBuild", DistributedRequest);
+		Require(DistributedStarted["Ok"], "Studio did not start a distributed Player build");
+		const auto DistributedDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		do {
+			Completed = Call("GetPackageBuildState", {{"JobId", DistributedStarted["Result"]["JobId"]}});
+			Require(Completed["Ok"], "Studio distributed package progress polling failed");
+			if (Completed["Result"].value("Complete", false)) break;
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		} while (std::chrono::steady_clock::now() < DistributedDeadline);
+		Require(Completed["Result"].value("Complete", false), "Studio distributed Player packaging did not complete");
+		const auto Capability = Paths::GetExecutableDirectory() / "RuntimeDistribution/distributed-player-capability.json";
+		if (std::filesystem::exists(Capability)) {
+			Require(Completed["Result"].value("Ok", false), "Studio distributed Player packaging failed");
+			const auto DistributedManifest = Json::parse(ReadText(DistributedOutput / "game.package.json"));
+			const auto DistributedAssets = Json::parse(ReadText(DistributedOutput / "content/assets/catalog.json"));
+			Require(DistributedManifest["Audience"] == "DistributedPlayer" && DistributedAssets["Assets"].empty() &&
+				std::filesystem::exists(DistributedOutput / "content/client-code.json") &&
+				!std::filesystem::exists(DistributedOutput / "content/game.instance.json"),
+				"Studio distributed output retained trusted authoring state");
+		} else {
+			Require(!Completed["Result"].value("Ok", false) && !std::filesystem::exists(DistributedOutput),
+				"Studio published a distributed package with an incompatible runtime");
+		}
 
 		auto PlayStarted = Call("StartPlaySession");
 		Require(PlayStarted["Ok"], "package fixture could not enter Play");

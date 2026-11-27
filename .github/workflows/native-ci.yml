@@ -237,6 +237,9 @@ jobs:
           ninja --version
           cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DGARGANTUAN_TRACY=OFF -DGARGANTUAN_WITH_GNS=ON -DGARGANTUAN_BUILD_RENDERER_BENCHMARKS=ON -DGARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS=ON -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF -DGARGANTUAN_GLSLC_EXECUTABLE="%GLSLC_EXECUTABLE%" -DCMAKE_TOOLCHAIN_FILE="%VCPKG_TOOLCHAIN%" -DVCPKG_MANIFEST_DIR="%CD%\cmake\gns" -DVCPKG_INSTALLED_DIR="%CD%\build-ci\vcpkg_installed" -DVCPKG_TARGET_TRIPLET=x64-windows -DFETCHCONTENT_BASE_DIR="%CD%\build-ci\_deps"
 
+      - name: Check recipient source recovery and public artifact boundaries
+        run: python tools/distribution/test_release_compliance.py
+
       - name: Build engine and registered test targets
         shell: cmd
         run: |
@@ -262,7 +265,12 @@ jobs:
         with:
           name: runtime6-physical-probes-${{ github.sha }}
           if-no-files-found: error
-          path: runtime6-physical-probes/
+          path: |
+            runtime6-physical-probes/receipts/manifest.json
+            runtime6-physical-probes/receipts/compiler-identity.json
+            runtime6-physical-probes/receipts/dependencies.json
+            runtime6-physical-probes/receipts/shader-inputs.sha256.json
+            runtime6-physical-probes/shader-provenance.json
 
       - name: Build bounded scheduler diagnostic
         if: github.event_name == 'workflow_dispatch' && (inputs.scheduler_trace || inputs.scheduler_pair_diagnostic || inputs.scheduler_ack_cycle_diagnostic)
@@ -523,8 +531,11 @@ jobs:
         with:
           name: qualified-scale-${{ github.sha }}
           if-no-files-found: error
-          include-hidden-files: true
-          path: build-ci/QualifiedScalePhysical/
+          path: |
+            qualified-source-commit.txt
+            qualification-contract.txt
+            build-ci/QualifiedScalePhysical/Player/deployment-sha256.json
+            build-ci/QualifiedScalePhysical/Server/deployment-sha256.json
 
       - name: Upload native CI diagnostics
         if: always()
@@ -538,17 +549,6 @@ jobs:
             build-ci/CMakeFiles/CMakeConfigureLog.yaml
             build-ci/Testing/Temporary/LastTest.log
             build-ci/ctest-results.xml
-            build-ci/sampler-test-diagnostics/
-            build-ci/scheduler-trace/
-            build-ci/scheduler-trace-ack-stats/
-            build-ci/scheduler-trace-ack-cycle-funded/
-            build-ci/scheduler-trace-aggregate32-structural/
-            build-ci/scheduler-trace-pooled-aggregate32-structural/
-            build-ci/scheduler-trace-pooled-full/
-            build-ci/scheduler-trace-aggregate32/
-            build-ci/scheduler-trace.exe
-            build-ci/gargantuan_game_session_real_transport_tests.exe
-            build-ci/gargantuan_real_transport_tests.exe
             build-ci/scheduler-trace-pair.json
 
       - name: Report concrete-default qualification measurements

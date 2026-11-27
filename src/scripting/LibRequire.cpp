@@ -1,9 +1,11 @@
 #include "gargantuan/classes/LuaSourceContainer.hpp"
 #include "gargantuan/classes/ModuleScript.hpp"
+#include "gargantuan/runtime/ObjectId.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/scripting/ModuleResolution.hpp"
 
 #include <Luau/Require.h>
+#include <charconv>
 #include <cstring>
 #include <format>
 #include <lua.h>
@@ -11,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace gargantuan {
 	static luarequire_WriteResult
@@ -23,13 +26,38 @@ namespace gargantuan {
 		return WRITE_SUCCESS;
 	}
 
+	static std::shared_ptr<Instance> ResolveRuntimeScriptCaller(const ScriptEngine &Engine, std::string_view ChunkName) {
+		// The unique, live identity keeps clone and module lookup semantics
+		// independent of the persistent diagnostic identity in the same label.
+		constexpr std::size_t ScriptIdLength = 32;
+		const auto Parts = ChunkName.substr(RuntimeScriptChunkPrefix.size());
+		if (Parts.size() <= ScriptIdLength || Parts[ScriptIdLength] != '/') return {};
+		const auto LiveId = Parts.substr(ScriptIdLength + 1);
+		const auto Separator = LiveId.find('/');
+		if (Separator == std::string_view::npos) return {};
+		ObjectId Id;
+		const auto *Middle = LiveId.data() + Separator;
+		const auto *End = LiveId.data() + LiveId.size();
+		const auto Slot = std::from_chars(LiveId.data(), Middle, Id.Slot);
+		const auto Generation = std::from_chars(Middle + 1, End, Id.Generation);
+		if (Slot.ec != std::errc{} || Slot.ptr != Middle || Generation.ec != std::errc{} || Generation.ptr != End ||
+			!Id.IsValid()) return {};
+		auto Script = std::dynamic_pointer_cast<LuaSourceContainer>(ObjectRegistry::Get().Lookup(Id));
+		if (!Script || Script->GetDestroyed() || Script->IsDestroying() || Script->GetDataModel() != Engine.DataModel ||
+			Script->GetRuntimeScriptChunkName() != ChunkName) return {};
+		return Script;
+	}
+
 	static void LibRequire_InitConfiguration(luarequire_Configuration *config) {
 		config->is_require_allowed = [](lua_State *L, void *ctx, const char *requirer_chunkname) { return true; };
 
 		config->reset = [](lua_State *L, void *ctx, const char *requirer_chunkname) -> luarequire_NavigateResult {
 			auto scriptEngine = static_cast<ScriptEngine *>(ctx);
 
-			auto instance = scriptEngine->FindRequiredInstanceByPath(requirer_chunkname);
+			const std::string_view ChunkName = requirer_chunkname ? requirer_chunkname : "";
+			auto instance = ChunkName.starts_with(RuntimeScriptChunkPrefix)
+				? ResolveRuntimeScriptCaller(*scriptEngine, ChunkName)
+				: scriptEngine->FindRequiredInstanceByPath(requirer_chunkname);
 			if (instance) {
 				scriptEngine->RequireCurrentInstance = instance;
 				return NAVIGATE_SUCCESS;
@@ -135,14 +163,9 @@ namespace gargantuan {
 			}
 
 			module->CompileBytecode(&scriptEngine->CompileOptions);
-			if (module->BytecodeCompileStatus != BytecodeCompileStatus::Success) {
-				lua_pushstring(L, module->BytecodeCompileError.value().c_str());
+			if (const auto Error = module->LoadBytecodeIntoState(L, chunkname)) {
+				lua_pushlstring(L, Error->data(), Error->size());
 				lua_error(L);
-			}
-
-			if (luau_load(L, chunkname, module->Bytecode.data(), module->BytecodeSize, 0) != LUA_OK) {
-				lua_error(L);
-				return 0;
 			}
 
 			if (lua_pcall(L, 0, 1, 0) != LUA_OK) {

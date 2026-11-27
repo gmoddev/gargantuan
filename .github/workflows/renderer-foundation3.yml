@@ -121,5 +121,16 @@ jobs:
         if: always()
         with:
           name: renderer3-linux
-          path: renderer-evidence/
+          path: |
+            renderer-evidence/source.txt
+            renderer-evidence/ctest.log
+            renderer-evidence/projection.csv
+            renderer-evidence/device.txt
+            renderer-evidence/pixels.log
+            renderer-evidence/material-check.csv
+            renderer-evidence/material-extensions.csv
+            renderer-evidence/depth.log
+            renderer-evidence/depth-baseline-source.txt
+            renderer-evidence/depth-baseline.log
+            renderer-evidence/depth-comparison.txt
           if-no-files-found: warn

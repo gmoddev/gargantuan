@@ -9,12 +9,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
 namespace gargantuan::network {
-	// Version 3 binds optional terrain to the session handshake. GRMT v3 is still required.
-	inline constexpr std::uint16_t GameSessionProtocolVersion = 3;
+	// Version 2 requires GRMT v3. Versions 3 and 4 separately identify the
+	// managed package and loopback terrain handshake formats.
+	inline constexpr std::uint16_t GameSessionProtocolVersion = 2;
+	inline constexpr std::uint16_t GameSessionDistributionProtocolVersion = 3;
+	inline constexpr std::uint16_t GameSessionTerrainProtocolVersion = 4;
 	inline constexpr std::size_t MaximumGameSessionFrameBytes = 256;
 
 	enum class GameSessionMessageKind : std::uint8_t {
@@ -31,6 +36,7 @@ namespace gargantuan::network {
 		std::uint64_t Nonce = 0;
 		NetworkLimits AdvertisedLimits;
 		AssetContentId TerrainBinding;
+		std::string RuntimeDistributionIdentity;
 	};
 
 	struct GameSessionServerAccepted {
@@ -42,6 +48,7 @@ namespace gargantuan::network {
 		SessionIdentityKind Identity = SessionIdentityKind::DevelopmentLocal;
 		NetworkLimits NegotiatedLimits;
 		AssetContentId TerrainBinding;
+		std::string RuntimeDistributionIdentity;
 	};
 
 	struct GameSessionClientReady {
@@ -54,6 +61,7 @@ namespace gargantuan::network {
 	using GameSessionMessage = std::variant<GameSessionClientHello, GameSessionServerAccepted, GameSessionClientReady>;
 
 	[[nodiscard]] bool IsGameSessionFrame(std::span<const std::byte> Bytes);
+	[[nodiscard]] bool IsGameSessionDistributionIdentity(std::string_view Value);
 	[[nodiscard]] SerializationResult<std::vector<std::byte>>
 	EncodeGameSessionMessage(const GameSessionMessage &Message);
 	[[nodiscard]] SerializationResult<GameSessionMessage> DecodeGameSessionMessage(std::span<const std::byte> Bytes);

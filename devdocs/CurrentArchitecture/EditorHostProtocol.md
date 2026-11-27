@@ -1,5 +1,10 @@
 # EditorHost v0 protocol and Studio boundary
 
+The [Runtime Distribution 1 candidate](../../docs/protocols/Runtime-Distribution-Package-v4.md)
+adds the optional `RuntimeDistributionPolicy` packaging capability, stateless
+revision-bound policy inspection, and a completion receipt for the exact
+published package. Signing and content keys are native provider inputs.
+
 ## Implemented boundary
 
 Gargantuan Studio is a separately authored private application. The public
@@ -32,6 +37,34 @@ format. Studio supplies its observed revision for Save As; MCP exposes no Save A
 
 ## Envelope and limits
 
+### Experimental private Team Create
+
+The [Team Create decision](../../docs/adr/D05-private-team-authoring.md)
+extends the private stdin request envelope with optional `Team`, an object
+containing exactly `Author` as an unsigned seat number in `1..8`. The
+owning broker supplies this field and retains the EditorHost launch token.
+Ordinary offline clients retain their five-field envelope. Tagged handshakes
+advertise `TeamAuthoringVersion=1`. Tagged project state includes project and
+schema generation identity and redacts the filesystem destination.
+
+Each tagged `GetSnapshot` establishes that author's scoped journal cursor.
+Tagged `PollChanges` reports `HasMore` and advances only across complete
+commits. `ResnapshotRequired` requires a new successful snapshot before
+continuing. A session replacement changes its authority identity and
+requires fresh synchronization. `GetTeamHistory` returns bounded retained
+`Entries` with transaction ID, author, label, starting and resulting
+revision, and change count, plus caller-specific `CanUndo` and `CanRedo`.
+Tags do not grant additional command authority.
+
+Ordinary field commits can omit the project revision. Structural mutations,
+prepared batches, transforms, Undo and Redo use exact revision admission.
+Dedicated source commits retain exact `ExpectedSourceVersion`.
+Explicit `BeginTransaction` and `CommitTransaction` stay unavailable over
+the Team lane. Undo and redo traverse only the next global history entry
+that the authenticated author owns.
+
+### Common protocol
+
 The optional version-1 `AnimationRig` / `AnimationPreview` extension is specified
 in [Animation authoring preview](AnimationAuthoringPreview.md). It adds bounded
 asset inspection and a disposable script-free preview without changing project
@@ -48,6 +81,13 @@ Native and custom roots use normal schema/snapshot records. Existing structural
 commands author eligible descendants and reject replacement, duplication,
 destruction or reparenting of protected service roots. No storage-specific editor
 transport or arbitrary filesystem capability is introduced.
+
+The optional `DistributedPlayerPackages` capability lets `StartPackageBuild`
+accept `Audience` as `Trusted` or `DistributedPlayer`. The default is
+`Trusted`. Distributed capture reads its bounded sharing policy on Main and
+passes the immutable projection to the existing package job. Authoritative
+revision, progress, cancellation and output replacement retain their existing
+contracts. [Distributed package format](../../docs/protocols/Distributed-Player-Package-v3.md)
 
 Requests have exactly these fields:
 
@@ -288,6 +328,19 @@ diagnostic object has `Version: 1`, `Enabled`, `Status`, `SimulationTick`,
 When disabled, the projection carries no policy rows or timing history. A Play
 session without an on-demand server policy can report `NotConfigured`; the
 extension does not create a streaming provider or policy.
+
+An Editor Play response may additionally carry `Execution` while collection
+is enabled. It contains `Accounting: "EditorPlayInclusiveWallTimeV1"`,
+`Samples` (0–60) and `Phases`. The phase keys are `EngineStep`,
+`PreSimulation`, `Physics`, `Animation` and `RenderPublication`. Each
+has unsigned `TotalNanoseconds` and `MaximumNanoseconds` across the latest
+sampled Play steps. Measurements reuse the Engine's existing scoped work
+timers. Inclusive phases may overlap. These elapsed CPU-side wall times
+exclude request serialization, frame-mailbox capture and GPU presentation.
+An absent phase in a sampled step contributes zero. Collection starts empty,
+and disabling it discards the window. Reads preserve execution and capture
+state. A client can use the existing streaming results when an older
+version-1 Engine omits this field.
 
 `Policy` includes `Enabled`, `Stopped`, `Tick`, `Revision`, `ManifestUnits`,
 `Focuses`, `PendingFocuses`, `UnhealthyFocuses`, `Candidates`, `DemandRecords`,

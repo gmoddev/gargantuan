@@ -78,13 +78,13 @@ namespace gargantuan {
 	}
 
 	PreparedPropertyResult PreparedPropertyCommit::Apply(DataModel &World, std::uint64_t ExpectedRevision,
-		std::span<const PreparedPropertyWrite> Writes, const ScriptSecurityContext &Security) {
-		return Execute(World, ExpectedRevision, Writes, Security, nullptr, false);
+		std::span<const PreparedPropertyWrite> Writes, const ScriptSecurityContext &Security, std::uint64_t Author) {
+		return Execute(World, ExpectedRevision, Writes, Security, nullptr, false, Author);
 	}
 
 	PreparedPropertyResult PreparedPropertyCommit::Execute(DataModel &World, std::uint64_t ExpectedRevision,
 		std::span<const PreparedPropertyWrite> Writes, const ScriptSecurityContext &Security,
-		const CommittedTransaction *ReplayAction, bool Redo) {
+		const CommittedTransaction *ReplayAction, bool Redo, std::uint64_t Author) {
 		PreparedPropertyResult Result;
 		Result.StartingRevision = Result.ResultingRevision = ExpectedRevision;
 		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) {
@@ -208,6 +208,7 @@ namespace gargantuan {
 			Action.ResultingRevision = ExpectedRevision + 1;
 			Action.SemanticBytes = Result.HistoryBytes;
 			Action.ReplayPolicy = TransactionReplayPolicy::PreparedPropertyBatch;
+			Action.Author = Author;
 			const auto ActionId = Action.Id;
 			Stage(PreparedPropertyStage::HistoryRetention);
 			auto Candidate = World.Transactions; // only shared immutable payloads are copied

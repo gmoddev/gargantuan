@@ -114,10 +114,11 @@ namespace gargantuan {
 		ScriptSecurityContext SecurityContextValue,
 		std::optional<ObjectId> ScopeValue,
 		std::optional<TransactionId> TransactionValue,
-		std::uint64_t TransactionOwnerValue
+		std::uint64_t TransactionOwnerValue,
+		std::uint64_t AuthorValue
 	)
 		: Origin(OriginValue), SecurityContext(std::move(SecurityContextValue)), Scope(ScopeValue),
-		  Transaction(TransactionValue), TransactionOwner(TransactionOwnerValue) {
+		  Transaction(TransactionValue), TransactionOwner(TransactionOwnerValue), Author(AuthorValue) {
 		if (Scope && !Scope->IsValid()) throw std::invalid_argument("Mutation authority scope is invalid");
 		if (Transaction && (!Transaction->IsValid() || TransactionOwner == 0))
 			throw std::invalid_argument("Mutation transaction authority is invalid");
@@ -129,12 +130,10 @@ namespace gargantuan {
 
 	MutationAuthorityContext MutationAuthorityContext::Studio(ScriptSecurityContext SecurityContext, ObjectId Scope,
 		std::optional<TransactionId> Transaction,
-		std::uint64_t TransactionOwner) {
+		std::uint64_t TransactionOwner, std::uint64_t Author) {
 		if (SecurityContext.Domain != ScriptExecutionDomain::Studio)
 			throw std::invalid_argument("Studio mutation authority requires the Studio execution domain");
-		return {MutationCommandOrigin::Studio, std::move(SecurityContext), Scope,
-			Transaction,
-			TransactionOwner,};
+		return {MutationCommandOrigin::Studio, std::move(SecurityContext), Scope, Transaction, TransactionOwner, Author};
 	}
 
 	MutationAuthorityContext
@@ -246,7 +245,9 @@ namespace gargantuan {
 			auto &Transactions = World->Transactions;
 			const auto Owner = Authority.GetTransactionOwner();
 			const bool Implicit = !Authority.GetTransactionId();
-			auto Begin = Implicit ? Transactions.BeginImplicit(*World, Owner, std::move(Label))
+			auto Begin = Implicit
+								  ? Transactions.BeginImplicit(*World, Owner, std::move(Label), TransactionOrigin::Studio,
+										Authority.GetAuthor())
 								  : TransactionResult{
 										.Status = Transactions.IsOpen(*Authority.GetTransactionId(), Owner)
 													  ? TransactionStatus::Success
@@ -753,7 +754,8 @@ namespace gargantuan {
 							const auto Owner = Authority.GetTransactionOwner();
 							const bool Implicit = !Authority.GetTransactionId();
 							auto Begin = Implicit
-								? Transactions.BeginImplicit(*DataModelValue, Owner, "Set Transform")
+								? Transactions.BeginImplicit(*DataModelValue, Owner, "Set Transform",
+									TransactionOrigin::Studio, Authority.GetAuthor())
 								: TransactionResult{
 									.Status = Transactions.IsOpen(*Authority.GetTransactionId(), Owner)
 										? TransactionStatus::Success : TransactionStatus::NotFound,

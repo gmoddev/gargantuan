@@ -457,9 +457,12 @@ namespace gargantuan {
 				Entry.Signal = Signal;
 				Entry.Connection = Signal->Connect([this, Id, Domains](std::monostate) { Mark(Id, Domains); });
 			};
-			for (const auto *Name : {"Position", "AnchorPoint", "AutomaticSize", "Opacity", "Rotation", "ZIndex",
+			for (const auto *Name : {"Position", "AnchorPoint", "Opacity", "Rotation", "ZIndex",
 				"LayoutOrder", "ClipsDescendants", "FillDirection", "Padding"})
 				Connect(Name, DirtyLayout | DirtyPresentation | DirtyInput);
+			// AutomaticSize can make an independent root layout-dependent and
+			// change the available width for text. Discard the old root policy.
+			Connect("AutomaticSize", DirtyLayout | DirtyText | DirtyPresentation | DirtyInput | DirtyAccessibility);
 			for (const auto *Name : {"CanvasSize", "AutomaticCanvasSize", "ScrollingDirection"})
 				Connect(Name, DirtyLayout | DirtyPresentation | DirtyInput | DirtyAccessibility);
 			for (const auto *Name : {"Visible", "Enabled", "DisplayOrder", "ClipToSafeArea", "ZIndexBehavior"})
@@ -931,6 +934,15 @@ namespace gargantuan {
 				Committed.Interactable = Node.Object->GetInteractable();
 				Committed.FocusEligible = Node.Object->GetInteractable() && Node.Object->GetSelectable();
 				Committed.InputSink = Node.Object->GetInputSink();
+				if (Mode == GuiRuntimeMode::AuthoringPreview) {
+					if (const auto List = Lists.find(Node.Parent); List != Lists.end()) {
+						Committed.LayoutPositionsX = List->second.Direction == Enums::GuiFillDirection::Horizontal;
+						Committed.LayoutPositionsY = List->second.Direction == Enums::GuiFillDirection::Vertical;
+					}
+					const auto Automatic = Node.Object->GetAutomaticSize();
+					Committed.LayoutSizesX = Automatic == Enums::AutomaticSize::X || Automatic == Enums::AutomaticSize::XY;
+					Committed.LayoutSizesY = Automatic == Enums::AutomaticSize::Y || Automatic == Enums::AutomaticSize::XY;
+				}
 				if (auto Scroll = std::dynamic_pointer_cast<ScrollingFrame>(Node.Object)) {
 					Committed.ScrollContainer = true;
 					Committed.ContentExtent = Scroll->GetContentExtent();
@@ -2508,6 +2520,9 @@ namespace gargantuan {
 
 	std::shared_ptr<const GuiLayoutSnapshot> GuiRuntime::GetCommittedLayout() const { return State->Layout; }
 	std::shared_ptr<const GuiLayoutSnapshot> GuiRuntime::GetPresentedLayout() const { return State->PresentedLayout; }
+	bool GuiRuntime::IsPresentedLayoutCurrent() const {
+		return State->PresentedLayout && !State->StructureDirty && State->RootDirty.empty() && !State->PresentationDirty;
+	}
 	std::shared_ptr<const GuiPresentationSnapshot> GuiRuntime::GetCommittedPresentation() const { return State->Presentation; }
 	std::shared_ptr<const GuiAccessibilitySnapshot> GuiRuntime::GetAccessibilitySnapshot() const { return State->Accessibility; }
 	GuiRuntimeProfile GuiRuntime::GetLastProfile() const { return State->Profile; }

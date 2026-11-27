@@ -193,9 +193,11 @@ namespace gargantuan {
 			};
 		}
 
-		std::string SerializeBoundedResponse(Json response) {
+		std::string SerializeBoundedResponse(Json response, bool *Encoded = nullptr) {
 			auto Serialized = JsonCodec::Encode(response, "EditorHost response");
-			if (Serialized && Serialized->size() <= EditorHostMaximumResponseBytes) return std::move(*Serialized);
+			const bool Fits = Serialized && Serialized->size() <= EditorHostMaximumResponseBytes;
+			if (Encoded) *Encoded = Fits;
+			if (Fits) return std::move(*Serialized);
 			auto Fallback = JsonCodec::Encode(
 				ErrorResponse(nullptr, "ResponseTooLarge", "EditorHost response exceeded its byte limit"),
 				"EditorHost error response"
@@ -638,7 +640,8 @@ namespace gargantuan {
 		Json EncodeProjectState(
 			const std::shared_ptr<DataModel> &world,
 			std::uint64_t persistedRevision,
-			const std::optional<Project> &project
+			const std::optional<Project> &project,
+			std::uint64_t TeamAuthor = 0
 		) {
 			if (!world || !project) return {
 				{"AuthoritativeRevision", 0}, {"PersistedRevision", 0},
@@ -647,7 +650,7 @@ namespace gargantuan {
 			};
 			const auto authoritativeRevision = world->GetAuthoritativeRevision();
 			const auto History = world->Transactions.GetStatus();
-			return {
+			Json Result = {
 				{"AuthoritativeRevision", authoritativeRevision},
 				{"PersistedRevision", persistedRevision},
 				{"Dirty", authoritativeRevision != persistedRevision},
@@ -659,6 +662,23 @@ namespace gargantuan {
 					{"RetainedCount", History.RetainedCount}, {"SemanticBytes", History.SemanticBytes}
 				}},
 			};
+			if (TeamAuthor != 0) {
+				const auto *Undo = world->Transactions.GetUndoTransaction();
+				const auto *Redo = world->Transactions.GetRedoTransaction();
+				auto &Actions = Result["History"];
+				if (!Undo || Undo->Author != TeamAuthor) {
+					Actions["CanUndo"] = false;
+					Actions["UndoLabel"] = nullptr;
+				}
+				if (!Redo || Redo->Author != TeamAuthor) {
+					Actions["CanRedo"] = false;
+					Actions["RedoLabel"] = nullptr;
+				}
+				Result["CurrentDestination"] = nullptr;
+				Result["ProjectId"] = project->Identity.ToString();
+				Result["SchemaGeneration"] = GetRuntimeSchemaLifecycle().GetActiveGeneration();
+			}
+			return Result;
 		}
 
 		Json EncodeAssetRecord(const AssetRecord &Record, bool IncludeAdvancedMaterials = false) {
@@ -1212,6 +1232,7 @@ namespace gargantuan {
 	struct EditorHost::GuiPreviewState final {
 		struct DisplayedFrame {
 			std::uint64_t Number = 0;
+			std::uint64_t ProjectRevision = 0;
 			GuiPreviewPlacement Placement;
 			std::shared_ptr<const GuiLayoutSnapshot> Layout;
 		};
@@ -1391,7 +1412,8 @@ namespace gargantuan {
 		if (!GuiPreview || ActivePlaySession || !GuiPreview->DisplayedLayout) return;
 		auto &Frames = GuiPreview->DisplayedFrames;
 		if (Frames.size() == MaximumGuiPreviewFrames) Frames.pop_front();
-		Frames.push_back({FrameNumber, GuiPreview->Placement, GuiPreview->DisplayedLayout});
+		const auto Revision = GuiPreview->Runtime.IsPresentedLayoutCurrent() ? World->GetAuthoritativeRevision() : 0;
+		Frames.push_back({FrameNumber, Revision, GuiPreview->Placement, GuiPreview->DisplayedLayout});
 	}
 
 	void EditorHost::AdvanceViewportGeneration() {
@@ -1575,6 +1597,11 @@ namespace gargantuan {
 		TerrainAuthoring->Pending.reset();
 	}
 
+	void EditorHost::ResetAuthoringCursors() {
+		Cursor.reset();
+		TeamCursors.fill(std::nullopt);
+	}
+
 	std::string EditorHost::HandleRequest(std::string_view request) {
 		Json requestId = nullptr;
 		try {
@@ -1592,7 +1619,7 @@ namespace gargantuan {
 					requestId, "MalformedRequest", ParsedMessage.error().Format()
 				));
 			auto message = std::move(*ParsedMessage);
-			if (!HasOnlyFields(message, {"Version", "RequestId", "SessionToken", "Method", "Params"}) ||
+			if (!HasOnlyFields(message, {"Version", "RequestId", "SessionToken", "Method", "Params", "Team"}) ||
 				!message.contains("Version") || JsonCodec::DecodeUnsigned32(message["Version"]) != EditorHostProtocolVersion ||
 				!message.contains("RequestId") || !message["RequestId"].is_string() ||
 				message["RequestId"].get_ref<const std::string &>().size() > 128 ||
@@ -1606,16 +1633,41 @@ namespace gargantuan {
 			if (message["SessionToken"].get<std::string>() != SessionToken)
 				return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Session token was rejected"));
 			const auto method = message["Method"].get<std::string>();
+			const auto &parameters = message["Params"];
+			std::uint64_t TeamAuthor = 0;
+			if (message.contains("Team")) {
+				// Only the owning broker can add author identity over the private authenticated stdio channel.
+				const auto &Team = message["Team"];
+				if (!HasOnlyFields(Team, {"Author"}) || !Team.contains("Author") ||
+					!Team["Author"].is_number_unsigned())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Invalid Team author context"));
+				TeamAuthor = Team["Author"].get<std::uint64_t>();
+				if (TeamAuthor == 0 || TeamAuthor > TeamCursors.size())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Team author is out of range"));
+				if (method != "Handshake" && method != "GetProjectState" && method != "GetSchema" &&
+					method != "GetSnapshot" && method != "PollChanges" && method != "GetTeamHistory" &&
+					method != "GetScriptSource" && method != "GetScriptBinding" && method != "ResolveScriptBinding" &&
+					method != "SetProperty" && method != "SetPropertyBatch" && method != "SetTransform" &&
+					method != "SetAttribute" && method != "SetExtensionProperty" && method != "SetCustomProperty" &&
+					method != "AddTag" && method != "RemoveTag" && method != "SetScriptSource" &&
+					method != "CreateInstance" && method != "DestroyInstance" && method != "DuplicateInstance" &&
+					method != "ReparentInstance" && method != "Undo" && method != "Redo" && method != "SaveProject")
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Method is unavailable in Team Create"));
+				if (parameters.contains("TransactionId"))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Team requests cannot join open transactions"));
+				if (World && World->Transactions.GetOpenCount() != 0)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "TransactionOpen", "A local authoring transaction is open"));
+			}
+			auto &RequestCursor = TeamAuthor == 0 ? Cursor : TeamCursors[TeamAuthor - 1];
 			// Batch failures and diagnostic operations cannot commit an unrelated
 			// expired legacy group. These diagnostics do not edit document state.
-			if (World && method != "SetPropertyBatch" && method != "GetStreamingDiagnostics" &&
+			if (TeamAuthor == 0 && World && method != "SetPropertyBatch" && method != "GetStreamingDiagnostics" &&
 				method != "ConfigureStreamingDiagnostics" && method != "GetPlayInputSnapshot" &&
 				method != "InspectPlayPersistenceRecord" && method != "ResetPlayPersistenceRecord" &&
 				method != "GetCharacterComposition" && method != "GetAnimationRig" &&
 				method != "OpenAnimationPreview" && method != "ControlAnimationPreview" &&
 				method != "CaptureAnimationPreview" && method != "CloseAnimationPreview")
 				(void)World->Transactions.ExpireOwner(*World, TransactionOwner);
-			const auto &parameters = message["Params"];
 			if (ActivePlaySession && IsAuthoringMethodWhilePlaying(method))
 				return SerializeBoundedResponse(ErrorResponse(
 					requestId, "PlaySessionActive", "Stop Play before changing the authoritative project"
@@ -1653,6 +1705,18 @@ namespace gargantuan {
 					));
 				ExpectedRevision = Value;
 			}
+			if (TeamAuthor != 0 && World && IsAuthoringMethodWhilePlaying(method)) {
+				if (!RequestCursor)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a journal cursor"));
+				if (RequestCursor->NextSequence < ChangeJournal::Get().GetRetentionWindow(RequestCursor->Scope).OldestSequence) {
+					RequestCursor.reset();
+					return SerializeBoundedResponse(ErrorResponse(requestId, "ResnapshotRequired", "Journal cursor was evicted"));
+				}
+				if (!ExpectedRevision && (method == "SetTransform" ||
+					method == "CreateInstance" || method == "DestroyInstance" || method == "DuplicateInstance" ||
+					method == "ReparentInstance" || method == "Undo" || method == "Redo"))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Team operation requires ExpectedRevision"));
+			}
 			auto HasRevisionConflict = [&] {
 				return ExpectedRevision && World && World->GetAuthoritativeRevision() != *ExpectedRevision;
 			};
@@ -1666,6 +1730,19 @@ namespace gargantuan {
 			if (method == "Handshake") {
 				if (!parameters.empty())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Handshake takes no parameters"));
+				constexpr std::uint32_t ScriptSecurityVersion = 1;
+				const auto StudioExecutionDomain = GetScriptExecutionDomainName(StudioSecurity.Domain);
+				if (TeamAuthor != 0)
+					return SerializeBoundedResponse(SuccessResponse(requestId, {
+						{"Engine", "Gargantuan"}, {"ProtocolVersion", EditorHostProtocolVersion},
+						{"PropertyBatchVersion", EditorHostPropertyBatchVersion}, {"TeamAuthoringVersion", 1},
+						{"ScriptSecurityVersion", ScriptSecurityVersion}, {"StudioExecutionDomain", StudioExecutionDomain},
+						{"Capabilities", {"Schema", "Snapshot", "Journal", "AuthoritativeRevision", "SetProperty",
+							"SetPropertyBatch", "SetTransform", "SetAttribute", "SetExtensionProperty", "SetCustomProperty",
+							"AddTag", "RemoveTag", "CreateInstance", "DestroyInstance", "DuplicateInstance", "ReparentInstance",
+							"ReadScriptSource", "WriteScriptSource", "ScriptDocumentBinding", "GetTeamHistory", "Undo", "Redo",
+							"SaveProject", "CreateInstanceInitialProperties", "CreateScriptWithSource"}}
+					}));
 				Json capabilities = {
 					"OpenProject", "CreateProject", "Schema", "Snapshot", "Journal", "SetProperty", "SetPropertyBatch", "SetTransform", "SetAttribute", "SetExtensionProperty", "SetCustomProperty",
 					"AddTag", "RemoveTag", "SaveProject", "SaveProjectAs", "AuthoritativeRevision",
@@ -1685,10 +1762,15 @@ namespace gargantuan {
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
 					"AdvancedMaterialMetadata",
 					"AnimationRig", "AnimationPreview", "AnimationPreviewBlend", "CharacterComposition",
-					"PackageBuild", "PackageBuildProgress", "PackageBuildCancellation",
+					"PackageBuild", "PackageBuildProgress", "PackageBuildCancellation", "RuntimeDistributionPolicy",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport",
-					"ViewportLatestFrame", "ViewportPresentationDiagnostics", "GuiPreview"
+					"ViewportLatestFrame", "ViewportPresentationDiagnostics", "GuiPreview", "GuiPreviewLayout"
 				};
+				const auto ExecutableDirectory = Paths::GetExecutableDirectory();
+				if (std::filesystem::is_regular_file(ExecutableDirectory / "RuntimeDistribution" /
+					"distributed-player-capability.json")) capabilities.push_back("DistributedPlayerPackages");
+				if (std::filesystem::is_regular_file(ExecutableDirectory / "ServerRuntimeDistribution" /
+					"runtime-distribution-capability.json")) capabilities.push_back("DedicatedServerPackages");
 				Json viewportTransports = Json::array({{
 					{"Name", "Base64"}, {"Version", 1}, {"PixelFormats", {"RGB8"}}
 				}});
@@ -1724,8 +1806,8 @@ namespace gargantuan {
 						{"Capabilities", std::move(capabilities)},
 						{"ViewportWireVersion", 2},
 						{"ViewportTransports", std::move(viewportTransports)},
-						{"ScriptSecurityVersion", 1},
-						{"StudioExecutionDomain", GetScriptExecutionDomainName(StudioSecurity.Domain)},
+						{"ScriptSecurityVersion", ScriptSecurityVersion},
+						{"StudioExecutionDomain", StudioExecutionDomain},
 						{"StudioCapabilities", EncodeCapabilities(StudioSecurity.Capabilities)},
 					}
 				));
@@ -1793,17 +1875,75 @@ namespace gargantuan {
 				return SerializeBoundedResponse(SuccessResponse(requestId, std::move(Result)));
 			}
 
+			if (method == "InspectPackagePolicy") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::EditorCommands) ||
+					!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Package policy preview requires project access."));
+				if (!HasOnlyFields(parameters, {"ExpectedRevision", "Configuration", "RuntimeDistribution"}) ||
+					!parameters.contains("ExpectedRevision") ||
+					!parameters.contains("RuntimeDistribution") || !parameters["RuntimeDistribution"].is_object())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Package policy preview requires a distribution request."));
+				if (!World || !CurrentProject)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectRequired", "OpenProject must succeed first."));
+				if (World->Transactions.GetOpenCount() != 0 || HasRevisionConflict())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Conflict", "Package policy requires the current committed authoring revision."));
+				try {
+					const auto Request = ParseRuntimeDistributionRequest(parameters["RuntimeDistribution"].dump());
+					const auto Policy = PackageBuilder::CaptureRuntimeDistribution(*CurrentProject, World, Request, false);
+					Json Rows = Json::array();
+					std::size_t ReportBytes = 0;
+					for (const auto &Script : Policy.Scripts) {
+						std::string DisplayPath;
+						for (const auto &Segment : Script.Path) {
+							if (!DisplayPath.empty()) DisplayPath += '/';
+							if (DisplayPath.size() + Segment.size() > 1023) {
+								DisplayPath += "...";
+								break;
+							}
+							DisplayPath += Segment;
+						}
+						if (DisplayPath.size() > 1024) DisplayPath = "<long script path>";
+						ReportBytes += DisplayPath.size() + 192;
+						if (Rows.size() == 128 || ReportBytes > 48 * 1024) break;
+						Rows.push_back({
+							{"SourceId", Script.SourceId}, {"Path", DisplayPath},
+							{"Audience", Script.Eligible ? GetRuntimeDistributionName(Request.Target) : "Excluded"},
+							{"Representation", GetRuntimeDistributionName(Script.Representation)},
+							{"Diagnostics", GetRuntimeDistributionName(Script.Diagnostics)}, {"Origin", Script.Origin},
+						});
+					}
+					return SerializeBoundedResponse(SuccessResponse(requestId, {
+						{"CapturedRevision", World->GetAuthoritativeRevision()},
+						{"CapturedUnsavedChanges", World->GetAuthoritativeRevision() != PersistedRevision},
+						{"PolicySha256", Policy.PolicySha256}, {"TotalScripts", Policy.Scripts.size()},
+						{"Truncated", Rows.size() != Policy.Scripts.size()}, {"Rows", std::move(Rows)},
+						{"Diagnostics", Json::array()},
+					}));
+				} catch (const RuntimeDistributionError &Error) {
+					return SerializeBoundedResponse(ErrorResponse(requestId, Error.Code, Error.what()));
+				} catch (const std::exception &) {
+					return SerializeBoundedResponse(ErrorResponse(requestId, "PackageCaptureFailed", "The package policy could not be previewed safely."));
+				}
+			}
+
 			if (method == "StartPackageBuild") {
 				if (!StudioSecurity.HasCapability(ScriptCapability::EditorCommands) ||
 					!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "Unauthorized", "Packaging requires EditorCommands and ReadDataModel"
 					));
-				if (!HasOnlyFields(parameters, {"OutputDirectory", "Configuration", "ExpectedRevision"}) ||
+				if (!HasOnlyFields(parameters, {"OutputDirectory", "Configuration", "ExpectedRevision", "Audience",
+					"RuntimeDistribution", "ExpectedPolicySha256"}) ||
 					!parameters.contains("OutputDirectory") || !parameters["OutputDirectory"].is_string() ||
 					parameters["OutputDirectory"].get_ref<const std::string &>().empty() ||
 					parameters["OutputDirectory"].get_ref<const std::string &>().size() > 32768 ||
-					!parameters.contains("Configuration") || !parameters["Configuration"].is_string())
+					!parameters.contains("Configuration") || !parameters["Configuration"].is_string() ||
+					(parameters.contains("Audience") && !parameters["Audience"].is_string()) ||
+					(parameters.contains("RuntimeDistribution") && (!parameters.contains("ExpectedRevision") ||
+						!parameters["RuntimeDistribution"].is_object())) ||
+					(parameters.contains("ExpectedPolicySha256") &&
+						(!parameters.contains("RuntimeDistribution") || !parameters["ExpectedPolicySha256"].is_string() ||
+						!AssetContentId::Parse(parameters["ExpectedPolicySha256"].get_ref<const std::string &>()))))
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "MalformedRequest", "StartPackageBuild requires a bounded output directory and configuration"
 					));
@@ -1824,6 +1964,10 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "InvalidConfiguration", "Package configuration must be Development or Release"
 					));
+				auto Audience = ParsePackageAudience(parameters.value("Audience", std::string("Trusted")));
+				if (!Audience)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidAudience",
+						"Package audience must be Trusted or DistributedPlayer"));
 				if (ActivePackageJob && !ActivePackageJob->Complete.load(std::memory_order_acquire))
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "PackageBuildActive", "One package build is already active"
@@ -1834,13 +1978,31 @@ namespace gargantuan {
 					));
 
 				GamePayload Payload;
+				std::optional<RuntimeDistributionRequest> DistributionRequest;
 				try {
+					if (parameters.contains("RuntimeDistribution")) {
+						DistributionRequest = ParseRuntimeDistributionRequest(parameters["RuntimeDistribution"].dump());
+						const auto Requested = DistributionRequest->Target == RuntimeDistributionTarget::DistributedPlayer ?
+							PackageAudience::DistributedPlayer : PackageAudience::Trusted;
+						if (parameters.contains("Audience") && *Audience != Requested)
+							throw RuntimeDistributionError("AudienceViolation", "Package target and audience disagree.");
+						Audience = Requested;
+					}
 					Payload = PackageBuilder::Capture(
-						*CurrentProject, World, World->GetAuthoritativeRevision(), PersistedRevision
+						*CurrentProject, World, World->GetAuthoritativeRevision(), PersistedRevision, *Audience, DistributionRequest
 					);
+					if (parameters.contains("ExpectedPolicySha256") &&
+						Payload.DistributionPlan->PolicySha256 != parameters["ExpectedPolicySha256"])
+						return SerializeBoundedResponse(ErrorResponse(requestId, "PolicyChanged", "The project package policy changed after preview."));
 					if (Payload.PreRunSource != ActivePreRunSource)
 						return SerializeBoundedResponse(ErrorResponse(requestId, "PreRunReloadRequired", "PreRun source changed during package capture; reopen the project"));
+				} catch (const RuntimeDistributionError &Error) {
+					return SerializeBoundedResponse(ErrorResponse(requestId, Error.Code, Error.what()));
 				} catch (const std::exception &) {
+					if (*Audience == PackageAudience::DistributedPlayer)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "PackageCaptureFailed",
+							"Could not capture a distributed Player package. Check the native schema, client code paths, "
+							"and .gargantuan/package-audience.json."));
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "PackageCaptureFailed", "The authoritative project snapshot could not be captured for packaging"
 					));
@@ -1851,7 +2013,9 @@ namespace gargantuan {
 				Job->CapturedUnsavedChanges = Payload.UnsavedChanges;
 				auto *JobPointer = Job.get();
 				auto OutputDirectory = std::filesystem::path(parameters["OutputDirectory"].get<std::string>());
-				auto RuntimeDistribution = Paths::GetExecutableDirectory() / "RuntimeDistribution";
+				auto RuntimeDistribution = Paths::GetExecutableDirectory() /
+					(DistributionRequest && DistributionRequest->Target == RuntimeDistributionTarget::DedicatedServer ?
+						"ServerRuntimeDistribution" : "RuntimeDistribution");
 				Job->Worker = std::jthread([
 					JobPointer,
 					Payload = std::move(Payload),
@@ -1935,6 +2099,17 @@ namespace gargantuan {
 						Result["OutputDirectory"] = BuildResult.OutputDirectory.generic_string();
 						Result["PlayerExecutable"] = BuildResult.PlayerExecutable.empty()
 							? Json(nullptr) : Json(BuildResult.PlayerExecutable.generic_string());
+						if (BuildResult.Target) {
+							Result["Target"] = GetRuntimeDistributionName(*BuildResult.Target);
+							Result["ManifestSha256"] = BuildResult.ManifestSha256;
+							Result["PlayerExecutableSha256"] = BuildResult.PlayerExecutableSha256;
+							if (*BuildResult.Target == RuntimeDistributionTarget::DedicatedServer) {
+								Result["ServerExecutable"] = std::move(Result["PlayerExecutable"]);
+								Result["PlayerExecutable"] = nullptr;
+							}
+							if (!BuildResult.PrivateDiagnosticsPath.empty())
+								Result["PrivateDiagnosticsPath"] = BuildResult.PrivateDiagnosticsPath.generic_string();
+						}
 						Result["Size"] = {
 							{"TotalBytes", BuildResult.Size.TotalBytes}, {"RuntimeBytes", BuildResult.Size.RuntimeBytes},
 							{"ProjectBytes", BuildResult.Size.ProjectBytes}, {"AssetBytes", BuildResult.Size.AssetBytes},
@@ -2542,7 +2717,7 @@ namespace gargantuan {
 				LastViewportPublication.reset();
 				ViewportProjection.Clear();
 				ViewportPublisher->RequestFullResync();
-				Cursor.reset();
+				ResetAuthoringCursors();
 				ViewportWidth = 0;
 				ViewportHeight = 0;
 				ViewportPresentationActive = false;
@@ -2673,7 +2848,7 @@ namespace gargantuan {
 					LastViewportPublication.reset();
 					ViewportProjection.Clear();
 					ViewportPublisher->RequestFullResync();
-					Cursor.reset();
+					ResetAuthoringCursors();
 					ViewportWidth = 0;
 					ViewportHeight = 0;
 					ViewportPresentationActive = false;
@@ -2703,7 +2878,7 @@ namespace gargantuan {
 					CurrentProject.reset();
 					PersistedRevision = 0;
 					ViewportCamera.reset();
-					Cursor.reset();
+					ResetAuthoringCursors();
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "ProjectActivationFailure", "The persisted new project could not be activated"
 					));
@@ -2720,8 +2895,32 @@ namespace gargantuan {
 				if (!World || !CurrentProject)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded"));
 				return SerializeBoundedResponse(SuccessResponse(
-					requestId, EncodeProjectState(World, PersistedRevision, CurrentProject)
+					requestId, EncodeProjectState(World, PersistedRevision, CurrentProject, TeamAuthor)
 				));
+			}
+
+			if (TeamAuthor != 0 && method == "GetTeamHistory") {
+				if (!parameters.empty())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GetTeamHistory takes no parameters"));
+				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "History access requires ReadDataModel"));
+				if (!World)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded"));
+				const auto &Transactions = World->Transactions;
+				Json Entries = Json::array();
+				for (const auto &Action : Transactions.GetCommitted()) {
+					Entries.push_back({
+						{"TransactionId", std::to_string(Action->Id.Value)}, {"Author", Action->Author},
+						{"Label", Action->Label}, {"StartingRevision", Action->StartingRevision},
+						{"ResultingRevision", Action->ResultingRevision}, {"ChangeCount", Action->Changes.size()}
+					});
+				}
+				const auto *Undo = Transactions.GetUndoTransaction();
+				const auto *Redo = Transactions.GetRedoTransaction();
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"Entries", std::move(Entries)}, {"CanUndo", Undo && Undo->Author == TeamAuthor},
+					{"CanRedo", Redo && Redo->Author == TeamAuthor}
+				}));
 			}
 
 			if (method == "GetCharacterComposition") {
@@ -3069,7 +3268,7 @@ namespace gargantuan {
 					));
 				if (!World || !CurrentProject)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded"));
-				if (!Cursor)
+				if (!RequestCursor)
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "SnapshotRequired", "GetSnapshot must establish a journal cursor"
 					));
@@ -3077,6 +3276,14 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "Conflict", "The authoritative project revision changed before history execution"
 					));
+				if (TeamAuthor != 0) {
+					const auto *Action = method == "Undo" ? World->Transactions.GetUndoTransaction()
+						: World->Transactions.GetRedoTransaction();
+					if (Action && Action->Author != TeamAuthor)
+						return SerializeBoundedResponse(ErrorResponse(
+							requestId, "HistoryConflict", "The next history action belongs to another author"
+						));
+				}
 				auto Result = method == "Undo" ? Mutations.Undo(*World, StudioSecurity) : Mutations.Redo(*World, StudioSecurity);
 				if (!Result.Succeeded()) {
 					const char *Code = Result.Status == TransactionStatus::NothingToUndo ? "NothingToUndo" :
@@ -3085,14 +3292,14 @@ namespace gargantuan {
 						Result.Status == TransactionStatus::InvalidState ? "TransactionOpen" : "HistoryExecutionFailed";
 					return SerializeBoundedResponse(ErrorResponse(requestId, Code, Result.Message));
 				}
-				const auto Status = World->Transactions.GetStatus();
+				auto ProjectState = EncodeProjectState(World, PersistedRevision, CurrentProject, TeamAuthor);
+				const auto &History = ProjectState["History"];
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"TransactionId", std::to_string(Result.Id.Value)},
 					{"Action", method}, {"ResultingRevision", Result.ResultingRevision},
-					{"CanUndo", Status.CanUndo}, {"CanRedo", Status.CanRedo},
-					{"UndoLabel", Status.UndoLabel ? Json(*Status.UndoLabel) : Json(nullptr)},
-					{"RedoLabel", Status.RedoLabel ? Json(*Status.RedoLabel) : Json(nullptr)},
-					{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
+					{"CanUndo", History["CanUndo"]}, {"CanRedo", History["CanRedo"]},
+					{"UndoLabel", History["UndoLabel"]}, {"RedoLabel", History["RedoLabel"]},
+					{"ProjectState", ProjectState},
 				}));
 			}
 
@@ -3179,7 +3386,7 @@ namespace gargantuan {
 						World->Root = CurrentProject->Root;
 						World->Filesystem = Filesystem.get();
 					}
-					Json result = EncodeProjectState(World, PersistedRevision, CurrentProject);
+					Json result = EncodeProjectState(World, PersistedRevision, CurrentProject, TeamAuthor);
 					result["PersistedRevision"] = snapshot.Revision;
 					return SerializeBoundedResponse(SuccessResponse(requestId, std::move(result)));
 				} catch (const std::filesystem::filesystem_error &) {
@@ -3360,7 +3567,7 @@ namespace gargantuan {
 				if (!Scope) return Fail("MalformedRequest", "Scope must be a canonical ObjectId");
 				if (Scope->ToObjectId() != World->GetObjectId())
 					return Fail("StaleProject", "Scope does not identify the current project instance");
-				if (!Cursor) return Fail("SnapshotRequired", "GetSnapshot must establish a cursor");
+				if (!RequestCursor) return Fail("SnapshotRequired", "GetSnapshot must establish a cursor");
 				if (HasRevisionConflict()) return Fail("Conflict", "The authoritative project revision changed");
 				if (World->Transactions.GetOpenCount() != 0)
 					return Fail("TransactionOpen", "Commit the open authoring transaction before a property batch");
@@ -3410,7 +3617,7 @@ namespace gargantuan {
 				// Release the parsed tree while failures still precede mutation. No
 				// references into parameters or EncodedWrites are used after this point.
 				message = nullptr;
-				const auto Result = PreparedPropertyCommit::Apply(*World, *ExpectedRevision, Writes, StudioSecurity);
+				const auto Result = PreparedPropertyCommit::Apply(*World, *ExpectedRevision, Writes, StudioSecurity, TeamAuthor);
 				if (Result.Status != MutationStatus::Success) {
 					const auto *Code = Result.Status == MutationStatus::Conflict ? "Conflict" :
 						Result.Status == MutationStatus::InvalidProperty ? "StaleSchema" : MutationStatusName(Result.Status);
@@ -3424,7 +3631,7 @@ namespace gargantuan {
 				return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectRequired", "OpenProject must succeed first"));
 			auto StudioMutationAuthority = [&] {
 				return MutationAuthorityContext::Studio(
-					StudioSecurity, World->GetObjectId(), RequestTransaction, TransactionOwner
+					StudioSecurity, World->GetObjectId(), RequestTransaction, TransactionOwner, TeamAuthor
 				);
 			};
 
@@ -3756,7 +3963,7 @@ namespace gargantuan {
 				ViewportPublisher->SetTerrainRenderState(std::move(TerrainRender));
 				ActiveAnimationPreview.reset();
 				PersistedRevision = 0;
-				Cursor.reset();
+				ResetAuthoringCursors();
 				ViewportCamera = RenderCameraInput{};
 				AdvanceViewportGeneration();
 				return Response;
@@ -3814,15 +4021,28 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionActive", "Stop Play before picking authored GUI"));
 				if (!GuiPreview)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "GuiPreviewInactive", "Enable GUI preview before picking"));
-				if (!HasOnlyFields(parameters, {"X", "Y", "FrameNumber", "Generation"}) || !parameters.contains("X") ||
-					!parameters["X"].is_number() || !parameters.contains("Y") || !parameters["Y"].is_number() ||
+				if (!HasOnlyFields(parameters, {"X", "Y", "Object", "FrameNumber", "Generation", "IncludeLayout"}) ||
 					!parameters.contains("FrameNumber") || !parameters["FrameNumber"].is_number_unsigned() ||
-					!parameters.contains("Generation") || !parameters["Generation"].is_number_unsigned())
-					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PickGuiPreview requires pixels and the displayed frame identity"));
+					!parameters.contains("Generation") || !parameters["Generation"].is_number_unsigned() ||
+					(parameters.contains("IncludeLayout") && !parameters["IncludeLayout"].is_boolean()))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PickGuiPreview requires the displayed frame identity"));
+				const bool IncludeLayout = parameters.value("IncludeLayout", false);
+				std::optional<WireObjectId> LayoutObject;
+				float X = 0.0f;
+				float Y = 0.0f;
+				if (parameters.contains("Object")) {
+					LayoutObject = JsonCodec::DecodeObjectId(parameters["Object"]);
+					if (!IncludeLayout || !LayoutObject || parameters.contains("X") || parameters.contains("Y"))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GUI layout lookup requires only an authored object and frame identity"));
+				} else {
+					if (!parameters.contains("X") || !parameters["X"].is_number() ||
+						!parameters.contains("Y") || !parameters["Y"].is_number())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GUI preview pick requires pixels"));
+					X = parameters["X"].get<float>();
+					Y = parameters["Y"].get<float>();
+				}
 				const auto FrameNumber = parameters["FrameNumber"].get<std::uint64_t>();
 				const auto Generation = parameters["Generation"].get<std::uint64_t>();
-				const auto X = parameters["X"].get<float>();
-				const auto Y = parameters["Y"].get<float>();
 				if (FrameNumber == 0 || Generation == 0 || !std::isfinite(X) || !std::isfinite(Y))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GUI preview pick values are invalid"));
 				const auto &Frames = GuiPreview->DisplayedFrames;
@@ -3830,30 +4050,62 @@ namespace gargantuan {
 				if (Generation != ViewportGeneration || Frame == Frames.end())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleFrame", "The displayed GUI preview frame is no longer available"));
 				const auto &Placement = Frame->Placement;
-				if (Placement.Bounds.Contains(X, Y)) {
+				const auto Starter = World->FindFirstChildOfClass("StarterGui", false);
+				const auto IsAuthored = [&](const GuiLayoutNode &Node) {
+					if (!Node.Parent.IsValid() || !Node.EffectiveVisible || Node.EffectiveOpacity <= 0.0f) return false;
+					const auto Object = ObjectRegistry::Get().Lookup(Node.Object);
+					return Object && Starter && Object->GetDataModel() == World &&
+						Object->FindFirstAncestorWhichIsA("StarterGui") == Starter;
+				};
+				const GuiLayoutNode *Hit = nullptr;
+				if (LayoutObject) {
+					const auto Node = Frame->Layout->NodeByObject.find(LayoutObject->ToObjectId());
+					if (Node != Frame->Layout->NodeByObject.end() && IsAuthored(Frame->Layout->Nodes[Node->second]))
+						Hit = &Frame->Layout->Nodes[Node->second];
+				} else if (Placement.Bounds.Contains(X, Y)) {
 					const Vector2 Point((X - Placement.Bounds.X) / Placement.Scale, (Y - Placement.Bounds.Y) / Placement.Scale);
-					const auto Starter = World->FindFirstChildOfClass("StarterGui", false);
 					for (auto Node = Frame->Layout->Nodes.rbegin(); Node != Frame->Layout->Nodes.rend(); ++Node) {
-						if (!Node->Parent.IsValid() || !Node->EffectiveVisible || Node->EffectiveOpacity <= 0.0f ||
-							(Node->EffectiveClip && !Node->EffectiveClip->Contains(Point.GetX(), Point.GetY()))) continue;
+						if (Node->EffectiveClip && !Node->EffectiveClip->Contains(Point.GetX(), Point.GetY())) continue;
 						const auto Inverse = Node->Transform.Inverse();
 						if (!Inverse) continue;
 						const auto Local = Inverse->Apply(Point);
-						if (!Node->Bounds.Contains(Local.GetX(), Local.GetY())) continue;
-						const auto Object = ObjectRegistry::Get().Lookup(Node->Object);
-						if (!Object || !Starter || Object->GetDataModel() != World ||
-							Object->FindFirstAncestorWhichIsA("StarterGui") != Starter) continue;
-						auto Bounds = PlaceGuiRect(Node->TransformedBounds, Placement);
-						if (Node->EffectiveClip)
-							Bounds = GuiRect::Intersect(Bounds, PlaceGuiRect(*Node->EffectiveClip, Placement)).value_or(GuiRect{});
-						Bounds = GuiRect::Intersect(Bounds, Placement.Bounds).value_or(GuiRect{});
-						return SerializeBoundedResponse(SuccessResponse(requestId, {
-							{"Object", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Node->Object))},
-							{"Bounds", {{"X", Bounds.X}, {"Y", Bounds.Y}, {"Width", Bounds.Width}, {"Height", Bounds.Height}}},
-						}));
+						if (!Node->Bounds.Contains(Local.GetX(), Local.GetY()) || !IsAuthored(*Node)) continue;
+						Hit = &*Node;
+						break;
 					}
 				}
-				return SerializeBoundedResponse(SuccessResponse(requestId, {{"Object", nullptr}, {"Bounds", nullptr}}));
+				if (!Hit) {
+					Json Result = {{"Object", nullptr}, {"Bounds", nullptr}};
+					if (IncludeLayout) Result["Revision"] = Frame->ProjectRevision;
+					return SerializeBoundedResponse(SuccessResponse(requestId, std::move(Result)));
+				}
+				const auto Unclipped = PlaceGuiRect(Hit->TransformedBounds, Placement);
+				auto Bounds = Unclipped;
+				if (Hit->EffectiveClip)
+					Bounds = GuiRect::Intersect(Bounds, PlaceGuiRect(*Hit->EffectiveClip, Placement)).value_or(GuiRect{});
+				Bounds = GuiRect::Intersect(Bounds, Placement.Bounds).value_or(GuiRect{});
+				Json Result = {
+					{"Object", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Hit->Object))},
+					{"Bounds", {{"X", Bounds.X}, {"Y", Bounds.Y}, {"Width", Bounds.Width}, {"Height", Bounds.Height}}},
+				};
+				if (IncludeLayout) Result["Revision"] = Frame->ProjectRevision;
+				if (IncludeLayout && Frame->ProjectRevision != 0) {
+					const auto AxisAligned = [](const GuiTransform &Transform) {
+						return std::abs(Transform.M00 - 1.0f) < 0.0001f && std::abs(Transform.M11 - 1.0f) < 0.0001f &&
+							std::abs(Transform.M01) < 0.0001f && std::abs(Transform.M10) < 0.0001f;
+					};
+					const auto Parent = Frame->Layout->NodeByObject.find(Hit->Parent);
+					Result["Layout"] = {
+						{"Revision", Frame->ProjectRevision}, {"Scale", Placement.Scale},
+						{"AxisAligned", AxisAligned(Hit->Transform) && Parent != Frame->Layout->NodeByObject.end() &&
+							AxisAligned(Frame->Layout->Nodes[Parent->second].Transform)},
+						{"Clipped", Bounds.Width < Unclipped.Width - 0.001f || Bounds.Height < Unclipped.Height - 0.001f},
+						{"LayoutPositionsX", Hit->LayoutPositionsX}, {"LayoutPositionsY", Hit->LayoutPositionsY},
+						{"LayoutSizesX", Hit->LayoutSizesX}, {"LayoutSizesY", Hit->LayoutSizesY},
+						{"Width", Hit->Bounds.Width}, {"Height", Hit->Bounds.Height},
+					};
+				}
+				return SerializeBoundedResponse(SuccessResponse(requestId, std::move(Result)));
 			}
 
 			if (method == "ConfigureViewport") {
@@ -4048,23 +4300,27 @@ namespace gargantuan {
 				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Snapshot access requires ReadDataModel"));
 				if (!World) return SerializeBoundedResponse(ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded"));
+				if (TeamAuthor != 0) RequestCursor.reset();
 				auto snapshot = CaptureSnapshot(World, SnapshotAudience::Editor);
-				Cursor = snapshot.Cursor;
+				if (TeamAuthor == 0) RequestCursor = snapshot.Cursor;
 				auto EncodedSnapshot = ParseGeneratedJson(SerializeSnapshot(snapshot), "Snapshot response");
 				AddEditorPropertyValues(EncodedSnapshot, StudioSecurity, World->GetObjectId());
-				return SerializeBoundedResponse(SuccessResponse(
+				bool Encoded = false;
+				auto Response = SerializeBoundedResponse(SuccessResponse(
 					requestId,
 					{
 						{"Snapshot", std::move(EncodedSnapshot)},
-						{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
+						{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject, TeamAuthor)},
 					}
-				));
+				), &Encoded);
+				if (TeamAuthor != 0 && Encoded) RequestCursor = snapshot.Cursor;
+				return Response;
 			}
 
 			if (method == "PollChanges") {
 				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Journal access requires ReadDataModel"));
-				if (!Cursor)
+				if (!RequestCursor)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
 				if (!HasOnlyFields(parameters, {"MaximumRecords"}))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PollChanges has unknown parameters"));
@@ -4076,22 +4332,35 @@ namespace gargantuan {
 					if (maximumRecords == 0 || maximumRecords > 256)
 						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "MaximumRecords is out of range"));
 				}
-				auto changes = ChangeJournal::Get().Read(*Cursor, maximumRecords);
-				if (changes.Status == ChangeReadStatus::ResnapshotRequired)
-					return SerializeBoundedResponse(ErrorResponse(requestId, "ResnapshotRequired", "Journal cursor was evicted"));
+				auto &Journal = ChangeJournal::Get();
+				auto changes = Journal.ReadPinned(*RequestCursor, maximumRecords, TeamAuthor != 0);
+				auto ResnapshotRequired = [&] {
+					if (TeamAuthor != 0) RequestCursor.reset();
+					return SerializeBoundedResponse(ErrorResponse(requestId, "ResnapshotRequired",
+						TeamAuthor == 0 ? "Journal cursor was evicted" : "Journal page cannot be delivered as complete commits"));
+				};
+				if (changes.Status == ChangeReadStatus::ResnapshotRequired) return ResnapshotRequired();
 				std::vector<WireJournalRecord> records;
 				records.reserve(changes.Records.size());
-				for (const auto &record : changes.Records) records.push_back(EncodeChangeRecord(record));
-				Cursor = changes.Cursor;
-				auto wire = ParseGeneratedJson(SerializeWireJournalRecords(records), "Journal response");
-				return SerializeBoundedResponse(SuccessResponse(
-					requestId,
-					{
-						{"Records", std::move(wire["Records"])},
-						{"Cursor", EncodeCursor(*Cursor)},
-						{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
-					}
-				));
+				for (const auto &record : changes.Records) records.push_back(EncodeChangeRecord(*record));
+				if (TeamAuthor == 0) RequestCursor = changes.Cursor;
+				auto EncodedWire = SerializeWireJournalRecords(records);
+				if (TeamAuthor != 0 && EncodedWire.size() > EditorHostMaximumResponseBytes) return ResnapshotRequired();
+				auto wire = ParseGeneratedJson(EncodedWire, "Journal response");
+				Json Result = {
+					{"Records", std::move(wire["Records"])},
+					{"Cursor", EncodeCursor(changes.Cursor)},
+					{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject, TeamAuthor)},
+				};
+				if (TeamAuthor != 0)
+					Result["HasMore"] = changes.Cursor.NextSequence < Journal.GetRetentionWindow(changes.Cursor.Scope).NextSequence;
+				bool Encoded = false;
+				auto Response = SerializeBoundedResponse(SuccessResponse(requestId, std::move(Result)), &Encoded);
+				if (TeamAuthor != 0) {
+					if (!Encoded) return ResnapshotRequired();
+					RequestCursor = changes.Cursor;
+				}
+				return Response;
 			}
 
 			if (method == "GetScriptBinding" || method == "ResolveScriptBinding") {
@@ -4182,7 +4451,7 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "Unauthorized", "Script source mutation requires EditorCommands and MutateDataModel"
 					));
-				if (!Cursor)
+				if (!RequestCursor)
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"
 					));
@@ -4235,7 +4504,7 @@ namespace gargantuan {
 			if (method == "SetTransform") {
 				if (!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "SetTransform requires MutateDataModel"));
-				if (!Cursor)
+				if (!RequestCursor)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
 				if (!HasOnlyFields(parameters, {"Object", "CFrame", "Size", "TransactionId", "ExpectedRevision"}) ||
 					!parameters.contains("Object") ||
@@ -4286,7 +4555,7 @@ namespace gargantuan {
 			if (method == "SetProperty") {
 				if (!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "SetProperty requires MutateDataModel"));
-				if (!Cursor)
+				if (!RequestCursor)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
 				if (!HasOnlyFields(parameters, {
 						"Object", "ClassSchemaId", "ClassDefinitionVersion", "DeclaringClassSchemaId",
@@ -4359,7 +4628,7 @@ namespace gargantuan {
 			if (method == "SetAttribute") {
 				if (!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "SetAttribute requires MutateDataModel"));
-				if (!Cursor)
+				if (!RequestCursor)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
 				if (!HasOnlyFields(parameters, {"Object", "Attribute", "Value", "TransactionId", "ExpectedRevision"}) ||
 					!parameters.contains("Object") || !parameters.contains("Attribute") ||
@@ -4394,7 +4663,7 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "Unauthorized", "SetExtensionProperty requires MutateDataModel"
 					));
-				if (!Cursor)
+				if (!RequestCursor)
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"
 					));
@@ -4462,7 +4731,7 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "Unauthorized", "SetCustomProperty requires MutateDataModel"
 					));
-				if (!Cursor)
+				if (!RequestCursor)
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"
 					));
@@ -4533,7 +4802,7 @@ namespace gargantuan {
 				method == "DuplicateInstance" || method == "ReparentInstance") {
 				if (!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Structural editing requires MutateDataModel"));
-				if (!Cursor)
+				if (!RequestCursor)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
 				MutationResult Mutation;
 				if (method == "CreateInstance") {
@@ -4639,7 +4908,7 @@ namespace gargantuan {
 			if (method == "AddTag" || method == "RemoveTag") {
 				if (!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Tag mutation requires MutateDataModel"));
-				if (!Cursor)
+				if (!RequestCursor)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
 				if (!HasOnlyFields(parameters, {"Object", "Tag", "TransactionId"}) || !parameters.contains("Object") ||
 					!parameters.contains("Tag") || !parameters["Tag"].is_string())

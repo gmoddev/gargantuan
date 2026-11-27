@@ -183,6 +183,8 @@ The following documents describe recently implemented, source-verified slices:
 - [Engine Foundation 8 capability inventory and scope](EngineFoundation8Inventory.md)
 - [Foundation 9 runtime presentation and creator integration](Foundation9Presentation.md)
 - [Protected GAS export proposal](../adr/GAS-Protected-Exports.md)
+- [Runtime Distribution Foundation 1 candidate](../adr/Runtime-Distribution-1.md)
+- [Runtime distribution format 4](../protocols/Runtime-Distribution-Package-v4.md)
 - [Script security](../../devdocs/CurrentArchitecture/ScriptSecurity.md)
 - [SourceMount and FileLink compatibility](../../devdocs/CurrentArchitecture/SourceMount.md)
 - [Continuous native build and test contract](../../devdocs/CurrentArchitecture/ContinuousIntegration.md)

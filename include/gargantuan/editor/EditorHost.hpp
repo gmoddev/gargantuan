@@ -16,6 +16,7 @@
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 
+#include <array>
 #include <cstddef>
 #include <chrono>
 #include <functional>
@@ -31,6 +32,7 @@ namespace gargantuan {
 	class Workspace;
 	inline constexpr std::uint32_t EditorHostProtocolVersion = 1;
 	inline constexpr std::uint32_t EditorHostPropertyBatchVersion = 1;
+	inline constexpr std::size_t EditorHostMaximumTeamAuthors = 8;
 	inline constexpr std::size_t EditorHostMaximumRequestBytes = 1024 * 1024;
 	inline constexpr std::size_t EditorHostMaximumResponseBytes = 8 * 1024 * 1024;
 	inline constexpr std::uint32_t EditorHostMaximumViewportWidth = 3840;
@@ -84,6 +86,7 @@ namespace gargantuan {
 		std::function<EditorViewportCaptureView(RenderPublicationPtr)> ViewportCaptureForTesting;
 		std::function<void(RenderPublicationPtr)> ViewportApplyForTesting;
 		std::optional<ChangeCursor> Cursor;
+		std::array<std::optional<ChangeCursor>, EditorHostMaximumTeamAuthors> TeamCursors{};
 		MutationGateway Mutations;
 		ScriptSecurityContext StudioSecurity = ScriptSecurityContext::StudioCoreUi();
 		bool AudioEnabled = false;
@@ -128,6 +131,7 @@ namespace gargantuan {
 		std::uint64_t NextPackageJobId = 1;
 
 		void AdvanceViewportGeneration();
+		void ResetAuthoringCursors();
 		void ResetViewportSpatial();
 		void ResetEditorViewportDocument();
 		void StepViewportSpatial();

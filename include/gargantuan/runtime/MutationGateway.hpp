@@ -30,7 +30,8 @@ namespace gargantuan {
 			ScriptSecurityContext SecurityContext,
 			ObjectId Scope,
 			std::optional<TransactionId> Transaction = std::nullopt,
-			std::uint64_t TransactionOwner = 1
+			std::uint64_t TransactionOwner = 1,
+			std::uint64_t Author = 0
 		);
 		[[nodiscard]] static MutationAuthorityContext AuthenticatedPeer(
 			ScriptSecurityContext SecurityContext,
@@ -42,6 +43,7 @@ namespace gargantuan {
 		[[nodiscard]] std::optional<ObjectId> GetScope() const { return Scope; }
 		[[nodiscard]] std::optional<TransactionId> GetTransactionId() const { return Transaction; }
 		[[nodiscard]] std::uint64_t GetTransactionOwner() const { return TransactionOwner; }
+		[[nodiscard]] std::uint64_t GetAuthor() const { return Author; }
 
 	  private:
 		MutationAuthorityContext(
@@ -49,7 +51,8 @@ namespace gargantuan {
 			ScriptSecurityContext SecurityContextValue,
 			std::optional<ObjectId> ScopeValue,
 			std::optional<TransactionId> TransactionValue = std::nullopt,
-			std::uint64_t TransactionOwnerValue = 0
+			std::uint64_t TransactionOwnerValue = 0,
+			std::uint64_t AuthorValue = 0
 		);
 
 		MutationCommandOrigin Origin;
@@ -57,6 +60,7 @@ namespace gargantuan {
 		std::optional<ObjectId> Scope;
 		std::optional<TransactionId> Transaction;
 		std::uint64_t TransactionOwner = 0;
+		std::uint64_t Author = 0;
 	};
 
 	inline constexpr std::size_t MaximumCreateInitialProperties = 32;

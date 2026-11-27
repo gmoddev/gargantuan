@@ -94,7 +94,25 @@ jobs:
         if: always()
         with:
           name: renderer5-linux
-          path: renderer-evidence/
+          path: |
+            renderer-evidence/source.txt
+            renderer-evidence/ctest.log
+            renderer-evidence/semantic-frames.csv
+            renderer-evidence/semantic.csv
+            renderer-evidence/instance-records.log
+            renderer-evidence/shaders.sha256
+            renderer-evidence/device.txt
+            renderer-evidence/viewport.log
+            renderer-evidence/opaque-ordering.log
+            renderer-evidence/instancing-ordering.log
+            renderer-evidence/contiguous-instancing.log
+            renderer-evidence/primitive-instancing.log
+            renderer-evidence/scene-envelope.log
+            renderer-evidence/ibl.log
+            renderer-evidence/probes.log
+            renderer-evidence/shadows.log
+            renderer-evidence/material-check.csv
+            renderer-evidence/material-extensions.csv
 
   windows-release:
     runs-on: windows-2025-vs2026
@@ -185,24 +203,12 @@ jobs:
         with:
           name: renderer5-windows
           path: |
-            renderer-evidence/
-            build-renderer/gargantuan.exe
-            build-renderer/gargantuan_editor_viewport_smoke.exe
-            build-renderer/gargantuan_renderer_benchmark.exe
-            build-renderer/gargantuan_renderer_allocation_benchmark.exe
-            build-renderer/gargantuan_renderer_depth_tests.exe
-            build-renderer/gargantuan_renderer_foundation2_gpu_benchmark.exe
-            build-renderer/gargantuan_renderer_foundation2_benchmark.exe
-            build-renderer/gargantuan_ibl_gpu_tests.exe
-            build-renderer/gargantuan_reflection_probe_gpu_tests.exe
-            build-renderer/gargantuan_shadow_foundation5_gpu_tests.exe
-            build-renderer/gargantuan_renderer_publication_tests.exe
-            build-renderer/gargantuan_asset_foundation_tests.exe
-            build-renderer/gargantuan_directional_shadow_cache_tests.exe
-            build-renderer/*.dll
-            build-renderer/runtime/
-            build-renderer/test-fixtures/
-            build-renderer/shaders/
+            renderer-evidence/configure.log
+            renderer-evidence/build.log
+            renderer-evidence/renderer-package.json
+            renderer-evidence/ctest.log
+            renderer-evidence/semantic-frames.csv
+            renderer-evidence/semantic.csv
 
   linux-sanitizers:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[renderer5-sanitizers]')
@@ -252,4 +258,8 @@ jobs:
         if: always()
         with:
           name: renderer5-sanitizers
-          path: renderer-evidence/
+          path: |
+            renderer-evidence/source.txt
+            renderer-evidence/sanitizers.log
+            renderer-evidence/semantic-frames.csv
+            renderer-evidence/semantic.csv

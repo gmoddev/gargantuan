@@ -52,6 +52,10 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	Program.add_argument("--session-smoke").flag().help("require a bounded packaged game-session acceptance proof");
 	Program.add_argument("--max-frames").scan<'i', int>().default_value(0).help("bounded test-only frame count");
 	Program.add_argument("--connect").default_value(std::string()).help("host:port for a network game client");
+	Program.add_argument("--expected-manifest-sha256").default_value(std::string())
+		.help("out-of-band expected SHA-256 of the exact package manifest");
+	Program.add_argument("--require-package-publisher").flag()
+		.help("require a package signed by an independently enrolled publisher");
 	Program.add_argument("--farm-run-id").default_value(std::string()).help("bounded test-only client farm run identity");
 	Program.add_argument("--farm-slot").scan<'i', int>().default_value(-1).help("test-only client farm slot, 0 through 31");
 	Program.add_argument("--farm-client-nonce").scan<'u', std::uint64_t>().default_value(std::uint64_t{0})
@@ -156,14 +160,32 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 				  << " nonce=" << FarmClientNonce << " steady_ns=" << FarmTimestamp() << std::endl;
 
 	const auto PackageRoot = Paths::GetExecutableDirectory().lexically_normal();
+	const auto ExpectedManifest = Program.get<std::string>("--expected-manifest-sha256");
+	if (!ExpectedManifest.empty() && !AssetContentId::Parse(ExpectedManifest)) {
+		std::cerr << "[Package:Integrity] The expected manifest digest is invalid.\n";
+		return 2;
+	}
 	int BootstrapExitCode = 0;
 	const auto LoadMode = ClientEndpoint && network::IsLoopbackTransportEndpoint(*ClientEndpoint)
 		? PackageRuntimeLoadMode::LoopbackDevelopmentClient : PackageRuntimeLoadMode::Complete;
-	auto Payload = host::BootstrapPackagedRuntime(PackageRoot, PackageRoot, "GargantuanPlayer", BootstrapExitCode, LoadMode);
+	auto Payload = host::BootstrapPackagedRuntime(PackageRoot, PackageRoot, "GargantuanPlayer", BootstrapExitCode, {
+		.ExpectedManifestSha256 = ExpectedManifest.empty() ? std::nullopt : std::optional(ExpectedManifest),
+		.RequirePublisher = Program.is_used("--require-package-publisher"),
+	}, LoadMode);
 	if (!Payload) {
 		const int ExitCode = FarmEnabled && BootstrapExitCode == 0 ? 7 : BootstrapExitCode;
 		ReportFarmResult(ExitCode, "package_bootstrap");
 		return ExitCode;
+	}
+	const bool Distributed = Payload->Inspection.Audience == PackageAudience::DistributedPlayer;
+	if (Payload->Inspection.Target && !Distributed && !ClientText.empty()) {
+		std::cerr << "[Package:Audience] A managed offline Player cannot join a network session.\n";
+		return 3;
+	}
+	if (Distributed && ClientText.empty()) {
+		std::cerr << "[Package:Audience] A distributed Player package requires a multiplayer connection.\n";
+		ReportFarmResult(3, "connection_required");
+		return 3;
 	}
 	const bool NetworkTerrain = ClientEndpoint && !Payload->TerrainArtifacts.empty();
 	if (NetworkTerrain && (Payload->Inspection.Configuration != PackageConfiguration::Development ||
@@ -195,8 +217,11 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	std::unique_ptr<network::GameSession> Session;
 	std::unique_ptr<host::detail::FarmPublicationEvidence> PublicationEvidence;
 	try {
-		auto PackagedWorld = Payload->LoadMode == PackageRuntimeLoadMode::LoopbackDevelopmentClient
-			? PackageBuilder::LoadClientCodeWorld(*Payload, PackageRoot) : PackageBuilder::LoadWorld(*Payload, PackageRoot);
+		std::shared_ptr<DataModel> PackagedWorld;
+		if (!Distributed) {
+			PackagedWorld = Payload->LoadMode == PackageRuntimeLoadMode::LoopbackDevelopmentClient
+				? PackageBuilder::LoadClientCodeWorld(*Payload, PackageRoot) : PackageBuilder::LoadWorld(*Payload, PackageRoot);
+		}
 		const Vector2 ViewportSize(720, 540);
 		if (Headless)
 			Renderer = std::make_unique<HeadlessRenderer>(ViewportSize);
@@ -220,9 +245,13 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 					.ClientNonce = FarmEnabled ? FarmClientNonce : 0,
 					.AllowInsecureDevelopmentNetwork = AllowInsecureDevelopmentNetwork,
 					.DeclareNormalOrdinaryService = true,
-					.HydratePlayerGuiCode = PackageBuilder::MakePlayerGuiCodeHydrator(PackagedWorld),
+					.HydratePlayerGuiCode = Payload->RuntimeCode ?
+						PackageBuilder::MakeDistributedPlayerGuiCodeHydrator(*Payload) :
+						PackageBuilder::MakePlayerGuiCodeHydrator(PackagedWorld),
 					.TerrainBootstrap = NetworkTerrain ? network::MakeTerrainSessionData(Payload->Inspection.Identity,
 						Payload->Inspection.Revision, Payload->TerrainArtifacts, false) : nullptr,
+					.RuntimeDistributionIdentity = Payload->ClientCodeIdentity,
+					.HydratePackagedCode = PackageBuilder::MakeDistributedCodeHydrator(*Payload),
 				}
 			);
 			if (FarmScaleWorkload && !network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(*Session, false))
@@ -247,10 +276,14 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			auto Assets = std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
 			if (!Assets) throw std::runtime_error("replicated AssetService is unavailable");
 			Assets->LoadRuntimeAssetSnapshot(Payload->Assets);
-			const auto HydratedCode = PackageBuilder::HydrateClientCode(PackagedWorld, World);
+			const auto HydratedCode = Distributed
+				? PackageBuilder::HydrateDistributedClientCode(*Payload, World)
+				: PackageBuilder::HydrateClientCode(PackagedWorld, World);
 			LOG_INFO(App, "[Package:Runtime] Hydrated %zu trusted client code containers", HydratedCode);
-			PackagedWorld->Destroy();
-			PackagedWorld.reset();
+			if (PackagedWorld) {
+				PackagedWorld->Destroy();
+				PackagedWorld.reset();
+			}
 		} else
 #endif
 		{

@@ -238,7 +238,7 @@ namespace gargantuan::network {
 		return ApplyFrame(*Decoded);
 	}
 
-	ReplicaApplyResult ReplicaApplier::ApplyFrame(const ReplicationFrame &Frame) {
+	ReplicaApplyResult ReplicaApplier::ApplyFrame(const ReplicationFrame &Frame, const BeforePublish &Prepare) {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::ClientApply);
 		if (std::ranges::any_of(Frame.Operations, [](const auto &Operation) {
 				return std::holds_alternative<PreparedPublishReplication>(Operation.Intent);
@@ -436,6 +436,14 @@ namespace gargantuan::network {
 				throw std::invalid_argument(
 					Loaded.Errors.empty() ? "Replica materialization failed" : Loaded.Errors.front()
 				);
+			const auto PreparePublications = [&](const SnapshotLoadResult &Objects) {
+				if (!Prepare) return;
+				for (const auto &Operation : Frame.Operations)
+					if (const auto *Publish = std::get_if<PublishReplication>(&Operation.Intent)) {
+						const auto Object = Objects.Resolve(WireObjectId::FromObjectId(Publish->Object));
+						if (Object) Prepare(Publish->Object, Object);
+					}
+			};
 			if (Frame.Kind == ReplicationMessageKind::Incremental) {
 				runtime_detail::WorkScope Live(runtime_detail::WorkPhase::ReplicaLiveApply);
 				LiveCommitStarted = true;
@@ -555,10 +563,13 @@ namespace gargantuan::network {
 							Operation.Intent
 						);
 				});
+				PreparePublications(Receiver);
 				runtime_detail::MeasureWork(runtime_detail::WorkPhase::ReplicaNotifications,
 					[&] { DeferNotifications.Commit(); });
-			} else
+			} else {
+				PreparePublications(Loaded);
 				InstallReceiver(std::move(Loaded));
+			}
 			FinishPhase(Metrics.LiveApplyNanoseconds);
 			SemanticState = std::move(Candidate);
 			Epoch = Frame.Epoch;

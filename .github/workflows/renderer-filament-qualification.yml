@@ -192,12 +192,11 @@ jobs:
         with:
           name: renderer-filament-windows-release
           path: |
-            filament-evidence/
-            build-filament/gargantuan.exe
-            build-filament/gargantuan_renderer_benchmark.exe
-            build-filament/gargantuan_filament_renderer_tests.exe
-            build-filament/gargantuan_editor_viewport_smoke.exe
-            build-filament/*.dll
-            build-filament/runtime/
-            build-filament/shaders/
+            filament-evidence/sdk.json
+            filament-evidence/configure.log
+            filament-evidence/adapter-compile.log
+            filament-evidence/link.log
+            filament-evidence/renderer-package.json
+            filament-evidence/software-smoke.txt
+            filament-evidence/software-vulkan-tests.log
           if-no-files-found: warn

@@ -43,6 +43,9 @@ if(NOT GARGANTUAN_BUILD_RESULT EQUAL 0)
 	GargantuanPackageFailure("FirstCompleteGame package build failed: ${GARGANTUAN_BUILD_OUTPUT}${GARGANTUAN_BUILD_ERROR}")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/VerifyRuntimeNotices.cmake")
+GargantuanVerifyRuntimeNotices("${GARGANTUAN_PACKAGE}")
+
 execute_process(
 	COMMAND "${GARGANTUAN_PACKAGER}" validate "${GARGANTUAN_PACKAGE}"
 	RESULT_VARIABLE GARGANTUAN_VALIDATE_RESULT

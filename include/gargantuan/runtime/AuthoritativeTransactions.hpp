@@ -113,6 +113,7 @@ namespace gargantuan {
 		std::size_t SemanticBytes = 0;
 		TransactionState State = TransactionState::Committed;
 		TransactionReplayPolicy ReplayPolicy = TransactionReplayPolicy::Legacy;
+		std::uint64_t Author = 0;
 	};
 
 	enum class TransactionStatus {
@@ -171,7 +172,8 @@ namespace gargantuan {
 			DataModel &World,
 			std::uint64_t Owner,
 			std::string Label,
-			TransactionOrigin Origin = TransactionOrigin::Studio
+			TransactionOrigin Origin = TransactionOrigin::Studio,
+			std::uint64_t Author = 0
 		);
 		[[nodiscard]] TransactionResult ValidateMutation(
 			TransactionId Id, std::uint64_t Owner, std::size_t AdditionalBytes, std::size_t AdditionalChanges = 1
@@ -225,10 +227,12 @@ namespace gargantuan {
 			std::size_t SemanticBytes = 0;
 			bool Implicit = false;
 			std::chrono::steady_clock::time_point OpenedAt;
+			std::uint64_t Author = 0;
 		};
 
 		TransactionResult BeginInternal(
-			DataModel &World, std::uint64_t Owner, std::string Label, TransactionOrigin Origin, bool Implicit
+			DataModel &World, std::uint64_t Owner, std::string Label, TransactionOrigin Origin, bool Implicit,
+			std::uint64_t Author
 		);
 		void Retain(CommittedTransaction Transaction);
 

@@ -29,7 +29,15 @@ set(Json "${Origin}/.gargantuan/project.instance.json")
 set(Place "${Workspace}/Relay.gasp")
 set(Player "${Workspace}/Player")
 set(Server "${Workspace}/Server")
+set(Distributed "${Workspace}/DP")
 file(COPY "${SOURCE_PROJECT}/" DESTINATION "${Origin}")
+file(WRITE "${Origin}/.gargantuan/package-audience.json" "{\"Version\":1,\"SharedAssets\":[]}")
+execute_process(COMMAND "${PACKAGER}" build --project "${Origin}" --output "${Distributed}"
+	--runtime "${PLAYER_DISTRIBUTION}" --audiece DistributedPlayer
+	RESULT_VARIABLE AudienceUsageExit OUTPUT_QUIET ERROR_QUIET TIMEOUT 15)
+if(NOT "${AudienceUsageExit}" STREQUAL "2" OR EXISTS "${Distributed}")
+	message(FATAL_ERROR "Unrecognized audience option did not stop before package construction")
+endif()
 file(SHA256 "${Json}" SourceDigest)
 message(STATUS "[GAS:Relay] source JSON SHA-256 ${SourceDigest}")
 Run(Export "${PACKAGER}" export-gasp --project "${Origin}" --output "${Place}")
@@ -39,6 +47,18 @@ Run(GaspPlayerBuild "${PACKAGER}" build --project "${Origin}" --gasp "${Place}" 
 	--runtime "${PLAYER_DISTRIBUTION}")
 Run(GaspServerBuild "${PACKAGER}" build --project "${Origin}" --gasp "${Place}" --output "${Server}"
 	--runtime "${SERVER_DISTRIBUTION}")
+if(GNS)
+	Run(DistributedGaspBuild "${PACKAGER}" build --project "${Origin}" --gasp "${Place}" --output "${Distributed}"
+		--runtime "${PLAYER_DISTRIBUTION}" --audience DistributedPlayer)
+	Run(DistributedValidation "${PACKAGER}" validate "${Distributed}" --audience DistributedPlayer)
+	file(SHA256 "${Distributed}/game.package.json" DistributedDigest)
+	file(READ "${Distributed}/content/client-code.json" DistributedCode)
+	if(NOT DistributedCode MATCHES "RelayClient" OR DistributedCode MATCHES "RelayServer" OR
+		EXISTS "${Distributed}/content/game.instance.json" OR EXISTS "${Distributed}/content/content.manifest.json" OR
+		EXISTS "${Distributed}/content/prerun.luau" OR EXISTS "${Distributed}/content/regions")
+		message(FATAL_ERROR "Distributed Relay Player artifact did not contain only the expected client startup data")
+	endif()
+endif()
 Run(PlayerPackageIntegrity "${PACKAGER}" validate "${Player}")
 Run(ServerPackageIntegrity "${PACKAGER}" validate "${Server}")
 file(SHA256 "${Player}/game.package.json" PlayerDigest)
@@ -65,6 +85,14 @@ Run(JsonPlayerBuild "${PACKAGER}" build --project "${Origin}" --output "${Player
 	--runtime "${PLAYER_DISTRIBUTION}")
 Run(JsonServerBuild "${PACKAGER}" build --project "${Origin}" --output "${Server}"
 	--runtime "${SERVER_DISTRIBUTION}")
+if(GNS)
+	Run(DistributedJsonBuild "${PACKAGER}" build --project "${Origin}" --output "${Distributed}"
+		--runtime "${PLAYER_DISTRIBUTION}" --audience DistributedPlayer)
+	file(SHA256 "${Distributed}/game.package.json" JsonDistributedDigest)
+	if(NOT "${DistributedDigest}" STREQUAL "${JsonDistributedDigest}")
+		message(FATAL_ERROR "Equivalent GAS and JSON did not build the same distributed Player manifest")
+	endif()
+endif()
 file(SHA256 "${Player}/game.package.json" JsonPlayerDigest)
 file(SHA256 "${Server}/game.package.json" JsonServerDigest)
 if(NOT "${PlayerDigest}" STREQUAL "${JsonPlayerDigest}" OR

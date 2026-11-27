@@ -441,6 +441,22 @@ list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/network/Gam
 include(cmake/Manifold.cmake)
 add_library(gargantuan_core OBJECT ${GARGANTUAN_SOURCES})
 target_link_libraries(gargantuan_core PUBLIC GargantuanManifold)
+find_package(OpenSSL 3.0...<4.0 QUIET COMPONENTS Crypto)
+set(GARGANTUAN_RUNTIME_PACKAGE_OPENSSL_VERSION "${OpenSSL_VERSION}")
+if(NOT GARGANTUAN_RUNTIME_PACKAGE_OPENSSL_VERSION)
+	set(GARGANTUAN_RUNTIME_PACKAGE_OPENSSL_VERSION "${OPENSSL_VERSION}")
+endif()
+set(GARGANTUAN_RUNTIME_PACKAGE_STAGE_ARGUMENTS)
+if(OpenSSL_FOUND AND TARGET OpenSSL::Crypto AND
+	GARGANTUAN_RUNTIME_PACKAGE_OPENSSL_VERSION VERSION_GREATER_EQUAL 3.0 AND
+	GARGANTUAN_RUNTIME_PACKAGE_OPENSSL_VERSION VERSION_LESS 4.0)
+	target_link_libraries(gargantuan_core PUBLIC OpenSSL::Crypto)
+	target_compile_definitions(gargantuan_core PRIVATE GARGANTUAN_RUNTIME_PACKAGE_OPENSSL=1)
+	include(cmake/RuntimePackageOpenSSL.cmake)
+	list(APPEND GARGANTUAN_RUNTIME_PACKAGE_STAGE_ARGUMENTS
+		"-DGARGANTUAN_RUNTIME_PACKAGE_OPENSSL_NOTICE=${GARGANTUAN_RUNTIME_PACKAGE_OPENSSL_NOTICE}"
+		"-DGARGANTUAN_RUNTIME_PACKAGE_OPENSSL_DLL=${GARGANTUAN_RUNTIME_PACKAGE_OPENSSL_DLL}")
+endif()
 if(GARGANTUAN_WITH_LOCAL_SQLITE)
 	target_link_libraries(gargantuan_core PUBLIC gargantuan_sqlite)
 	target_compile_definitions(gargantuan_core PUBLIC GARGANTUAN_WITH_LOCAL_SQLITE=1)
@@ -450,6 +466,16 @@ if(GARGANTUAN_WORK_TRACE)
 endif()
 add_executable(gargantuan "src/Main.cpp" ${GARGANTUAN_TELEMETRY_HOST_SOURCES} ${SHADER_OUTPUTS})
 target_link_libraries(gargantuan PRIVATE gargantuan_core ${CMAKE_DL_LIBS})
+if(GARGANTUAN_RUNTIME_PACKAGE_OPENSSL_DLL)
+	add_custom_target(gargantuan_stage_package_openssl
+		COMMAND ${CMAKE_COMMAND}
+			"-DGARGANTUAN_RUNTIME_PACKAGE_OPENSSL_DLL=${GARGANTUAN_RUNTIME_PACKAGE_OPENSSL_DLL}"
+			"-DGARGANTUAN_RUNTIME_PACKAGE_APP_LOCAL=$<TARGET_FILE_DIR:gargantuan>"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/StageRuntimePackageLibrary.cmake"
+		COMMENT "Staging OpenSSL Crypto next to Gargantuan executables"
+		VERBATIM)
+	add_dependencies(gargantuan_core gargantuan_stage_package_openssl)
+endif()
 add_library(gargantuan_runtime_host STATIC "src/host/common/PackagedHost.cpp")
 target_link_libraries(gargantuan_runtime_host PUBLIC gargantuan_core)
 target_include_directories(gargantuan_runtime_host PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>")
@@ -501,7 +527,7 @@ endif()
 target_link_libraries(gargantuan_server PRIVATE gargantuan_server_host gargantuan_core ${CMAKE_DL_LIBS})
 add_executable(gargantuan_packager "tools/PackagerMain.cpp")
 set_target_properties(gargantuan_packager PROPERTIES OUTPUT_NAME "gargantuan-packager")
-target_link_libraries(gargantuan_packager PRIVATE gargantuan_core ${CMAKE_DL_LIBS})
+target_link_libraries(gargantuan_packager PRIVATE gargantuan_core nlohmann_json ${CMAKE_DL_LIBS})
 
 # Shader generation and executable-local staging are separate dependencies.
 if(GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION)
@@ -530,26 +556,35 @@ if(NOT WIN32)
 endif()
 set(GARGANTUAN_SYSTEM_RUNTIME_ARGUMENTS)
 if(MSVC)
-	set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
-	include(InstallRequiredSystemLibraries)
-	if(NOT CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
-		message(FATAL_ERROR "MSVC runtime redistribution files could not be resolved")
+	# Microsoft supplies the centrally serviced prerequisite directly to recipients.
+	if(CMAKE_CXX_COMPILER MATCHES "/[Tt]ools/MSVC/(14[.][0-9]+[.][0-9]+)/")
+		set(GARGANTUAN_MSVC_RUNTIME_MINIMUM "${CMAKE_MATCH_1}")
+	elseif(DEFINED ENV{VCToolsVersion} AND "$ENV{VCToolsVersion}" MATCHES "^(14[.][0-9]+[.][0-9]+)")
+		set(GARGANTUAN_MSVC_RUNTIME_MINIMUM "${CMAKE_MATCH_1}")
+	else()
+		string(REGEX REPLACE "^19[.]" "14." GARGANTUAN_MSVC_RUNTIME_MINIMUM "${CMAKE_CXX_COMPILER_VERSION}")
 	endif()
-	set(GARGANTUAN_SYSTEM_RUNTIME_COUNT 0)
-	foreach(GARGANTUAN_SYSTEM_RUNTIME_FILE IN LISTS CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
-		if(NOT EXISTS "${GARGANTUAN_SYSTEM_RUNTIME_FILE}")
-			message(FATAL_ERROR "Required MSVC runtime redistribution file is unavailable")
-		endif()
-		list(APPEND GARGANTUAN_SYSTEM_RUNTIME_ARGUMENTS
-			"-DGARGANTUAN_SYSTEM_RUNTIME_FILE_${GARGANTUAN_SYSTEM_RUNTIME_COUNT}=${GARGANTUAN_SYSTEM_RUNTIME_FILE}")
-		math(EXPR GARGANTUAN_SYSTEM_RUNTIME_COUNT "${GARGANTUAN_SYSTEM_RUNTIME_COUNT} + 1")
-	endforeach()
 	list(APPEND GARGANTUAN_SYSTEM_RUNTIME_ARGUMENTS
-		-DGARGANTUAN_SYSTEM_RUNTIME_COUNT=${GARGANTUAN_SYSTEM_RUNTIME_COUNT})
+		"-DGARGANTUAN_MSVC_RUNTIME_MINIMUM=${GARGANTUAN_MSVC_RUNTIME_MINIMUM}")
 endif()
 set(GARGANTUAN_NETWORK_RUNTIME_ARGUMENTS)
+set(GARGANTUAN_IMAGE_NOTICE_CODECS)
+foreach(Codec GIF QOI SVG BACKEND_STB JPG_SAVE)
+	if(SDLIMAGE_${Codec})
+		list(APPEND GARGANTUAN_IMAGE_NOTICE_CODECS "${Codec}")
+	endif()
+endforeach()
+list(JOIN GARGANTUAN_IMAGE_NOTICE_CODECS "|" GARGANTUAN_IMAGE_NOTICE_CODECS)
+set(GARGANTUAN_SDL_NOTICE_FEATURES)
+foreach(Feature HIDAPI OPENGL OPENGLES VULKAN)
+	if(SDL_${Feature})
+		list(APPEND GARGANTUAN_SDL_NOTICE_FEATURES "${Feature}")
+	endif()
+endforeach()
+list(JOIN GARGANTUAN_SDL_NOTICE_FEATURES "|" GARGANTUAN_SDL_NOTICE_FEATURES)
 if(GARGANTUAN_WITH_GNS)
 	list(APPEND GARGANTUAN_NETWORK_RUNTIME_ARGUMENTS
+		-DGARGANTUAN_GNS_REFERENCE_DONNA=$<STREQUAL:${USE_CRYPTO25519},Reference>
 		-DGARGANTUAN_GNS_LICENSE_FILE=${GameNetworkingSockets_SOURCE_DIR}/LICENSE
 		-DGARGANTUAN_PROTOBUF_LICENSE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/notices/ProtocolBuffers.txt
 	)
@@ -617,14 +652,27 @@ if((GARGANTUAN_WITH_NODE_CONTENT OR GARGANTUAN_WITH_NODE_PERSISTENCE) AND WIN32)
 			-DGARGANTUAN_OPTIONAL_NOTICE_COUNT=${GARGANTUAN_NODE_NOTICE_COUNT})
 	endif()
 endif()
+set(GARGANTUAN_COVERED_SOURCE_INSTRUCTIONS "" CACHE FILEPATH
+    "Recipient instructions for the exact covered source, including local changes (optional for Git builds)")
+set(GARGANTUAN_COVERED_SOURCE_ARCHIVE "" CACHE FILEPATH "Reviewed matching source ZIP to embed in each export")
+set(GARGANTUAN_RUNTIME_SOURCE_REVISION "" CACHE STRING "Full Engine build revision recorded in the reviewed ZIP")
+option(GARGANTUAN_EXTERNAL_DISTRIBUTION "Require a release-specific source route when staging runtimes" OFF)
 add_custom_target(gargantuan_runtime_distribution ALL
 	COMMAND ${CMAKE_COMMAND}
 		-DGARGANTUAN_RUNTIME_DISTRIBUTION_ROOT=$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
 		-DGARGANTUAN_PLAYER_FILE=$<TARGET_FILE:gargantuan_player>
+		-DGARGANTUAN_STAGE_DISTRIBUTED_PLAYER=${GARGANTUAN_WITH_GNS}
+		"-DGARGANTUAN_IMAGE_NOTICE_CODECS=${GARGANTUAN_IMAGE_NOTICE_CODECS}"
+		"-DGARGANTUAN_SDL_NOTICE_FEATURES=${GARGANTUAN_SDL_NOTICE_FEATURES}"
+		-DGARGANTUAN_EXTERNAL_DISTRIBUTION=${GARGANTUAN_EXTERNAL_DISTRIBUTION}
+		-DGARGANTUAN_COVERED_SOURCE_INSTRUCTIONS=${GARGANTUAN_COVERED_SOURCE_INSTRUCTIONS}
+		-DGARGANTUAN_COVERED_SOURCE_ARCHIVE=${GARGANTUAN_COVERED_SOURCE_ARCHIVE}
+		-DGARGANTUAN_RUNTIME_SOURCE_REVISION=${GARGANTUAN_RUNTIME_SOURCE_REVISION}
 		-DGARGANTUAN_SDL_FILE=$<TARGET_FILE:SDL3::SDL3>
 		${GARGANTUAN_SDL_SONAME_ARGUMENT}
 		${GARGANTUAN_SYSTEM_RUNTIME_ARGUMENTS}
 		${GARGANTUAN_NETWORK_RUNTIME_ARGUMENTS}
+		${GARGANTUAN_RUNTIME_PACKAGE_STAGE_ARGUMENTS}
 		-DGARGANTUAN_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
 		-DGARGANTUAN_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
 		-DGARGANTUAN_PLATFORM=${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}
@@ -638,11 +686,18 @@ add_custom_target(gargantuan_server_runtime_distribution ALL
 	COMMAND ${CMAKE_COMMAND}
 		-DGARGANTUAN_RUNTIME_DISTRIBUTION_ROOT=$<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution
 		-DGARGANTUAN_PLAYER_FILE=$<TARGET_FILE:gargantuan_server>
+		"-DGARGANTUAN_IMAGE_NOTICE_CODECS=${GARGANTUAN_IMAGE_NOTICE_CODECS}"
+		"-DGARGANTUAN_SDL_NOTICE_FEATURES=${GARGANTUAN_SDL_NOTICE_FEATURES}"
+		-DGARGANTUAN_EXTERNAL_DISTRIBUTION=${GARGANTUAN_EXTERNAL_DISTRIBUTION}
+		-DGARGANTUAN_COVERED_SOURCE_INSTRUCTIONS=${GARGANTUAN_COVERED_SOURCE_INSTRUCTIONS}
+		-DGARGANTUAN_COVERED_SOURCE_ARCHIVE=${GARGANTUAN_COVERED_SOURCE_ARCHIVE}
+		-DGARGANTUAN_RUNTIME_SOURCE_REVISION=${GARGANTUAN_RUNTIME_SOURCE_REVISION}
 		-DGARGANTUAN_SDL_FILE=$<TARGET_FILE:SDL3::SDL3>
 		${GARGANTUAN_SDL_SONAME_ARGUMENT}
 		${GARGANTUAN_SYSTEM_RUNTIME_ARGUMENTS}
 		${GARGANTUAN_NETWORK_RUNTIME_ARGUMENTS}
 		${GARGANTUAN_NODE_SERVER_RUNTIME_ARGUMENTS}
+		${GARGANTUAN_RUNTIME_PACKAGE_STAGE_ARGUMENTS}
 		-DGARGANTUAN_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
 		-DGARGANTUAN_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
 		-DGARGANTUAN_PLATFORM=${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}
@@ -812,6 +867,10 @@ if(BUILD_TESTING)
 	target_include_directories(gargantuan_terrain_lod_offscreen PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 	target_link_libraries(gargantuan_terrain_lod_offscreen PRIVATE gargantuan_core)
 	add_dependencies(gargantuan_terrain_lod_offscreen gargantuan_shaders)
+	add_executable(gargantuan_runtime_package_crypto_tests "tests/RuntimePackageCryptoTests.cpp")
+	target_link_libraries(gargantuan_runtime_package_crypto_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_runtime_package_crypto COMMAND gargantuan_runtime_package_crypto_tests)
+	set_tests_properties(gargantuan_runtime_package_crypto PROPERTIES LABELS "runtime;packaging;security")
 	add_executable(gargantuan_gas_document_tests "tests/GasDocumentTests.cpp")
 	target_link_libraries(gargantuan_gas_document_tests PRIVATE gargantuan_core)
 	add_test(NAME gargantuan_gas_document COMMAND gargantuan_gas_document_tests)
@@ -1354,6 +1413,10 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_cross_foundation_independent_authoring COMMAND gargantuan_cross_foundation_independent_authoring_tests)
 	set_tests_properties(gargantuan_cross_foundation_independent_authoring
 		PROPERTIES LABELS "geometry;editor;integration;authority" TIMEOUT 120)
+	add_executable(gargantuan_team_create_authority_tests "tests/TeamCreateAuthorityTests.cpp")
+	target_link_libraries(gargantuan_team_create_authority_tests PRIVATE gargantuan_core nlohmann_json)
+	add_test(NAME gargantuan_team_create_authority COMMAND gargantuan_team_create_authority_tests)
+	set_tests_properties(gargantuan_team_create_authority PROPERTIES LABELS "editor;team-create;authority" TIMEOUT 120)
 	add_executable(gargantuan_mesh_geometry_relevance_tests "tests/MeshGeometryRelevanceTests.cpp")
 	target_link_libraries(gargantuan_mesh_geometry_relevance_tests PRIVATE gargantuan_core)
 	add_test(NAME gargantuan_mesh_geometry_relevance COMMAND gargantuan_mesh_geometry_relevance_tests)
@@ -1698,6 +1761,7 @@ if(BUILD_TESTING)
 		set(GARGANTUAN_SDL_RUNTIME_TARGETS
 			gargantuan
 			gargantuan_foundation_tests
+			gargantuan_runtime_package_crypto_tests
 			gargantuan_gas_document_tests
 			gargantuan_gas_authoring_tests
 			gargantuan_prepared_property_tests

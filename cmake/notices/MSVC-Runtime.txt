@@ -1,9 +1,15 @@
-Microsoft Visual C++ Runtime
+Windows prerequisite for this Gargantuan game or dedicated server
 
-Windows packages built with Microsoft Visual C++ may include the Microsoft C and
-C++ runtime redistributable files selected by CMake's
-InstallRequiredSystemLibraries module. These files are redistributed under the
-Microsoft Visual Studio license terms applicable to the toolchain used to build
-the package.
+Before first launch, install the Microsoft Visual C++ v14 Redistributable for
+the application's architecture. This build targets @GARGANTUAN_PLATFORM@ and
+requires version @GARGANTUAN_MSVC_RUNTIME_MINIMUM@ or later. Use x64 for Windows-AMD64.
+Choose the matching architecture on Microsoft's supported downloads page:
+https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/
 
-License terms: https://visualstudio.microsoft.com/license-terms/
+Obtain the installer directly from Microsoft. Windows administrators can
+preinstall it on a target machine, including before taking a machine offline.
+Follow Microsoft's installer prompts and terms. A compatible central
+installation can be used by multiple games and serviced through Windows Update.
+Creators should provide this prerequisite information before first launch.
+The game export contains no redistributable installer or Visual C++ runtime DLLs.
+Playing the game or operating the server requires no Studio agreement.

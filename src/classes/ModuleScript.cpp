@@ -1,4 +1,5 @@
 #include "gargantuan/classes/ModuleScript.hpp"
+#include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/runtime/ServicePolicy.hpp"
 
 namespace gargantuan {
@@ -20,6 +21,8 @@ namespace gargantuan {
 	}
 
 	std::string ModuleScript::GetReplicatedSource() const {
+		const auto World = GetDataModel();
+		if (World && !World->GetPackagedClientCodeIdentity().empty()) return {};
 		return GetInstanceServicePolicy(*this) == SchemaServicePolicy::Replicated ? GetSource() : std::string{};
 	}
 

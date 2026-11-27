@@ -9,11 +9,14 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/platform/HostEvent.hpp"
 
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace gargantuan {
@@ -27,6 +30,22 @@ namespace gargantuan {
 		std::string Severity;
 		std::string Category;
 		std::string Message;
+	};
+
+	struct PlayExecutionDiagnostics {
+		struct Phase {
+			std::string_view Name;
+			std::uint64_t TotalNanoseconds = 0;
+			std::uint64_t MaximumNanoseconds = 0;
+		};
+		static constexpr std::size_t MaximumSamples = 60;
+		std::size_t Samples = 0;
+		std::array<Phase, 5> Phases{};
+	};
+
+	struct PlayStreamingDiagnostics {
+		StreamingDiagnostics Streaming;
+		std::optional<PlayExecutionDiagnostics> Execution;
 	};
 
 	class PlaySession final {
@@ -60,7 +79,7 @@ namespace gargantuan {
 		[[nodiscard]] std::vector<RenderPublicationPtr> TakeRenderPublications();
 		void RequestRenderFullResync();
 		void SetStreamingDiagnosticsEnabled(bool Enabled);
-		[[nodiscard]] StreamingDiagnostics GetStreamingDiagnostics(ResidencyDiagnosticQuery Query = {}) const;
+		[[nodiscard]] PlayStreamingDiagnostics GetStreamingDiagnostics(ResidencyDiagnosticQuery Query = {}) const;
 		[[nodiscard]] std::shared_ptr<DataModel> GetWorld() const { return RuntimeWorld; }
 		// Native inspection must use the evaluator actually owned by RuntimeEngine.
 		// Never resolve a replacement service by class/name in the mutable graph.
@@ -78,6 +97,8 @@ namespace gargantuan {
 		std::shared_ptr<DataModel> RuntimeWorld;
 		std::unique_ptr<HeadlessRenderer> RuntimeRenderer;
 		std::unique_ptr<Engine> RuntimeEngine;
+		struct ExecutionProfile;
+		std::unique_ptr<ExecutionProfile> Profile;
 		std::deque<PlayDiagnostic> Diagnostics;
 		std::deque<RenderPublicationPtr> PendingRenderPublications;
 		bool AwaitingRenderFullResync = false;

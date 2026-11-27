@@ -1,6 +1,21 @@
 #include "editor/StreamingDiagnosticsEncoding.hpp"
+#include "gargantuan/editor/PlaySession.hpp"
 
 namespace gargantuan {
+	JsonCodec::Json EncodeStreamingDiagnosticsSnapshot(const PlayStreamingDiagnostics &Snapshot) {
+		using Json = JsonCodec::Json;
+		auto Result = EncodeStreamingDiagnosticsSnapshot(Snapshot.Streaming);
+		if (Snapshot.Execution) {
+			Json Phases = Json::object();
+			for (const auto &Phase : Snapshot.Execution->Phases)
+				Phases[std::string(Phase.Name)] = {{"TotalNanoseconds", Phase.TotalNanoseconds},
+					{"MaximumNanoseconds", Phase.MaximumNanoseconds}};
+			Result["Execution"] = {{"Accounting", "EditorPlayInclusiveWallTimeV1"},
+				{"Samples", Snapshot.Execution->Samples}, {"Phases", std::move(Phases)}};
+		}
+		return Result;
+	}
+
 	JsonCodec::Json EncodeStreamingDiagnosticsSnapshot(const StreamingDiagnostics &Snapshot) {
 		using Json = JsonCodec::Json;
 		const auto &Policy = Snapshot.Policy;

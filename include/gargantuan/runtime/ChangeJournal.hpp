@@ -66,6 +66,8 @@ namespace gargantuan {
 		ObjectId Scope;
 		ObjectId Object;
 		ChangePayload Payload;
+		// Exclusive ending sequence of the atomic journal commit containing this record.
+		std::uint64_t BatchEndSequence;
 	};
 	struct BufferedChangeRecord {
 		ObjectId Scope;
@@ -114,7 +116,9 @@ namespace gargantuan {
 		[[nodiscard]] ChangeCursor CreateCursor(ObjectId scope = {}) const;
 		[[nodiscard]] ChangeRetentionWindow GetRetentionWindow(ObjectId scope = {}) const;
 		[[nodiscard]] ChangeReadResult Read(ChangeCursor cursor, std::size_t maximumRecords = std::numeric_limits<std::size_t>::max()) const;
-		[[nodiscard]] PinnedChangeReadResult ReadPinned(ChangeCursor Cursor, std::size_t MaximumRecords = std::numeric_limits<std::size_t>::max()) const;
+		// WholeBatches requires an anchor from a snapshot or a prior whole-batch page.
+		[[nodiscard]] PinnedChangeReadResult ReadPinned(ChangeCursor Cursor,
+			std::size_t MaximumRecords = std::numeric_limits<std::size_t>::max(), bool WholeBatches = false) const;
 		void SetCapacity(std::size_t capacity);
 		[[nodiscard]] std::size_t GetCapacity() const;
 		void Clear();
@@ -139,6 +143,7 @@ namespace gargantuan {
 		  private:
 			struct Candidate {
 				ObjectId Scope;
+				std::uint64_t BatchEndSequence = 1;
 				std::deque<std::shared_ptr<const ChangeRecord>> Records;
 				std::uint64_t NextSequence = 1;
 				bool Created = false;

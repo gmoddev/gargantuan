@@ -13,6 +13,7 @@
 namespace gargantuan {
 	class ScopedAuthoritativeRevisionDeferral;
 	class AssetService;
+	class PackageBuilder;
 	class DataModel : public ServiceProvider {
 		I_DataModel;
 		~DataModel() override;
@@ -38,10 +39,12 @@ namespace gargantuan {
 		void AdoptInstances(std::size_t Count);
 		void ReleaseInstance() noexcept;
 		[[nodiscard]] std::size_t GetOwnedInstanceCount() const { return OwnedInstanceCount; }
+		[[nodiscard]] std::string_view GetPackagedClientCodeIdentity() const { return PackagedClientCodeIdentity; }
 
 	  private:
 		friend class ScopedAuthoritativeRevisionDeferral;
 		friend class AssetService;
+		friend class PackageBuilder;
 		friend class MutationGateway;
 		friend class PreparedPropertyCommit;
 		friend struct PreparedPropertyTestAccess;
@@ -49,6 +52,7 @@ namespace gargantuan {
 		std::uint64_t AuthoritativeRevision = InitialProjectRevision;
 		bool RevisionBatchActive = false;
 		bool RevisionBatchChanged = false;
+		std::string PackagedClientCodeIdentity;
 		std::size_t OwnedInstanceCount = 1;
 		mutable ServiceDefinitions RegisteredServices;
 		mutable std::uint64_t ServiceSchemaGeneration = 0;

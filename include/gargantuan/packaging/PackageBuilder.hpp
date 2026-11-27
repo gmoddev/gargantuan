@@ -4,6 +4,8 @@
 #include "gargantuan/content/ContentAvailability.hpp"
 #include "gargantuan/filesystem/ProjectIdentity.hpp"
 #include "gargantuan/terrain/Persistence.hpp"
+#include "gargantuan/packaging/RuntimeDistribution.hpp"
+#include "gargantuan/packaging/RuntimePackageCrypto.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -14,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace gargantuan {
@@ -21,12 +24,17 @@ namespace gargantuan {
 	class LuaSourceContainer;
 	class Project;
 	class RuntimeSchemaRegistry;
+	class RuntimeScriptCode;
+	struct RuntimeDistributionCodeCatalog;
 
 	inline constexpr std::uint32_t GamePackageFormatVersion = 2;
+	inline constexpr std::uint32_t DistributedPlayerPackageFormatVersion = 3;
+	inline constexpr std::uint32_t RuntimeDistributionPackageFormatVersion = 4;
 	inline constexpr std::uint32_t RuntimeCompatibilityVersion = 1;
 
 	enum class PackageConfiguration : std::uint8_t { Development, Release };
 	enum class PackageRuntimeLoadMode : std::uint8_t { Complete, LoopbackDevelopmentClient };
+	enum class PackageAudience : std::uint8_t { Trusted, DistributedPlayer };
 	enum class PackagePhase : std::uint8_t {
 		Snapshot,
 		Validate,
@@ -66,6 +74,18 @@ namespace gargantuan {
 		}
 	};
 
+	class DistributedPlayerCapture final {
+		friend class PackageBuilder;
+
+		DistributedPlayerCapture(ProjectId Project, std::uint64_t Revision, std::string Code, AssetRuntimeSnapshot Assets)
+			: Project(Project), Revision(Revision), Code(std::move(Code)), Assets(std::move(Assets)) {}
+
+		const ProjectId Project;
+		const std::uint64_t Revision;
+		const std::string Code;
+		const AssetRuntimeSnapshot Assets;
+	};
+
 	struct GamePayload {
 		ProjectId Identity;
 		std::string DisplayName;
@@ -87,6 +107,8 @@ namespace gargantuan {
 		// select version 4 only when every content unit matches that version.
 		std::uint32_t ContentInstanceSchemaVersion = PackageContentInstanceSchemaVersion;
 		std::vector<terrain::TerrainArtifact> TerrainArtifacts;
+		std::shared_ptr<const DistributedPlayerCapture> DistributedPlayer;
+		std::optional<RuntimeDistributionPlan> DistributionPlan;
 	};
 
 	struct PackageSizeBreakdown {
@@ -111,6 +133,7 @@ namespace gargantuan {
 		PackageCancellationToken Cancellation;
 		std::function<void(PackagePhase)> Progress;
 		PackageFailurePoint FailurePoint = PackageFailurePoint::None;
+		std::optional<RuntimePackageProvisionedSecurity> DistributionSecurity;
 	};
 
 	struct PackageBuildResult {
@@ -124,6 +147,17 @@ namespace gargantuan {
 		PackageSizeBreakdown Size;
 		std::vector<PackagePhaseTiming> Timings;
 		std::vector<PackageDiagnostic> Diagnostics;
+		std::optional<RuntimeDistributionTarget> Target;
+		std::string ManifestSha256;
+		std::string PlayerExecutableSha256;
+		std::filesystem::path PrivateDiagnosticsPath;
+	};
+
+	struct RuntimeDistributionAdmission final {
+		std::optional<std::string> ExpectedManifestSha256;
+		std::optional<RuntimePackageProvisionedSecurity> Security;
+		bool RequirePublisher = false;
+		bool VerifyExecutableArtifacts = true;
 	};
 
 	struct PackageInspection {
@@ -136,6 +170,9 @@ namespace gargantuan {
 		std::uint64_t ContentCount = 0;
 		std::uint64_t ContentBytes = 0;
 		std::filesystem::path PlayerExecutable;
+		PackageAudience Audience = PackageAudience::Trusted;
+		std::optional<RuntimeDistributionTarget> Target;
+		std::string ManifestSha256;
 	};
 
 	struct RuntimePackagePayload {
@@ -147,6 +184,9 @@ namespace gargantuan {
 		AssetContentId ContentManifestDigest;
 		std::vector<terrain::TerrainArtifact> TerrainArtifacts;
 		PackageRuntimeLoadMode LoadMode = PackageRuntimeLoadMode::Complete;
+		std::optional<std::string> ClientCodeJson;
+		std::shared_ptr<const RuntimeDistributionCodeCatalog> RuntimeCode;
+		std::string ClientCodeIdentity;
 	};
 
 	class PackageBuilder final {
@@ -155,14 +195,23 @@ namespace gargantuan {
 			const Project &ProjectValue,
 			const std::shared_ptr<DataModel> &World,
 			std::uint64_t AuthoritativeRevision,
-			std::uint64_t PersistedRevision
+			std::uint64_t PersistedRevision,
+			PackageAudience Audience = PackageAudience::Trusted,
+			std::optional<RuntimeDistributionRequest> RuntimeDistribution = std::nullopt
+		);
+		[[nodiscard]] static RuntimeDistributionPlan CaptureRuntimeDistribution(
+			const Project &ProjectValue, const std::shared_ptr<DataModel> &World,
+			const RuntimeDistributionRequest &Request, bool RetainSource
 		);
 		[[nodiscard]] static PackageBuildResult Build(const PackageBuildRequest &Request);
-		[[nodiscard]] static std::vector<PackageDiagnostic> Validate(const std::filesystem::path &PackageRoot);
+		[[nodiscard]] static std::vector<PackageDiagnostic> Validate(const std::filesystem::path &PackageRoot,
+			std::optional<PackageAudience> ExpectedAudience = std::nullopt,
+			const RuntimeDistributionAdmission &Admission = {});
 		[[nodiscard]] static std::optional<PackageInspection>
 		Inspect(const std::filesystem::path &PackageRoot, std::vector<PackageDiagnostic> &Diagnostics);
 		[[nodiscard]] static std::optional<RuntimePackagePayload>
 		Load(const std::filesystem::path &PackageRoot, std::vector<PackageDiagnostic> &Diagnostics,
+			const RuntimeDistributionAdmission &Admission = {},
 			PackageRuntimeLoadMode Mode = PackageRuntimeLoadMode::Complete);
 		[[nodiscard]] static std::shared_ptr<DataModel>
 		LoadWorld(const RuntimePackagePayload &Payload, const std::filesystem::path &PackageRoot);
@@ -180,10 +229,19 @@ namespace gargantuan {
 		);
 		[[nodiscard]] static std::function<bool(const std::shared_ptr<LuaSourceContainer> &)>
 		MakePlayerGuiCodeHydrator(const std::shared_ptr<DataModel> &TrustedPackageWorld);
+		[[nodiscard]] static std::function<bool(const std::shared_ptr<LuaSourceContainer> &)>
+		MakeDistributedPlayerGuiCodeHydrator(const RuntimePackagePayload &Payload);
+		[[nodiscard]] static std::function<void(ObjectId, const std::shared_ptr<LuaSourceContainer> &, bool)>
+		MakeDistributedCodeHydrator(const RuntimePackagePayload &Payload);
+		[[nodiscard]] static std::size_t HydrateDistributedClientCode(
+			const RuntimePackagePayload &Payload, const std::shared_ptr<DataModel> &ReplicatedWorld
+		);
 	};
 
 	[[nodiscard]] std::string_view GetPackageConfigurationName(PackageConfiguration Configuration);
 	[[nodiscard]] std::optional<PackageConfiguration> ParsePackageConfiguration(std::string_view Value);
+	[[nodiscard]] std::string_view GetPackageAudienceName(PackageAudience Audience);
+	[[nodiscard]] std::optional<PackageAudience> ParsePackageAudience(std::string_view Value);
 	[[nodiscard]] std::string_view GetPackagePhaseName(PackagePhase Phase);
 	[[nodiscard]] std::filesystem::path GetPackageUserDataRoot(ProjectId Identity);
 }

@@ -48,6 +48,9 @@ if(NOT GARGANTUAN_BUILD_RESULT EQUAL 0)
 	)
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/VerifyRuntimeNotices.cmake")
+GargantuanVerifyRuntimeNotices("${GARGANTUAN_PACKAGE}")
+
 if(WIN32)
 	set(GARGANTUAN_SERVER "${GARGANTUAN_PACKAGE}/GargantuanServer.exe")
 else()

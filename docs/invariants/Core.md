@@ -409,6 +409,9 @@ Tests should enforce them where practical.
 78. Package construction partitions only bounded independently serializable
     Workspace subtrees. Bootstrap-sensitive Scripts, ModuleScripts, Remotes,
     Characters, Players, Camera, Terrain, and FileLink content stay bootstrap.
+    A distributed Player package projects client code and explicitly shared
+    asset dependencies before staging. Trusted project graphs, schema source,
+    source mounts and content units belong only to the trusted package path.
 79. Runtime mutation of an immutable package baseline is ephemeral unless a
     separate authoritative state owner persists it. Foundation 3L performs no
     write-back or package patching.
@@ -550,6 +553,19 @@ certify physical/provider deployment behavior.
 6. Retain useful existing infrastructure and historical failures. Once the
    acceptance fact has sufficient trustworthy evidence, proceed to the next
    canonical gate rather than continuing redundant tooling qualification.
+
+## Runtime distribution
+
+1. Native audience projection precedes script selection, compilation and
+   encryption. Package protection never expands replication authority.
+2. Compiled bytes reach Luau only through explicit native compiler-origin
+   trust, bounded package admission and exact stored-byte verification.
+3. Managed game sessions source entitled client code from the admitted Player
+   package. Server cannot publish the same script as clear source. Late
+   replica binding cannot replace a retired authored source identity.
+4. Publisher verification roots and decryption provider selection come from
+   trusted deployment state. Signing seeds and private diagnostic content
+   remain outside the distributed package.
 
 ## Changes requiring architecture review
 

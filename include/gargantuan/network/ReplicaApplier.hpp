@@ -2,6 +2,7 @@
 
 #include "gargantuan/network/ReplicationProtocol.hpp"
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -45,8 +46,9 @@ namespace gargantuan::network {
 
 	class ReplicaApplier {
 	  public:
+		using BeforePublish = std::function<void(ObjectId, const std::shared_ptr<Instance> &)>;
 		[[nodiscard]] ReplicaApplyResult ApplyBytes(std::span<const std::byte> Bytes);
-		[[nodiscard]] ReplicaApplyResult ApplyFrame(const ReplicationFrame &Frame);
+		[[nodiscard]] ReplicaApplyResult ApplyFrame(const ReplicationFrame &Frame, const BeforePublish &Prepare = {});
 		void Reset();
 
 		[[nodiscard]] std::shared_ptr<Instance> GetReplicaRoot() const {

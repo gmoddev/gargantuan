@@ -7,12 +7,49 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/InputService.hpp"
+#include "runtime/RuntimeWorkDiagnostics.hpp"
 
 #include <chrono>
 #include <sstream>
 #include <stdexcept>
 
 namespace gargantuan {
+	struct PlaySession::ExecutionProfile {
+		using WorkPhase = runtime_detail::WorkPhase;
+		static constexpr std::array Phases{WorkPhase::EngineStep, WorkPhase::PreSimulation,
+			WorkPhase::Physics, WorkPhase::Animation, WorkPhase::RenderPublication};
+		std::array<std::array<std::uint64_t, Phases.size()>, PlayExecutionDiagnostics::MaximumSamples> Recent{};
+		std::size_t Cursor = 0;
+		std::size_t Count = 0;
+
+		void Step(Engine &Runtime) {
+			runtime_detail::WorkSample Sample{};
+			{
+				const runtime_detail::WorkCapture Capture(&Sample);
+				Runtime.Step();
+			}
+			for (std::size_t Index = 0; Index < Phases.size(); ++Index)
+				Recent[Cursor][Index] = Sample[static_cast<std::size_t>(Phases[Index])].Nanoseconds;
+			Cursor = (Cursor + 1) % Recent.size();
+			Count = std::min(Count + 1, Recent.size());
+		}
+
+		[[nodiscard]] PlayExecutionDiagnostics Snapshot() const {
+			PlayExecutionDiagnostics Result{.Samples = Count};
+			static_assert(Phases.size() == std::tuple_size_v<decltype(Result.Phases)>);
+			for (std::size_t Index = 0; Index < Phases.size(); ++Index) {
+				auto &Phase = Result.Phases[Index];
+				Phase.Name = runtime_detail::WorkPhaseNames[static_cast<std::size_t>(Phases[Index])];
+				for (std::size_t Sample = 0; Sample < Count; ++Sample) {
+					const auto Duration = Recent[Sample][Index];
+					runtime_detail::AddWorkCounter(Phase.TotalNanoseconds, Duration);
+					Phase.MaximumNanoseconds = std::max(Phase.MaximumNanoseconds, Duration);
+				}
+			}
+			return Result;
+		}
+	};
+
 	const char *GetPlaySessionStateName(PlaySessionState State) {
 		switch (State) {
 		case PlaySessionState::Stopped: return "Stopped";
@@ -81,7 +118,8 @@ namespace gargantuan {
 
 	void PlaySession::Step() {
 		if (State != PlaySessionState::Running || !RuntimeEngine) return;
-		RuntimeEngine->Step();
+		if (Profile) Profile->Step(*RuntimeEngine);
+		else RuntimeEngine->Step();
 		if (auto Publication = RuntimeRenderer->TakeLastPublication()) {
 			if (AwaitingRenderFullResync && !Publication->FullResync) {
 				// The requested full publication has not reached the renderer yet.
@@ -106,13 +144,19 @@ namespace gargantuan {
 	}
 
 	void PlaySession::SetStreamingDiagnosticsEnabled(bool Enabled) {
-		if (RuntimeEngine) RuntimeEngine->SetStreamingDiagnosticsEnabled(Enabled);
+		if (!RuntimeEngine || State != PlaySessionState::Running) return;
+		auto NewProfile = Enabled && !Profile ? std::make_unique<ExecutionProfile>() : nullptr;
+		RuntimeEngine->SetStreamingDiagnosticsEnabled(Enabled);
+		if (!Enabled) Profile.reset();
+		else if (NewProfile) Profile = std::move(NewProfile);
 	}
 
-	StreamingDiagnostics PlaySession::GetStreamingDiagnostics(ResidencyDiagnosticQuery Query) const {
-		if (RuntimeEngine) return RuntimeEngine->GetStreamingDiagnostics(Query);
-		StreamingDiagnostics Result;
-		Result.Status = StreamingDiagnosticStatus::Stopped;
+	PlayStreamingDiagnostics PlaySession::GetStreamingDiagnostics(ResidencyDiagnosticQuery Query) const {
+		PlayStreamingDiagnostics Result;
+		if (RuntimeEngine) {
+			Result.Streaming = RuntimeEngine->GetStreamingDiagnostics(Query);
+			if (Result.Streaming.Enabled && Profile) Result.Execution = Profile->Snapshot();
+		} else Result.Streaming.Status = StreamingDiagnosticStatus::Stopped;
 		return Result;
 	}
 
@@ -134,6 +178,7 @@ namespace gargantuan {
 	void PlaySession::Stop() {
 		if (State == PlaySessionState::Stopped || State == PlaySessionState::Stopping) return;
 		State = PlaySessionState::Stopping;
+		Profile.reset();
 		if (RuntimeEngine) {
 			RuntimeEngine->ProcessService->MarkExit(0);
 			RuntimeEngine->Destroy();

@@ -1,4 +1,5 @@
 #include "gargantuan/classes/Player.hpp"
+#include "gargantuan/packaging/RuntimeDistribution.hpp"
 
 #include "gargantuan/Log.hpp"
 #include "gargantuan/classes/Character.hpp"
@@ -113,7 +114,10 @@ namespace gargantuan {
 						throw std::logic_error("PlayerGui clone has a different script class");
 					ScriptSecurityScope Security(ScriptSecurityContext::CoreTrusted());
 					Cloned->SetGuiTemplateSourceId(Original->GetSourceId());
-					Cloned->SetGuiTemplateSourceDigest(Cloned->GetSourceDigest());
+					const auto World = Original->GetDataModel();
+					const auto PackageIdentity = World ? World->GetPackagedClientCodeIdentity() : std::string_view{};
+					Cloned->SetGuiTemplateSourceDigest(PackageIdentity.empty() ? Cloned->GetSourceDigest() :
+						GetRuntimeDistributionGuiDigest(PackageIdentity, Original->GetSourceId(), Cloned->GetSourceVersion()));
 					Cloned->SetGuiTemplateSourceVersion(Cloned->GetSourceVersion());
 				}
 				Roots.push_back(std::move(Copy));

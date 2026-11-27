@@ -39,6 +39,25 @@ renderer-neutral vertices, indices, logical texture identities, rectangular
 clips, layers, and opacity. It does not know about `TextButton`, `TextBox`,
 `ScrollingFrame`, or stacking behavior.
 
+### Studio authoring layout
+
+`GuiRuntime` in authoring-preview mode reuses the same layout and presentation.
+The retained `GuiLayoutSnapshot` records which positioning axes a list owns and
+which size axes are automatic. `EditorHost` attaches that snapshot to the
+bounded history of Edit viewport frames. A read of an expired frame or another
+viewport generation returns `StaleFrame`.
+
+Engines advertising `GuiPreviewLayout` accept `IncludeLayout=true` on
+`PickGuiPreview`. Callers provide either viewport pixels or a known authored
+object ID and the presented frame identity. The prior pixel-only response is
+unchanged. An opted-in response also carries the captured project revision,
+with `0` indicating that no current layout could be asserted. A visible
+authored hit with a current layout returns the preview scale, logical size,
+clip and rotation flags, and axis ownership. This read has no project or
+runtime effects. Studio applies position and size through its existing
+revision-fenced property batch. The renderer and runtime input contract are
+unchanged.
+
 The text system owns SDL_ttf through its guarded process-local retain count and
 releases cached fonts before its final `TTF_Quit`. Glyph rasterization also owns
 the surface returned by `TTF_GetGlyphImageForIndex`: it converts that surface to

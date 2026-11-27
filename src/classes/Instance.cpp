@@ -2,6 +2,7 @@
 #include "gargantuan/runtime/ServicePolicy.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/LuaSourceContainer.hpp"
 #include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/PlayerGui.hpp"
 #include "gargantuan/classes/Terrain.hpp"
@@ -659,6 +660,12 @@ namespace gargantuan {
 						if (Status != MutationStatus::Success)
 							throw std::invalid_argument(std::format("property {} could not be copied", Name));
 					}
+				}
+				if (const auto Script = std::dynamic_pointer_cast<LuaSourceContainer>(Source)) {
+					const auto ScriptCopy = std::dynamic_pointer_cast<LuaSourceContainer>(Copy);
+					if (!ScriptCopy) throw std::logic_error("Script clone class is inconsistent");
+					ScriptSecurityScope NativeClone(ScriptSecurityContext::CoreTrusted());
+					Script->CopyRuntimeScriptCodeTo(*ScriptCopy);
 				}
 			}
 		} catch (const std::exception &Error) {

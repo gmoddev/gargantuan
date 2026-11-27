@@ -33,6 +33,8 @@
 
 #if defined(_WIN32)
 #include <Windows.h>
+#else
+#include <unistd.h>
 #endif
 
 namespace gargantuan {
@@ -54,13 +56,19 @@ namespace gargantuan {
 			const std::function<void()> &BeforeReplace = {}, AtomicWriteMode Mode = AtomicWriteMode::Replace) {
 			std::filesystem::create_directories(Destination.parent_path());
 			static std::atomic_uint64_t Counter = 1;
-			const auto Suffix = std::format(
-				".saving-{}-{}",
+			// A short sibling keeps the write on the same volume without
+			// extending names such as the 64-character asset digests.
+#if defined(_WIN32)
+			const auto ProcessId = GetCurrentProcessId();
+#else
+			const auto ProcessId = getpid();
+#endif
+			const auto Temporary = Destination.parent_path() / std::format(
+				".saving-{}-{}-{}",
+				ProcessId,
 				std::chrono::steady_clock::now().time_since_epoch().count(),
 				Counter.fetch_add(1, std::memory_order_relaxed)
 			);
-			auto Temporary = Destination;
-			Temporary += Suffix;
 			try {
 				{
 					std::ofstream Output(Temporary, std::ios::binary | std::ios::trunc);

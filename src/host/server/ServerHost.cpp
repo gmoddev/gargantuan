@@ -213,6 +213,10 @@ namespace gargantuan::host {
 		argparse::ArgumentParser Program("GargantuanServer");
 		Program.add_description("Gargantuan authoritative headless packaged server");
 		Program.add_argument("--bind").default_value(std::string()).help("host:port for the authoritative game server");
+		Program.add_argument("--expected-manifest-sha256").default_value(std::string())
+			.help("out-of-band expected SHA-256 of the exact package manifest");
+		Program.add_argument("--require-package-publisher").flag()
+			.help("require a package signed by an independently enrolled publisher");
 		Program.add_argument("--startup-smoke").flag().help("exit after a bounded authoritative startup smoke");
 		Program.add_argument("--session-smoke").flag().help("require a bounded packaged game-session acceptance proof");
 		Program.add_argument("--max-ticks").scan<'i', int>().default_value(0).help("bounded test-only server tick count");
@@ -513,8 +517,16 @@ namespace gargantuan::host {
 
 		const auto RuntimeRoot = Paths::GetExecutableDirectory().lexically_normal();
 		const auto PackageRoot = RuntimeRoot;
+		const auto ExpectedManifest = Program.get<std::string>("--expected-manifest-sha256");
+		if (!ExpectedManifest.empty() && !AssetContentId::Parse(ExpectedManifest)) {
+			std::cerr << "[Package:Integrity] The expected manifest digest is invalid.\n";
+			return 2;
+		}
 		int BootstrapExitCode = 0;
-		auto Payload = BootstrapPackagedRuntime(PackageRoot, RuntimeRoot, "GargantuanServer", BootstrapExitCode);
+		auto Payload = BootstrapPackagedRuntime(PackageRoot, RuntimeRoot, "GargantuanServer", BootstrapExitCode, {
+			.ExpectedManifestSha256 = ExpectedManifest.empty() ? std::nullopt : std::optional(ExpectedManifest),
+			.RequirePublisher = Program.is_used("--require-package-publisher"),
+		});
 		if (!Payload) return BootstrapExitCode;
 		const bool NetworkTerrain = !Payload->TerrainArtifacts.empty();
 		if (NetworkTerrain && (Payload->Inspection.Configuration != PackageConfiguration::Development || !BindEndpoint ||
@@ -752,6 +764,7 @@ namespace gargantuan::host {
 						.ReliableService = HostConfiguration.ReliableService,
 						.TerrainBootstrap = NetworkTerrain ? network::MakeTerrainSessionData(Payload->Inspection.Identity,
 							Payload->Inspection.Revision, Payload->TerrainArtifacts, true) : nullptr,
+						.RuntimeDistributionIdentity = Payload->ClientCodeIdentity,
 					},
 					Runtime.get()
 				);

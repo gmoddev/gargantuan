@@ -14,7 +14,7 @@ namespace gargantuan {
 		const auto Gui = FindPlayerGuiScope(*module);
 		if (IsStarterGuiTemplate(*module) || (Gui &&
 			(GetCurrentScriptSecurityContext().Domain != ScriptExecutionDomain::Client ||
-				!IsLocalPlayerGui(*Gui) || !module->HasSource())))
+				!IsLocalPlayerGui(*Gui) || !module->HasExecutableCode())))
 			throw std::invalid_argument("Required GUI ModuleScript is outside the caller's execution scope");
 		return module;
 	}

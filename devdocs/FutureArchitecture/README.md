@@ -10,6 +10,11 @@ deprecated APIs, historical quirks, or exact bug compatibility.
 
 Focused proposals:
 
+- [Runtime Distribution Foundation 1](../../docs/adr/Runtime-Distribution-1.md)
+  implements the first managed package candidate. Native promotion gates,
+  external entitlement-backed key release, lazy protected loading, extensions,
+  exact VM symbols and optional opcode protection remain separate milestones.
+
 - [Architectural discipline and subsystem boundaries](ArchitecturalDisciplineAndSubsystemBoundaries.md)
   records future dependency enforcement, authenticated admission, bounded service
   envelopes, resource attribution, policy-only 3M, and later hardening/topology.

@@ -266,12 +266,17 @@ namespace {
 			"owned Play input snapshot unavailable before streaming opt-in");
 		const auto Disabled = Call("GetStreamingDiagnostics", {{"PlaySessionId", Id}});
 		Check(Disabled["Ok"] && Disabled["Result"]["PlaySessionId"] == Id &&
-			!Disabled["Result"]["Diagnostics"]["Enabled"], "Play collection enabled implicitly");
+			!Disabled["Result"]["Diagnostics"]["Enabled"] && !Disabled["Result"]["Diagnostics"].contains("Execution"),
+			"Play collection enabled implicitly");
 		const auto Enabled = Call("ConfigureStreamingDiagnostics", {{"PlaySessionId", Id}, {"Enabled", true}});
 		Check(Enabled["Ok"] && Enabled["Result"]["Diagnostics"]["Enabled"] &&
 			Enabled["Result"]["Diagnostics"]["Status"] == "NotConfigured", "Play invented a streaming provider/policy");
 		Check(Enabled["Result"]["Diagnostics"]["Policy"]["TimingAccounting"] == "CorePhasesExcludeObservation",
 			"Play response did not identify timing observation scope");
+		Check(Enabled["Result"]["Diagnostics"]["Execution"]["Accounting"] == "EditorPlayInclusiveWallTimeV1" &&
+			Enabled["Result"]["Diagnostics"]["Execution"]["Samples"] == 0, "Play profiler included pre-capture ticks");
+		for (std::size_t Step = 0; Step <= PlayExecutionDiagnostics::MaximumSamples; ++Step)
+			Host.PumpPlaySessionForTesting();
 		Check(!Call("GetStreamingDiagnostics", {{"PlaySessionId", Id}, {"MaximumUnits", 129}})["Ok"], "IPC unit cap bypass");
 		Check(!Call("GetStreamingDiagnostics", {{"PlaySessionId", Id}, {"MaximumTimingSamples", -1}})["Ok"], "IPC negative cap accepted");
 		Check(!Call("GetStreamingDiagnostics", {{"PlaySessionId", Id}, {"RequestContent", "unit/a"}})["Ok"], "IPC demand field accepted");
@@ -279,6 +284,21 @@ namespace {
 		const auto Snapshot = Call("GetStreamingDiagnostics", {{"PlaySessionId", Id}, {"MaximumUnits", 0}, {"MaximumTimingSamples", 0}});
 		Check(Snapshot["Ok"] && Snapshot["Result"]["PlaySessionId"] == Id && Snapshot.dump().size() < 16384,
 			"aggregate diagnostic response not bounded or no longer owned by Play");
+		const auto &Execution = Snapshot["Result"]["Diagnostics"]["Execution"];
+		Check(Execution["Samples"] == PlayExecutionDiagnostics::MaximumSamples &&
+			Execution["Phases"].size() == 5 && Execution["Phases"]["EngineStep"]["TotalNanoseconds"].get<std::uint64_t>() > 0 &&
+			Execution["Phases"]["EngineStep"]["TotalNanoseconds"].get<std::uint64_t>() >=
+				Execution["Phases"]["EngineStep"]["MaximumNanoseconds"].get<std::uint64_t>(),
+			"bounded Play step timing data missing");
+		const auto Stable = Call("GetStreamingDiagnostics", {{"PlaySessionId", Id}})["Result"]["Diagnostics"];
+		Check(Stable["Execution"] == Execution &&
+			Stable["SimulationTick"] == Snapshot["Result"]["Diagnostics"]["SimulationTick"],
+			"Play profiler read advanced or changed runtime state");
+		const auto Off = Call("ConfigureStreamingDiagnostics", {{"PlaySessionId", Id}, {"Enabled", false}});
+		Check(Off["Ok"] && !Off["Result"]["Diagnostics"].contains("Execution"), "Play profiler retained disabled results");
+		Host.PumpPlaySessionForTesting();
+		const auto Restart = Call("ConfigureStreamingDiagnostics", {{"PlaySessionId", Id}, {"Enabled", true}});
+		Check(Restart["Ok"] && Restart["Result"]["Diagnostics"]["Execution"]["Samples"] == 0, "Play profiler retained its prior window");
 		const auto InputAfter = Call("GetPlayInputSnapshot", {{"PlaySessionId", Id}});
 		Check(InputAfter["Ok"] && InputAfter["Result"]["PlaySessionId"] == Id &&
 			InputAfter["Result"]["Snapshot"]["Scope"] == InputBefore["Result"]["Snapshot"]["Scope"] &&

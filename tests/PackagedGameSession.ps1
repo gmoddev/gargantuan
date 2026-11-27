@@ -231,9 +231,23 @@ end)
 	$ProjectJson = $ProjectDocument | ConvertTo-Json -Depth 100 -Compress
 	[System.IO.File]::WriteAllText($ProjectDocumentPath, $ProjectJson, [System.Text.UTF8Encoding]::new($false))
 
-	& $Packager build --project $FixtureRoot --output $PlayerPackageRoot --runtime $PlayerRuntimeDistribution --configuration Release
+	# The catalog of this public test fixture is intentionally shared in its entirety.
+	$AssetCatalog = Get-Content -LiteralPath (Join-Path $FixtureRoot '.gargantuan\assets\catalog.json') -Raw | ConvertFrom-Json
+	$PolicyJson = @{Version = 1; SharedAssets = @($AssetCatalog.Assets.AssetId)} | ConvertTo-Json -Compress
+	[System.IO.File]::WriteAllText((Join-Path $FixtureRoot '.gargantuan\package-audience.json'),
+		$PolicyJson, [System.Text.UTF8Encoding]::new($false))
+	& $Packager build --project $FixtureRoot --output $PlayerPackageRoot --runtime $PlayerRuntimeDistribution --configuration Release --audience DistributedPlayer
 	if ($LASTEXITCODE -ne 0) {
 		throw "Player packager exited with $LASTEXITCODE"
+	}
+	& $Packager validate $PlayerPackageRoot --audience DistributedPlayer
+	if ($LASTEXITCODE -ne 0) {
+		throw "Distributed Player package validation exited with $LASTEXITCODE"
+	}
+	$StartupCode = Get-Content -LiteralPath (Join-Path $PlayerPackageRoot 'content\client-code.json') -Raw | ConvertFrom-Json
+	$ScriptNames = @($StartupCode.Code | ForEach-Object { $_.Path[-1] })
+	if ($ScriptNames -notcontains 'NetworkSessionClientProof' -or $ScriptNames -contains 'NetworkSessionServerProof') {
+		throw 'Distributed Player did not contain the expected test fixture code'
 	}
 	& $Packager build --project $FixtureRoot --output $ServerPackageRoot --runtime $ServerRuntimeDistribution --configuration Release
 	if ($LASTEXITCODE -ne 0) {

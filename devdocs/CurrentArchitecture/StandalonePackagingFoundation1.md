@@ -8,6 +8,17 @@ the command-line packager and the EditorHost job API. Studio orchestrates that
 API; it does not copy files, serialize the project, or define a second package
 format.
 
+The [Distributed Player audience](../../docs/protocols/Distributed-Player-Package-v3.md)
+is the Foundation 10A candidate for downloadable multiplayer artifacts. It
+captures a separate client code and shared-asset projection. The full project
+flow on this page applies to trusted offline and Server packages.
+
+The [Runtime Distribution candidate](../../docs/adr/Runtime-Distribution-1.md)
+extends this builder with an opt-in [format 4](../../docs/protocols/Runtime-Distribution-Package-v4.md)
+script catalog, publisher trust, and content key admission. Legacy callers
+remain on the formats described here. See the separate
+[native qualification record](../Validation/RuntimeDistributionFoundation1.md).
+
 The validated Foundation 1 platform is Windows x64. The manifest/parser/builder
 are platform-neutral and the player has executable-relative `$ORIGIN` and
 `@loader_path` loader contracts, but Linux and macOS redistributable packages are
