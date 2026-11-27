@@ -64,7 +64,7 @@ def VerifyPair(Fixture, Packager, PlayerRuntime, ServerRuntime, Directory):
 
     Environment = os.environ.copy()
     if os.name == "nt":
-        Windows = Path(Environment["SystemRoot"])
+        Windows = Path(os.environ["SystemRoot"])
         Environment["PATH"] = os.pathsep.join([str(Windows / "System32"), str(Windows)])
     Environment["SDL_AUDIODRIVER"] = "dummy"
     Suffix = ".exe" if os.name == "nt" else ""
