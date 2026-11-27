@@ -64,7 +64,7 @@ namespace {
 		Require(Baseline.Succeeded() && Replica.ApplyFrame(*Baseline.Frame).Succeeded(), "structural baseline failed");
 		HeadlessRenderer View(Vector2(64,64));
 		Engine ReplicaRuntime(std::dynamic_pointer_cast<DataModel>(Replica.GetReplicaRoot()), &View, nullptr,
-			{.Mode = RuntimeMode::NetworkClient, .AdmitSpatialContent = true});
+			{.Mode = RuntimeMode::Offline, .AdmitSpatialContent = true});
 		auto Shell = std::dynamic_pointer_cast<BlockGrid>(Replica.Resolve(Id));
 		Require(Shell && Shell->IsReplicaMaterialization(), "missing replicated shell");
 		Shell->SetCellSize(1);

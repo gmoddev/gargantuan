@@ -99,12 +99,12 @@ namespace {
 			Params.IncludeBlockGrids=true
 			local D=Vector3.new(0,-3,0)
 			for _,X in {0,2} do
-				local O=Vector3.new(X+.25,2,.25)
+				local O=Vector3.new(X+.25,2,.5)
 				local H=G:Raycast(O,D)
 				local W=game.Workspace:Raycast(O,D,Params)
 				assert(H and W and W.GridHit and math.abs(H.Position.Y-.375)<.001)
 				assert(W.GridHit.Cell==H.Cell and math.abs(H.Position.Y-W.Position.Y)<.02)
-				local Gap=Vector3.new(X+.65,2,.65)
+				local Gap=Vector3.new(X+.65,2,.2)
 				assert(G:Raycast(Gap,D)==nil and game.Workspace:Raycast(Gap,D,Params)==nil)
 			end
 		)";

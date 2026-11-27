@@ -1686,7 +1686,7 @@ namespace gargantuan {
 				}
 		}
 		auto Terrain = terrain::CaptureSceneTerrain(*World, ProjectValue.Identity);
-		if (ManagedMultiplayer && Terrain) SpatialContent = true;
+
 		const auto TerrainManifest = Terrain ? std::optional(Terrain->ManifestDigest) : std::nullopt;
 		auto Domains = terrain::CaptureDocumentTerrain(World, ProjectValue.Identity, Terrain ? Terrain->ClosureBytes : 0);
 		const auto DomainBindings = terrain::GetDomainTerrainBindings(Domains);
@@ -1846,8 +1846,11 @@ namespace gargantuan {
 					Request.Payload.DisplayName.size() > MaximumDisplayNameBytes ||
 					PackageAssets.CatalogJson.size() > 1024 * 1024)
 					throw std::runtime_error("Package payload snapshot is invalid or exceeds its bounds");
+				const bool SpatialServerTerrain = Plan && Plan->SpatialContent &&
+					Plan->Request.Target == RuntimeDistributionTarget::DedicatedServer &&
+					Request.Configuration == PackageConfiguration::Development && !Plan->WorkspaceTerrainManifest.empty();
 				if (!Request.Payload.TerrainArtifacts.empty() && (Distributed ||
-					(Plan && Plan->Request.Target != RuntimeDistributionTarget::OfflinePlayer)))
+					(Plan && Plan->Request.Target != RuntimeDistributionTarget::OfflinePlayer && !SpatialServerTerrain)))
 					throw RuntimeDistributionError("UnsupportedTerrainTarget",
 						"Terrain requires a trusted package or a managed Offline Player.");
 				if (Distributed) {
