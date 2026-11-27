@@ -6,6 +6,7 @@
 #include "gargantuan/blockgrid/Traversal.hpp"
 #include "gargantuan/blockgrid/Transfer.hpp"
 #include "gargantuan/blockgrid/Assets.hpp"
+#include "RegionalGridFixture.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -24,6 +25,47 @@ namespace {
 		const Write W{Bounds,B}; return Grid.Apply(std::span(&W,1));
 	}
 	using DVec=std::array<double,3>;
+	void TestReplicaPages() {
+		auto Source=gargantuan::blockgrid::test::LargePublicField();
+		const auto Canonical=Encode(Source,DataProfile::RelevantPeers);
+		Check(Canonical.size()>1024*1024 && Source.GetOccupiedCount()==393216);
+		ReplicaCoverage Near;
+		for (int Z=0;Z<24;Z+=8) for (int Y=0;Y<24;Y+=8) for (int X=0;X<24;X+=8) Near.Origins.push_back({X,Y,Z});
+		Check(Near.Contains({{0,0,0},{24,24,24}}) && !Near.Contains({{0,0,0},{25,24,24}}));
+		auto Selected=Source.CapturePages(Near,[](const Field& F) {
+			return F.GetDefinitionCount()==1 && F.FindDefinitionId("project:near") && F.GetChannelCount()==1 &&
+				F.GetChannel(0).Spec.Name=="charge";
+		});
+		Check(Selected && Selected->Records.size()==27 && Selected->Bytes.size()<45000);
+		ReplicaCoverage Seen;
+		auto Installed=Field::DecodePages(Selected->Bytes,Seen);
+		Check(Seen==Near && Installed.GetOccupiedCount()==27*512 && Installed.GetValue({12,12,12},0)==17 &&
+			Installed.Get({12,12,12})==Block{3,11} && !Installed.FindDefinitionId("project:distant"));
+		Check(Cast(Installed,{3.1,3.4,3.5},{10,0,0},MaximumRayVisits,&Seen).has_value());
+		Reject([&]{ (void)Cast(Installed,{-1.5,3.4,3.5},{10,0,0},MaximumRayVisits,&Seen); });
+		Installed.ForEachOccupied([&](Cell P,Block B) {
+			const auto A=Source.Get(P);
+			Check(Seen.Contains(SingleCell(P)) && A.Orientation==B.Orientation &&
+				Source.GetDefinition(A.Definition).Key==Installed.GetDefinition(B.Definition).Key);
+		});
+		auto Broken=Selected->Bytes;
+		Broken[7]=1;Reject([&]{(void)Field::DecodePages(Broken,Seen);});
+		Broken=Selected->Bytes;Broken.pop_back();Reject([&]{(void)Field::DecodePages(Broken,Seen);});
+		Broken=Selected->Bytes;Broken[Selected->Records[0].Offset+2]=8;
+		Reject([&]{(void)Field::DecodePages(Broken,Seen);});
+		Reject([&]{(void)Source.CapturePages(ReplicaCoverage{true});});
+		const std::array<Operation,1> SecretEdit{ValueWrite{{12,12,12},0,18}};
+		Check(Source.ApplyOperations(SecretEdit) && Source.CapturePages(Near)->Bytes==Selected->Bytes);
+		Check(Fill(Source,SingleCell({84,52,52}),{Stone,19}) && Source.CapturePages(Near)->Bytes==Selected->Bytes);
+		ReplicaCoverage Vacant{false,{{-80,-80,-80}}};
+		const auto Empty=Source.CapturePages(Vacant);
+		Check(Empty && Empty->Records.empty() && Field::DecodePages(Empty->Bytes,Seen).GetOccupiedCount()==0 &&
+			Seen.Contains(SingleCell({-79,-79,-79})) && !Seen.Contains(SingleCell({-71,-79,-79})));
+		Check(!Cast(Field{}, {-79.5,-79.5,-79.5},{2,0,0},MaximumRayVisits,&Seen));
+		Reject([&]{(void)Cast(Field{}, {-79.5,-79.5,-79.5},{12,0,0},MaximumRayVisits,&Seen);});
+		std::cout<<"[BlockGrid:RegionalField] sourceBytes="<<Canonical.size()<<" sourceCells="<<Source.GetOccupiedCount()
+			<<" windowBytes="<<Selected->Bytes.size()<<" windowCells="<<Installed.GetOccupiedCount()<<" pages="<<Selected->Records.size()<<'\n';
+	}
 	DVec Rotate(DVec P,std::uint8_t R,double Pivot) {
 		DVec Out{Pivot,Pivot,Pivot};
 		for (unsigned I=0;I<3;++I) for (unsigned J=0;J<3;++J) Out[I]+=Basis(R)[J][I]*(P[J]-Pivot);
@@ -274,7 +316,7 @@ namespace {
 int main() try {
 	TestDefinitions();
 	TestAssetPins();
-	TestBilateralTransfer();
+	TestBilateralTransfer(); TestReplicaPages();
 	TestState();
 	TestTraversal();
 	Field Grid;

@@ -973,10 +973,14 @@ if(BUILD_TESTING)
 	add_executable(gargantuan_blockgrid_field_tests "tests/blockgrid/BlockGridFieldTests.cpp"
 		"src/blockgrid/Field.cpp" "src/blockgrid/Codec.cpp" "src/blockgrid/Picking.cpp" "src/blockgrid/Edit.cpp"
 		"src/blockgrid/Geometry.cpp" "src/blockgrid/Definitions.cpp" "src/blockgrid/State.cpp" "src/blockgrid/Traversal.cpp"
-		"src/blockgrid/Transfer.cpp" "src/assets/AssetTypes.cpp")
+		"src/blockgrid/Transfer.cpp" "src/blockgrid/ReplicaPages.cpp" "src/assets/AssetTypes.cpp")
 	target_include_directories(gargantuan_blockgrid_field_tests PRIVATE "include")
 	target_link_libraries(gargantuan_blockgrid_field_tests PRIVATE glm::glm)
 	add_test(NAME gargantuan_blockgrid_field COMMAND gargantuan_blockgrid_field_tests)
+	add_executable(gargantuan_blockgrid_regional_stream_tests "tests/blockgrid/BlockGridStreamTests.cpp")
+	target_link_libraries(gargantuan_blockgrid_regional_stream_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_blockgrid_regional_stream COMMAND gargantuan_blockgrid_regional_stream_tests)
+	set_tests_properties(gargantuan_blockgrid_regional_stream PROPERTIES LABELS "blockgrid;network;streaming")
 	set_tests_properties(gargantuan_blockgrid_field PROPERTIES LABELS "blockgrid;storage;persistence")
 	add_executable(gargantuan_blockgrid_collision_catalog_tests "tests/blockgrid/BlockGridCollisionCatalogTests.cpp"
 		"src/blockgrid/Geometry.cpp" "src/blockgrid/Momentum.cpp")

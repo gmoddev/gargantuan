@@ -3,7 +3,7 @@
 #include "gargantuan/blockgrid/Traversal.hpp"
 
 namespace gargantuan::blockgrid::binding {
-	BlockGrid& ReadTarget(lua_State* L,Instance* Object,bool Edit=false);
+	BlockGrid& ReadTarget(lua_State* L,Instance* Object,bool Edit=false,bool AllowMissing=false);
 	Cell ReadCell(lua_State* L,int Index,bool Exclusive=false);
 	std::string_view StringAt(lua_State* L,int Index);
 	Block ReadBlock(lua_State* L,const Field& Source,int Key,int Orientation);

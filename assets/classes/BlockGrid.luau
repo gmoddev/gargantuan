@@ -57,6 +57,7 @@ return c({
 		ReadPacked = Native("(self: BlockGrid, Min: Vector3, MaxExclusive: Vector3) -> (" .. Packed .. " & { Revision: string })", "Reads a bounded X-fastest uint16 palette buffer with pinned definition digests."),
 		FindConnected = Native('(self: BlockGrid, Starts: {Vector3}, Options: {Bounds: ' .. Bounds .. ', Filter: ' .. Filter .. '?, Adjacency: ("Face" | "Edge" | "Corner")?, UsePorts: boolean?, StopAt: {string}?, MaxVisited: number?}) -> ' .. Cursor, "Starts incremental native traversal of a pinned grid view."),
 		FindActive = Native("(self: BlockGrid, Channel: string, Bounds: " .. Bounds .. ") -> " .. Cursor, "Traverses nondefault members of an indexed channel."),
+		IsRegionAvailable = Native("(self: BlockGrid, Min: Vector3, MaxExclusive: Vector3) -> boolean", "Reports whether every cell in a half-open local region has installed content, including verified air."),
 		CellToWorld = Native("(self: BlockGrid, Cell: Vector3) -> Vector3", "Returns the world position of a cell center."),
 		WorldToCell = Native("(self: BlockGrid, Position: Vector3) -> Vector3", "Returns the local cell containing the world point."),
 		Raycast = Native("(self: BlockGrid, Origin: Vector3, Direction: Vector3) -> { Cell: Vector3, Block: " .. Block .. ", Position: Vector3, Normal: Vector3, Revision: string }?", "Returns the closest exact current cell hit on the world segment."),
