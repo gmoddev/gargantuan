@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 #include "gargantuan/blockgrid/Field.hpp"
+#include "gargantuan/runtime/ObjectId.hpp"
 #include <string>
 
 namespace gargantuan::blockgrid {
@@ -17,6 +18,11 @@ namespace gargantuan::blockgrid {
 	};
 	struct BindingEdit { Definition Spec; bool Replace{}; };
 	struct MotionEdit { bool Dynamic{}; std::optional<std::pair<Point,Point>> Velocities; };
+	struct GridTransferEdit {
+		std::optional<Region> Extract;
+		ObjectId Source;
+		std::string SourceRevision;
+	};
 	[[nodiscard]] std::shared_ptr<const Patch> CapturePatch(const Field& Source, std::span<const Write> Writes);
 	[[nodiscard]] std::vector<Write> ReplayWrites(const Field& Source, const Patch& Value, bool Forward);
 	struct EditRequest {
@@ -30,5 +36,6 @@ namespace gargantuan::blockgrid {
 		std::vector<Operation> Commands;
 		std::vector<Definition> Materials;
 		std::optional<MotionEdit> Motion;
+		std::optional<GridTransferEdit> Bilateral;
 	};
 }

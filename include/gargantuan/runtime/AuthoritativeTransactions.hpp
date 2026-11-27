@@ -17,6 +17,7 @@
 
 namespace gargantuan {
 	class DataModel;
+	struct GridTransferHistory;
 	namespace blockgrid { struct Patch; }
 
 	inline constexpr std::size_t MaximumOpenAuthoringTransactions = 1;
@@ -87,6 +88,7 @@ namespace gargantuan {
 	struct BlockGridTransactionChange {
 		ObjectId Object;
 		std::shared_ptr<const blockgrid::Patch> Delta;
+		std::shared_ptr<const GridTransferHistory> Transfer;
 	};
 
 	enum class SubtreeTransactionKind { Create, Destroy, Duplicate };
@@ -108,7 +110,7 @@ namespace gargantuan {
 		SubtreeTransactionChange,
 		BlockGridTransactionChange>;
 
-	enum class TransactionReplayPolicy { Legacy, PreparedPropertyBatch };
+	enum class TransactionReplayPolicy { Legacy, PreparedPropertyBatch, PreparedGridTransfer };
 	struct CommittedTransaction {
 		TransactionId Id;
 		std::string Label;
@@ -220,6 +222,7 @@ namespace gargantuan {
 	  private:
 		friend class MutationGateway;
 		friend class PreparedPropertyCommit;
+		friend class PreparedGridTransfer;
 		static TransactionId AllocatePreparedIdentity();
 		void InstallPrepared(AuthoritativeTransactionHistory &Candidate) noexcept;
 		struct OpenTransaction {
