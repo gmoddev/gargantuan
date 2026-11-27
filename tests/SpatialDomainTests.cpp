@@ -167,6 +167,25 @@ namespace {
 			!Provider->Installed.empty() && !Provider->AuthoritativeEmpty, "grid receipt must bind installed native bodies");
 		Grid->SetCFrame(CFrame(0,2,0));
 		Check(!A->ValidateSpatialDestination(WithGrid), "moving grid owner must invalidate a held destination");
+		const auto PartsGrid = std::make_shared<BlockGrid>();
+		blockgrid::Field Catalog;
+		Check(Catalog.Define({.Key="Low",.Geometry=blockgrid::Shape::Slab}) &&
+			Catalog.Define({.Key="Sensor",.CanCollide=false,.Queryable=true}), "shape catalog declarations");
+		const std::array<blockgrid::Write,2> Pieces{{
+			{blockgrid::SingleCell({0,0,0}), {Catalog.GetDefinitionId("Low"),0}},
+			{blockgrid::SingleCell({3,0,0}), {Catalog.GetDefinitionId("Sensor"),0}}}};
+		Check(Catalog.Apply(Pieces), "shape catalog membership");
+		PartsGrid->RestoreField(std::move(Catalog)); PartsGrid->SetCFrame(CFrame(31,0,0)); PartsGrid->SetParent(B);
+		const std::array CatalogOwner{PartsGrid->GetObjectId()};
+		const auto ProbePiece = [&](float X, float Y) {
+			const SpatialDestinationBounds At{{X,Y,.40f},{X+.05f,Y+.04f,.45f}};
+			const auto Receipt = B->PrepareSpatialDestination(At, CatalogOwner).value();
+			return std::ranges::find(Receipt.Providers, PartsGrid->GetObjectId(), &SpatialProviderReceipt::Owner)->Installed;
+		};
+		const auto LowPiece = ProbePiece(31.4f,.20f);
+		Check(LowPiece.size() == 1 && LowPiece.front().CatalogGeometry == std::uint8_t(blockgrid::Shape::Slab) &&
+			ProbePiece(31.4f,.80f).empty() && ProbePiece(34.4f,.20f).empty(),
+			"movement receipts require the real slab half and discard query-only catalog pieces");
 		const auto Actor = MakePart(Default, {1,1,1}, {20,0,0});
 		Actor->SetAnchored(false); Actor->SetSpatialRegion(A);
 		Actor->SetLinearVelocity({3,0,0}); Actor->ApplyImpulse({2,0,0});

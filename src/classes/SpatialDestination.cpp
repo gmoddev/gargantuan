@@ -125,13 +125,18 @@ namespace gargantuan {
 			SpatialProviderReceipt Proof{.Owner = Id, .Provider = SpatialCollisionProvider::BlockGrid,
 				.ContentRevision = *Member.Revision, .Pose = Member.Pose, .Size = glm::vec3(Member.CellSize),
 				.AuthoritativeEmpty = !Member.Collidable || Grid.GetField().GetOccupiedCount() == 0};
-			for (const auto &[Box, Body] : Member.Bodies) {
-				const glm::vec3 Min(Box[0], Box[1], Box[2]), Max(Box[3], Box[4], Box[5]);
-				const CFrame BoxPose(Member.Pose.PointToWorldSpace((Min + Max) * (.5f * Member.CellSize)), Member.Pose.Rotation);
-				if (!OverlapsBody(Bounds, BoxPose, (Max - Min) * Member.CellSize)) continue;
-				if (!Physics.IsBodyValid(Body)) return std::unexpected(BackendFailure);
-				Proof.Installed.push_back({Body, {Box[0], Box[1], Box[2]}, *Member.Revision});
+			bool HasPhysicalPiece = false;
+			for (const auto &[Piece, Body] : Member.Bodies) {
+				if ((Piece.Participation & 1u) == 0) continue;
+				HasPhysicalPiece = true;
+				const auto Native = Physics.GetBodyState(Body);
+				if (!Native || !Native->Description.CanCollide) return std::unexpected(BackendFailure);
+				if (!OverlapsBody(Bounds, Native->Transform, Native->Description.Shape.Size)) continue;
+				const auto &Cells = Piece.Cells;
+				Proof.Installed.push_back({Body, {Cells[0], Cells[1], Cells[2]}, *Member.Revision,
+					static_cast<std::uint8_t>(Piece.Geometry), Piece.Orientation, Piece.Piece});
 			}
+			Proof.AuthoritativeEmpty = !HasPhysicalPiece;
 			if (!Proof.Installed.empty() || Required(Id)) {
 				Proof.Resource = Grid.GetBlockRevision();
 				Result.Providers.push_back(std::move(Proof));

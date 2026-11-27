@@ -26,6 +26,7 @@ namespace gargantuan {
 		PhysicsBodyId Body;
 		std::array<std::int64_t, 3> Chunk{};
 		std::uint64_t DerivativeRevision{};
+		std::uint8_t CatalogGeometry{}, Orientation{}, Piece{};
 		bool operator==(const SpatialInstalledCollider &) const = default;
 	};
 
