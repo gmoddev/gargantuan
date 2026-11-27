@@ -1031,7 +1031,10 @@ if(BUILD_TESTING)
 		add_test(NAME gargantuan_spatial_creator_doors
 			COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialCreatorTrial.py"
 				--engine $<TARGET_FILE:gargantuan> --doors)
-		set_tests_properties(gargantuan_spatial_creator_play gargantuan_spatial_creator_doors PROPERTIES
+		add_test(NAME gargantuan_spatial_masonry_example
+			COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialCreatorTrial.py"
+				--engine $<TARGET_FILE:gargantuan> --masonry)
+		set_tests_properties(gargantuan_spatial_creator_play gargantuan_spatial_creator_doors gargantuan_spatial_masonry_example PROPERTIES
 			LABELS "spatial;blockgrid;creator;headless" TIMEOUT 65)
 		add_test(NAME gargantuan_spatial_grid_clipboard
 			COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialGridClipboardAuthoring.py"
