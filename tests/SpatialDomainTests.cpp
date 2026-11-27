@@ -232,6 +232,8 @@ namespace {
 		PublishedPart->SetPosition({90, 2, 0});
 		PublishedPart->SetParent(Space);
 		PublishedPart->SetLinearVelocity({3, 0, 0});
+		Space->StepPhysics(.02, std::nullopt);
+		Check(PublishedPart->GetLinearVelocity().x > 2.f, "source provider accepted the requested dynamic velocity");
 		PublishedPart->SetAnchored(true);
 		PublishedPart->SetSpatialRegion(A);
 		Check(WorldRoot::GetEffectiveWorld(*PublishedPart) == A && PublishedPart->GetLinearVelocity() == glm::vec3(0),
