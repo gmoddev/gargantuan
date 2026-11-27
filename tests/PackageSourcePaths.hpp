@@ -16,15 +16,19 @@
 namespace gargantuan::test {
 	inline constexpr std::size_t PackageScanChunkBytes = 64 * 1024;
 
-	inline void NormalizePathBytes(std::span<char> Bytes) {
+	enum class PackagePathStyle { Windows, Posix };
 #ifdef _WIN32
+	inline constexpr auto NativePackagePathStyle = PackagePathStyle::Windows;
+#else
+	inline constexpr auto NativePackagePathStyle = PackagePathStyle::Posix;
+#endif
+
+	inline void NormalizePathBytes(std::span<char> Bytes, PackagePathStyle Style) {
+		if (Style == PackagePathStyle::Posix) return;
 		for (auto &Byte : Bytes) {
 			if (Byte == '\\') Byte = '/';
 			else if (Byte >= 'A' && Byte <= 'Z') Byte += 'a' - 'A';
 		}
-#else
-		(void)Bytes;
-#endif
 	}
 
 	inline std::string PackagePathRoot(const std::filesystem::path &Path) {
@@ -32,7 +36,7 @@ namespace gargantuan::test {
 		auto Normal = Path.lexically_normal();
 		if (Normal.has_relative_path() && !Normal.has_filename()) Normal = Normal.parent_path();
 		auto Root = Normal.generic_string();
-		NormalizePathBytes(Root);
+		NormalizePathBytes(Root, NativePackagePathStyle);
 		return Root;
 	}
 
@@ -45,7 +49,8 @@ namespace gargantuan::test {
 		return Byte <= ' ' || Byte == 127 || std::string_view("\"'=:,;()[]{}<>|").find(static_cast<char>(Byte)) != std::string_view::npos;
 	}
 
-	inline std::optional<PackagePathMatch> FindPackagePath(std::istream &Input, std::span<const std::string> Roots) {
+	inline std::optional<PackagePathMatch> FindPackagePath(std::istream &Input, std::span<const std::string> Roots,
+		PackagePathStyle Style = NativePackagePathStyle) {
 		std::size_t Longest = 0;
 		for (const auto &Root : Roots) {
 			if (Root.empty()) throw std::invalid_argument("Empty package path root");
@@ -59,7 +64,7 @@ namespace gargantuan::test {
 			Input.read(Buffer.data() + Retained, PackageScanChunkBytes);
 			if (Input.bad() || (Input.fail() && !Input.eof())) throw std::runtime_error("Package scan read failed");
 			const auto Count = static_cast<std::size_t>(Input.gcount());
-			NormalizePathBytes(std::span(Buffer.data() + Retained, Count));
+			NormalizePathBytes(std::span(Buffer.data() + Retained, Count), Style);
 			const std::string_view Window(Buffer.data(), Retained + Count);
 			for (std::size_t I = 0; I < Roots.size(); ++I) {
 				const auto &Root = Roots[I];

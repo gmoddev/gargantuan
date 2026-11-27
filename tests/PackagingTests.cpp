@@ -103,12 +103,15 @@ namespace {
 		const auto Match = FindPackagePath(Late, Roots);
 		Require(Match && Match->RootIndex == 1 && Match->Offset == LateOffset,
 			"missed an absolute authoring path past 16 MiB spanning two scan chunks");
-#ifdef _WIN32
-		const std::array Drive{PackagePathRoot("C:/Project/AuthorRoot")};
-		std::istringstream Native(R"(binary:C:\PROJECT/AuthorRoot\part.cpp)");
-		const auto WindowsMatch = FindPackagePath(Native, Drive);
-		Require(WindowsMatch && WindowsMatch->Offset == 7, "missed a native Windows authoring path");
-#endif
+		const std::array<std::string, 1> Drive{"c:/project/authorroot"};
+		for (const auto *Spelling : {R"(binary:C:\PROJECT\AuthorRoot\part.cpp)",
+			R"(binary:C:\project/AuthorRoot\part.cpp)", "binary:C:/Project/AuthorRoot/part.cpp"}) {
+			std::istringstream Native(Spelling);
+			const auto WindowsMatch = FindPackagePath(Native, Drive, PackagePathStyle::Windows);
+			Require(WindowsMatch && WindowsMatch->Offset == 7, "missed a native or mixed-separator Windows authoring path");
+		}
+		std::istringstream Siblings(R"(C:\project/AuthorRoot-extra\file C:/PROJECT/AuthorRoot2/x vendor\src\file .\project\authorroot\file)");
+		Require(!FindPackagePath(Siblings, Drive, PackagePathStyle::Windows), "matched a sibling or relative Windows path");
 	}
 
 	void RequirePublicPackagePaths(const std::filesystem::path &File, std::span<const std::string> Roots) {
