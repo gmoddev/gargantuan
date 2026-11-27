@@ -6,6 +6,7 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
+#include "gargantuan/editor/EditorViewport.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -14,11 +15,13 @@
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
+#include <SDL3/SDL.h>
 #include <array>
 #include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 
 namespace {
 	using namespace gargantuan;
@@ -215,12 +218,63 @@ namespace {
 			Grid->GetField().Get(Target) == blockgrid::Block{blockgrid::Stone,0}, "corrupt native data escaped admission");
 		Reopened->Destroy();
 	}
+
+	void CheckOffscreenPixels() {
+		constexpr std::uint32_t Width = 192, Height = 128;
+		SDL_SetHintWithPriority(SDL_HINT_GPU_DRIVER, "vulkan", SDL_HINT_OVERRIDE);
+		Require(SDL_Init(SDL_INIT_VIDEO), SDL_GetError());
+		struct VideoLifetime { ~VideoLifetime() { SDL_Quit(); } } Video;
+		auto Game = std::make_shared<DataModel>();
+		auto World = WorkspaceOf(Game);
+		auto Grid = MakeGrid(World, "PixelGrid", {blockgrid::Brick,0}, CFrame{});
+		const auto Center = TargetCenter(*Grid);
+		const auto Camera = MakeLookAtRenderCameraInput(Center + glm::vec3(3,2,4),Center,{0,1,0},55);
+		RenderPublisher Publisher;
+		EditorViewportRenderer View(Width,Height);
+		const auto Capture = [&] {
+			auto Frame = View.Capture(Publisher.Publish(*World, Camera, Width, Height));
+			Require(Frame.Width == Width && Frame.Height == Height && Frame.RgbPixels.size() == Width*Height*3,
+				"incomplete native GPU readback");
+			return Frame.RgbPixels;
+		};
+		const auto Changed = [](const auto &A, const auto &B) {
+			std::size_t Count = 0;
+			for (std::size_t I = 0; I < A.size(); I += 3)
+				if (A[I] != B[I] || A[I+1] != B[I+1] || A[I+2] != B[I+2]) ++Count;
+			return Count;
+		};
+		Grid->SetVisible(false);
+		const auto Blank = Capture();
+		Grid->SetVisible(true);
+		const auto Visible = Capture();
+		Grid->SetCFrame(CFrame(1.25f,0,0));
+		const auto Moved = Capture();
+		Grid->SetVisible(false);
+		const auto Hidden = Capture();
+		Grid->SetVisible(true);
+		const auto Reappeared = Capture();
+		Grid->Destroy();
+		const auto Deleted = Capture();
+		const auto VisiblePixels = Changed(Blank,Visible);
+		const auto MovedPixels = Changed(Visible,Moved);
+		Require(VisiblePixels >= 32 && MovedPixels >= 32 && Hidden == Blank && Reappeared == Moved && Deleted == Blank,
+			"actual visible/moved/hidden/retired pixels disagree");
+		std::cout << "[Spatial:ConstructionGpu] VisiblePixels=" << VisiblePixels
+			<< " MovedPixels=" << MovedPixels << " HiddenResidual=" << Changed(Blank,Hidden)
+			<< " DeletedResidual=" << Changed(Blank,Deleted) << '\n';
+		Game->Destroy();
+	}
 }
 
-int main() {
+int main(int Count, char **Arguments) {
 	using namespace gargantuan;
 	try {
 		BootstrapNativeRuntimeSchema();
+		if (Count == 2 && std::string_view(Arguments[1]) == "--vulkan") {
+			CheckOffscreenPixels();
+			return 0;
+		}
+		Require(Count == 1, "optional mode is --vulkan");
 		ScratchProject Scratch;
 		DiskFilesystem Files(Scratch.Root);
 		auto ProjectValue = Project::fromInit(&Files,"SpatialConstruction");
