@@ -29,6 +29,7 @@ namespace gargantuan {
 	class Camera;
 	class ViewportFrame;
 	class WorldRoot;
+	namespace terrain { struct RenderState; }
 
 	struct RenderCameraInput {
 		glm::vec3 Position{0.0f};
@@ -103,6 +104,9 @@ namespace gargantuan {
 			return UiSource == Source && UiSourceGeneration == SourceGeneration;
 		}
 		void SetViewportScenes(std::shared_ptr<const RenderViewportScenes> Scenes);
+		void SetTerrainRenderState(std::shared_ptr<const terrain::RenderState> State) {
+			CurrentTerrain = std::move(State);
+		}
 		void SetUiTextureChanges(
 			std::vector<RenderTextureCreate> Creates,
 			std::vector<RenderTextureUpdate> Updates,
@@ -125,6 +129,9 @@ namespace gargantuan {
 		static constexpr std::size_t MaximumVisualTraversal = 131072;
 		static constexpr std::size_t MaximumVisualAncestry = 64;
 		static constexpr std::size_t MaximumVisualAssetDependencies = 258;
+		std::shared_ptr<const terrain::RenderState> CurrentTerrain;
+		std::shared_ptr<const terrain::RenderState> PublishedTerrain;
+		std::weak_ptr<const terrain::RenderState> SuppressedTerrainVariants;
 		struct VisualDependency {
 			std::vector<ObjectId> Sources;
 			std::vector<std::string> Assets;

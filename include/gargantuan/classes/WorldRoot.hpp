@@ -9,11 +9,14 @@
 #include "gargantuan/datatypes/RaycastParams.hpp"
 #include "gargantuan/physics/PhysicsBackend.hpp"
 #include "gargantuan/physics/SoftBodyBackend.hpp"
+#include "gargantuan/runtime/RuntimeMode.hpp"
 
 #include <cstdint>
+#include <expected>
 #include <functional>
 #include <map>
 #include <memory>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -22,7 +25,24 @@ namespace gargantuan {
 	class AssetService;
 	class LocalLight;
 	class ReflectionProbe;
+	class Terrain;
+	struct RenderCameraInput;
 	struct WorldRootTestAccess;
+
+	namespace network {
+		class GameSession;
+	}
+
+	namespace terrain {
+		enum class EditStatus;
+		class Field;
+		class PhysicsStage;
+		class TerrainMaterialPalette;
+		class TerrainRuntime;
+		struct ChunkPublicationCandidate;
+		struct TerrainMutation;
+		struct RenderState;
+	}
 
 	struct WorldRaycastResult {
 		PhysicsOperationStatus Status = PhysicsOperationStatus::Success;
@@ -31,13 +51,16 @@ namespace gargantuan {
 		glm::vec3 Position{0.0f};
 		glm::vec3 Normal{0.0f};
 		float Distance = 0.0f;
+		std::shared_ptr<Terrain> TerrainInstance;
 
 		[[nodiscard]] bool Succeeded() const {
 			return Status == PhysicsOperationStatus::Success;
 		}
 		[[nodiscard]] bool HasHit() const {
-			return Instance != nullptr;
+			return Instance != nullptr || TerrainInstance != nullptr;
 		}
+
+		[[nodiscard]] std::shared_ptr<gargantuan::Instance> GetHitInstance() const;
 	};
 
 	class WorldRoot : public Instance {
@@ -131,6 +154,7 @@ namespace gargantuan {
 			std::string Message;
 			std::vector<std::shared_ptr<BasePart>> Parts;
 			bool Truncated = false;
+			std::shared_ptr<Terrain> TerrainInstance;
 			[[nodiscard]] bool Succeeded() const { return Status == PhysicsOperationStatus::Success; }
 		};
 		[[nodiscard]] OverlapResult ResolveOverlap(const PhysicsQueryShape &Shape, const RaycastParams &Params = {}, std::size_t MaxResults = MaximumPhysicsOverlapResults);
@@ -140,9 +164,25 @@ namespace gargantuan {
 		[[nodiscard]] const SoftBodyStepProfile &GetLastSoftBodyProfile() const { return LastSoftBodyProfile; }
 		[[nodiscard]] const std::map<ObjectId, std::weak_ptr<LocalLight>> &GetLocalLights() const { return LocalLights; }
 		[[nodiscard]] const std::map<ObjectId, std::weak_ptr<ReflectionProbe>> &GetReflectionProbes() const { return ReflectionProbes; }
+		[[nodiscard]] std::shared_ptr<const terrain::RenderState> GetTerrainRenderState() const noexcept;
+		[[nodiscard]] bool IsTerrainCollisionReady() const noexcept { return HasTerrainRuntime(); }
 
 	  private:
-		[[nodiscard]] WorldRaycastResult ResolveQueryHit(PhysicsRaycastResult Result);
+		friend class Engine;
+		friend class EditorHost;
+		friend class MutationGateway;
+		friend class Terrain;
+		friend class Workspace;
+		friend class network::GameSession;
+		// A Main-owned session may bound motion to its installed collision coverage.
+		using TerrainMotionGuard = std::function<bool(ObjectId, glm::vec3, glm::vec3)>;
+		std::weak_ptr<const TerrainMotionGuard> TerrainMotionAdmission;
+		bool TerrainReplicaCoverageRequired{};
+		[[nodiscard]] bool HasTerrainQueryCoverage(glm::vec3 Origin, glm::vec3 Destination, glm::vec3 Extents) const;
+		[[nodiscard]] bool InstallTerrainReplica(std::unique_ptr<terrain::Field> Field,
+			std::vector<terrain::ChunkPublicationCandidate> Chunks, std::uint64_t Publication);
+		void UpdateTerrainVisualDensity(const RenderCameraInput &Camera, std::uint32_t Width, std::uint32_t Height);
+		[[nodiscard]] WorldRaycastResult ResolveQueryHit(PhysicsRaycastResult Result, bool IncludeTerrain);
 		static int RunShapeQuery(lua_State *L, Instance *Value, PhysicsQueryShapeKind Kind, bool IsOverlap);
 		friend struct WorldRootTestAccess;
 		[[nodiscard]] PhysicsBodyDesc DescribePart(const BasePart &Part);
@@ -177,7 +217,27 @@ namespace gargantuan {
 		void RemoveInvalidConstraintMappings();
 		void ShutdownPhysics();
 		[[nodiscard]] std::shared_ptr<BasePart> ResolvePart(PhysicsBodyId Body) const;
+		[[nodiscard]] std::shared_ptr<Terrain> GetTerrainQueryOwner() const;
 		[[nodiscard]] PhysicsOperationResult
-		BuildRaycastFilter(const RaycastParams &Params, PhysicsQueryFilter &Filter) const;
+		BuildRaycastFilter(const RaycastParams &Params, PhysicsQueryFilter &Filter);
+
+		void InitializeTerrainRuntime(RuntimeMode Mode, bool AdmitNetworkTerrain = false,
+			bool ExperimentalVisualDensity = false, std::shared_ptr<const terrain::TerrainMaterialPalette> Palette = {});
+		void PollTerrainWork();
+		[[nodiscard]] std::expected<std::uint64_t, terrain::EditStatus>
+		SubmitTerrainEdit(const Terrain &Owner, const terrain::TerrainMutation &Edit);
+		[[nodiscard]] bool CancelTerrainEdit(const Terrain &Owner, std::uint64_t Ticket) noexcept;
+		struct TerrainTicketInfo {
+			std::string_view Status;
+			std::optional<std::uint64_t> Revision;
+			std::string_view Diagnostic;
+		};
+		[[nodiscard]] std::optional<TerrainTicketInfo> GetTerrainTicket(std::uint64_t Ticket) const noexcept;
+		[[nodiscard]] bool HasTerrainRuntime() const noexcept;
+
+		[[nodiscard]] const terrain::PhysicsStage *GetTerrainPhysics() const noexcept;
+		std::unique_ptr<terrain::TerrainRuntime> TerrainRuntimeValue;
+		struct TerrainTickets;
+		std::unique_ptr<TerrainTickets> TerrainEditTickets;
 	};
 }

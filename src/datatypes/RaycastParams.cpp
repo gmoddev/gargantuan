@@ -91,6 +91,7 @@ namespace gargantuan {
 				 }
 			 )},
 			{"FilterDescendantsInstances", Property::fromReadWriteMember<&RaycastParams::FilterDescendantsInstances>()},
+			{"IncludeTerrain", Property::fromReadWriteMember<&RaycastParams::IncludeTerrain>()},
 			{"CollisionGroup",
 			 Property::fromReadWrite<int>(
 				 [](RaycastParams *Params) { return Params->CollisionGroup; },

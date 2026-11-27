@@ -3,6 +3,7 @@
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
+#include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
@@ -26,6 +27,8 @@ namespace gargantuan {
 
 		void DemandTargetMutation(const ScriptSecurityContext &Context, ObjectId Object) {
 			const auto Target = ObjectRegistry::Get().Lookup(Object);
+			if (dynamic_cast<Terrain *>(Target.get()))
+				throw std::runtime_error("[Terrain:Ownership] Terrain cannot be tagged");
 			if (Context.Domain == ScriptExecutionDomain::Client && Target &&
 				GetInstanceServicePolicy(*Target) == SchemaServicePolicy::Replicated)
 				throw std::runtime_error("[Storage:Authority] Replicated service tags are server-authoritative");

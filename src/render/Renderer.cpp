@@ -307,6 +307,10 @@ namespace gargantuan {
 			const auto ProjectionStart = Clock::now();
 			State->ShadowCache.ApplyPublication(State->Projection, *Publication);
 			State->SpotShadowAtlas.ApplyPublication(State->Projection, *Publication);
+			if (Publication->TerrainDraws) {
+				State->ShadowCache.Invalidate();
+				State->SpotShadowAtlas.Invalidate();
+			}
 			State->Metrics.LastShadowClassificationNanoseconds = Nanoseconds(Clock::now() - ProjectionStart);
 			const auto Changes = State->Projection.Apply(*Publication);
 			if (State->Options.EnableInstancing && State->InstanceResources) {

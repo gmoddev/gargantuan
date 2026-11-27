@@ -172,6 +172,7 @@ GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/argparse/LICENSE" "n
 GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/box3d/LICENSE" "notices/Box3D.txt" Notice)
 GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/manifold/LICENSE" "notices/Manifold.txt" Notice)
 GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/manifold/AUTHORS" "notices/Manifold-Authors.txt" Notice)
+GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/cmake/notices/MC33.txt" "notices/MC33.txt" Notice)
 GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/glm/copying.txt" "notices/GLM.txt" Notice)
 GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/json/LICENSE.MIT" "notices/nlohmann-json.txt" Notice)
 GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/luau/LICENSE.txt" "notices/Luau.txt" Notice)

@@ -1,6 +1,7 @@
 #include "gargantuan/Engine.hpp"
 #include "runtime/PublicationLatencyDiagnostics.hpp"
 #include "runtime/RuntimeWorkDiagnostics.hpp"
+#include "terrain/TerrainMaterialPalette.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/Profiler.hpp"
 #include "gargantuan/classes/Animator.hpp"
@@ -90,6 +91,21 @@ namespace gargantuan {
 			bool Complete = false;
 			~ConstructionLifetime() { if (!Complete) Runtime.Destroy(); }
 		} Construction{*this};
+		std::shared_ptr<const terrain::TerrainMaterialPalette> TerrainPalette;
+		bool TerrainVisualDensity = ProviderConfiguration.ExperimentalTerrainVisualDensity;
+		if (ProviderConfiguration.Mode != RuntimeMode::NetworkServer) {
+			if (const auto Setting = Workspace->GetAttributeValue("TerrainVisualDensity"))
+				if (const auto Enabled = std::get_if<bool>(&*Setting)) TerrainVisualDensity |= *Enabled;
+			auto ProjectPalette = terrain::ResolveTerrainMaterialBindings(*Workspace, *Assets);
+			if (ProjectPalette) {
+				TerrainPalette = std::move(*ProjectPalette);
+				if (TerrainPalette) LOG_INFO(App, "[Terrain:Material] Loaded project terrain tint bindings");
+			} else {
+				LOG_WARN(App, "[Terrain:Material] Using built-in tint because the project palette could not be resolved");
+			}
+		}
+		WorldRoot->InitializeTerrainRuntime(ProviderConfiguration.Mode, ProviderConfiguration.AdmitNetworkTerrain,
+			TerrainVisualDensity, std::move(TerrainPalette));
 		if (ProviderConfiguration.Mode != RuntimeMode::NetworkServer) {
 			auto Mixer = std::dynamic_pointer_cast<AudioMixService>(DataModel->FindFirstChildOfClass("AudioMixService", false));
 			if (!Mixer) {
@@ -539,9 +555,12 @@ namespace gargantuan {
 				G_PROFILE("Draw");
 				const auto [viewportWidth, viewportHeight] = Renderer->GetViewportSize();
 				auto camera = Workspace->GetCurrentCamera();
+				const auto CameraInput = MakeRenderCameraInput(*camera);
+				WorldRoot->UpdateTerrainVisualDensity(CameraInput, viewportWidth, viewportHeight);
+				RenderPublishing.SetTerrainRenderState(WorldRoot->GetTerrainRenderState());
 				auto Publication = runtime_detail::MeasureWork(runtime_detail::WorkPhase::RenderPublication,
 					[&] { return RenderPublishing.Publish(
-						*WorldRoot, MakeRenderCameraInput(*camera), viewportWidth, viewportHeight); });
+						*WorldRoot, CameraInput, viewportWidth, viewportHeight); });
 				try {
 #if defined(GARGANTUAN_WORK_TRACE)
 					runtime_detail::WorkScope DrawWork(runtime_detail::WorkPhase::RenderDraw);

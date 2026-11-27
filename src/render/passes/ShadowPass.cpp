@@ -282,16 +282,15 @@ namespace gargantuan {
 			auto *DefaultSampler = context.MaterialSamplers->Get(Gpu, {}, false);
 			bool AllResident = true;
 			glm::vec4 BoundAlpha(-1.0f);
-			for (const auto &[Object, Projected] : context.Projection.GetObjects()) {
-				(void)Object;
-				if (!Projected.Visible) continue;
+			const auto VisitCaster = [&](const RenderProjectedObject &Projected, bool Terrain) {
+				if (!Projected.Visible) return;
 				const auto &item = Projected.Item;
 				if (!item.CastShadow) {
-					continue;
+					return;
 				}
 				if (CascadeIndex && !SDLShadowCasterMayAffect(context.Projection, item, Projected.Mesh,
-					ShadowMatrix, context.CascadePlan.Resolution, Origin)) continue;
-				if (SpotLayer && !context.SpotShadowAtlas->MayAffect(context.Projection, Projected, *SpotLayer)) continue;
+					ShadowMatrix, context.CascadePlan.Resolution, Origin)) return;
+				if (SpotLayer && !context.SpotShadowAtlas->MayAffect(context.Projection, Projected, *SpotLayer)) return;
 				if (CascadeIndex) context.ShadowCache.DependOnObject(*CascadeIndex, item.Object);
 
 				const auto *mesh = Projected.Mesh
@@ -305,7 +304,7 @@ namespace gargantuan {
 						item.Object.Slot,
 						item.Object.Generation
 					);
-					continue;
+					return;
 				}
 				if (Projected.Mesh) {
 					if (CascadeIndex) context.ShadowCache.DependOnMesh(*CascadeIndex, *Projected.Mesh);
@@ -319,7 +318,7 @@ namespace gargantuan {
 				SDL_PushGPUVertexUniformData(context.Commands, 0, &uniforms, sizeof(Uniforms));
 
 				const auto Palette = context.SkinPalettes.Find(
-					item.Object, context.Projection.GetAnimationPose(item.Object));
+					item.Object, Terrain ? nullptr : context.Projection.GetAnimationPose(item.Object));
 				auto *PaletteBuffer = Palette.Buffer;
 
 				auto DrawPrimitive = [&](std::uint32_t First, std::uint32_t Count, const RenderMaterialState &Material) {
@@ -396,7 +395,12 @@ namespace gargantuan {
 					for (const auto &Primitive : *Projected.Primitives)
 						DrawPrimitive(Primitive.FirstIndex, Primitive.IndexCount, Primitive.Material);
 				} else DrawPrimitive(0, mesh->IndexCount, Projected.Material);
+			};
+			for (const auto &[Object, Projected] : context.Projection.GetObjects()) {
+				(void)Object;
+				VisitCaster(Projected, false);
 			}
+			for (const auto &Projected : context.Projection.GetTerrainDraws()) VisitCaster(Projected, true);
 			return AllResident;
 		}
 

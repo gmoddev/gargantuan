@@ -7,6 +7,7 @@
 #include "gargantuan/classes/ModuleScript.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Script.hpp"
+#include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/datatypes/Vector2.hpp"
@@ -31,6 +32,7 @@
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
+#include "gargantuan/runtime/RuntimeMode.hpp"
 #include "gargantuan/runtime/Snapshot.hpp"
 #include "gargantuan/runtime/TagIndex.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
@@ -48,9 +50,11 @@
 #include "gargantuan/services/ProcessService.hpp"
 #include "gargantuan/services/Tags.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "gargantuan/terrain/Field.hpp"
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
 #include "../src/runtime/PreparedPropertyCommit.hpp"
 #include "../src/serialization/JsonCodec.hpp"
+#include "../src/terrain/PhysicsStage.hpp"
 
 #include <algorithm>
 #include <array>
@@ -83,6 +87,11 @@ namespace gargantuan {
 			if (Found == World.PartBodies.end()) return false;
 			auto State = World.Physics.GetBodyState(Found->second);
 			return State && State->Description.Anchored;
+		}
+		static terrain::PhysicsStage *AttachTerrainQueryFixture(WorldRoot &World) {
+			World.InitializeTerrainRuntime(RuntimeMode::Offline);
+			// The fixture stages a synthetic cohort in the runtime-owned, mutable provider.
+			return const_cast<terrain::PhysicsStage *>(World.GetTerrainPhysics());
 		}
 	};
 }
@@ -275,6 +284,301 @@ namespace {
 	void FreezeSchemaRegistry(gargantuan::RuntimeSchemaRegistry &registry) {
 		registry.Validate();
 		registry.Freeze();
+	}
+
+	void TestTerrainWorkspaceOwnership() {
+		using namespace gargantuan;
+		auto World = std::make_shared<DataModel>();
+		const auto WorldId = World->GetObjectId();
+		const auto BootstrapCursor = ChangeJournal::Get().CreateCursor(WorldId);
+		World->MarkPersistenceSubtreeArchivable();
+		World->InitializeLoadedProjectRevision();
+		auto Space = std::static_pointer_cast<Workspace>(World->GetService("Workspace"));
+		auto TerrainValue = Space->GetTerrain();
+		if (!TerrainValue) {
+			Check(false, "Workspace bootstrap establishes the terrain shell");
+			return;
+		}
+		const auto TerrainId = TerrainValue->GetObjectId();
+		const auto Sample = TerrainValue->GetField().Read({-1, 0, 0});
+		Check(Space->GetTerrain() == TerrainValue && TerrainValue->GetDataModel() == World &&
+			TerrainValue->GetParent().value_or(nullptr) == Space && World->IsProtectedService(TerrainValue) &&
+			World->GetAuthoritativeRevision() == DataModel::InitialProjectRevision &&
+			Sample && *Sample == terrain::AirSample, "terrain identity and empty field belong to the bootstrapped world");
+
+		const auto BootstrapChanges = ChangeJournal::Get().Read(BootstrapCursor, 128);
+		Check(std::ranges::none_of(BootstrapChanges.Records, [TerrainId](const auto &Record) {
+			return Record.Object == TerrainId;
+		}), "terrain bootstrap does not publish a structural lifecycle record");
+		const auto Editor = CaptureSnapshot(World, SnapshotAudience::Editor);
+		const auto Structural = CaptureSnapshot(World);
+		Check(std::ranges::count(Editor.Objects, "Terrain", &SnapshotObject::ClassName) == 1 &&
+			std::ranges::count(Structural.Objects, "Terrain", &SnapshotObject::ClassName) == 0 &&
+			LoadSnapshot(Structural).Succeeded(), "the authoring projection includes terrain while structural snapshots remain loadable");
+
+		CheckThrows<std::runtime_error>([&] { TerrainValue->Destroy(); }, "direct terrain retirement is refused");
+		CheckThrows<std::runtime_error>([&] { TerrainValue->SetParent(std::nullopt); }, "reparenting terrain is refused");
+		CheckThrows<std::invalid_argument>([&] { (void)TerrainValue->Clone(); }, "cloning terrain is refused");
+		auto PartValue = std::make_shared<Part>();
+		CheckThrows<std::runtime_error>([&] { PartValue->SetParent(TerrainValue); }, "terrain refuses Instance children");
+		PartValue->SetParent(Space);
+		Space->ClearAllChildren();
+		Check(PartValue->GetDestroyed() && !TerrainValue->GetDestroyed(), "clearing Workspace children retains its terrain");
+
+		std::shared_ptr<Instance> Root = World;
+		const auto Json = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Root);
+		std::istringstream Input(Json);
+		const auto Loaded = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Input);
+		Check(Loaded.Ok && Loaded.Instance && Json.find(R"("ClassName":"Terrain")") == std::string::npos,
+			"scene JSON excludes the synthesized terrain object");
+		if (auto LoadedWorld = std::dynamic_pointer_cast<DataModel>(Loaded.Instance)) {
+			LoadedWorld->InitializeLoadedProjectRevision();
+			auto LoadedSpace = std::static_pointer_cast<Workspace>(LoadedWorld->GetService("Workspace"));
+			auto LoadedTerrain = LoadedSpace->GetTerrain();
+			Check(LoadedTerrain && LoadedTerrain->GetObjectId() != TerrainId &&
+				LoadedTerrain->GetField().GetLifetime() != TerrainValue->GetField().GetLifetime(),
+				"reopening ordinary scene data bootstraps a new terrain lifetime");
+			LoadedWorld->Destroy();
+		}
+
+		const auto Run = [&](RuntimeMode Mode, ScriptSecurityContext Context, std::string_view Source) {
+			ScriptEngine Script(World, {}, Mode);
+			ScriptSecurityScope Security(std::move(Context));
+			std::size_t BytecodeSize = 0;
+			auto *Bytecode = luau_compile(Source.data(), Source.size(), &Script.CompileOptions, &BytecodeSize);
+			if (!Bytecode) return false;
+			const auto LoadStatus = luau_load(Script.L, "terrain-foundation", Bytecode, BytecodeSize, 0);
+			std::free(Bytecode);
+			const auto Status = LoadStatus == LUA_OK ? lua_pcall(Script.L, 0, 0, 0) : LoadStatus;
+			if (Status != LUA_OK) {
+				const auto *Message = lua_tostring(Script.L, -1);
+				if (Message) std::cerr << "[Terrain:Test] " << Message << '\n';
+			}
+			return Status == LUA_OK;
+		};
+		Check(Run(RuntimeMode::Offline, ScriptSecurityContext::ServerRuntime(), R"(
+			local Terrain = game.Workspace.Terrain
+			assert(Terrain:IsA("Terrain") and Terrain == game.Workspace:FindFirstChild("Terrain"))
+			local Grid = Terrain:GetGridInfo()
+			assert(Grid.FieldAvailable and Grid.Revision == "0" and Grid.SampleSpacing == 1)
+			local Region, Revision = Terrain:ReadRegion(Vector3.new(-1, 0, 0), Vector3.new(1, 1, 1))
+			assert(Revision == "0" and buffer.len(Region) == 12)
+			assert(buffer.readi16(Region, 0) == 32767 and buffer.readu32(Region, 2) == 0)
+			assert(buffer.readi16(Region, 6) == 32767 and buffer.readu32(Region, 8) == 0)
+			assert(not pcall(function() return Terrain:ReadRegion(Vector3.new(0, 0, 0), Vector3.new(17, 17, 17)) end))
+			assert(not pcall(function() return Terrain:ReadRegion(Vector3.new(0, 0, 0), Vector3.new(0.25, 1, 1)) end))
+			assert(not pcall(function() return Instance.new("Terrain") end))
+			assert(not pcall(function() Terrain.Name = "Other" end))
+			assert(not pcall(function() Terrain:SetAttribute("Test", true) end))
+			local Filter = RaycastParams.new()
+			assert(Filter.IncludeTerrain == false)
+			Filter.IncludeTerrain = true
+			assert(Filter.IncludeTerrain == true)
+		)"), "authoritative Luau reads bounded packed terrain and preserves shell ownership");
+		Check(Run(RuntimeMode::NetworkClient, ScriptSecurityContext::ClientRuntime(), R"(
+			local Terrain = game.Workspace.Terrain
+			local Grid = Terrain:GetGridInfo()
+			assert(not Grid.FieldAvailable and Grid.Revision == nil and Grid.SampleSpacing == nil)
+			assert(not pcall(function() Terrain:ReadRegion(Vector3.new(0, 0, 0), Vector3.new(1, 1, 1)) end))
+		)"), "network-client shell distinguishes unsynchronized terrain from authoritative air");
+
+		World->Destroy();
+		Check(TerrainValue->GetDestroyed() && !ObjectRegistry::Get().Lookup(TerrainId),
+			"world teardown retires the terrain identity while a caller still holds the shell");
+		CheckThrows<std::runtime_error>([&] { (void)TerrainValue->GetField(); },
+			"a retired terrain wrapper cannot read a field");
+
+		std::shared_ptr<Terrain> Retained;
+		{
+			auto ReleasedWorld = std::make_shared<DataModel>();
+			auto ReleasedSpace = std::static_pointer_cast<Workspace>(ReleasedWorld->GetService("Workspace"));
+			Retained = ReleasedSpace->GetTerrain();
+		}
+		if (Retained)
+			CheckThrows<std::runtime_error>([&] { (void)Retained->GetField(); },
+				"final native Workspace owner release also retires retained terrain field storage");
+	}
+
+	void TestTerrainColliderQueryProjection() {
+		using namespace gargantuan;
+		auto World = std::make_shared<DataModel>();
+		auto Space = std::static_pointer_cast<Workspace>(World->GetService("Workspace"));
+		const auto TerrainValue = Space->GetTerrain();
+		auto LegacyPart = std::make_shared<Part>();
+		LegacyPart->SetName("BelowTerrain");
+		LegacyPart->SetAnchored(true);
+		LegacyPart->SetCFrame(CFrame(glm::vec3(6.0f, 1.0f, 6.5f)));
+		LegacyPart->SetSize({4.0f, 1.0f, 4.0f});
+		LegacyPart->SetParent(Space);
+
+		const terrain::CollisionSurfaceMesh Surface{
+			.Positions = {{0, 4, 0}, {32, 4, 0}, {32, 4, 12}, {0, 4, 12}},
+			.Indices = {0, 2, 1, 0, 3, 2},
+			.TriangleMaterials = {1, 1},
+		};
+		const std::array<terrain::ChunkPublicationCandidate, 2> Cohort{{
+			{.Key = {0, 0, 0}, .Collision = Surface, .GeometryChanged = true},
+			{.Key = {1, 0, 0}, .Collision = Surface, .GeometryChanged = true},
+		}};
+		auto *Stage = WorldRootTestAccess::AttachTerrainQueryFixture(*Space);
+		if (!Stage) {
+			Check(false, "native terrain runtime owns the provider under test");
+			World->Destroy();
+			return;
+		}
+		auto Publication = Stage->Stage({}, Cohort);
+		if (!Publication) {
+			Check(false, "provider admits the terrain query fixture");
+			World->Destroy();
+			return;
+		}
+
+		const glm::vec3 Origin(6.0f, 10.0f, 6.5f), Direction(0.0f, -15.0f, 0.0f);
+		RaycastParams WithTerrain;
+		WithTerrain.IncludeTerrain = true;
+		Check(!Space->ResolveRaycast(Origin, Direction, WithTerrain).Succeeded(),
+			"query rejects an unfinished native terrain cohort");
+		(*Publication)->Install(1);
+		Publication->reset();
+		const auto Ordinary = Space->ResolveRaycast(Origin, Direction);
+		const auto Complete = Space->ResolveRaycast(Origin, Direction, WithTerrain);
+		Check(Ordinary.Succeeded() && Ordinary.Instance == LegacyPart && !Ordinary.TerrainInstance,
+			"legacy ray excludes installed terrain colliders");
+		Check(Complete.Succeeded() && Complete.GetHitInstance() == TerrainValue && !Complete.Instance,
+			"terrain-aware ray resolves the same semantic Terrain ahead of a lower Part");
+
+		RaycastParams Include = WithTerrain;
+		Include.FilterType = Enums::RaycastFilterType::Include;
+		Include.FilterDescendantsInstances.Values = {TerrainValue};
+		const PhysicsQueryShape CastShape{.Kind = PhysicsQueryShapeKind::Sphere, .Transform = CFrame(Origin),
+			.Radius = 0.5f};
+		const auto ShapeHit = Space->ResolveShapeCast(CastShape, Direction, Include);
+		Check(ShapeHit.Succeeded() && ShapeHit.TerrainInstance == TerrainValue,
+			"a terrain-only Include filter participates in a shape cast");
+		RaycastParams Exclude = Include;
+		Exclude.FilterType = Enums::RaycastFilterType::Exclude;
+		const auto Excluded = Space->ResolveRaycast(Origin, Direction, Exclude);
+		Check(Excluded.Succeeded() && Excluded.Instance == LegacyPart && !Excluded.TerrainInstance,
+			"excluding the Terrain hierarchy root removes every installed terrain chunk");
+
+		const PhysicsQueryShape QueryShape{.Kind = PhysicsQueryShapeKind::Sphere,
+			.Transform = CFrame(glm::vec3(32.0f, 4.2f, 6.5f)), .Radius = 1.0f};
+		const auto Overlap = Space->ResolveOverlap(QueryShape, WithTerrain, 1);
+		Check(Overlap.Succeeded() && Overlap.TerrainInstance == TerrainValue && Overlap.Parts.empty() &&
+			!Overlap.Truncated, "overlap across two chunk bodies returns one Terrain owner independently of the Parts limit");
+
+		const std::array<terrain::ChunkPublicationCandidate, 1> Remove{{
+			{.Key = {0, 0, 0}, .GeometryChanged = true},
+		}};
+		auto Retirement = Stage->Stage({}, Remove);
+		if (Retirement) {
+			(*Retirement)->Install(2);
+			Retirement->reset();
+			const auto Replaced = Space->ResolveRaycast(Origin, Direction, WithTerrain);
+			Check(Replaced.Succeeded() && Replaced.Instance == LegacyPart && !Replaced.TerrainInstance,
+				"retired terrain body no longer participates in the semantic hit");
+		} else Check(false, "provider admits a terrain chunk retirement");
+		World->Destroy();
+	}
+
+	void TestTerrainRuntimeLuau() {
+		using namespace gargantuan;
+		auto World = std::make_shared<DataModel>();
+		auto TerrainScript = std::make_shared<Script>();
+		TerrainScript->SetName("TerrainFoundationLuau");
+		TerrainScript->SetSource(R"(
+			local Terrain = game.Workspace.Terrain
+			assert(Terrain:GetGridInfo().EditingAvailable)
+			assert(Terrain:GetEditStatus("0:1") == nil and not Terrain:CancelEdit("0:1"))
+			local function Commit(Ticket)
+				local Receipt = Terrain:GetEditStatus(Ticket)
+				assert(Receipt and Receipt.Status == "Pending" and not Receipt.CollisionReady)
+				for Step = 1, 1200 do
+					task.wait()
+					Receipt = Terrain:GetEditStatus(Ticket)
+					if Receipt.Status ~= "Pending" then
+						assert(Receipt.Status == "Committed" and Receipt.CollisionReady, Receipt.Status)
+						return Receipt.Revision
+					end
+				end
+				error("terrain edit did not commit")
+			end
+
+			local Center = Vector3.new(12, 8.4, 12)
+			local Revision = Commit(Terrain:FillBlock(Center, Vector3.new(8.4, 4.4, 8.4), 9))
+			local Params = RaycastParams.new()
+			Params.IncludeTerrain = true
+			local Origin = Vector3.new(12, 15, 12.25)
+			local Direction = Vector3.new(0, -15, 0)
+			local Hit = game.Workspace:Raycast(Origin, Direction, Params)
+			assert(Hit and Hit.Instance == Terrain and Hit.Normal.Y > 0.9)
+
+			local Min = Vector3.new(12, 8, 12)
+			local MaxExclusive = Vector3.new(13, 9, 13)
+			local Packet, ReadRevision = Terrain:ReadRegion(Min, MaxExclusive)
+			assert(ReadRevision == Revision and buffer.readi16(Packet, 0) < 0 and buffer.readu32(Packet, 2) == 9)
+			assert(not pcall(function() Terrain:WriteRegion(Min, MaxExclusive, Packet, "0") end))
+			buffer.writeu32(Packet, 2, 16)
+			Commit(Terrain:WriteRegion(Min, MaxExclusive, Packet, Revision))
+			local Painted = Terrain:ReadRegion(Min, MaxExclusive)
+			assert(buffer.readu32(Painted, 2) == 16)
+			Commit(Terrain:SmoothRegion(Min, MaxExclusive, 0.2))
+
+			local Canceled = Terrain:PaintBall(Center, 2, 4)
+			assert(Terrain:CancelEdit(Canceled))
+			for Step = 1, 1200 do
+				task.wait()
+				local Receipt = Terrain:GetEditStatus(Canceled)
+				if Receipt.Status ~= "Pending" then
+					assert(Receipt.Status == "Canceled" and not Receipt.CollisionReady)
+					break
+				end
+			end
+			assert(Terrain:GetEditStatus(Canceled).Status == "Canceled")
+			Commit(Terrain:RemoveBall(Center, 7.5))
+			assert(game.Workspace:Raycast(Origin, Direction, Params) == nil)
+			local Removed = Terrain:ReadRegion(Min, MaxExclusive)
+			assert(buffer.readi16(Removed, 0) >= 0 and buffer.readu32(Removed, 2) == 0)
+
+			local Character = game:GetService("Players"):GetPlayers()[1].Character
+			assert(Character and Character:IsA("KinematicCharacter"), "stock Character unavailable")
+			Commit(Terrain:FillBlock(Vector3.new(32, 6.4, 12), Vector3.new(15.4, 4.4, 9.4), 9))
+			Character.CFrame = CFrame.new(28, 10.8, 12)
+			local GroundedSteps = 0
+			for Step = 1, 9 do
+				local Movement = Character:Move(Vector3.new(1, -0.15, 0), Vector3.new(1, 0, 0))
+				assert(Movement.Position.Y > 10.3, "Character lost support over the chunk boundary")
+				if Movement.HasFloor and Movement.FloorNormal.Y > 0.9 then
+					GroundedSteps += 1
+				end
+			end
+			assert(Character.Position.X > 35 and GroundedSteps >= 5, "Character failed its cross-chunk grounding check")
+			local Before = Character.Position
+			Commit(Terrain:RemoveBall(Vector3.new(Before.X, 7.5, Before.Z), 4.2))
+			local Fallen = Character:Move(Vector3.new(0, -2, 0))
+			assert(Fallen.Position.Y < Before.Y - 1, "Character did not descend after support excavation")
+			script:SetAttribute("TerrainVerified", true)
+		)");
+		TerrainScript->SetParent(World);
+		HeadlessRenderer Renderer(Vector2(64.0f, 64.0f));
+		Engine Runtime(World, &Renderer, {}, EngineProviderConfiguration{.AudioEnabled = false});
+		Runtime.ProcessService->Alive = true;
+		for (int Tick = 0; Tick < 1800 && TerrainScript->Status != ScriptStatus::Finished &&
+			TerrainScript->Status != ScriptStatus::Error; ++Tick) {
+			Runtime.Step();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		const auto Verified = TerrainScript->GetAttributeValue("TerrainVerified");
+		if (!Verified) std::cerr << "[Terrain:Test] " << TerrainScript->ErrorMessage << '\n';
+		Check(Verified && std::get_if<bool>(&*Verified) && std::get<bool>(*Verified),
+			"headless Luau edits publish validated collision, honor revision and cancellation, and support excavation");
+		if (Verified) {
+			std::shared_ptr<Instance> Root = World;
+			CheckThrows<std::runtime_error>([&] {
+				(void)InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Root);
+			}, "direct JSON and package scene capture cannot silently omit edited terrain");
+		}
+		Runtime.Destroy();
 	}
 
 	void TestHierarchyAndDestruction() {
@@ -5281,7 +5585,7 @@ namespace {
 		Check(!ExistingProjectCreate["Ok"].get<bool>() && ExistingProjectCreate["Error"]["Code"] == "ExistingProject",
 			"CreateProject never overwrites an existing Gargantuan project");
 		auto CreatedSnapshot = call("GetSnapshot", Json::object(), "test-token");
-		Check(CreatedSnapshot["Ok"].get<bool>() && CreatedSnapshot["Result"]["Snapshot"]["Objects"].size() == 8,
+		Check(CreatedSnapshot["Ok"].get<bool>() && CreatedSnapshot["Result"]["Snapshot"]["Objects"].size() == 9,
 			"the minimum new project is immediately available through the normal authoritative snapshot path");
 		auto CreatedWorkspace = std::find_if(
 			CreatedSnapshot["Result"]["Snapshot"]["Objects"].begin(),
@@ -8682,6 +8986,9 @@ int main() {
 	}
 
 	TestRuntimeWorkAccounting();
+	TestTerrainWorkspaceOwnership();
+	TestTerrainColliderQueryProjection();
+	TestTerrainRuntimeLuau();
 	TestHierarchyAndDestruction();
 	TestServiceProviderSemantics();
 	TestObjectIdsAndChanges();

@@ -6,8 +6,13 @@
 #include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/classes/LocalLight.hpp"
 #include "gargantuan/classes/ReflectionProbe.hpp"
+#include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/Workspace.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
+#include "../terrain/PhysicsStage.hpp"
+#include "../terrain/TerrainMutation.hpp"
+#include "../terrain/TerrainRuntime.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
 
@@ -15,6 +20,7 @@
 #include "gargantuan/scripting/StackValue.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -28,6 +34,15 @@
 #include <vector>
 
 namespace gargantuan {
+	struct WorldRoot::TerrainTickets {
+		struct Record {
+			std::uint64_t Ticket{};
+			std::optional<terrain::EditReceipt> Completion;
+		};
+		std::array<Record, 128> Records;
+		bool ProviderFailureLogged{};
+	};
+
 	namespace {
 		[[nodiscard]] bool HasImpulse(const glm::vec3 &Impulse) {
 			return Impulse.x != 0.0f || Impulse.y != 0.0f || Impulse.z != 0.0f;
@@ -962,6 +977,8 @@ namespace gargantuan {
 	void WorldRoot::ShutdownPhysics() {
 		if (ShuttingDownPhysics) return;
 		ShuttingDownPhysics = true;
+		TerrainRuntimeValue.reset();
+		TerrainEditTickets.reset();
 		Deformables.Shutdown();
 		if (UnbindDescendants) UnbindDescendants();
 		if (DescendantRemovedConnection) DescendantRemovedConnection->Disconnect();
@@ -1081,13 +1098,119 @@ namespace gargantuan {
 		ShutdownPhysics();
 	}
 
+	void WorldRoot::InitializeTerrainRuntime(RuntimeMode Mode, bool AdmitNetworkTerrain, bool ExperimentalVisualDensity,
+		std::shared_ptr<const terrain::TerrainMaterialPalette> Palette) {
+		if (TerrainRuntimeValue || ShuttingDownPhysics) return;
+		auto *Space = dynamic_cast<Workspace *>(this);
+		auto Owner = Space ? Space->GetTerrain() : nullptr;
+		if (!Owner || !Owner->Field) return;
+		const bool Materialized = Owner->Field->GetStats().MaterializedPages != 0;
+		if (Mode == RuntimeMode::NetworkClient && !AdmitNetworkTerrain) {
+			if (Materialized)
+				throw std::runtime_error("[Terrain:Startup] Network client terrain requires peer readiness");
+			return;
+		}
+		if (Mode == RuntimeMode::NetworkServer && !Materialized && !AdmitNetworkTerrain) return;
+		if (!Physics.IsValid() && !Materialized) return;
+		const bool AllowEdits = Mode == RuntimeMode::Offline || (Mode == RuntimeMode::NetworkServer && AdmitNetworkTerrain);
+		const bool AllowReplicaReplacement = Mode == RuntimeMode::NetworkClient && AdmitNetworkTerrain;
+		auto Tickets = AllowEdits ? std::make_unique<TerrainTickets>() : nullptr;
+		auto Runtime = terrain::TerrainRuntime::Start(*Owner->Field, Owner->GetObjectId(), Physics, AllowEdits,
+			AllowReplicaReplacement, ExperimentalVisualDensity, std::move(Palette));
+		if (!Runtime)
+			throw std::runtime_error("[Terrain:Startup] Restore residency failed: " +
+				std::string(terrain::GetEditStatusName(Runtime.error())));
+		TerrainEditTickets = std::move(Tickets);
+		TerrainRuntimeValue = std::move(*Runtime);
+		TerrainReplicaCoverageRequired = AllowReplicaReplacement;
+	}
+
+	void WorldRoot::UpdateTerrainVisualDensity(const RenderCameraInput &Camera, std::uint32_t Width, std::uint32_t Height) {
+		if (HasTerrainRuntime()) TerrainRuntimeValue->UpdateVisualDensity(Camera, Width, Height);
+	}
+
+	bool WorldRoot::InstallTerrainReplica(std::unique_ptr<terrain::Field> Field,
+		std::vector<terrain::ChunkPublicationCandidate> Chunks, std::uint64_t Publication) {
+		if (!Field || !HasTerrainRuntime() || SteppingPhysics) return false;
+		const auto Owner = GetTerrainQueryOwner();
+		if (!Owner || !Owner->Field || Owner->Field->GetGrid() != Field->GetGrid()) return false;
+		if (!TerrainRuntimeValue->InstallReplica(Field->GetGrid(), std::move(Chunks), Publication)) return false;
+		Owner->Field = std::move(Field);
+		return true;
+	}
+
+	const terrain::PhysicsStage *WorldRoot::GetTerrainPhysics() const noexcept {
+		return TerrainRuntimeValue ? &TerrainRuntimeValue->GetPhysicsStage() : nullptr;
+	}
+
+	bool WorldRoot::HasTerrainRuntime() const noexcept {
+		const auto *TerrainPhysics = GetTerrainPhysics();
+		return TerrainPhysics && TerrainPhysics->IsHealthy() && !ShuttingDownPhysics;
+	}
+
+	std::expected<std::uint64_t, terrain::EditStatus>
+	WorldRoot::SubmitTerrainEdit(const Terrain &Owner, const terrain::TerrainMutation &Edit) {
+		if (!HasTerrainRuntime() || !TerrainEditTickets || GetTerrainQueryOwner().get() != &Owner || SteppingPhysics)
+			return std::unexpected(terrain::EditStatus::Unavailable);
+		if (Edit.ExpectedRevision && *Edit.ExpectedRevision != Owner.GetField().GetRevision())
+			return std::unexpected(terrain::EditStatus::Stale);
+		auto Ticket = TerrainRuntimeValue->Submit(Edit.Request, Edit.ExpectedRevision);
+		if (Ticket) {
+			auto &Records = TerrainEditTickets->Records;
+			Records[*Ticket % Records.size()] = {*Ticket, std::nullopt};
+		}
+		return Ticket;
+	}
+
+	bool WorldRoot::CancelTerrainEdit(const Terrain &Owner, std::uint64_t Ticket) noexcept {
+		return HasTerrainRuntime() && GetTerrainQueryOwner().get() == &Owner && TerrainRuntimeValue->Cancel(Ticket);
+	}
+
+	std::optional<WorldRoot::TerrainTicketInfo> WorldRoot::GetTerrainTicket(std::uint64_t Ticket) const noexcept {
+		if (!TerrainEditTickets || Ticket == 0) return std::nullopt;
+		const auto &Records = TerrainEditTickets->Records;
+		const auto &Receipt = Records[Ticket % Records.size()];
+		if (Receipt.Ticket != Ticket) return std::nullopt;
+		if (!Receipt.Completion) return TerrainTicketInfo{"Pending", std::nullopt, {}};
+		const auto &Completion = *Receipt.Completion;
+		return TerrainTicketInfo{terrain::GetEditStatusName(Completion.Status),
+			Completion.Status == terrain::EditStatus::Committed
+				? std::optional(Completion.CommittedRevision) : std::nullopt,
+			terrain::GetEditStatusDiagnostic(Completion.Status)};
+	}
+
+	void WorldRoot::PollTerrainWork() {
+		if (!TerrainRuntimeValue || !TerrainEditTickets) return;
+		const auto *TerrainPhysics = GetTerrainPhysics();
+		auto &Records = TerrainEditTickets->Records;
+		for (const auto &Completion : TerrainRuntimeValue->Poll()) {
+			auto &Record = Records[Completion.Ticket % Records.size()];
+			if (Record.Ticket == Completion.Ticket) Record.Completion = Completion;
+		}
+		if (TerrainPhysics && !TerrainPhysics->IsHealthy() && !TerrainEditTickets->ProviderFailureLogged) {
+			TerrainEditTickets->ProviderFailureLogged = true;
+			LOG_ERROR(App, "[Terrain:Collision] Provider retirement failed; terrain publication and world stepping paused");
+		}
+	}
+
+	std::shared_ptr<const terrain::RenderState> WorldRoot::GetTerrainRenderState() const noexcept {
+		return HasTerrainRuntime() ? TerrainRuntimeValue->CaptureRender() : nullptr;
+	}
+
 	PhysicsKinematicMotionResult WorldRoot::ResolveKinematicMotion(const PhysicsKinematicMotionRequest &Request) {
+		const auto *TerrainPhysics = GetTerrainPhysics();
+		if (TerrainPhysics && (TerrainPhysics->IsStaging() || !TerrainPhysics->IsHealthy()))
+			return {.Status = PhysicsOperationStatus::BackendFailure, .Message = "[Terrain:Query] Terrain collision is unavailable"};
 		ApplyPendingPhysicsChanges();
 		return Physics.MoveKinematicCapsule(Request);
 	}
 
 	PhysicsOperationResult
-	WorldRoot::BuildRaycastFilter(const RaycastParams &Params, PhysicsQueryFilter &Filter) const {
+	WorldRoot::BuildRaycastFilter(const RaycastParams &Params, PhysicsQueryFilter &Filter) {
+		const auto *TerrainPhysics = GetTerrainPhysics();
+		if (TerrainPhysics && (TerrainPhysics->IsStaging() || !TerrainPhysics->IsHealthy()))
+			return {PhysicsOperationStatus::BackendFailure, "[Terrain:Query] Terrain collision is unavailable"};
+		ApplyPendingPhysicsChanges();
 		if (Params.CollisionGroup < 0 || Params.CollisionGroup > MaximumPhysicsCollisionGroup ||
 			Params.CollisionMask < 0 || Params.CollisionMask > MaximumPhysicsCollisionMask)
 			return {PhysicsOperationStatus::InvalidDescription, "RaycastParams collision filter is outside the 16-group bound"};
@@ -1097,6 +1220,17 @@ namespace gargantuan {
 																			 : PhysicsQueryFilterType::Exclude;
 		if (Params.FilterDescendantsInstances.Values.size() > RaycastParams::MaximumFilterRoots)
 			return {PhysicsOperationStatus::InvalidDescription, "RaycastParams exceeds the 128-root limit"};
+
+		const auto CandidateTerrain = Params.IncludeTerrain ? GetTerrainQueryOwner() : nullptr;
+		const auto AppendTerrainBodies = [&] {
+			const auto *InstalledTerrain = GetTerrainPhysics();
+			if (!InstalledTerrain) return true;
+			if (InstalledTerrain->GetBodyCount() > MaximumRaycastFilterBodies - Filter.Bodies.size()) return false;
+			InstalledTerrain->AppendBodies(Filter.Bodies);
+			return true;
+		};
+		if (!Params.IncludeTerrain && Filter.Type == PhysicsQueryFilterType::Exclude && !AppendTerrainBodies())
+			return {PhysicsOperationStatus::InvalidDescription, "RaycastParams collider limit reached"};
 
 		std::vector<std::shared_ptr<Instance>> Pending;
 		Pending.reserve(Params.FilterDescendantsInstances.Values.size());
@@ -1132,6 +1266,8 @@ namespace gargantuan {
 				};
 			if (++Traversed > MaximumRaycastFilterTraversal)
 				return {PhysicsOperationStatus::InvalidDescription, "RaycastParams descendant traversal limit reached"};
+			if (Value == CandidateTerrain && !AppendTerrainBodies())
+				return {PhysicsOperationStatus::InvalidDescription, "RaycastParams collider limit reached"};
 			if (auto Part = std::dynamic_pointer_cast<BasePart>(Value)) {
 				auto Found = PartBodies.find(Part->GetObjectId());
 				if (Found != PartBodies.end() && Physics.IsBodyValid(Found->second)) {
@@ -1156,7 +1292,8 @@ namespace gargantuan {
 	}
 
 	WorldRaycastResult WorldRoot::ResolveRaycast(glm::vec3 Origin, glm::vec3 Direction, const RaycastParams &Params) {
-		ApplyPendingPhysicsChanges();
+		if (Params.IncludeTerrain && !HasTerrainQueryCoverage(Origin, Origin + Direction, glm::vec3(0.0f)))
+			return {.Status = PhysicsOperationStatus::ResourceLimit, .Message = "[Terrain:Query] Collision coverage is unavailable"};
 		PhysicsQueryFilter Filter;
 		if (auto Prepared = BuildRaycastFilter(Params, Filter); !Prepared.Succeeded())
 			return {.Status = Prepared.Status, .Message = std::move(Prepared.Message)};
@@ -1165,10 +1302,27 @@ namespace gargantuan {
 			.Direction = Direction,
 			.Filter = std::move(Filter),
 		});
-		return ResolveQueryHit(std::move(BackendResult));
+		return ResolveQueryHit(std::move(BackendResult), Params.IncludeTerrain);
 	}
 
-	WorldRaycastResult WorldRoot::ResolveQueryHit(PhysicsRaycastResult BackendResult) {
+	bool WorldRoot::HasTerrainQueryCoverage(glm::vec3 Origin, glm::vec3 Destination, glm::vec3 Extents) const {
+		const auto Admission = TerrainMotionAdmission.lock();
+		if (!Admission) return !TerrainReplicaCoverageRequired;
+		return HasTerrainRuntime() && (*Admission)({}, Origin, Extents) && (*Admission)({}, Destination, Extents);
+	}
+
+	std::shared_ptr<Terrain> WorldRoot::GetTerrainQueryOwner() const {
+		if (!GetTerrainPhysics()) return {};
+		const auto *Space = dynamic_cast<const Workspace *>(this);
+		return Space ? Space->GetTerrain() : nullptr;
+	}
+
+	std::shared_ptr<gargantuan::Instance> WorldRaycastResult::GetHitInstance() const {
+		if (Instance) return Instance;
+		return TerrainInstance;
+	}
+
+	WorldRaycastResult WorldRoot::ResolveQueryHit(PhysicsRaycastResult BackendResult, bool IncludeTerrain) {
 		auto Fail = [this](PhysicsOperationStatus Status, std::string Message) {
 			if (Status == PhysicsOperationStatus::BackendFailure && !RaycastFailureLogged) {
 				RaycastFailureLogged = true;
@@ -1184,23 +1338,40 @@ namespace gargantuan {
 		);
 		const PhysicsRaycastHit *SelectedHit = nullptr;
 		std::shared_ptr<BasePart> SelectedPart;
+		const auto *TerrainPhysics = GetTerrainPhysics();
+		const auto CandidateTerrain = IncludeTerrain ? GetTerrainQueryOwner() : nullptr;
+		std::optional<terrain::ChunkKey> SelectedChunk;
+		ObjectId SelectedObject{};
 		for (const auto &Candidate : BackendResult.Candidates) {
 			if (Candidate.Distance - NearestDistance > TieEpsilon) break;
 			auto CandidatePart = ResolvePart(Candidate.Body);
-			if (!CandidatePart)
+			std::optional<terrain::ChunkKey> CandidateChunk;
+			ObjectId CandidateObject{};
+			if (CandidatePart) CandidateObject = CandidatePart->GetObjectId();
+			else if (CandidateTerrain) {
+				if (const auto Owner = TerrainPhysics->FindOwner(Candidate.Body)) {
+					CandidateObject = CandidateTerrain->GetObjectId();
+					CandidateChunk = Owner->Key;
+				}
+			}
+			if (!CandidateObject.IsValid())
 				return Fail(PhysicsOperationStatus::BackendFailure, "Physics raycast hit has no live semantic owner");
-			if (!SelectedPart || CandidatePart->GetObjectId() < SelectedPart->GetObjectId()) {
+			if (!SelectedHit || CandidateObject < SelectedObject ||
+				(CandidateObject == SelectedObject && CandidateChunk < SelectedChunk)) {
 				SelectedHit = &Candidate;
 				SelectedPart = std::move(CandidatePart);
+				SelectedChunk = CandidateChunk;
+				SelectedObject = CandidateObject;
 			}
 		}
-		if (!SelectedPart || !SelectedHit)
+		if (!SelectedHit)
 			return Fail(PhysicsOperationStatus::BackendFailure, "Physics raycast hit has no live semantic owner");
 		return {
 			.Instance = std::move(SelectedPart),
 			.Position = SelectedHit->Position,
 			.Normal = SelectedHit->Normal,
 			.Distance = SelectedHit->Distance,
+			.TerrainInstance = SelectedChunk ? CandidateTerrain : nullptr,
 		};
 	}
 
@@ -1220,7 +1391,7 @@ namespace gargantuan {
 			return 1;
 		}
 		lua_createtable(L, 0, 4);
-		StackValue<std::shared_ptr<Instance>>::Push(L, Result.Instance);
+		StackValue<std::shared_ptr<Instance>>::Push(L, Result.GetHitInstance());
 		lua_setfield(L, -2, "Instance");
 		StackValue<glm::vec3>::Push(L, Result.Position);
 		lua_setfield(L, -2, "Position");
@@ -1362,6 +1533,9 @@ namespace gargantuan {
 		if (SteppingPhysics)
 			throw std::logic_error("[Physics:Step] Cannot advance a world already stepping");
 		(void)Instances;
+		PollTerrainWork();
+		const auto *TerrainPhysics = GetTerrainPhysics();
+		if (TerrainPhysics && (TerrainPhysics->IsStaging() || !TerrainPhysics->IsHealthy())) return;
 
 		struct StepGuard {
 			bool &Active;

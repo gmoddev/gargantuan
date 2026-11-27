@@ -2,6 +2,7 @@
 
 #include "gargantuan/network/BinaryCodec.hpp"
 
+#include <cstring>
 #include <limits>
 #include <string>
 #include <type_traits>
@@ -9,6 +10,13 @@
 namespace gargantuan::network {
 	namespace {
 		constexpr std::uint32_t GameSessionMagic = 0x53455347; // "GSES" in little endian.
+
+		bool ReadTerrainBinding(GameBinaryReader &Input, AssetContentId &Binding) {
+			std::span<const std::byte> Bytes;
+			if (!Input.Take(Binding.Bytes.size(), Bytes)) return false;
+			std::memcpy(Binding.Bytes.data(), Bytes.data(), Bytes.size());
+			return true;
+		}
 
 		bool WriteLimits(GameBinaryWriter &Output, const NetworkLimits &Limits) {
 			if (!Limits.IsValid() || Limits.MaximumReliableMessageBytes > std::numeric_limits<std::uint32_t>::max() ||
@@ -82,7 +90,9 @@ namespace gargantuan::network {
 				using ValueType = std::decay_t<decltype(Value)>;
 				if constexpr (std::is_same_v<ValueType, GameSessionClientHello>) {
 					Output.Integer(Value.Nonce);
-					return Value.Nonce != 0 && WriteLimits(Output, Value.AdvertisedLimits);
+					const auto ValidLimits = WriteLimits(Output, Value.AdvertisedLimits);
+					Output.Append(std::as_bytes(std::span(Value.TerrainBinding.Bytes)));
+					return Value.Nonce != 0 && ValidLimits;
 				} else if constexpr (std::is_same_v<ValueType, GameSessionServerAccepted>) {
 					Output.Integer(Value.Nonce);
 					Output.Integer(Value.SessionEpoch);
@@ -92,14 +102,17 @@ namespace gargantuan::network {
 					Output.Integer(static_cast<std::uint8_t>(Value.Identity));
 					Output.Integer<std::uint8_t>(0);
 					Output.Integer<std::uint16_t>(0);
+					const auto ValidLimits = WriteLimits(Output, Value.NegotiatedLimits);
+					Output.Append(std::as_bytes(std::span(Value.TerrainBinding.Bytes)));
 					return Value.Nonce != 0 && Value.SessionEpoch != 0 && Value.Replication.IsValid() &&
 						   Value.Player.IsValid() && Value.PlayerId != 0 &&
 						   Value.Identity == SessionIdentityKind::DevelopmentLocal &&
-						   WriteLimits(Output, Value.NegotiatedLimits);
+						   ValidLimits;
 				} else {
 					Output.Integer(Value.SessionEpoch);
 					Output.Integer(Value.Replication.Value());
 					WriteBinaryObjectId(Output, Value.Player);
+					Output.Append(std::as_bytes(std::span(Value.TerrainBinding.Bytes)));
 					return Value.SessionEpoch != 0 && Value.Replication.IsValid() && Value.Player.IsValid();
 				}
 			},
@@ -134,7 +147,8 @@ namespace gargantuan::network {
 		GameSessionMessage Result;
 		if (KindValue == static_cast<std::uint8_t>(GameSessionMessageKind::ClientHello)) {
 			GameSessionClientHello Value;
-			if (!Input.Integer(Value.Nonce) || !ReadLimits(Input, Value.AdvertisedLimits) || Value.Nonce == 0)
+			if (!Input.Integer(Value.Nonce) || !ReadLimits(Input, Value.AdvertisedLimits) ||
+				!ReadTerrainBinding(Input, Value.TerrainBinding) || Value.Nonce == 0)
 				return SerializationFailure(
 					ErrorCode(Input), Input.Error.empty() ? "Game session client hello is invalid" : Input.Error
 				);
@@ -148,7 +162,7 @@ namespace gargantuan::network {
 			if (!Input.Integer(Value.Nonce) || !Input.Integer(Value.SessionEpoch) || !Input.Integer(Replication) ||
 				!ReadBinaryObjectId(Input, Value.Player) || !Input.Integer(Value.PlayerId) ||
 				!Input.Integer(Identity) || !Input.Integer(Reserved8) || !Input.Integer(Reserved16) ||
-				!ReadLimits(Input, Value.NegotiatedLimits))
+				!ReadLimits(Input, Value.NegotiatedLimits) || !ReadTerrainBinding(Input, Value.TerrainBinding))
 				return SerializationFailure(ErrorCode(Input), Input.Error);
 			Value.Replication = ReplicationEpoch(Replication);
 			Value.Identity = static_cast<SessionIdentityKind>(Identity);
@@ -161,7 +175,7 @@ namespace gargantuan::network {
 			GameSessionClientReady Value;
 			std::uint64_t Replication;
 			if (!Input.Integer(Value.SessionEpoch) || !Input.Integer(Replication) ||
-				!ReadBinaryObjectId(Input, Value.Player))
+				!ReadBinaryObjectId(Input, Value.Player) || !ReadTerrainBinding(Input, Value.TerrainBinding))
 				return SerializationFailure(ErrorCode(Input), Input.Error);
 			Value.Replication = ReplicationEpoch(Replication);
 			if (Value.SessionEpoch == 0 || !Value.Replication.IsValid() || !Value.Player.IsValid())

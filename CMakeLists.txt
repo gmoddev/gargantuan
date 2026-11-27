@@ -657,10 +657,9 @@ if(MSVC)
 	target_compile_options(gargantuan_core PUBLIC /EHsc)
 endif()
 
-# GCC 13+ rejects members named after their own type (ie. ScrptEngine's
-# ThreadEngine)
+# GCC 13+ needs this option for Engine headers that expose established member names.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-	target_compile_options(gargantuan_core PRIVATE -Wno-changes-meaning)
+	target_compile_options(gargantuan_core PUBLIC -Wno-changes-meaning)
 endif()
 
 target_include_directories(gargantuan_core PUBLIC
@@ -783,6 +782,36 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+	foreach(TerrainTest IN ITEMS
+		"tests/terrain/TerrainFieldTests.cpp"
+		"tests/terrain/TerrainCoordinatorTests.cpp"
+		"tests/terrain/TerrainRenderTests.cpp"
+		"tests/terrain/TerrainRuntimeTests.cpp"
+		"tests/terrain/lod/TerrainVisualDensityRender.cpp"
+		"tests/terrain/storage/HeightColumnQualification.cpp"
+		"tests/terrain/surface/TerrainSurfaceTests.cpp"
+		"tests/terrain/physics/TerrainPhysicsStageTests.cpp"
+		"tests/terrain/metadata/ActiveChunkRegistryTests.cpp"
+		"tests/terrain/codec/ChunkCodecTests.cpp"
+		"tests/terrain/codec/TerrainManifestTests.cpp"
+		"tests/terrain/codec/TerrainPersistenceTests.cpp")
+		get_filename_component(TerrainName "${TerrainTest}" NAME_WE)
+		string(TOLOWER "gargantuan_${TerrainName}" TerrainTarget)
+		add_executable("${TerrainTarget}" "${TerrainTest}")
+		target_include_directories("${TerrainTarget}" PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+		target_link_libraries("${TerrainTarget}" PRIVATE gargantuan_core)
+		add_test(NAME "${TerrainTarget}" COMMAND "${TerrainTarget}")
+		set_tests_properties("${TerrainTarget}" PROPERTIES LABELS "terrain;headless" TIMEOUT 60)
+	endforeach()
+	add_executable(gargantuan_terrainlodqualification "tests/terrain/lod/TerrainLodQualification.cpp")
+	target_include_directories(gargantuan_terrainlodqualification PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+	target_link_libraries(gargantuan_terrainlodqualification PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_terrainlodqualification COMMAND gargantuan_terrainlodqualification --compare-indexed)
+	set_tests_properties(gargantuan_terrainlodqualification PROPERTIES LABELS "terrain;headless" TIMEOUT 60)
+	add_executable(gargantuan_terrain_lod_offscreen EXCLUDE_FROM_ALL "tests/terrain/lod/TerrainLodOffscreen.cpp")
+	target_include_directories(gargantuan_terrain_lod_offscreen PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+	target_link_libraries(gargantuan_terrain_lod_offscreen PRIVATE gargantuan_core)
+	add_dependencies(gargantuan_terrain_lod_offscreen gargantuan_shaders)
 	add_executable(gargantuan_gas_document_tests "tests/GasDocumentTests.cpp")
 	target_link_libraries(gargantuan_gas_document_tests PRIVATE gargantuan_core)
 	add_test(NAME gargantuan_gas_document COMMAND gargantuan_gas_document_tests)
@@ -1390,6 +1419,8 @@ if(BUILD_TESTING)
 		target_link_libraries(gargantuan_gameplay_allocation_workload PRIVATE gargantuan_gns_transport)
 		target_link_libraries(gargantuan_gameplay_sample_tests PRIVATE gargantuan_gns_transport)
 		add_test(NAME gargantuan_gameplay_possession_gns COMMAND gargantuan_game_session_tests --generic-possession-gns)
+		add_test(NAME gargantuan_terrain_session_gns COMMAND gargantuan_game_session_tests --terrain-gns)
+		set_tests_properties(gargantuan_terrain_session_gns PROPERTIES LABELS "terrain;networking;transport" TIMEOUT 20 RUN_SERIAL TRUE)
 		set_tests_properties(gargantuan_gameplay_possession_gns PROPERTIES LABELS "networking;runtime;security;gns" TIMEOUT 45)
 		add_test(NAME gargantuan_gameplay_relay_sample_gns COMMAND gargantuan_gameplay_sample_tests --gns)
 		set_tests_properties(gargantuan_gameplay_relay_sample_gns PROPERTIES LABELS "networking;runtime;sample;gns" TIMEOUT 45)

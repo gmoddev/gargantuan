@@ -2,6 +2,7 @@
 #include "host/server/PhysicalScaleQualification.hpp"
 #include "host/server/FarmAdmissionEvidence.hpp"
 #include "host/common/FarmPublicationEvidence.hpp"
+#include "gargantuan/network/TerrainSession.hpp"
 #include "host/server/FarmF1Evidence.hpp"
 #include "host/server/FarmD03FirstFault.hpp"
 #include "host/common/FarmServerTickEvidence.hpp"
@@ -515,6 +516,12 @@ namespace gargantuan::host {
 		int BootstrapExitCode = 0;
 		auto Payload = BootstrapPackagedRuntime(PackageRoot, RuntimeRoot, "GargantuanServer", BootstrapExitCode);
 		if (!Payload) return BootstrapExitCode;
+		const bool NetworkTerrain = !Payload->TerrainArtifacts.empty();
+		if (NetworkTerrain && (Payload->Inspection.Configuration != PackageConfiguration::Development || !BindEndpoint ||
+			!network::IsLoopbackTransportEndpoint(*BindEndpoint) || HostConfiguration.ReliableService)) {
+			std::cerr << "[Terrain:Network] Terrain delivery currently requires a loopback Development package and standard reliable service.\n";
+			return 7;
+		}
 
 		// These owners also outlive the catch handler. Engine::Destroy borrows
 		// Renderer, and GameSession::Stop borrows Engine during exception cleanup.
@@ -662,6 +669,7 @@ namespace gargantuan::host {
 					.EnableResidencyDemandPolicy = !FarmMode && ContentLifecycleKey.empty() && StopInFlightKey.empty(),
 					.EnableStreamingDiagnostics = Program.get<bool>("--streaming-diagnostics"),
 					.Persistence = std::move(Persistence),
+					.AdmitNetworkTerrain = NetworkTerrain,
 				}
 			);
 #if defined(GARGANTUAN_WITH_GNS)
@@ -742,6 +750,8 @@ namespace gargantuan::host {
 						.Limits = network::GameSessionConfiguration::DefaultLimits(),
 						.AllowInsecureDevelopmentNetwork = AllowInsecureDevelopmentNetwork,
 						.ReliableService = HostConfiguration.ReliableService,
+						.TerrainBootstrap = NetworkTerrain ? network::MakeTerrainSessionData(Payload->Inspection.Identity,
+							Payload->Inspection.Revision, Payload->TerrainArtifacts, true) : nullptr,
 					},
 					Runtime.get()
 				);

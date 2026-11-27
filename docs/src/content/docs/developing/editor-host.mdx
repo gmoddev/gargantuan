@@ -136,6 +136,70 @@ fixed layout, complete state, sequence, dimensions, format, and payload length;
 the named mapping disappears when both processes release their session handles.
 Picking currently uses BasePart-oriented bounds.
 
+## Terrain authoring
+
+Local EditorHost advertises `TerrainAuthoringV1`. Terrain commands operate on
+the protected Workspace terrain via the native mutation gateway and scheduler.
+They require the trusted Studio grant. Brush and history commands require an
+established snapshot, mutation capability, and a closed object transaction.
+Terrain editing is available in Edit mode.
+
+Hosts advertising `TerrainProjectGridV1` accept optional numeric
+`TerrainSampleSpacing` on `CreateProject`. Choose 0.5, 1, or 2 world
+units. The default is 1. A spacing of 0.5 fits eight times as many samples
+in the same volume as spacing 1. The project keeps the chosen spacing on
+save and reopen, including when the field is empty. Brush admission uses
+the chosen lattice and its normal sample budget.
+
+| Method | Parameters and behavior |
+| --- | --- |
+| `GetTerrainAuthoringState` | Takes no parameters. Returns `Scope`, exact decimal-string `TerrainRevision`, world-unit `SampleSpacing`, `MaximumBrushSamples`, `EditingAvailable`, `Busy`, `CanUndo`, `CanRedo`, and the ordinary `ProjectState`. |
+| `SubmitTerrainBrush` | Takes `Scope`, `ExpectedTerrainRevision`, optional numeric `ExpectedRevision` for project state, and `Brush`. Returns a decimal-string `Ticket` and `Pending`. |
+| `GetTerrainEditStatus` | Takes `Scope` and `Ticket`. Returns the current authoring state plus the ticket's `Status`, `Diagnostic`, and nullable `CommittedTerrainRevision`. |
+| `CancelTerrainEdit` | Takes `Scope` and the pending `Ticket`. Returns `CancelRequested` when cancellation is accepted. Poll the ticket for its terminal state. |
+| `UndoTerrainEdit`, `RedoTerrainEdit` | Take `Scope`, `ExpectedTerrainRevision`, and optional numeric `ExpectedRevision`. Return a ticket for replay of the exact samples from the most recent changed brush. |
+| `RaycastTerrainSurface` | Takes `Scope`, `ExpectedTerrainRevision`, and world-space `Origin` and `Direction` arrays. `Direction` is displacement with length up to 8,192. Returns `Hit` with `Position`, `Normal`, and `Distance`, or null. Requires `ViewportControl` and checks only committed terrain collision. |
+
+A `Sphere` brush takes `Mode`, `Center` and `Radius` in world units. A `Box`
+brush takes `Mode`, `Center` and a three-component world-unit `HalfExtent`.
+`Add` and `Paint` require a nonzero unsigned 32-bit `Material`. `Subtract`
+clears material from excavated samples. `Smooth` takes integer lattice vectors
+`Min` and `MaxExclusive` and `Strength` from 1 to 255. The 4,096-sample brush
+limit includes the signed-density band for Add and Subtract. Inputs outside the
+brush or native scene budgets are denied with diagnostics.
+
+Only one terrain stamp or replay may be pending per authoring scope. Save,
+project replacement, Play, and new object transactions wait for its terminal
+state. A changed brush advances the terrain and project revisions once and
+publishes paired native collision and immutable render state on Main.
+`Committed` can return the original revision when the brush changed no samples.
+The viewport consumes the new render state through its ordinary next frame.
+The first brush or targeted query can synchronously prepare bounded native
+terrain residency for a reopened scene.
+
+The terrain history slot holds exact before-and-after sample values for one
+changed brush. A later changed brush replaces the slot. The slot survives
+ordinary object edits and is cleared on scene replacement. It is separate from
+the object Undo stack and is session-local. Preparing work and rejected
+requests leave both saved authority and history intact. Ticket receipts are
+bounded to the latest 128 per space and every request is scoped to the loaded
+DataModel's generation-safe identity.
+
+EditorHost advertises `TerrainMaterialBindingsV1` when the Engine resolves the
+Workspace `TerrainMaterialBindings` string attribute into terrain tints at
+Play or package startup. Use the asset catalog to select imported project
+materials and submit the attribute with `SetAttribute` and the current
+`ExpectedRevision`. The string holds an array of records with a nonzero
+unsigned 32-bit `Id` and a project material `Asset` ID. This edit uses
+ordinary project Undo, Redo, and Save.
+
+The Workspace Boolean attribute `TerrainVisualDensity` opts the project
+into camera-driven mixed visual detail on its next Play or package startup.
+The Engine retains authored-resolution collider geometry and selects the
+fine visual mesh where a reduced mesh fails its geometry or resource checks.
+
+## Viewport capability
+
 Every viewport transport, configuration, camera, capture, and picking method
 requires the explicit `ViewportControl` capability at EditorHost dispatch. The
 restricted Studio Luau service receives only viewport size, camera values,

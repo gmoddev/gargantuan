@@ -1,4 +1,5 @@
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Terrain.hpp"
 
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
@@ -83,6 +84,7 @@ namespace gargantuan {
 	bool DataModel::IsProtectedService(const std::shared_ptr<Instance> &InstanceValue) const {
 		if (!InstanceValue) return false;
 		if (InstanceValue.get() == this) return true;
+		if (dynamic_cast<Terrain *>(InstanceValue.get())) return true;
 		auto *Definition = InstanceClassRegistry::GetDefinition(InstanceValue.get());
 		if (Definition && Definition->Id == SchemaId::FromNativeName("Engine", "PlayerGui")) return true;
 		auto Parent = InstanceValue->GetParent();
@@ -93,7 +95,8 @@ namespace gargantuan {
 
 	bool DataModel::IsProtectedServiceClass(SchemaId ClassId) const {
 		if (ClassId == SchemaId::FromNativeName("Engine", "DataModel") ||
-			ClassId == SchemaId::FromNativeName("Engine", "PlayerGui")) return true;
+			ClassId == SchemaId::FromNativeName("Engine", "PlayerGui") ||
+			ClassId == SchemaId::FromNativeName("Engine", "Terrain")) return true;
 		for (const auto &[Name, Id] : GetServiceDefinitions()) {
 			(void)Name;
 			if (ClassId == Id) return true;

@@ -1,0 +1,8 @@
+Scene,Repetitions,FineColdP50Us,ReducedColdP50Us,FinePublishP50Us,ReducedPublishP50Us,FineUploadBytes,ReducedUploadBytes
+Flat,9,586.5,2659.9,49.3,40.7,81204,63496
+Rolling,9,647.6,3614.2,68.7,57.4,108072,89224
+ThinCave,9,612.3,3237.7,57.5,45.8,91140,71380
+Checks,PaintGeometryHaloIdentityAndFineCollision,Pass
+Checks,BoundedPrioritizedPrefetchCancellationAndRetirement,Pass
+Checks,OverlapDenialPublishesFine,Pass
+Checks,ProviderDenialPreservesCommittedSource,Pass

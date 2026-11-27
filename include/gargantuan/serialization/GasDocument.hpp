@@ -19,6 +19,7 @@ namespace gargantuan::Gas {
 	enum class DocumentKind : std::uint8_t { Model = 1, Place = 2 };
 
 	inline constexpr std::uint16_t FormatVersion = 1;
+	inline constexpr std::uint16_t TerrainPlaceFormatVersion = 2;
 	inline constexpr std::uint32_t SchemaVersion = 1;
 	inline constexpr std::size_t MaximumDocumentBytes = 8 * 1024 * 1024;
 	inline constexpr std::size_t MaximumInstances = 64 * 1024;
@@ -71,6 +72,7 @@ namespace gargantuan::Gas {
 	struct PlaceMetadata {
 		ProjectId Identity;
 		std::optional<std::string> PreRunSource;
+		std::optional<AssetContentId> TerrainManifest;
 		bool operator==(const PlaceMetadata &) const = default;
 	};
 
@@ -81,6 +83,10 @@ namespace gargantuan::Gas {
 		std::optional<PlaceMetadata> Place;
 		bool operator==(const Document &) const = default;
 	};
+
+	[[nodiscard]] inline std::uint16_t GetFormatVersion(const Document &Value) noexcept {
+		return Value.Place && Value.Place->TerrainManifest ? TerrainPlaceFormatVersion : FormatVersion;
+	}
 
 	// These operations handle inert values only. Callers still require frozen-schema,
 	// dependency and lifecycle validation before constructing or publishing Instances.

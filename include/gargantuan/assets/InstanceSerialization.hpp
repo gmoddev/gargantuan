@@ -1,8 +1,11 @@
 #pragma once
 
+#include "gargantuan/assets/AssetTypes.hpp"
 #include "gargantuan/classes/Instance.hpp"
 
+#include <expected>
 #include <format>
+#include <functional>
 #include <cstdint>
 #include <istream>
 #include <optional>
@@ -14,6 +17,8 @@
 
 namespace gargantuan::InstanceSerialization {
 	enum class InstanceFormat : int { Json, Binary };
+	inline constexpr int TerrainSceneVersion = 6;
+	using TerrainSceneAdmission = std::function<void(DataModel &, const AssetContentId &)>;
 	struct DeserializationState {
 		bool Ok = false;
 		std::shared_ptr<Instance> Instance;
@@ -46,9 +51,12 @@ namespace gargantuan::InstanceSerialization {
 		}
 	};
 
-	std::string Serialize(InstanceFormat format, std::shared_ptr<Instance> &instance);
+	std::string Serialize(InstanceFormat format, std::shared_ptr<Instance> &instance,
+		std::optional<AssetContentId> TerrainManifest = {});
 	std::string SerializeEmptyProject(InstanceFormat Format, std::string_view ProjectName);
-	DeserializationState Deserialize(InstanceFormat format, std::istream &input);
+	DeserializationState Deserialize(InstanceFormat format, std::istream &input,
+		const TerrainSceneAdmission &AdmitTerrain = {});
+	[[nodiscard]] std::expected<std::optional<AssetContentId>, std::string> InspectTerrainManifest(std::string_view Json);
 	DeserializationState DeserializeDetached(InstanceFormat format, std::istream &input);
 	// Clone/duplicate create new logical resources. Undo/Redo uses the ordinary
 	// identity-preserving detached reconstruction above.

@@ -18,6 +18,7 @@
 
 namespace gargantuan {
 	namespace Gas { struct Document; }
+	namespace terrain { struct TerrainMutation; }
 	inline constexpr std::size_t MaximumPendingMutations = 4096;
 
 	enum class MutationCommandOrigin { LocalInternal, Studio, AuthenticatedPeer };
@@ -97,6 +98,16 @@ namespace gargantuan {
 	struct ReparentObjectCommand { ObjectId Object; std::optional<ObjectId> Parent; };
 	struct DestroyObjectCommand { ObjectId Object; };
 	struct DuplicateObjectCommand { ObjectId Object; };
+	struct SubmitTerrainEditCommand {
+		ObjectId Object;
+		ObjectId ExpectedScope;
+		std::shared_ptr<const terrain::TerrainMutation> Edit;
+	};
+	struct CancelTerrainEditCommand {
+		ObjectId Object;
+		ObjectId ExpectedScope;
+		std::uint64_t Ticket = 0;
+	};
 	struct RestoreSubtreeCommand {
 		std::string PersistentSnapshot;
 		ObjectId Parent;
@@ -121,7 +132,9 @@ namespace gargantuan {
 		DestroyObjectCommand,
 		DuplicateObjectCommand,
 		RestoreSubtreeCommand,
-		ImportGasModelCommand
+		ImportGasModelCommand,
+		SubmitTerrainEditCommand,
+		CancelTerrainEditCommand
 	>;
 
 	enum class MutationStatus {
@@ -149,6 +162,7 @@ namespace gargantuan {
 		MutationStatus Status = MutationStatus::InternalError;
 		std::optional<ObjectId> Object;
 		std::string Message;
+		std::optional<std::uint64_t> TerrainTicket;
 		[[nodiscard]] bool Succeeded() const { return Status == MutationStatus::Success; }
 	};
 

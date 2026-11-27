@@ -34,11 +34,12 @@ namespace gargantuan {
 		std::uint64_t AuthoringRevision,
 		AssetProjectSnapshot Assets,
 		bool AudioEnabled,
-		std::shared_ptr<IPersistenceProvider> Persistence
+		std::shared_ptr<IPersistenceProvider> Persistence,
+		const InstanceSerialization::TerrainSceneAdmission &AdmitTerrain
 	) : Id(SessionId), State(PlaySessionState::Starting), LaunchAuthoringRevision(AuthoringRevision) {
 		if (Id.Value == 0 || AuthoringRevision == 0) throw std::invalid_argument("Play session identity and revision must be nonzero");
 		std::istringstream Input(std::move(LaunchContents));
-		auto Deserialized = InstanceSerialization::Deserialize(Format, Input);
+		auto Deserialized = InstanceSerialization::Deserialize(Format, Input, AdmitTerrain);
 		if (!Deserialized.Ok || !Deserialized.Instance || !Deserialized.Instance->IsA("DataModel")) {
 			State = PlaySessionState::Failed;
 			throw std::runtime_error("Play launch snapshot could not construct a DataModel");

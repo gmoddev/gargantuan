@@ -1,6 +1,8 @@
 #include "gargantuan/classes/ServiceProvider.hpp"
+#include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/services/AudioMixService.hpp"
+#include "gargantuan/services/Workspace.hpp"
 
 #include <SDL3/SDL.h>
 #include <optional>
@@ -8,6 +10,7 @@
 namespace gargantuan {
 	namespace {
 		constexpr auto AudioMixServiceId = SchemaId::FromNativeName("Engine", "AudioMixService");
+		constexpr auto WorkspaceId = SchemaId::FromNativeName("Engine", "Workspace");
 
 		bool IsCanonicalService(
 			ServiceProvider *Provider,
@@ -54,7 +57,12 @@ namespace gargantuan {
 		const auto &Definitions = GetServiceDefinitions();
 		auto Registered = Definitions.find(Name);
 		if (Registered == Definitions.end()) return std::nullopt;
-		if (auto Existing = FindService(Name)) return Existing;
+		const auto Prepare = [&](const std::shared_ptr<Instance> &Service) {
+			if (Registered->second == WorkspaceId && dynamic_cast<DataModel *>(this))
+				static_cast<Workspace &>(*Service).InitializeTerrain();
+			return Service;
+		};
+		if (auto Existing = FindService(Name)) return Prepare(*Existing);
 		if (Registered->second == AudioMixServiceId) return std::nullopt;
 
 		auto *Definition = InstanceClassRegistry::GetDefinitionBySchemaId(Registered->second);
@@ -68,7 +76,7 @@ namespace gargantuan {
 		if (auto Existing = FindFirstChildOfClass(ClassName, std::nullopt);
 			IsCanonicalService(this, Existing, Registered->second)) {
 			Services.emplace(Name, Existing);
-			return Existing;
+			return Prepare(Existing);
 		}
 
 		auto Service = InstanceClassRegistry::Construct(*Definition);
@@ -76,7 +84,7 @@ namespace gargantuan {
 		if (GetArchivable()) Service->MarkPersistenceSubtreeArchivable();
 		Service->SetParent(this->shared_from_this());
 		Services.emplace(Name, Service);
-		return Service;
+		return Prepare(Service);
 	}
 
 	std::shared_ptr<Instance> ServiceProvider::GetService(std::string Name) {

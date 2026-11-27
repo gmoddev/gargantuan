@@ -17,6 +17,8 @@
 #include "assets/AssetImporter.hpp"
 #include "assets/PreparedInstanceSerialization.hpp"
 #include "serialization/JsonCodec.hpp"
+#include "terrain/ScenePersistence.hpp"
+#include "terrain/TerrainProfile.hpp"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -287,6 +289,12 @@ namespace gargantuan {
 			return true;
 		}
 
+		std::string GetPackageTerrainPath(const terrain::TerrainArtifactId &Id) {
+			const auto Source = terrain::GetTerrainArtifactPath(Id);
+			if (!Source) throw terrain::TerrainPersistenceFailure(terrain::TerrainPersistenceError::InvalidBinding);
+			return "content/" + *Source;
+		}
+
 		bool IsReparseOrLink(const std::filesystem::path &Path) {
 			std::error_code Error;
 			const auto Status = std::filesystem::symlink_status(Path, Error);
@@ -411,8 +419,36 @@ namespace gargantuan {
 			if (!Input) throw std::runtime_error("Could not open package document");
 			std::string Result(static_cast<std::size_t>(Size), '\0');
 			Input.read(Result.data(), static_cast<std::streamsize>(Result.size()));
-			if (!Input && !Input.eof()) throw std::runtime_error("Could not read package document");
+			if (Input.gcount() != static_cast<std::streamsize>(Result.size()) ||
+				Input.peek() != std::char_traits<char>::eof() || Input.bad())
+				throw std::runtime_error("Package document changed or could not be read completely");
 			return Result;
+		}
+
+		const ContentEntry *FindContentEntry(const ParsedPackageManifest &Manifest, std::string_view Relative) {
+			const auto Entry = std::ranges::lower_bound(Manifest.Content, Relative, {}, &ContentEntry::Path);
+			return Entry != Manifest.Content.end() && Entry->Path == Relative ? &*Entry : nullptr;
+		}
+
+		void VerifyContentFiles(const std::filesystem::path &Root, const ParsedPackageManifest &Manifest,
+			const std::set<std::string> &DeferredTerrainChunks) {
+			for (const auto &Entry : Manifest.Content) {
+				if (DeferredTerrainChunks.contains(Entry.Path)) continue;
+				const auto Path = ResolvePackageFile(Root, Entry.Path, true);
+				if (!Path || std::filesystem::file_size(*Path) != Entry.Size || HashFile(*Path, Entry.Size) != Entry.Sha256)
+					throw std::runtime_error("Package content is missing or has an integrity mismatch");
+			}
+		}
+
+		std::string ReadPinnedText(const std::filesystem::path &PackageRoot, const ParsedPackageManifest &Manifest,
+			std::string_view Relative, std::size_t MaximumBytes) {
+			const auto *Entry = FindContentEntry(Manifest, Relative);
+			const auto Path = ResolvePackageFile(PackageRoot, Relative, true);
+			if (!Entry || !Path) throw std::runtime_error("Package payload has no pinned content entry");
+			auto Bytes = ReadBoundedText(*Path, MaximumBytes);
+			if (Bytes.size() != Entry->Size || HashText(Bytes) != Entry->Sha256)
+				throw std::runtime_error("Package payload changed after content validation");
+			return Bytes;
 		}
 
 		Json EncodeContent(const std::vector<ContentEntry> &Entries) {
@@ -500,7 +536,8 @@ namespace gargantuan {
 		}
 
 		std::optional<ParsedPackageManifest> ParseManifest(
-			const std::filesystem::path &Root, std::vector<PackageDiagnostic> &Diagnostics, bool VerifyContent
+			const std::filesystem::path &Root, std::vector<PackageDiagnostic> &Diagnostics, bool VerifyContent,
+			PackageRuntimeLoadMode Mode = PackageRuntimeLoadMode::Complete
 		) {
 			try {
 				auto Parsed = JsonCodec::Parse(
@@ -612,9 +649,9 @@ namespace gargantuan {
 					auto Found = std::ranges::find(Result.Content, *Result.ContentManifestPath, &ContentEntry::Path);
 					if (Found == Result.Content.end()) throw std::runtime_error("Package content manifest metadata is absent");
 					Result.ContentManifestDigest = *AssetContentId::Parse(Found->Sha256);
-					auto ContentManifestText = ReadBoundedText(
-						*ResolvePackageFile(Root, *Result.ContentManifestPath, true), MaximumPackageContentManifestBytes
-					);
+					const auto ContentManifestFile = ResolvePackageFile(Root, *Result.ContentManifestPath, true);
+					if (!ContentManifestFile) throw std::runtime_error("Package content manifest file is absent");
+					auto ContentManifestText = ReadBoundedText(*ContentManifestFile, MaximumPackageContentManifestBytes);
 					auto ContentManifest = ParsePackageContentManifest(ContentManifestText);
 					if (!ContentManifest || ContentManifest->Package.Project != Result.Inspection.Identity ||
 						ContentManifest->Package.PackageVersion != Result.Inspection.Revision)
@@ -625,9 +662,9 @@ namespace gargantuan {
 							UnitFound->Sha256 != Unit.Digest.ToString())
 							throw std::runtime_error("Package content unit is absent from the verified content table");
 						if (VerifyContent) {
-							auto UnitText = ReadBoundedText(
-								*ResolvePackageFile(Root, Unit.BlobReference, true), MaximumPackageContentPayloadBytes
-							);
+							const auto UnitFile = ResolvePackageFile(Root, Unit.BlobReference, true);
+							if (!UnitFile) throw std::runtime_error("Package content unit file is absent");
+							auto UnitText = ReadBoundedText(*UnitFile, MaximumPackageContentPayloadBytes);
 							auto UnitDocument = JsonCodec::Parse(
 								UnitText, MaximumPackageContentPayloadBytes, "package content unit"
 							);
@@ -644,13 +681,9 @@ namespace gargantuan {
 				Result.Inspection.ContentCount = Result.Content.size();
 				Result.Inspection.ContentBytes = Aggregate;
 
-				if (VerifyContent)
-					for (const auto &Entry : Result.Content) {
-						auto Path = ResolvePackageFile(Root, Entry.Path, true);
-						if (!Path || std::filesystem::file_size(*Path) != Entry.Size ||
-							HashFile(*Path, Entry.Size) != Entry.Sha256)
-							throw std::runtime_error("Package content is missing or has an integrity mismatch");
-					}
+				if (VerifyContent && (Mode != PackageRuntimeLoadMode::LoopbackDevelopmentClient ||
+					Result.Inspection.Configuration != PackageConfiguration::Development))
+					VerifyContentFiles(Root, Result, {});
 				if (VerifyContent) {
 					std::unordered_set<std::string> AllowedFiles{LowerPath("game.package.json")};
 					std::unordered_set<std::string> AllowedDirectories;
@@ -811,6 +844,7 @@ namespace gargantuan {
 			for (const auto &Artifact : Payload.Assets.Artifacts)
 				Check("content/" + Artifact.RelativePath);
 			for (const auto &Unit : Payload.ContentUnits) Check(Unit.Entry.BlobReference);
+			for (const auto &Artifact : Payload.TerrainArtifacts) Check(GetPackageTerrainPath(Artifact.Id));
 #else
 			(void)Destination;
 			(void)Candidate;
@@ -1366,8 +1400,10 @@ namespace gargantuan {
 		AssertAuthoritativeMutation("PackageBuilder::Capture schema snapshot");
 		if (!World || !ProjectValue.Identity.IsValid() || AuthoritativeRevision == 0 || PersistedRevision == 0)
 			throw std::invalid_argument("Package snapshot source is invalid");
+		auto Terrain = terrain::CaptureSceneTerrain(*World, ProjectValue.Identity);
+		const auto TerrainManifest = Terrain ? std::optional(Terrain->ManifestDigest) : std::nullopt;
 		auto Root = std::static_pointer_cast<Instance>(World);
-		auto ProjectJson = InstanceSerialization::Serialize(ProjectValue.InstanceFileFormat, Root);
+		auto ProjectJson = InstanceSerialization::Serialize(ProjectValue.InstanceFileFormat, Root, TerrainManifest);
 		if (ProjectJson.size() > MaximumProjectSnapshotBytes)
 			throw std::length_error("Project snapshot exceeds the package byte limit");
 		auto Assets = std::dynamic_pointer_cast<AssetService>(World->FindFirstChildOfClass("AssetService", false));
@@ -1376,11 +1412,13 @@ namespace gargantuan {
 			.Identity = ProjectValue.Identity,
 			.DisplayName = World->GetName(),
 			.AuthoritativeRevision = AuthoritativeRevision,
-			.UnsavedChanges = AuthoritativeRevision != PersistedRevision,
+			.UnsavedChanges = AuthoritativeRevision != PersistedRevision ||
+				(Terrain && ProjectValue.GetPersistedTerrainManifest() != TerrainManifest),
 			.ProjectJson = std::move(ProjectJson),
 			.PreRunSource = ReadProjectPreRunSource(ProjectValue.Root),
 			.Assets = Assets->CaptureRuntimeAssets(),
 			.SchemaSnapshot = GetRuntimeSchemaLifecycle().GetActiveRegistry(),
+			.TerrainArtifacts = Terrain ? std::move(Terrain->Artifacts) : std::vector<terrain::TerrainArtifact>{},
 		};
 		if (Result.DisplayName.empty() || Result.DisplayName.size() > MaximumDisplayNameBytes)
 			throw std::runtime_error("Project display name exceeds the package bound");
@@ -1527,6 +1565,18 @@ namespace gargantuan {
 					if (!Target) throw std::runtime_error("Runtime asset package path is unsafe");
 					Entries.push_back(WriteAndHash(*Target, Relative, "Asset", *Artifact.Bytes));
 				}
+				std::size_t TerrainBytes = 0;
+				for (const auto &Artifact : Request.Payload.TerrainArtifacts) {
+					if (Request.Cancellation.IsCancelled()) throw std::runtime_error("Package build cancelled");
+					if (!Artifact.Bytes || Artifact.Bytes->size() > terrain::MaximumTerrainClosureBytes - TerrainBytes ||
+						AssetContentId::Hash(*Artifact.Bytes) != Artifact.Id.Digest)
+						throw terrain::TerrainPersistenceFailure(terrain::TerrainPersistenceError::CorruptArtifact);
+					TerrainBytes += Artifact.Bytes->size();
+					const auto Relative = GetPackageTerrainPath(Artifact.Id);
+					auto Target = ResolvePackageFile(Candidate, Relative, false);
+					if (!Target) throw std::runtime_error("Terrain package path is unsafe");
+					Entries.push_back(WriteAndHash(*Target, Relative, "Project", *Artifact.Bytes));
+				}
 			});
 
 			RunPhase(PackagePhase::HashManifest, [&] {
@@ -1637,8 +1687,42 @@ namespace gargantuan {
 		return Result;
 	}
 
+	static terrain::TerrainArtifact PinClientTerrainManifest(const std::filesystem::path &Root,
+		const ParsedPackageManifest &Package, AssetContentId Digest, std::set<std::string> &DeferredChunks) {
+		using enum terrain::TerrainPersistenceError;
+		const terrain::TerrainArtifactId Id{terrain::TerrainArtifactPurpose::Manifest, Digest};
+		const auto ManifestPath = GetPackageTerrainPath(Id);
+		const auto *ManifestPin = FindContentEntry(Package, ManifestPath);
+		if (!ManifestPin || ManifestPin->Category != "Project" || ManifestPin->Sha256 != Digest.ToString())
+			throw terrain::TerrainPersistenceFailure(InvalidBinding);
+		constexpr auto MaximumPinnedManifestBytes = terrain::TerrainManifestHeaderBytes +
+			terrain::MaximumStartupSourceChunks * terrain::TerrainManifestEntryBytes;
+		const auto Text = ReadPinnedText(Root, Package, ManifestPath, MaximumPinnedManifestBytes);
+		auto Bytes = std::make_shared<const std::vector<std::uint8_t>>(Text.begin(), Text.end());
+		const auto Project = Package.Inspection.Identity;
+		const auto Directory = terrain::DecodeTerrainManifest(*Bytes, Project, terrain::GetTerrainDatasetId(Project));
+		if (!Directory) throw terrain::TerrainPersistenceFailure(CorruptArtifact);
+		std::size_t ClosureBytes = Bytes->size();
+		for (const auto &Chunk : Directory->Chunks) {
+			const auto ChunkDigest = AssetContentId{Chunk.Digest.Bytes};
+			const auto Path = GetPackageTerrainPath({terrain::TerrainArtifactPurpose::Chunk, ChunkDigest});
+			const auto *Pin = FindContentEntry(Package, Path);
+			if (!Pin || Pin->Category != "Project" || Pin->Size != Chunk.ByteCount || Pin->Sha256 != ChunkDigest.ToString() ||
+				Path == Package.ProjectPath || Path == Package.AssetCatalogPath || Path == Package.PreRunPath ||
+				Path == Package.ContentManifestPath || Root / Path == Package.Inspection.PlayerExecutable ||
+				!DeferredChunks.insert(Path).second)
+				throw terrain::TerrainPersistenceFailure(InvalidBinding);
+			if (Chunk.ByteCount > terrain::MaximumTerrainClosureBytes - ClosureBytes)
+				throw terrain::TerrainPersistenceFailure(LimitExceeded);
+			ClosureBytes += Chunk.ByteCount;
+		}
+		return {Id, std::move(Bytes)};
+	}
+
 	static std::vector<PackageDiagnostic> ValidatePackageRoot(const std::filesystem::path &PackageRoot,
-		std::optional<ParsedPackageManifest> *VerifiedManifest) {
+		std::optional<ParsedPackageManifest> *VerifiedManifest,
+		std::vector<terrain::TerrainArtifact> *TerrainArtifacts = nullptr,
+		PackageRuntimeLoadMode Mode = PackageRuntimeLoadMode::Complete) {
 		std::vector<PackageDiagnostic> Diagnostics;
 		if (!PackageRoot.is_absolute() || !std::filesystem::is_directory(PackageRoot) || IsReparseOrLink(PackageRoot)) {
 			AddDiagnostic(
@@ -1650,17 +1734,21 @@ namespace gargantuan {
 			);
 			return Diagnostics;
 		}
-		auto Manifest = ParseManifest(PackageRoot, Diagnostics, true);
+		auto Manifest = ParseManifest(PackageRoot, Diagnostics, true, Mode);
 		if (!Manifest) return Diagnostics;
+		const bool IsLoopbackClient = Mode == PackageRuntimeLoadMode::LoopbackDevelopmentClient &&
+			Manifest->Inspection.Configuration == PackageConfiguration::Development;
+		std::optional<AssetContentId> TerrainDigest;
 		try {
-			auto ProjectPath = ResolvePackageFile(PackageRoot, Manifest->ProjectPath, true);
-			if (!ProjectPath) throw std::runtime_error("Project payload path is invalid");
-			auto ProjectText = ReadBoundedText(*ProjectPath, MaximumProjectSnapshotBytes);
+			const auto ProjectText = ReadPinnedText(PackageRoot, *Manifest, Manifest->ProjectPath, MaximumProjectSnapshotBytes);
 			auto ProjectJson = JsonCodec::Parse(ProjectText, MaximumProjectSnapshotBytes, "packaged project snapshot");
 			if (!ProjectJson || !ProjectJson->is_object() || !ProjectJson->contains("Version") ||
 				!(*ProjectJson)["Version"].is_number_unsigned() || !ProjectJson->contains("ClassName") ||
 				!(*ProjectJson)["ClassName"].is_string() || (*ProjectJson)["ClassName"] != "DataModel")
 				throw std::runtime_error("Packaged project snapshot is malformed");
+			const auto Digest = InstanceSerialization::InspectTerrainManifest(ProjectText);
+			if (!Digest) throw std::runtime_error(Digest.error());
+			TerrainDigest = *Digest;
 		} catch (const std::exception &) {
 			AddDiagnostic(
 				Diagnostics,
@@ -1669,6 +1757,55 @@ namespace gargantuan {
 				"InvalidProject",
 				"The packaged project snapshot is malformed or exceeds its bounds."
 			);
+		}
+		std::set<std::string> DeferredChunks;
+		if (!HasErrors(Diagnostics)) {
+			try {
+				std::size_t Admitted = 0;
+				if (TerrainDigest && IsLoopbackClient) {
+					auto Pin = PinClientTerrainManifest(PackageRoot, *Manifest, *TerrainDigest, DeferredChunks);
+					Admitted = DeferredChunks.size() + 1;
+					if (TerrainArtifacts) TerrainArtifacts->push_back(std::move(Pin));
+				} else if (TerrainDigest) {
+					const auto Reader = [&](const terrain::TerrainArtifactId &Id, std::size_t Maximum) ->
+						std::expected<std::vector<std::uint8_t>, terrain::TerrainPersistenceError> {
+						using enum terrain::TerrainPersistenceError;
+						const auto Relative = GetPackageTerrainPath(Id);
+						const auto *Entry = FindContentEntry(*Manifest, Relative);
+						if (!Entry) return std::unexpected(MissingArtifact);
+						if (Entry->Size > Maximum) return std::unexpected(LimitExceeded);
+						if (Entry->Category != "Project" || Entry->Sha256 != Id.Digest.ToString())
+							return std::unexpected(CorruptArtifact);
+						const auto File = ResolvePackageFile(PackageRoot, Relative, true);
+						if (!File) return std::unexpected(MissingArtifact);
+						const auto Text = ReadBoundedText(*File, Maximum);
+						if (Text.size() != Entry->Size) return std::unexpected(CorruptArtifact);
+						std::vector<std::uint8_t> Bytes(Text.begin(), Text.end());
+						if (TerrainArtifacts)
+							TerrainArtifacts->push_back({Id, std::make_shared<const std::vector<std::uint8_t>>(Bytes)});
+						++Admitted;
+						return Bytes;
+					};
+					(void)terrain::LoadSceneTerrain(Manifest->Inspection.Identity, *TerrainDigest, Reader);
+				}
+				const auto Pinned = std::ranges::count_if(Manifest->Content, [](const ContentEntry &Entry) {
+					return Entry.Path.starts_with("content/.gargantuan/terrain/");
+				});
+				if (static_cast<std::size_t>(Pinned) != Admitted)
+					throw terrain::TerrainPersistenceFailure(terrain::TerrainPersistenceError::InvalidBinding);
+				if (TerrainArtifacts) std::ranges::sort(*TerrainArtifacts, {}, &terrain::TerrainArtifact::Id);
+			} catch (const std::exception &Error) {
+				AddDiagnostic(Diagnostics, PackageDiagnosticSeverity::Error, "Content", "InvalidTerrainClosure",
+					"The packaged terrain closure could not be verified.", Error.what());
+			}
+		}
+		if (IsLoopbackClient && !HasErrors(Diagnostics)) {
+			try {
+				VerifyContentFiles(PackageRoot, *Manifest, DeferredChunks);
+			} catch (const std::exception &Error) {
+				AddDiagnostic(Diagnostics, PackageDiagnosticSeverity::Error, "Content", "ContentIntegrityMismatch",
+					"The package contains missing or unverified startup content.", Error.what());
+			}
 		}
 		ValidateRuntimeAssetCatalog(PackageRoot, *Manifest, Diagnostics);
 		if (!HasErrors(Diagnostics) && Manifest->ContentManifestPath) {
@@ -1711,9 +1848,9 @@ namespace gargantuan {
 				Diagnostics,
 				PackageDiagnosticSeverity::Info,
 				"Validation",
-				"Valid",
-				"The standalone package manifest, content hashes, project payload, assets, and runtime resources are "
-				"valid."
+				IsLoopbackClient ? "NetworkBootstrapValid" : "Valid",
+				IsLoopbackClient ? "The Development client startup content and terrain manifest pins are valid."
+					: "The standalone package manifest, content hashes, project payload, assets, and runtime resources are valid."
 			);
 		}
 		return Diagnostics;
@@ -1731,23 +1868,22 @@ namespace gargantuan {
 	}
 
 	std::optional<RuntimePackagePayload>
-	PackageBuilder::Load(const std::filesystem::path &PackageRoot, std::vector<PackageDiagnostic> &Diagnostics) {
+	PackageBuilder::Load(const std::filesystem::path &PackageRoot, std::vector<PackageDiagnostic> &Diagnostics,
+		PackageRuntimeLoadMode Mode) {
 		std::optional<ParsedPackageManifest> Manifest;
-		Diagnostics = ValidatePackageRoot(PackageRoot, &Manifest);
+		std::vector<terrain::TerrainArtifact> TerrainArtifacts;
+		Diagnostics = ValidatePackageRoot(PackageRoot, &Manifest, &TerrainArtifacts, Mode);
 		if (HasErrors(Diagnostics)) return std::nullopt;
 		if (!Manifest) return std::nullopt;
 		try {
-			auto ReadPinned = [&](std::string_view RelativePath, std::size_t MaximumBytes) {
-				const auto Entry = std::ranges::find(Manifest->Content, RelativePath, &ContentEntry::Path);
-				const auto Path = ResolvePackageFile(PackageRoot, RelativePath, true);
-				if (Entry == Manifest->Content.end() || !Path)
-					throw std::runtime_error("Package payload has no pinned content entry");
-				auto Bytes = ReadBoundedText(*Path, MaximumBytes);
-				if (Bytes.size() != Entry->Size || HashText(Bytes) != Entry->Sha256)
-					throw std::runtime_error("Package payload changed after spatial validation");
-				return Bytes;
+			const auto ReadPinned = [&](std::string_view Relative, std::size_t MaximumBytes) {
+				return ReadPinnedText(PackageRoot, *Manifest, Relative, MaximumBytes);
 			};
 			RuntimePackagePayload Result{.Inspection = Manifest->Inspection};
+			if (Mode == PackageRuntimeLoadMode::LoopbackDevelopmentClient &&
+				Manifest->Inspection.Configuration == PackageConfiguration::Development)
+				Result.LoadMode = PackageRuntimeLoadMode::LoopbackDevelopmentClient;
+			Result.TerrainArtifacts = std::move(TerrainArtifacts);
 			Result.ContentManifestReference = Manifest->ContentManifestPath;
 			Result.ContentManifestDigest = Manifest->ContentManifestDigest;
 			Result.ProjectJson = ReadPinned(Manifest->ProjectPath, MaximumProjectSnapshotBytes);
@@ -1788,12 +1924,12 @@ namespace gargantuan {
 		}
 	}
 
-	std::shared_ptr<DataModel>
-	PackageBuilder::LoadWorld(const RuntimePackagePayload &Payload, const std::filesystem::path &PackageRoot) {
+	static std::shared_ptr<DataModel> LoadPackagedScene(const RuntimePackagePayload &Payload,
+		const std::filesystem::path &PackageRoot, const InstanceSerialization::TerrainSceneAdmission &AdmitTerrain) {
 		if (!PackageRoot.is_absolute() || !std::filesystem::is_directory(PackageRoot) || IsReparseOrLink(PackageRoot))
 			throw std::invalid_argument("Packaged runtime root is invalid");
 		std::stringstream Input(Payload.ProjectJson);
-		auto Parsed = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Input);
+		auto Parsed = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Input, AdmitTerrain);
 		if (!Parsed.Ok || !Parsed.Instance || !Parsed.Instance->IsA("DataModel"))
 			throw std::runtime_error("The packaged project snapshot could not be loaded");
 		auto World = std::dynamic_pointer_cast<DataModel>(Parsed.Instance);
@@ -1807,11 +1943,37 @@ namespace gargantuan {
 		return World;
 	}
 
+	std::shared_ptr<DataModel>
+	PackageBuilder::LoadWorld(const RuntimePackagePayload &Payload, const std::filesystem::path &PackageRoot) {
+		if (Payload.LoadMode != PackageRuntimeLoadMode::Complete)
+			throw std::invalid_argument("[Package:Terrain] A complete payload is required to load a gameplay world");
+		return LoadPackagedScene(Payload, PackageRoot, terrain::GetSceneTerrainAdmission(Payload.Inspection.Identity,
+			[&Payload](const terrain::TerrainArtifactId &Id, std::size_t Maximum) {
+				return terrain::ReadCapturedTerrainArtifact(Payload.TerrainArtifacts, Id, Maximum);
+			}));
+	}
+
+	std::shared_ptr<DataModel> PackageBuilder::LoadClientCodeWorld(const RuntimePackagePayload &Payload,
+		const std::filesystem::path &PackageRoot) {
+		if (Payload.LoadMode != PackageRuntimeLoadMode::LoopbackDevelopmentClient ||
+			Payload.Inspection.Configuration != PackageConfiguration::Development)
+			throw std::invalid_argument("[Package:Terrain] Client code hydration requires a loopback Development payload");
+		return LoadPackagedScene(Payload, PackageRoot, [&Payload](DataModel &, const AssetContentId &Digest) {
+			const terrain::TerrainArtifactId Id{terrain::TerrainArtifactPurpose::Manifest, Digest};
+			const auto *Manifest = terrain::FindTerrainArtifact(Payload.TerrainArtifacts, Id);
+			if (Payload.TerrainArtifacts.size() != 1 || !Manifest || !Manifest->Bytes ||
+				AssetContentId::Hash(*Manifest->Bytes) != Digest)
+				throw std::runtime_error("[Package:Terrain] Client code world did not match its terrain manifest pin");
+		});
+	}
+
 	std::optional<ContentAvailabilityConfiguration> PackageBuilder::GetLocalContentConfiguration(
 		const RuntimePackagePayload &Payload,
 		const std::filesystem::path &PackageRoot,
 		ContentResidencyMode Mode
 	) {
+		if (Payload.LoadMode != PackageRuntimeLoadMode::Complete)
+			throw std::invalid_argument("[Package:Terrain] Local gameplay content requires a complete package payload");
 		if (!Payload.ContentManifestReference) return std::nullopt;
 		if (!PackageRoot.is_absolute() || !Payload.Inspection.Identity.IsValid() || Payload.Inspection.Revision == 0 ||
 			!Payload.ContentManifestDigest.IsValid())

@@ -28,6 +28,7 @@ namespace gargantuan {
 }
 
 namespace gargantuan::network {
+	struct TerrainSessionData;
 	namespace detail {
 		class GameSessionTestAccess;
 	}
@@ -65,6 +66,7 @@ namespace gargantuan::network {
 		// Native client host callback backed by trusted package code. GRPL only
 		// supplies a clone's source identity and regular structural properties.
 		std::function<bool(const std::shared_ptr<LuaSourceContainer> &)> HydratePlayerGuiCode;
+		std::shared_ptr<const TerrainSessionData> TerrainBootstrap;
 
 		[[nodiscard]] bool IsValid() const;
 		[[nodiscard]] static NetworkLimits DefaultLimits();

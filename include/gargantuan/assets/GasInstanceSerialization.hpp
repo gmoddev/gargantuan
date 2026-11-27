@@ -4,6 +4,7 @@
 #pragma once
 
 #include "gargantuan/serialization/GasDocument.hpp"
+#include "gargantuan/assets/InstanceSerialization.hpp"
 
 #include <memory>
 
@@ -28,5 +29,5 @@ namespace gargantuan::InstanceSerialization {
 	// an active frozen schema. The caller owns dependency admission, destination
 	// mutation, and any later activation.
 	[[nodiscard]] GasMaterializationResult MaterializeGasDocument(
-		const Gas::Document &Document, bool PreserveSourceIds);
+		const Gas::Document &Document, bool PreserveSourceIds, const TerrainSceneAdmission &AdmitTerrain = {});
 }

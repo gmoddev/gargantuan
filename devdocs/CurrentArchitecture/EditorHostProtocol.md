@@ -122,7 +122,8 @@ and are released as one transaction batch.
 The CFrame wire and project formats both encode the three rotation basis columns
 contiguously as Right, Up, and Back. Decode, Undo/Redo, and save/reopen preserve
 that orientation rather than transposing the matrix.
-`SetAttribute` uses the same live-object and `MutateDataModel` checks. Every
+`SetAttribute` uses the same live-object and `MutateDataModel` checks and
+honors the optional numeric `ExpectedRevision`. Every
 mutation carries host-owned Studio authority scoped to the open
 DataModel; decoded request data never grants capabilities or scope authority. Attribute
 state is delivered by snapshot and dedicated `AttributeUpdate` records rather

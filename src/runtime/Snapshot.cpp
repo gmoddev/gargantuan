@@ -4,6 +4,7 @@
 #include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Player.hpp"
+#include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/datatypes/CFrame.hpp"
 #include "gargantuan/datatypes/Color3.hpp"
 #include "gargantuan/datatypes/Enum.hpp"
@@ -67,13 +68,15 @@ namespace gargantuan {
 		void CollectObjects(
 			const std::shared_ptr<Instance> &instance,
 			std::vector<std::shared_ptr<Instance>> &objects,
-			std::unordered_set<Instance *> &visited
+			std::unordered_set<Instance *> &visited,
+			SnapshotAudience Audience
 		) {
 			if (dynamic_cast<AudioMixService *>(instance.get())) return;
+			if (Audience == SnapshotAudience::Structural && dynamic_cast<Terrain *>(instance.get())) return;
 			if (!instance || !visited.insert(instance.get()).second) throw std::runtime_error("Snapshot hierarchy is invalid");
 			instance->AssertIsAlive();
 			objects.push_back(instance);
-			for (const auto &child : instance->Children) CollectObjects(child, objects, visited);
+			for (const auto &child : instance->Children) CollectObjects(child, objects, visited, Audience);
 		}
 
 		void ValidateSnapshotForLoad(const Snapshot &SnapshotValue) {
@@ -318,11 +321,11 @@ namespace gargantuan {
 		return Result;
 	}
 
-	Snapshot CaptureSnapshot(const std::shared_ptr<Instance> &root) {
+	Snapshot CaptureSnapshot(const std::shared_ptr<Instance> &root, SnapshotAudience Audience) {
 		AssertAuthoritativeMutation("CaptureSnapshot");
 		std::vector<std::shared_ptr<Instance>> instances;
 		std::unordered_set<Instance *> visited;
-		CollectObjects(root, instances, visited);
+		CollectObjects(root, instances, visited, Audience);
 
 		std::unordered_map<Instance *, WireObjectId> ids;
 		for (const auto &instance : instances)

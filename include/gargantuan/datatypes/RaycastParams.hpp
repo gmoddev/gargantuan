@@ -31,5 +31,6 @@ namespace gargantuan {
 		RaycastFilterRoots FilterDescendantsInstances;
 		int CollisionGroup = 0;
 		int CollisionMask = 65535;
+		bool IncludeTerrain = false;
 	)
 }

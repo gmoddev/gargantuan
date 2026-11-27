@@ -14,6 +14,7 @@ namespace gargantuan::host {
 		const std::filesystem::path &PackageRoot,
 		const std::filesystem::path &RuntimeRoot,
 		std::string_view HostName,
-		int &ExitCode
+		int &ExitCode,
+		PackageRuntimeLoadMode Mode = PackageRuntimeLoadMode::Complete
 	);
 }

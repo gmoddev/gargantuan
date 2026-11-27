@@ -286,6 +286,7 @@ namespace gargantuan {
 				auto Builder = SDLPipelineBuilder()
 					.SetVertexShader(Shader.VertexShader)
 					.SetFragmentShader(Shader.FragmentShader)
+					.SetVertexTintEnabled(true)
 					.SetColorEnabled(true)
 					.SetColorFormat(swapchainFormat)
 					.SetBlendingEnabled(false)
@@ -424,6 +425,7 @@ namespace gargantuan {
 				auto Builder = SDLPipelineBuilder()
 					.SetVertexShader(InstancedShader.VertexShader)
 					.SetFragmentShader(InstancedShader.FragmentShader)
+					.SetVertexTintEnabled(true)
 					.SetColorEnabled(true)
 					.SetColorFormat(InstanceColorFormat)
 					.SetBlendingEnabled(false)
@@ -996,6 +998,9 @@ namespace gargantuan {
 				for (const auto &[Object, Projected] : Context.Projection.GetObjects())
 					VisitObject(Position++, Object, Projected, nullptr, nullptr, false);
 			}
+			for (const auto &Projected : Context.Projection.GetTerrainDraws())
+				VisitObject(InstanceActions.size(), Projected.Item.Object, Projected, nullptr,
+					Context.Projection.GetMeshBounds(*Projected.Mesh), true);
 			FlushOpaque();
 			if (Detailed) Context.Metrics->LastCameraTraversalNanoseconds = ElapsedNanoseconds(TraversalStart);
 

@@ -9,6 +9,7 @@ layout(location = 2) in vec4 VertexTangent;
 layout(location = 3) in vec2 VertexUV;
 layout(location = 4) in uvec4 VertexJoints;
 layout(location = 5) in vec4 VertexWeights;
+layout(location = 6) in vec4 VertexTint;
 
 #include "world-uniforms.glsl"
 
@@ -44,7 +45,7 @@ void main() {
     gl_Position = world.ProjectionMatrix * world.ViewMatrix * part.ModelMatrix * vec4(Vertex.Position, 1.0f);
 
     FragmentNormal = normalize(mat3(part.NormalMatrix) * Vertex.Normal);
-    FragmentColor = part.Color;
+    FragmentColor = part.Color * VertexTint;
     WorldPosition = (part.ModelMatrix * vec4(Vertex.Position, 1.0f)).xyzw;
     ShadowPosition = world.ShadowBiasMatrix * WorldPosition;
     FragmentUV = VertexUV;

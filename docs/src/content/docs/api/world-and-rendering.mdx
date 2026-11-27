@@ -61,7 +61,9 @@ These `WorldRoot` methods are available on `Workspace` and require `ReadDataMode
 | `GetPartsInCapsule` | `Transform, Radius, Height, Params?, MaxResults?` | Same overlap result. |
 | `GetPartsInBox` | `Transform, Size, Params?, MaxResults?` | Same overlap result. |
 
-A hit contains `Instance: BasePart`, `Position: Vector3`, `Normal: Vector3`, and `Distance: number`. `MaxResults` for overlaps is 1–256; test `Truncated` before treating the returned set as complete. Parts are returned in stable identity order. `MoveKinematicCapsule(Position, Radius, Height, Translation, Velocity)` returns a bounded collision-resolution table with `Position`, `AppliedTranslation`, `Velocity`, `ContactNormal`, `FloorNormal`, `Collided`, `HasFloor`, and `PlanesTruncated`. It is the primitive used by replaceable character movement policy, not a full character controller. See [the query example](https://github.com/gmoddev/Gargantuan/blob/main/docs/examples/world-query.luau).
+A hit contains `Instance`, `Position`, `Normal`, and `Distance`. The default `Instance` is a BasePart. Set `RaycastParams.IncludeTerrain = true` to include installed terrain collision, which returns the canonical `Workspace.Terrain` Instance on terrain hits. Terrain-aware overlap results add an optional `Terrain` field. They keep `Parts` in stable identity order. `MaxResults` bounds Parts from 1 through 256. Check `Truncated` before treating the Parts array as complete.
+
+`MoveKinematicCapsule(Position, Radius, Height, Translation, Velocity)` returns a bounded collision-resolution table with `Position`, `AppliedTranslation`, `Velocity`, `ContactNormal`, `FloorNormal`, `Collided`, `HasFloor`, and `PlanesTruncated`. The replaceable Character movement policy uses this primitive. [World query example](https://github.com/gmoddev/Gargantuan/blob/main/docs/examples/world-query.luau).
 
 The Engine advances world physics during its simulation phase. Luau controllers can queue body controls in `RunService.PreSimulation` and inspect completed simulation in `RunService.PostSimulation`.
 

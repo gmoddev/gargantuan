@@ -33,6 +33,7 @@ namespace gargantuan {
 				const auto &Source = MeshData.Vertices->at(Index);
 				Vertex Converted{Source.Position, Source.Normal, Source.TextureCoordinate};
 				Converted.Tangent = Source.Tangent;
+				Converted.Tint = Source.Tint;
 				if (MeshData.SkinInfluences) {
 					Converted.Joints = MeshData.SkinInfluences->at(Index).Joints;
 					Converted.Weights = MeshData.SkinInfluences->at(Index).Weights;
@@ -166,6 +167,7 @@ namespace gargantuan {
 			Destination.Normal = Source.Normal;
 			Destination.UV = Source.TextureCoordinate;
 			Destination.Tangent = Source.Tangent;
+			Destination.Tint = Source.Tint;
 		}
 		const auto Bytes = static_cast<std::uint32_t>(UpdatedVertices.size() * sizeof(Vertex));
 		auto *RangeTransfer = CreateTransferBuffer(Gpu);

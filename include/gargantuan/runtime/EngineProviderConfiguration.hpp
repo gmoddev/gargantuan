@@ -22,5 +22,9 @@ namespace gargantuan {
 		bool EnableResidencyDemandPolicy = false;
 		bool EnableStreamingDiagnostics = false;
 		std::shared_ptr<IPersistenceProvider> Persistence;
+		// Set by the packaged network host after matching terrain delivery admission.
+		bool AdmitNetworkTerrain = false;
+		// Native qualification hosts can select the renderer-only terrain detail trial.
+		bool ExperimentalTerrainVisualDensity = false;
 	};
 }

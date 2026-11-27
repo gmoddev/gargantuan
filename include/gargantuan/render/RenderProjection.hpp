@@ -96,6 +96,7 @@ namespace gargantuan {
 			return Viewports ? *Viewports : Empty;
 		}
 		[[nodiscard]] const std::unordered_map<ObjectId, RenderProjectedObject> &GetObjects() const { return Entries; }
+		[[nodiscard]] const std::vector<RenderProjectedObject> &GetTerrainDraws() const { return Terrain; }
 		// Mirrors GetObjects() iteration exactly until a structural publication changes it.
 		[[nodiscard]] const std::vector<RenderProjectedTraversal> &GetCompactTraversal() const;
 		[[nodiscard]] RenderSceneEnvelopeResult GetSceneEnvelope() const;
@@ -103,6 +104,7 @@ namespace gargantuan {
 
 	  private:
 		std::unordered_map<ObjectId, RenderProjectedObject> Entries;
+		std::vector<RenderProjectedObject> Terrain;
 		bool VisualAttachmentsComplete = true;
 		struct MeshEntry {
 			std::uint64_t TopologyRevision = 0;

@@ -4,6 +4,17 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+## Terrain campaign development entries
+
+| Issue | Disposition |
+| --- | --- |
+| Native provider failure after terrain field commit | Normal validation and provider denial retain the old revision. If a provider violates owned-body retirement during final installation, the field revision may already have advanced. Terrain edit readiness fails and physics stepping pauses. A neutral staged provider interface and fault recovery remain open. |
+| CPU render readiness precedes GPU installation | Native collision and immutable render values can be ready before a frame uploads and draws the resource. Vulkan fixtures cover normal publication, retention and retirement. GPU reset recovery and many-view frame budgets remain open. |
+| Multiplayer profile remains bounded | Windows and Linux loopback Development packages cover revisioned regions, bilateral collision readiness, live edits, late join and reconnect. Multihost audience policy, faster or larger possessed actors beyond the measured envelope, and sustained world-scale edit churn remain open. |
+| Mixed visual LOD and Studio interaction need wider qualification | The guarded opt-in path passed native Windows Vulkan camera sweeps and a bounded fine restore. EditorHost brush authority and headless Studio controls passed. The full pinned WinUI workflow and simultaneous multi-view performance remain open. |
+
+[Terrain campaign ledger](devdocs/Validation/TerrainCampaign.md)
+
 ## Foundation 10B development entries
 
 The November 24 strategic reconciliation at `0195d658d` records the original

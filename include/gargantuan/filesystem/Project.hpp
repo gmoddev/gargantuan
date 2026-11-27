@@ -7,6 +7,7 @@
 #include "gargantuan/filesystem/BaseFilesystem.hpp"
 #include "gargantuan/filesystem/ProjectIdentity.hpp"
 #include "gargantuan/serialization/GasDocument.hpp"
+#include "gargantuan/terrain/Persistence.hpp"
 
 #include <filesystem>
 #include <functional>
@@ -22,6 +23,7 @@ namespace gargantuan {
 			std::uint64_t Revision = 0;
 			std::string Contents;
 			AssetProjectSnapshot Assets;
+			std::optional<terrain::TerrainCapture> Terrain;
 		};
 
 		std::filesystem::path Root;
@@ -42,9 +44,30 @@ namespace gargantuan {
 		// Read a trusted GAS origin without migrating metadata or opening an Instance file.
 		[[nodiscard]] static Project FromGasOrigin(BaseFilesystem *Filesystem);
 
+		class PreparedGame {
+		  public:
+			PreparedGame(PreparedGame &&) noexcept = default;
+			PreparedGame &operator=(PreparedGame &&) noexcept = default;
+			[[nodiscard]] const terrain::Field *GetTerrain() const noexcept { return Terrain.get(); }
+		  private:
+			friend class Project;
+			PreparedGame() = default;
+			const BaseFilesystem *Source{};
+			ProjectId Identity;
+			std::string Contents;
+			std::optional<AssetContentId> Manifest;
+			std::unique_ptr<terrain::Field> Terrain;
+		};
+
+		[[nodiscard]] PreparedGame PrepareGameLoad() const;
 		std::shared_ptr<DataModel> DeserializeGame();
+		[[nodiscard]] std::shared_ptr<DataModel> DeserializeGame(PreparedGame Prepared);
 		// Capture a place from a world owned by this project's filesystem.
-		[[nodiscard]] SerializationResult<Gas::Document> CaptureGasPlace(const std::shared_ptr<DataModel> &World) const;
+		[[nodiscard]] SerializationResult<Gas::Document> CaptureGasPlace(const std::shared_ptr<DataModel> &World,
+			std::optional<terrain::TerrainCapture> *CapturedTerrain = nullptr) const;
+		void PersistTerrainArtifacts(const terrain::TerrainCapture &Capture) const;
+		[[nodiscard]] std::optional<AssetContentId> GetPersistedTerrainManifest() const;
+		void ValidatePersistenceDestination() const;
 		void ExportGasPlace(const std::shared_ptr<DataModel> &World, const std::filesystem::path &Destination,
 			const std::optional<std::string> &ExpectedPreRunSource) const;
 		// The caller establishes this origin's trusted schema before loading.
@@ -55,7 +78,8 @@ namespace gargantuan {
 			const std::optional<std::string> &ExpectedPreRunSource) const;
 		[[nodiscard]] PersistenceSnapshot CaptureGame(
 			const std::shared_ptr<DataModel> &game,
-			std::uint64_t revision
+			std::uint64_t revision,
+			bool ReuseDurableTerrain = false
 		) const;
 		void PersistGameAtomically(
 			const PersistenceSnapshot &snapshot,
@@ -65,7 +89,9 @@ namespace gargantuan {
 			std::string_view Source, const std::function<void()> &BeforeReplace = {}) const;
 
 	  private:
+		struct DurableTerrainState;
 		BaseFilesystem *Filesystem;
+		std::shared_ptr<DurableTerrainState> DurableTerrain;
 		Project(BaseFilesystem *fs);
 	};
 }

@@ -450,6 +450,33 @@ namespace gargantuan {
 				return Primitive.FirstIndex <= *Count && Primitive.IndexCount <= *Count - Primitive.FirstIndex;
 			});
 		};
+		std::vector<RenderProjectedObject> PreparedTerrain;
+		if (Publication.TerrainDraws) {
+			if (Publication.TerrainDraws->size() > MaximumRenderTerrainChunks)
+				throw std::invalid_argument("Render publication exceeds the terrain projection limit");
+			PreparedTerrain.reserve(Publication.TerrainDraws->size());
+			RenderMeshIdentity Previous{};
+			ObjectId Owner{};
+			for (const auto &Draw : *Publication.TerrainDraws) {
+				if (!Draw.Mesh || Draw.Mesh->Domain != RenderMeshDomain::Terrain || !Draw.Mesh->IsValid() ||
+					*Draw.Mesh <= Previous || !IsValid(Draw.Item) || !IsValid(Draw.Material) ||
+					!AreValid(Draw.Primitives) || !PrimitiveRangesFit(Draw) || !MeshExistsAfterPublication(*Draw.Mesh) ||
+					(Owner.IsValid() && Owner != Draw.Item.Object))
+					throw std::invalid_argument("Render publication contains an invalid terrain chunk");
+				if (Draw.Material.OpacityMode == RenderOpacityMode::Transparent ||
+					(Draw.Primitives && std::ranges::any_of(*Draw.Primitives, [](const auto &Primitive) {
+						return Primitive.Material.OpacityMode == RenderOpacityMode::Transparent;
+					})))
+					throw std::invalid_argument("Terrain render bindings require opaque or masked materials");
+				Owner = Draw.Item.Object;
+				Previous = *Draw.Mesh;
+				PreparedTerrain.push_back({Draw.Item, Draw.Mesh, Draw.Material, Draw.Visible, Draw.Primitives});
+			}
+		} else if (!Publication.FullResync && !Publication.MeshRemoves.empty()) {
+			for (const auto &Draw : Terrain)
+				if (!MeshExistsAfterPublication(*Draw.Mesh))
+					throw std::invalid_argument("Render publication removes a bound terrain mesh");
+		}
 		const auto ObjectMeshAfterPublication = [&](ObjectId Object) -> std::optional<RenderMeshIdentity> {
 			for (const auto &Create : Publication.Creates)
 				if (Create.Item.Object == Object) return Create.Mesh;
@@ -590,7 +617,7 @@ namespace gargantuan {
 			!Publication.Removes.empty() || !Publication.MeshCreates.empty() || !Publication.MeshRemoves.empty() ||
 			!Publication.AnimationPoseRemoves.empty() || std::ranges::any_of(Publication.AnimationPoseUpdates,
 				[&](const RenderAnimationPoseUpdate &Update) { return !AnimationPoses.contains(Update.Object); }));
-		const bool InvalidateSceneEnvelope = Publication.FullResync || !Publication.Creates.empty() ||
+		const bool InvalidateSceneEnvelope = Publication.FullResync || Publication.TerrainDraws || !Publication.Creates.empty() ||
 			!Publication.Updates.empty() || !Publication.Removes.empty() || !Publication.MeshCreates.empty() ||
 			!Publication.MeshVertexUpdates.empty() || !Publication.MeshRemoves.empty() ||
 			!Publication.AnimationPoseUpdates.empty() || !Publication.AnimationPoseRemoves.empty();
@@ -687,6 +714,7 @@ namespace gargantuan {
 			Ui = Publication.SharedUi ? Publication.SharedUi : std::make_shared<const RenderUiFrame>(PublishedUi);
 		}
 		if (Publication.FullResync || Publication.Viewports) Viewports = Publication.Viewports;
+		if (Publication.FullResync || Publication.TerrainDraws) Terrain = std::move(PreparedTerrain);
 		if (Publication.FullResync || Publication.EnvironmentChanged) ++Changes.EnvironmentsUpdated;
 		Frame = Publication.Frame;
 		VisualAttachmentsComplete = Publication.VisualAttachmentsComplete;
@@ -790,6 +818,7 @@ namespace gargantuan {
 		SceneEnvelopeValid = false;
 		SceneEnvelopeQuietFrames = 0;
 		Entries.clear();
+		Terrain.clear();
 		Meshes.clear();
 		Textures.clear();
 		AnimationPoses.clear();
@@ -807,6 +836,7 @@ namespace gargantuan {
 	}
 
 	RenderSceneEnvelopeResult RenderProjection::GetSceneEnvelope() const {
+		if (!Terrain.empty()) return {};
 		if (SceneEnvelopeValid) return {SceneEnvelope ? &*SceneEnvelope : nullptr};
 		if (SceneEnvelopeQuietFrames < 2) return {};
 		const auto Start = std::chrono::steady_clock::now();

@@ -1,4 +1,4 @@
-const c, t, p = require("@tools/classes").unpack()
+const c, t = require("@tools/classes").unpack()
 
 return c({
 	name = "Workspace",
@@ -13,6 +13,16 @@ return c({
 			unmodified = "nullptr",
 			writeLevel = "Never",
 			category = "Camera",
+			editable = false,
+		},
+		Terrain = {
+			description = "The world-owned terrain object.",
+			type = t.Instance("Terrain"),
+			unmodified = "nullptr",
+			overrideRead = "GetTerrain",
+			writable = false,
+			writeLevel = "Never",
+			category = "World",
 			editable = false,
 		},
 	},

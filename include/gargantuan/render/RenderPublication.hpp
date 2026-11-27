@@ -50,11 +50,17 @@ namespace gargantuan {
 		return (static_cast<std::uint32_t>(Value) & static_cast<std::uint32_t>(Domain)) != 0;
 	}
 
+	enum class RenderMeshDomain : std::uint8_t { Scene, Terrain };
+
 	struct RenderMeshIdentity {
 		std::uint64_t Slot = 0;
 		std::uint32_t Generation = 0;
+		RenderMeshDomain Domain = RenderMeshDomain::Scene;
 		auto operator<=>(const RenderMeshIdentity &) const = default;
-		[[nodiscard]] bool IsValid() const { return Slot != 0 && Generation != 0; }
+		[[nodiscard]] bool IsValid() const {
+			return Slot != 0 && Generation != 0 &&
+				(Domain == RenderMeshDomain::Scene || Domain == RenderMeshDomain::Terrain);
+		}
 	};
 
 	enum class RenderTextureFormat : std::uint8_t { Rgba8Unorm, Rgba32Float };
@@ -160,7 +166,8 @@ namespace gargantuan {
 
 	struct RenderMeshIdentityHash {
 		std::size_t operator()(const RenderMeshIdentity &Value) const noexcept {
-			return std::hash<std::uint64_t>{}(Value.Slot) ^ (std::hash<std::uint32_t>{}(Value.Generation) << 1);
+			return std::hash<std::uint64_t>{}(Value.Slot) ^ (std::hash<std::uint32_t>{}(Value.Generation) << 1) ^
+				(static_cast<std::size_t>(Value.Domain) << 2);
 		}
 	};
 
@@ -169,6 +176,8 @@ namespace gargantuan {
 		glm::vec3 Normal{0.0f, 1.0f, 0.0f};
 		glm::vec4 Tangent{1.0f, 0.0f, 0.0f, 1.0f};
 		glm::vec2 TextureCoordinate{0.0f};
+		// Linear RGBA multiplier, normalized by the mesh vertex input.
+		std::array<std::uint8_t, 4> Tint{255, 255, 255, 255};
 	};
 
 	struct RenderBounds {
@@ -305,6 +314,10 @@ namespace gargantuan {
 		std::vector<RenderViewportObject> Objects;
 	};
 	using RenderViewportScenes = std::vector<std::shared_ptr<const RenderViewportScene>>;
+	inline constexpr std::size_t MaximumRenderTerrainChunks = 512;
+	// Item.Object is the common Terrain shell. Each draw has its own terrain
+	// mesh identity and remains outside the ordinary Instance projection.
+	using RenderTerrainDraws = std::vector<RenderObjectCreate>;
 
 	struct RenderPublication {
 		RenderPublicationId Id = InvalidRenderPublicationId;
@@ -336,6 +349,9 @@ namespace gargantuan {
 		[[nodiscard]] const RenderUiFrame &GetUi() const { return SharedUi ? *SharedUi : Ui; }
 		// A non-null list replaces all active scenes. An empty list removes them.
 		std::shared_ptr<const RenderViewportScenes> Viewports;
+		// Optional complete terrain draw binding state. GPU resources use the
+		// ordinary mesh create/remove feed in the same immutable publication.
+		std::shared_ptr<const RenderTerrainDraws> TerrainDraws;
 		std::vector<RenderExtractionDiagnostic> Diagnostics;
 	};
 

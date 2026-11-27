@@ -66,10 +66,11 @@ namespace gargantuan::host {
 		const std::filesystem::path &PackageRoot,
 		const std::filesystem::path &RuntimeRoot,
 		std::string_view HostName,
-		int &ExitCode
+		int &ExitCode,
+		PackageRuntimeLoadMode Mode
 	) {
 		std::vector<PackageDiagnostic> Diagnostics;
-		auto Payload = PackageBuilder::Load(PackageRoot, Diagnostics);
+		auto Payload = PackageBuilder::Load(PackageRoot, Diagnostics, Mode);
 		if (!Payload) {
 			std::cerr << HostName << " could not validate this game package.\n";
 			for (const auto &Diagnostic : Diagnostics)

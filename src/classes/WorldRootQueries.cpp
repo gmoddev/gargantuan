@@ -1,35 +1,56 @@
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "gargantuan/scripting/StackValue.hpp"
+#include "../terrain/PhysicsStage.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
 namespace gargantuan {
+    namespace {
+        glm::vec3 GetTerrainQueryExtents(const PhysicsQueryShape &Shape) {
+            switch (Shape.Kind) {
+                case PhysicsQueryShapeKind::Sphere: return glm::vec3(Shape.Radius);
+                case PhysicsQueryShapeKind::Capsule: return glm::vec3(Shape.Height * 0.5f);
+                case PhysicsQueryShapeKind::Box: return glm::vec3(glm::length(Shape.Size) * 0.5f);
+            }
+            return {};
+        }
+    }
+
     WorldRaycastResult WorldRoot::ResolveShapeCast(const PhysicsQueryShape &Shape, glm::vec3 Direction, const RaycastParams &Params) {
-        ApplyPendingPhysicsChanges();
+        const auto Origin = Shape.Transform.Position;
+        if (Params.IncludeTerrain && !HasTerrainQueryCoverage(Origin, Origin + Direction, GetTerrainQueryExtents(Shape)))
+            return {.Status = PhysicsOperationStatus::ResourceLimit, .Message = "[Terrain:Query] Collision coverage is unavailable"};
         PhysicsQueryFilter Filter;
         if (auto Prepared=BuildRaycastFilter(Params, Filter); !Prepared.Succeeded())
             return {.Status=Prepared.Status, .Message=std::move(Prepared.Message)};
-        return ResolveQueryHit(Physics.ShapeCast({Shape, Direction, std::move(Filter)}));
+        return ResolveQueryHit(Physics.ShapeCast({Shape, Direction, std::move(Filter)}), Params.IncludeTerrain);
     }
 
     WorldRoot::OverlapResult WorldRoot::ResolveOverlap(const PhysicsQueryShape &Shape, const RaycastParams &Params, std::size_t MaxResults) {
         if (MaxResults==0 || MaxResults>MaximumPhysicsOverlapResults)
             return {.Status=PhysicsOperationStatus::InvalidDescription, .Message="MaxResults must be between 1 and 256"};
-        ApplyPendingPhysicsChanges();
+        if (Params.IncludeTerrain &&
+            !HasTerrainQueryCoverage(Shape.Transform.Position, Shape.Transform.Position, GetTerrainQueryExtents(Shape)))
+            return {.Status = PhysicsOperationStatus::ResourceLimit, .Message = "[Terrain:Query] Collision coverage is unavailable"};
         PhysicsQueryFilter Filter;
         if (auto Prepared=BuildRaycastFilter(Params, Filter); !Prepared.Succeeded())
             return {.Status=Prepared.Status, .Message=std::move(Prepared.Message)};
         auto BackendResult=Physics.Overlap({Shape, std::move(Filter)});
         if (!BackendResult.Succeeded()) return {.Status=BackendResult.Status, .Message=std::move(BackendResult.Message)};
         OverlapResult Result;
+        const auto *TerrainPhysics = GetTerrainPhysics();
+        const auto CandidateTerrain = Params.IncludeTerrain ? GetTerrainQueryOwner() : nullptr;
         Result.Parts.reserve(BackendResult.Bodies.size());
         for (auto Id:BackendResult.Bodies) {
             auto Part=ResolvePart(Id);
-            if (!Part) return {.Status=PhysicsOperationStatus::BackendFailure, .Message="Overlap has no live semantic owner"};
-            Result.Parts.push_back(std::move(Part));
+            if (Part) Result.Parts.push_back(std::move(Part));
+            else if (CandidateTerrain && TerrainPhysics->FindOwner(Id))
+                Result.TerrainInstance = CandidateTerrain;
+            else return {.Status=PhysicsOperationStatus::BackendFailure, .Message="Overlap has no live semantic owner"};
         }
         std::ranges::sort(Result.Parts, {}, [](const auto &Part) { return Part->GetObjectId(); });
         Result.Truncated=Result.Parts.size()>MaxResults;
@@ -66,7 +87,7 @@ namespace gargantuan {
             }
             auto Result=World->ResolveOverlap(Shape,Params,MaxResults);
             if (!Result.Succeeded()) throw std::runtime_error(Result.Message);
-            lua_createtable(L,0,2);
+            lua_createtable(L,0,3);
             lua_createtable(L,static_cast<int>(Result.Parts.size()),0);
             int Index=1;
             for (auto &Part:Result.Parts) {
@@ -77,12 +98,16 @@ namespace gargantuan {
             lua_setfield(L,-2,"Parts");
             lua_pushboolean(L,Result.Truncated);
             lua_setfield(L,-2,"Truncated");
+            if (Result.TerrainInstance) {
+                StackValue<std::shared_ptr<Instance>>::Push(L,Result.TerrainInstance);
+                lua_setfield(L,-2,"Terrain");
+            }
         } else {
             auto Result=World->ResolveShapeCast(Shape,Direction,Params);
             if (!Result.Succeeded()) throw std::runtime_error(Result.Message);
             if (!Result.HasHit()) { lua_pushnil(L); return 1; }
             lua_createtable(L,0,4);
-            StackValue<std::shared_ptr<Instance>>::Push(L,Result.Instance); lua_setfield(L,-2,"Instance");
+            StackValue<std::shared_ptr<Instance>>::Push(L,Result.GetHitInstance()); lua_setfield(L,-2,"Instance");
             StackValue<glm::vec3>::Push(L,Result.Position); lua_setfield(L,-2,"Position");
             StackValue<glm::vec3>::Push(L,Result.Normal); lua_setfield(L,-2,"Normal");
             lua_pushnumber(L,Result.Distance); lua_setfield(L,-2,"Distance");

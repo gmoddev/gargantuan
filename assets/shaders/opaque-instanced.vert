@@ -11,6 +11,7 @@ layout(location = 2) in vec4 VertexTangent;
 layout(location = 3) in vec2 VertexUV;
 layout(location = 4) in uvec4 VertexJoints;
 layout(location = 5) in vec4 VertexWeights;
+layout(location = 6) in vec4 VertexTint;
 
 layout(location = 0) out vec3 FragmentNormal;
 layout(location = 1) out vec4 FragmentColor;
@@ -31,7 +32,7 @@ void main() {
     );
     gl_Position = world.ProjectionMatrix * world.ViewMatrix * Part.ModelMatrix * vec4(Vertex.Position, 1.0f);
     FragmentNormal = normalize(mat3(Part.NormalMatrix) * Vertex.Normal);
-    FragmentColor = Part.Color;
+    FragmentColor = Part.Color * VertexTint;
     WorldPosition = (Part.ModelMatrix * vec4(Vertex.Position, 1.0f)).xyzw;
     ShadowPosition = world.ShadowBiasMatrix * WorldPosition;
     FragmentUV = VertexUV;

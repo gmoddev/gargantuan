@@ -2,6 +2,7 @@
 
 #include "host/common/PackagedHost.hpp"
 #include "host/common/FarmPublicationEvidence.hpp"
+#include "gargantuan/network/TerrainSession.hpp"
 #include "host/common/FarmLifecycleEvidence.hpp"
 #include "host/player/FarmRecoveryObservation.hpp"
 #include "network/ReliableServiceFeedback.hpp"
@@ -156,11 +157,20 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 
 	const auto PackageRoot = Paths::GetExecutableDirectory().lexically_normal();
 	int BootstrapExitCode = 0;
-	auto Payload = host::BootstrapPackagedRuntime(PackageRoot, PackageRoot, "GargantuanPlayer", BootstrapExitCode);
+	const auto LoadMode = ClientEndpoint && network::IsLoopbackTransportEndpoint(*ClientEndpoint)
+		? PackageRuntimeLoadMode::LoopbackDevelopmentClient : PackageRuntimeLoadMode::Complete;
+	auto Payload = host::BootstrapPackagedRuntime(PackageRoot, PackageRoot, "GargantuanPlayer", BootstrapExitCode, LoadMode);
 	if (!Payload) {
 		const int ExitCode = FarmEnabled && BootstrapExitCode == 0 ? 7 : BootstrapExitCode;
 		ReportFarmResult(ExitCode, "package_bootstrap");
 		return ExitCode;
+	}
+	const bool NetworkTerrain = ClientEndpoint && !Payload->TerrainArtifacts.empty();
+	if (NetworkTerrain && (Payload->Inspection.Configuration != PackageConfiguration::Development ||
+		!network::IsLoopbackTransportEndpoint(*ClientEndpoint))) {
+		std::cerr << "[Terrain:Network] Terrain delivery currently requires a loopback Development package.\n";
+		ReportFarmResult(7, "terrain_policy");
+		return 7;
 	}
 
 	const bool Headless = Program.is_used("--headless");
@@ -185,7 +195,8 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	std::unique_ptr<network::GameSession> Session;
 	std::unique_ptr<host::detail::FarmPublicationEvidence> PublicationEvidence;
 	try {
-		auto PackagedWorld = PackageBuilder::LoadWorld(*Payload, PackageRoot);
+		auto PackagedWorld = Payload->LoadMode == PackageRuntimeLoadMode::LoopbackDevelopmentClient
+			? PackageBuilder::LoadClientCodeWorld(*Payload, PackageRoot) : PackageBuilder::LoadWorld(*Payload, PackageRoot);
 		const Vector2 ViewportSize(720, 540);
 		if (Headless)
 			Renderer = std::make_unique<HeadlessRenderer>(ViewportSize);
@@ -210,6 +221,8 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 					.AllowInsecureDevelopmentNetwork = AllowInsecureDevelopmentNetwork,
 					.DeclareNormalOrdinaryService = true,
 					.HydratePlayerGuiCode = PackageBuilder::MakePlayerGuiCodeHydrator(PackagedWorld),
+					.TerrainBootstrap = NetworkTerrain ? network::MakeTerrainSessionData(Payload->Inspection.Identity,
+						Payload->Inspection.Revision, Payload->TerrainArtifacts, false) : nullptr,
 				}
 			);
 			if (FarmScaleWorkload && !network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(*Session, false))
@@ -244,7 +257,8 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			World = std::move(PackagedWorld);
 		}
 		const auto Mode = !ClientText.empty() ? RuntimeMode::NetworkClient : RuntimeMode::Offline;
-		auto ProviderConfiguration = EngineProviderConfiguration{.AudioEnabled = !Headless, .Mode = Mode};
+		auto ProviderConfiguration = EngineProviderConfiguration{
+			.AudioEnabled = !Headless, .Mode = Mode, .AdmitNetworkTerrain = NetworkTerrain};
 		if (Mode == RuntimeMode::Offline)
 			ProviderConfiguration.Content = PackageBuilder::GetLocalContentConfiguration(
 				*Payload, PackageRoot, ContentResidencyMode::FullyResident

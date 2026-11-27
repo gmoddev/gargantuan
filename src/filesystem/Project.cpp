@@ -4,6 +4,7 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/Workspace.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
 #include "serialization/JsonCodec.hpp"
@@ -12,6 +13,9 @@
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
+#include "gargantuan/Profiler.hpp"
+#include "terrain/ScenePersistence.hpp"
+#include "terrain/TerrainProfile.hpp"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -33,6 +37,10 @@
 
 namespace gargantuan {
 	using InstanceFormat = InstanceSerialization::InstanceFormat;
+
+	struct Project::DurableTerrainState {
+		std::atomic<std::shared_ptr<const terrain::TerrainCaptureIndex>> Index;
+	};
 
 	namespace {
 		using Json = nlohmann::ordered_json;
@@ -92,6 +100,38 @@ namespace gargantuan {
 			));
 		}
 
+		terrain::TerrainArtifactReader GetProjectTerrainReader(BaseFilesystem &Filesystem) {
+			return [&Filesystem, Mount = std::optional<SourceMount>{}](const terrain::TerrainArtifactId &Id,
+				std::size_t Maximum) mutable ->
+				std::expected<std::vector<std::uint8_t>, terrain::TerrainPersistenceError> {
+				using enum terrain::TerrainPersistenceError;
+				const auto Path = terrain::GetTerrainArtifactPath(Id);
+				if (!Path) return std::unexpected(InvalidBinding);
+				if (!Mount) Mount.emplace(Filesystem);
+				// The terrain manifest bounds the complete closure. SourceMount bounds and confines each read.
+				SourceMountBudget Budget;
+				const auto Bytes = Mount->ReadFile(*Path, Maximum, Budget);
+				if (Bytes) return std::vector<std::uint8_t>(Bytes->begin(), Bytes->end());
+				switch (Bytes.error().Code) {
+					case SourceMountErrorCode::Missing: return std::unexpected(MissingArtifact);
+					case SourceMountErrorCode::FileSizeLimit: return std::unexpected(LimitExceeded);
+					default: return std::unexpected(ReadFailed);
+				}
+			};
+		}
+
+		void RequirePlainPersistenceDirectory(const std::filesystem::path &Path) {
+			std::error_code Error;
+			const auto Status = std::filesystem::symlink_status(Path, Error);
+			if (Error || !std::filesystem::is_directory(Status))
+				throw std::runtime_error("[Project:Persistence] Project storage is not an accessible directory");
+#if defined(_WIN32)
+			const auto Attributes = GetFileAttributesW(Path.c_str());
+			if (Attributes == INVALID_FILE_ATTRIBUTES || (Attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+				throw std::runtime_error("[Project:Persistence] Project storage cannot traverse a reparse point");
+#endif
+		}
+
 		std::string EncodeProjectMetadata(ProjectId Identity) {
 			Json Document{{"Version", ProjectMetadataVersion}, {"ProjectId", Identity.ToString()}};
 			auto Encoded = JsonCodec::Encode(Document, "project metadata");
@@ -111,17 +151,39 @@ namespace gargantuan {
 			return *Identity;
 		}
 
-		ProjectId ReadProjectIdentity(BaseFilesystem &Filesystem, const std::filesystem::path &ConfigurationRoot) {
+		ProjectId ReadProjectIdentity(BaseFilesystem &Filesystem, const std::filesystem::path &ConfigurationRoot,
+			const std::filesystem::path &InstanceFile, InstanceFormat Format) {
+			RequirePlainPersistenceDirectory(ConfigurationRoot);
 			const auto Path = ConfigurationRoot / ProjectMetadataFilename;
-			if (!Filesystem.Exists(Path)) {
-				const auto Identity = ProjectId::New();
-				PersistStringAtomically(Path, EncodeProjectMetadata(Identity));
-				return Identity;
+			SourceMount Mount(Filesystem);
+			SourceMountBudget Budget;
+			const auto Relative = Path.lexically_relative(Filesystem.Root);
+			const auto Metadata = Mount.ReadFile(Relative, 4096, Budget);
+			if (Metadata) return DecodeProjectIdentity(*Metadata);
+			if (Metadata.error().Code != SourceMountErrorCode::Missing)
+				throw std::runtime_error(Metadata.error().Format());
+			if (Format == InstanceFormat::Json) {
+				const auto Scene = Mount.ReadFile(InstanceFile.lexically_relative(Filesystem.Root),
+					MaximumProtocolDocumentBytes, Budget);
+				if (!Scene) throw std::runtime_error(Scene.error().Format());
+				const auto Terrain = InstanceSerialization::InspectTerrainManifest(*Scene);
+				if (!Terrain) throw std::runtime_error(Terrain.error());
+				if (*Terrain)
+					throw std::runtime_error("[Terrain:Persistence] Restore the original project metadata before opening this terrain scene");
 			}
-			const auto Metadata = Filesystem.Metadata(Path);
-			if (Metadata.Type != FileType::File || Metadata.Size > 4096)
-				throw std::runtime_error("Project metadata exceeds its byte limit");
-			return DecodeProjectIdentity(Filesystem.ReadFileToString(Path));
+			const auto Identity = ProjectId::New();
+			const auto Text = EncodeProjectMetadata(Identity);
+			const auto Bytes = std::span(reinterpret_cast<const std::uint8_t *>(Text.data()), Text.size());
+			try {
+				PersistBytesAtomically(Path, Bytes, [&] { RequirePlainPersistenceDirectory(ConfigurationRoot); },
+					AtomicWriteMode::Create);
+			} catch (...) {
+				SourceMountBudget RetryBudget;
+				const auto Existing = Mount.ReadFile(Relative, 4096, RetryBudget);
+				if (!Existing) throw;
+				return DecodeProjectIdentity(*Existing);
+			}
+			return Identity;
 		}
 
 		bool HasPortableSourcePaths(const Gas::Document &Document) {
@@ -212,7 +274,8 @@ namespace gargantuan {
 	}
 
 	Project::Project(BaseFilesystem *fs)
-		: Filesystem(fs), Root(fs->Root), RootConfiguration(fs->Root / ".gargantuan") {}
+		: Root(fs->Root), RootConfiguration(fs->Root / ".gargantuan"), Filesystem(fs),
+			DurableTerrain(std::make_shared<DurableTerrainState>()) {}
 
 	Project Project::fromInit(
 		BaseFilesystem *fs, std::string projectName, std::shared_ptr<Instance> instance, InstanceFormat format
@@ -262,7 +325,8 @@ namespace gargantuan {
 		auto [instanceFilePath, instanceFileFormat] = resolvedInstance.value();
 		self.InstanceFilePath = instanceFilePath;
 		self.InstanceFileFormat = instanceFileFormat;
-		self.Identity = ReadProjectIdentity(*self.Filesystem, self.RootConfiguration);
+		self.Identity = ReadProjectIdentity(*self.Filesystem, self.RootConfiguration, self.InstanceFilePath,
+			self.InstanceFileFormat);
 
 		return self;
 	}
@@ -288,10 +352,41 @@ namespace gargantuan {
 		return Origin;
 	}
 
-	std::shared_ptr<DataModel> Project::DeserializeGame() {
-		auto stream = Filesystem->ReadFileToStringStream(InstanceFilePath);
+	Project::PreparedGame Project::PrepareGameLoad() const {
+		if (InstanceFileFormat != InstanceFormat::Json)
+			throw std::runtime_error("Binary instance formats are not yet implemented");
+		PreparedGame Result;
+		Result.Source = Filesystem;
+		Result.Identity = Identity;
+		SourceMount Mount(*Filesystem);
+		SourceMountBudget Budget;
+		auto Contents = Mount.ReadFile(InstanceFilePath.lexically_relative(Root), MaximumProtocolDocumentBytes, Budget);
+		if (!Contents) throw std::runtime_error(Contents.error().Format());
+		auto Manifest = InstanceSerialization::InspectTerrainManifest(*Contents);
+		if (!Manifest) throw std::runtime_error(Manifest.error());
+		Result.Contents = std::move(*Contents);
+		Result.Manifest = *Manifest;
+		if (Result.Manifest)
+			Result.Terrain = terrain::LoadSceneTerrain(Identity, *Result.Manifest, GetProjectTerrainReader(*Filesystem));
+		return Result;
+	}
 
-		auto deserialized = InstanceSerialization::Deserialize(InstanceFileFormat, stream);
+	std::shared_ptr<DataModel> Project::DeserializeGame() {
+		return DeserializeGame(PrepareGameLoad());
+	}
+
+	std::shared_ptr<DataModel> Project::DeserializeGame(PreparedGame Prepared) {
+		if (Prepared.Source != Filesystem || Prepared.Identity != Identity)
+			throw std::invalid_argument("Prepared scene differs from its source project");
+		std::istringstream stream(std::move(Prepared.Contents));
+		auto deserialized = InstanceSerialization::Deserialize(InstanceFileFormat, stream,
+			[&](DataModel &World, const AssetContentId &Digest) {
+				if (Prepared.Manifest != Digest || !Prepared.Terrain)
+					throw terrain::TerrainPersistenceFailure(terrain::TerrainPersistenceError::InvalidBinding);
+				const auto Space = std::dynamic_pointer_cast<Workspace>(World.GetService("Workspace"));
+				if (!Space) throw std::runtime_error("[Terrain:Persistence] Expected a canonical Workspace");
+				Space->RestoreTerrainField(std::move(Prepared.Terrain));
+			});
 		if (!deserialized.Ok) {
 			std::ostringstream err;
 			err << "Failed to deserialize instance file:" << std::endl;
@@ -299,16 +394,12 @@ namespace gargantuan {
 				err << "* " << reason << std::endl;
 			}
 			throw std::runtime_error(err.str());
-		} else if (!deserialized.Instance->IsA("DataModel")) {
-			throw std::runtime_error(
-				std::format(
-					"Expected project instance to be a DataModel, got a {}",
-					deserialized.Instance->CLASS_DEFINITION.ClassName
-				)
-			);
-		} else {
+		}
+		try {
 			auto game = std::dynamic_pointer_cast<DataModel>(deserialized.Instance);
-			if (!game) throw std::runtime_error("Project root has inconsistent DataModel type metadata");
+			if (!game)
+				throw std::runtime_error(std::format("Expected project instance to be a DataModel, got a {}",
+					deserialized.Instance->CLASS_DEFINITION.ClassName));
 			game->MarkPersistenceSubtreeArchivable();
 			game->Root = Root;
 			game->Filesystem = Filesystem;
@@ -318,19 +409,27 @@ namespace gargantuan {
 				Assets->LoadProjectAssets(*Filesystem);
 			}
 			return game;
+		} catch (...) {
+			deserialized.Instance->Destroy();
+			throw;
 		}
 	};
 
-	SerializationResult<Gas::Document> Project::CaptureGasPlace(const std::shared_ptr<DataModel> &World) const {
+	SerializationResult<Gas::Document> Project::CaptureGasPlace(const std::shared_ptr<DataModel> &World,
+		std::optional<terrain::TerrainCapture> *CapturedTerrain) const {
 		try {
 			AssertAuthoritativeMutation("CaptureGasPlace");
 			RequireFrozenRuntimeSchema("CaptureGasPlace");
 			if (!Identity.IsValid() || !World || World->GetDestroyed() || World->IsDestroying() ||
 				World->Filesystem != Filesystem || World->Root != Root)
 				return SerializationFailure(SerializationErrorCode::InvalidValue, "Expected a world owned by this project");
+			auto Terrain = terrain::CaptureSceneTerrain(*World, Identity);
+			if (Terrain && !CapturedTerrain)
+				return SerializationFailure(SerializationErrorCode::InvalidValue, "Terrain place capture requires its artifact closure");
 			const std::array<std::shared_ptr<Instance>, 1> Roots{World};
 			auto Document = InstanceSerialization::CaptureGasDocument(Roots, Gas::DocumentKind::Place,
-				Gas::PlaceMetadata{Identity, ReadProjectPreRunSource(Root)});
+				Gas::PlaceMetadata{Identity, ReadProjectPreRunSource(Root),
+					Terrain ? std::optional(Terrain->ManifestDigest) : std::nullopt});
 			if (!Document) return Document;
 			if (!HasPortableSourcePaths(*Document))
 				return SerializationFailure(SerializationErrorCode::InvalidValue, "GAS place has a nonportable FileLink path");
@@ -340,6 +439,7 @@ namespace gargantuan {
 			auto Dependencies = Gas::ResolveDependencies(*Document, Assets.get(), true);
 			if (!Dependencies) return std::unexpected(std::move(Dependencies.error()));
 			Document->Dependencies = std::move(*Dependencies);
+			if (CapturedTerrain) *CapturedTerrain = std::move(Terrain);
 			return Document;
 		} catch (const std::exception &) {
 			return SerializationFailure(SerializationErrorCode::InternalFailure, "Could not capture GAS place");
@@ -349,13 +449,16 @@ namespace gargantuan {
 	void Project::ExportGasPlace(const std::shared_ptr<DataModel> &World, const std::filesystem::path &Destination,
 		const std::optional<std::string> &ExpectedPreRunSource) const {
 		if (Destination.extension() != ".gasp") throw std::invalid_argument("GAS place export requires a .gasp destination");
-		const auto Document = CaptureGasPlace(World);
+		std::optional<terrain::TerrainCapture> CapturedTerrain;
+		const auto Document = CaptureGasPlace(World, &CapturedTerrain);
 		if (!Document) throw std::runtime_error(Document.error().Format());
 		if (Document->Place->PreRunSource != ExpectedPreRunSource)
 			throw PreRunSourceConflict("Project PreRun source differs from the initialized schema source");
 		const auto Bytes = Gas::Encode(*Document);
 		if (!Bytes) throw std::runtime_error(Bytes.error().Format());
 		const auto Output = std::filesystem::absolute(Destination);
+		ValidateGasExportDestination(Output);
+		if (CapturedTerrain) PersistTerrainArtifacts(*CapturedTerrain);
 		PersistBytesAtomically(Output, *Bytes, [&] {
 			if (ExpectedPreRunSource != ReadProjectPreRunSource(Root))
 				throw PreRunSourceConflict("Project PreRun source changed during GAS export");
@@ -375,9 +478,12 @@ namespace gargantuan {
 			throw std::invalid_argument("GAS place has an invalid hierarchy or FileLink path");
 
 		ScopedChangeJournalSuppression Suppression;
-		auto Materialized = InstanceSerialization::MaterializeGasDocument(Document, true);
+		auto Materialized = InstanceSerialization::MaterializeGasDocument(Document, true,
+			terrain::GetSceneTerrainAdmission(Identity, GetProjectTerrainReader(*Filesystem)));
 		try {
-			if (!Materialized.Succeeded()) throw std::runtime_error("Could not reconstruct the GAS place graph");
+			if (!Materialized.Succeeded())
+				throw std::runtime_error(Materialized.Errors.empty()
+					? "Could not reconstruct the GAS place graph" : Materialized.Errors.front());
 			auto World = std::dynamic_pointer_cast<DataModel>(Materialized.Roots.front());
 			if (!World || Materialized.Roots.size() != 1)
 				throw std::runtime_error("GAS place did not reconstruct one DataModel");
@@ -423,26 +529,118 @@ namespace gargantuan {
 			RequireAbsentInstanceFile(Destination);
 		};
 		CheckDestination();
-		auto RootInstance = std::static_pointer_cast<Instance>(World);
-		const auto Json = InstanceSerialization::Serialize(InstanceFormat::Json, RootInstance);
-		if (Json.size() > MaximumProtocolDocumentBytes)
+		const auto Snapshot = CaptureGame(World, World->GetAuthoritativeRevision());
+		if (Snapshot.Contents.size() > MaximumProtocolDocumentBytes)
 			throw std::length_error("Restored project exceeds the JSON persistence byte limit");
-		PersistBytesAtomically(Destination, std::span(reinterpret_cast<const std::uint8_t *>(Json.data()), Json.size()),
+		if (Snapshot.Terrain) PersistTerrainArtifacts(*Snapshot.Terrain);
+		PersistBytesAtomically(Destination, std::span(reinterpret_cast<const std::uint8_t *>(Snapshot.Contents.data()),
+			Snapshot.Contents.size()),
 			CheckDestination, AtomicWriteMode::Create);
 	}
 
 	Project::PersistenceSnapshot Project::CaptureGame(
 		const std::shared_ptr<DataModel> &game,
-		std::uint64_t revision
+		std::uint64_t revision,
+		bool ReuseDurableTerrain
 	) const {
 		if (!game) throw std::invalid_argument("Cannot persist a null DataModel");
 		if (revision == 0) throw std::invalid_argument("Cannot persist revision zero");
+		const auto Prior = ReuseDurableTerrain ? DurableTerrain->Index.load() : nullptr;
+		auto Terrain = terrain::CaptureSceneTerrain(*game, Identity, Prior.get());
 		auto root = std::static_pointer_cast<Instance>(game);
-		auto Contents = InstanceSerialization::Serialize(InstanceFileFormat, root);
+		auto Contents = InstanceSerialization::Serialize(InstanceFileFormat, root,
+			Terrain ? std::optional(Terrain->ManifestDigest) : std::nullopt);
 		AssetProjectSnapshot AssetSnapshot;
 		if (auto Assets = std::dynamic_pointer_cast<AssetService>(game->FindFirstChildOfClass("AssetService", false)))
 			AssetSnapshot = Assets->CaptureProjectAssets();
-		return {revision, std::move(Contents), std::move(AssetSnapshot)};
+		return {revision, std::move(Contents), std::move(AssetSnapshot), std::move(Terrain)};
+	}
+
+	void Project::PersistTerrainArtifacts(const terrain::TerrainCapture &Capture) const {
+		G_PROFILE("Terrain::PersistProjectArtifacts");
+		using namespace terrain;
+		using enum TerrainPersistenceError;
+		const TerrainArtifactId ManifestId{TerrainArtifactPurpose::Manifest, Capture.ManifestDigest};
+		const auto *ManifestArtifact = FindTerrainArtifact(Capture.Artifacts, ManifestId);
+		if (!ManifestArtifact || !ManifestArtifact->Bytes ||
+			ManifestArtifact->Bytes->size() > MaximumTerrainManifestBytes ||
+			AssetContentId::Hash(*ManifestArtifact->Bytes) != ManifestId.Digest)
+			throw TerrainPersistenceFailure(CorruptArtifact);
+		const auto Manifest = DecodeTerrainManifest(*ManifestArtifact->Bytes, Identity, GetTerrainDatasetId(Identity));
+		if (!Manifest) throw TerrainPersistenceFailure(InvalidBinding);
+		if (Manifest->Chunks.size() > MaximumStartupSourceChunks) throw TerrainPersistenceFailure(LimitExceeded);
+		std::size_t Bytes = ManifestArtifact->Bytes->size();
+		for (const auto &Ref : Manifest->Chunks) {
+			if (Ref.ByteCount > MaximumTerrainClosureBytes - Bytes)
+				throw TerrainPersistenceFailure(LimitExceeded);
+			Bytes += Ref.ByteCount;
+		}
+		std::filesystem::create_directories(Root);
+		const auto Configuration = ResolveProjectPreRunPath(Root).parent_path();
+		std::filesystem::create_directory(Configuration);
+		RequirePlainPersistenceDirectory(Configuration);
+		const auto Directory = Configuration / "terrain";
+		std::filesystem::create_directory(Directory);
+		RequirePlainPersistenceDirectory(Directory);
+		for (const auto *Leaf : {"chunks", "manifests"}) {
+			std::filesystem::create_directory(Directory / Leaf);
+			RequirePlainPersistenceDirectory(Directory / Leaf);
+		}
+		const auto Reader = GetProjectTerrainReader(*Filesystem);
+		const auto Store = [&](const TerrainArtifactId &Id, std::size_t Size) {
+			const auto Existing = [&] {
+				const auto Stored = Reader(Id, Size);
+				if (!Stored) {
+					if (Stored.error() == MissingArtifact) return false;
+					throw TerrainPersistenceFailure(Stored.error());
+				}
+				if (Stored->size() != Size || AssetContentId::Hash(*Stored) != Id.Digest)
+					throw TerrainPersistenceFailure(CorruptArtifact);
+				return true;
+			};
+			if (Existing()) return;
+			const auto *Artifact = FindTerrainArtifact(Capture.Artifacts, Id);
+			if (!Artifact || !Artifact->Bytes) throw TerrainPersistenceFailure(MissingArtifact);
+			if (Artifact->Bytes->size() != Size || AssetContentId::Hash(*Artifact->Bytes) != Id.Digest)
+				throw TerrainPersistenceFailure(CorruptArtifact);
+			const auto Path = *GetTerrainArtifactPath(Id);
+			const auto Destination = Configuration.parent_path() / Path;
+			const auto CheckDirectory = [&] {
+				if (ResolveProjectPreRunPath(Root).parent_path() != Configuration)
+					throw TerrainPersistenceFailure(ReadFailed);
+				RequirePlainPersistenceDirectory(Directory);
+				RequirePlainPersistenceDirectory(Destination.parent_path());
+			};
+			CheckDirectory();
+			try {
+				PersistBytesAtomically(Destination, *Artifact->Bytes, CheckDirectory, AtomicWriteMode::Create);
+			} catch (...) {
+				// A concurrent save can publish the same immutable artifact first.
+				if (!Existing()) throw;
+			}
+		};
+		for (const auto &Ref : Manifest->Chunks)
+			Store({TerrainArtifactPurpose::Chunk, AssetContentId{Ref.Digest.Bytes}}, Ref.ByteCount);
+		Store(ManifestId, ManifestArtifact->Bytes->size());
+	}
+
+	std::optional<AssetContentId> Project::GetPersistedTerrainManifest() const {
+		if (InstanceFileFormat != InstanceFormat::Json || !Filesystem->Exists(InstanceFilePath)) return std::nullopt;
+		SourceMount Mount(*Filesystem);
+		SourceMountBudget Budget;
+		const auto Contents = Mount.ReadFile(InstanceFilePath.lexically_relative(Root), MaximumProtocolDocumentBytes, Budget);
+		if (!Contents) throw std::runtime_error(Contents.error().Format());
+		const auto Manifest = InstanceSerialization::InspectTerrainManifest(*Contents);
+		if (!Manifest) throw std::runtime_error(Manifest.error());
+		return *Manifest;
+	}
+
+	void Project::ValidatePersistenceDestination() const {
+		if (!Identity.IsValid()) throw std::invalid_argument("Cannot persist an invalid project identity");
+		if (std::filesystem::exists(RootConfiguration)) RequirePlainPersistenceDirectory(RootConfiguration);
+		const auto Metadata = RootConfiguration / ProjectMetadataFilename;
+		if (Filesystem->Exists(Metadata) && FromGasOrigin(Filesystem).Identity != Identity)
+			throw std::runtime_error("Project destination belongs to a different project identity");
 	}
 
 	void Project::PersistGameAtomically(
@@ -450,10 +648,36 @@ namespace gargantuan {
 		const std::function<void()> &beforeReplace
 	) const {
 		if (snapshot.Revision == 0) throw std::invalid_argument("Cannot persist revision zero");
-		if (!Identity.IsValid()) throw std::invalid_argument("Cannot persist an invalid project identity");
+		ValidatePersistenceDestination();
 		if (InstanceFileFormat == InstanceFormat::Binary)
 			throw std::runtime_error("Binary instance formats are not yet implemented");
-		PersistStringAtomically(RootConfiguration / ProjectMetadataFilename, EncodeProjectMetadata(Identity));
+		const auto Digest = InstanceSerialization::InspectTerrainManifest(snapshot.Contents);
+		if (!Digest || *Digest != (snapshot.Terrain ? std::optional(snapshot.Terrain->ManifestDigest) : std::nullopt))
+			throw std::runtime_error("[Terrain:Persistence] Project scene and terrain closure do not match");
+		std::shared_ptr<const terrain::TerrainCaptureIndex> Index;
+		if (snapshot.Terrain) {
+			Index = std::make_shared<const terrain::TerrainCaptureIndex>(snapshot.Terrain->Index);
+			PersistTerrainArtifacts(*snapshot.Terrain);
+		}
+		if (beforeReplace) beforeReplace();
+		ValidatePersistenceDestination();
+		const auto Metadata = RootConfiguration / ProjectMetadataFilename;
+		const auto CheckIdentity = [&] {
+			if (FromGasOrigin(Filesystem).Identity != Identity)
+				throw std::runtime_error("Project identity changed during persistence");
+		};
+		if (!Filesystem->Exists(Metadata)) {
+			const auto Encoded = EncodeProjectMetadata(Identity);
+			const auto Bytes = std::span(reinterpret_cast<const std::uint8_t *>(Encoded.data()), Encoded.size());
+			try {
+				PersistBytesAtomically(Metadata, Bytes, [&] { RequirePlainPersistenceDirectory(RootConfiguration); },
+					AtomicWriteMode::Create);
+			} catch (...) {
+				// A second save may establish the project first. Accept only an identical identity.
+				if (!Filesystem->Exists(Metadata)) throw;
+			}
+		}
+		CheckIdentity();
 		for (const auto &Artifact : snapshot.Assets.Artifacts) {
 			if (!Artifact.Bytes || Artifact.RelativePath.empty())
 				throw std::runtime_error("Asset persistence snapshot contains an invalid artifact");
@@ -461,8 +685,10 @@ namespace gargantuan {
 		}
 		if (!snapshot.Assets.CatalogJson.empty())
 			PersistStringAtomically(Root / ".gargantuan" / "assets" / "catalog.json", snapshot.Assets.CatalogJson);
-		if (beforeReplace) beforeReplace();
-		PersistStringAtomically(InstanceFilePath, snapshot.Contents);
+		PersistBytesAtomically(InstanceFilePath,
+			std::span(reinterpret_cast<const std::uint8_t *>(snapshot.Contents.data()), snapshot.Contents.size()),
+			CheckIdentity);
+		DurableTerrain->Index.store(std::move(Index));
 	}
 
 	bool Project::ReplacePreRunSource(const std::optional<std::string> &ExpectedSource,

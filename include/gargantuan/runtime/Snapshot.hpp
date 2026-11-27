@@ -70,7 +70,8 @@ namespace gargantuan {
 		std::uint64_t PropertiesNanoseconds = 0;
 	};
 
-	Snapshot CaptureSnapshot(const std::shared_ptr<Instance> &root);
+	enum class SnapshotAudience { Structural, Editor };
+	Snapshot CaptureSnapshot(const std::shared_ptr<Instance> &root, SnapshotAudience Audience = SnapshotAudience::Structural);
 	SnapshotObject CaptureSnapshotObject(const std::shared_ptr<Instance> &Object);
 	std::string SerializeSnapshot(const Snapshot &snapshot);
 	SnapshotParseResult DeserializeSnapshot(std::string_view serialized);

@@ -4,6 +4,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/render/RenderExtractor.hpp"
+#include "terrain/RenderStage.hpp"
 #include "gargantuan/animation/AnimationRuntime.hpp"
 #include "gargantuan/classes/ViewportFrame.hpp"
 
@@ -554,6 +555,11 @@ namespace gargantuan {
 				Result = AddBounded(Result, MultiplyBounded(Publication.Frame.Environment.ReflectionProbes->size(),
 					sizeof(RenderReflectionProbeState)));
 			Result = AddBounded(Result, MultiplyBounded(Publication.Creates.size(), sizeof(RenderObjectCreate)));
+			if (Publication.TerrainDraws) {
+				Result = AddBounded(Result, MultiplyBounded(Publication.TerrainDraws->size(), sizeof(RenderObjectCreate)));
+				for (const auto &Draw : *Publication.TerrainDraws) if (Draw.Primitives)
+					Result = AddBounded(Result, MultiplyBounded(Draw.Primitives->size(), sizeof(RenderPrimitiveMaterialState)));
+			}
 			Result = AddBounded(Result, MultiplyBounded(Publication.Updates.size(), sizeof(RenderObjectUpdate)));
 			Result = AddBounded(Result, MultiplyBounded(Publication.Removes.size(), sizeof(RenderObjectRemove)));
 			Result = AddBounded(Result, MultiplyBounded(Publication.MeshCreates.size(), sizeof(RenderMeshCreate)));
@@ -613,6 +619,27 @@ namespace gargantuan {
 			for (const auto &Diagnostic : Publication.Diagnostics)
 				Result = AddBounded(Result, Diagnostic.Message.size());
 			return Result;
+		}
+
+		std::optional<std::shared_ptr<const terrain::RenderState>> AppendBoundedTerrain(
+			RenderPublication &Publication, const std::shared_ptr<const terrain::RenderState> &Before,
+			const std::shared_ptr<const terrain::RenderState> &Requested, std::size_t MaximumBytes
+		) {
+			const auto Created = Publication.MeshCreates.size();
+			const auto Removed = Publication.MeshRemoves.size();
+			const auto Draws = Publication.TerrainDraws;
+			terrain::AppendTerrainRenderState(Publication, Before, Requested);
+			if (EstimatePublicationBytes(Publication) <= MaximumBytes) return Requested;
+			if (!Requested || Requested->VisualVariants.empty()) return std::nullopt;
+
+			// Keep the non-terrain publication and retry with the exact fine resources.
+			Publication.MeshCreates.resize(Created);
+			Publication.MeshRemoves.resize(Removed);
+			Publication.TerrainDraws = Draws;
+			auto Fine = terrain::GetFineTerrainRenderState(Requested);
+			terrain::AppendTerrainRenderState(Publication, Before, Fine);
+			if (EstimatePublicationBytes(Publication) > MaximumBytes) return std::nullopt;
+			return Fine;
 		}
 	}
 
@@ -1312,6 +1339,17 @@ namespace gargantuan {
 			Dirty->RequestFullResync(Scope, "Pending render UI exceeds its byte limit");
 			throw std::length_error("Pending render UI exceeds its byte limit");
 		}
+		const auto PrepareTerrain = [&](RenderPublication &Publication) {
+			const auto Suppress = !Publication.FullResync && CurrentTerrain &&
+				SuppressedTerrainVariants.lock() == CurrentTerrain;
+			return AppendBoundedTerrain(Publication, PublishedTerrain, Suppress ? PublishedTerrain : CurrentTerrain,
+				Dirty->GetLimits().MaximumPublicationBytes);
+		};
+		const auto CommitTerrain = [&](std::shared_ptr<const terrain::RenderState> Published) {
+			PublishedTerrain = std::move(Published);
+			if (PublishedTerrain == CurrentTerrain) SuppressedTerrainVariants.reset();
+			else SuppressedTerrainVariants = CurrentTerrain;
+		};
 
 		auto FullResync = [&]() -> RenderPublicationPtr {
 			ClearVisualDependencies();
@@ -1473,7 +1511,8 @@ namespace gargantuan {
 			std::ranges::sort(OrderedTextures, {}, &std::pair<RenderTextureIdentity, PublishedTexture>::first);
 			for (const auto &[Texture, State] : OrderedTextures)
 				Result->TextureCreates.push_back({Texture, State.Revision, State.Width, State.Height, State.Format, State.Pixels});
-			if (EstimatePublicationBytes(*Result) > Dirty->GetLimits().MaximumPublicationBytes) {
+			auto Terrain = PrepareTerrain(*Result);
+			if (!Terrain) {
 				Dirty->RequestFullResync(Scope, "Render full-resync publication exceeds its byte limit");
 				throw std::length_error("Render full-resync publication exceeds its byte limit");
 			}
@@ -1481,6 +1520,7 @@ namespace gargantuan {
 			PublishedDeformables = std::move(DeformableReplacement);
 			CommittedAnimationPoses = AnimationPoses;
 			PublishedEnvironment = Environment;
+			CommitTerrain(std::move(*Terrain));
 			HasPublishedEnvironment = true;
 			FullResyncRequested = false;
 			LastPublicationId = Result->Id;
@@ -1844,7 +1884,8 @@ namespace gargantuan {
 		Result->TextureCreates = PendingTextureCreates;
 		Result->TextureUpdates = PendingTextureUpdates;
 		Result->TextureRemoves = PendingTextureRemoves;
-		if (EstimatePublicationBytes(*Result) > Dirty->GetLimits().MaximumPublicationBytes) {
+		auto Terrain = PrepareTerrain(*Result);
+		if (!Terrain) {
 			Dirty->RequestFullResync(Scope, "Incremental render publication exceeds its byte limit");
 			throw std::length_error("Incremental render publication exceeds its byte limit");
 		}
@@ -1878,6 +1919,7 @@ namespace gargantuan {
 			LastProfile.StateCacheReconciliationNanoseconds =
 				ProfileNanoseconds(ProfileClock::now() - ReconciliationStart);
 		LastPublicationId = Result->Id;
+		CommitTerrain(std::move(*Terrain));
 		Dirty->Acknowledge(DirtyBatch);
 		PendingUi.reset();
 		ViewportsChanged = false;

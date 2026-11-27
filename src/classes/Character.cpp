@@ -152,6 +152,15 @@ namespace gargantuan {
 			return Result;
 		}
 		const auto WorldTranslation = Request.LocalSpace ? Transform.Rotation * Request.Translation : Request.Translation;
+		const auto Admission = World.TerrainMotionAdmission.lock();
+		const glm::vec3 Extents(Kinematic->GetCapsuleRadius(), Kinematic->GetCapsuleHeight() * 0.5f,
+			Kinematic->GetCapsuleRadius());
+		if ((!Admission && World.TerrainReplicaCoverageRequired) ||
+			(Admission && (!(*Admission)(GetObjectId(), Transform.Position, Extents) ||
+				!(*Admission)(GetObjectId(), Transform.Position + WorldTranslation, Extents)))) {
+			Result.Status = PhysicsOperationStatus::ResourceLimit;
+			return Result;
+		}
 		const auto PhysicsStarted = std::chrono::steady_clock::now();
 		auto PhysicsResult = World.ResolveKinematicMotion({
 			.Position = Transform.Position,
@@ -159,12 +168,19 @@ namespace gargantuan {
 			.Height = Kinematic->GetCapsuleHeight(),
 			.Translation = WorldTranslation,
 			.Velocity = Request.Velocity,
+			.IsCenterCovered = Admission ? std::function<bool(glm::vec3)>([&](glm::vec3 Position) {
+				return (*Admission)(GetObjectId(), Position, Extents);
+			}) : std::function<bool(glm::vec3)>{},
 		});
 		Result.PhysicsCpuNanoseconds = static_cast<std::uint64_t>(
 			std::chrono::duration_cast<std::chrono::nanoseconds>(
 				std::chrono::steady_clock::now() - PhysicsStarted
 			).count()
 		);
+		if (PhysicsResult.Succeeded() && Admission && !(*Admission)(GetObjectId(), PhysicsResult.Position, Extents)) {
+			Result.Status = PhysicsOperationStatus::ResourceLimit;
+			return Result;
+		}
 		Result.Status = PhysicsResult.Status;
 		Result.AppliedTranslation = PhysicsResult.AppliedTranslation;
 		Result.Position = PhysicsResult.Position;

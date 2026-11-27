@@ -713,6 +713,14 @@ namespace gargantuan {
 				};
 
 				const glm::vec3 TargetPosition = Request.Position + Request.Translation;
+				auto CoverageDenied = [&]() {
+					Result.Status = PhysicsOperationStatus::ResourceLimit;
+					Result.Message = "[Terrain:Collision] Capsule sweep extends beyond ready coverage";
+					return Result;
+				};
+				if (Request.IsCenterCovered &&
+					(!Request.IsCenterCovered(Request.Position) || !Request.IsCenterCovered(TargetPosition)))
+					return CoverageDenied();
 				glm::vec3 CurrentPosition = Request.Position;
 				bool Collided = false;
 				bool PlanesTruncated = false;
@@ -730,6 +738,8 @@ namespace gargantuan {
 						).delta
 					);
 					if (glm::dot(SolvedDelta, SolvedDelta) < MotionToleranceSquared) break;
+					if (Request.IsCenterCovered && !Request.IsCenterCovered(CurrentPosition + SolvedDelta))
+						return CoverageDenied();
 
 					const b3Pos Origin{CurrentPosition.x, CurrentPosition.y, CurrentPosition.z};
 					const auto Box3Delta = Box3DConversions::ToBox3(SolvedDelta);
@@ -760,6 +770,7 @@ namespace gargantuan {
 						b3SolvePlanes(b3Vec3_zero, Context.Planes.data(), static_cast<int>(Context.PlaneCount)).delta
 					);
 					CurrentPosition += Correction;
+					if (Request.IsCenterCovered && !Request.IsCenterCovered(CurrentPosition)) return CoverageDenied();
 					Result.Velocity = Box3DConversions::FromBox3(b3ClipVector(
 						Box3DConversions::ToBox3(Request.Velocity),
 						Context.Planes.data(),

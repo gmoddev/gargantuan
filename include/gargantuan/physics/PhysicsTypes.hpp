@@ -188,6 +188,8 @@ namespace gargantuan {
 		float Height = 4.0f;
 		glm::vec3 Translation{0.0f};
 		glm::vec3 Velocity{0.0f};
+		// A synchronous caller can require every attempted sweep to stay in ready collision coverage.
+		std::function<bool(glm::vec3)> IsCenterCovered;
 	};
 
 	enum class PhysicsQueryFilterType : std::uint8_t {

@@ -23,13 +23,17 @@
 #include "gargantuan/classes/RemoteFunction.hpp"
 #include "gargantuan/classes/ScreenGui.hpp"
 #include "gargantuan/classes/Script.hpp"
+#include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/network/CharacterNetwork.hpp"
 #include "gargantuan/network/GameSession.hpp"
 #include "gargantuan/network/GameSessionProtocol.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
+#include "gargantuan/network/TerrainSession.hpp"
 #if defined(GARGANTUAN_WITH_GNS)
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
+#include "../src/terrain/PhysicsStage.hpp"
+#include "../src/terrain/RenderStage.hpp"
 #endif
 #include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -74,6 +78,17 @@ void *operator new(std::size_t Size) {
 
 void operator delete(void *Value) noexcept { std::free(Value); }
 void operator delete(void *Value, std::size_t) noexcept { std::free(Value); }
+#endif
+
+#if defined(GARGANTUAN_WITH_GNS)
+namespace gargantuan {
+	struct WorldRootTestAccess {
+		static std::size_t TerrainBodyCount(const WorldRoot &World) {
+			const auto *Stage = World.GetTerrainPhysics();
+			return Stage ? Stage->GetBodyCount() : 0;
+		}
+	};
+}
 #endif
 
 namespace {
@@ -604,7 +619,20 @@ namespace {
 			return Inner->Disconnect(Id, std::move(Value));
 		}
 		TransportOperationResult Send(const NetworkMessageIntent &Message) override {
+			const auto Terrain = DecodeTerrainFragment(Message.Payload());
+			if ((HoldTerrain && Terrain) || (HoldTerrainReady && IsTerrainWindowReady(Message.Payload()))) {
+				if (HoldTerrainReady && IsTerrainWindowReady(Message.Payload())) ++TerrainReadyDeferrals;
+				++TerrainDeferrals;
+				return {.Status = TransportOperationStatus::WouldBlock};
+			}
 			auto Result = Inner->Send(Message);
+			if (Result.Succeeded() && TerrainObservedPeer && Message.Destination() != TerrainObservedPeer)
+				if (const auto Offer = DecodeTerrainWindowOffer(Message.Payload())) TerrainObservedOffer = *Offer;
+			if (Result.Succeeded() && Terrain) {
+				TerrainBytes += Terrain->Bytes.size();
+				if (TerrainObservedPeer == Message.Destination()) ObservedTerrainBytes += Terrain->Bytes.size();
+				MaximumTerrainSlice = std::max(MaximumTerrainSlice, Terrain->Bytes.size());
+			}
 			if (Result.Succeeded() && Started != 0) {
 				Bytes += Message.Payload().size();
 				++Messages;
@@ -628,6 +656,11 @@ namespace {
 		std::shared_ptr<IGameTransport> Inner;
 		std::array<std::uint64_t, runtime_detail::WorkProducerNames.size()> Fresh{};
 		std::uint64_t Started = 0, Bytes = 0, Messages = 0;
+		std::size_t TerrainDeferrals = 0, TerrainBytes = 0, TerrainReadyDeferrals = 0, MaximumTerrainSlice = 0;
+		std::optional<ConnectionId> TerrainObservedPeer;
+		std::size_t ObservedTerrainBytes = 0;
+		std::optional<TerrainWindowOffer> TerrainObservedOffer;
+		bool HoldTerrain = false, HoldTerrainReady = false;
 	};
 
 	GameSessionConfiguration Configuration(GameSessionRole Role, std::string Endpoint = "game-session") {
@@ -712,6 +745,779 @@ namespace {
 			Check(!DecodeGameSessionMessage(*Accepted), "GSES rejects an unknown session identity kind");
 		}
 	}
+
+#if defined(GARGANTUAN_WITH_GNS)
+	constexpr unsigned DefaultTerrainChurnCycles = 24;
+	constexpr unsigned MaximumTerrainChurnCycles = 120;
+
+	struct TerrainChurnResources {
+		std::size_t Entries, Pages, FieldBytes, Meshes, RenderBytes, Bodies;
+		bool operator==(const TerrainChurnResources &) const = default;
+	};
+
+	TerrainChurnResources ReadTerrainChurnResources(const Engine &Runtime) {
+		const auto Stats = Runtime.Workspace->GetTerrain()->GetField().GetStats();
+		const auto Render = Runtime.WorldRoot->GetTerrainRenderState();
+		return {Stats.Entries, Stats.MaterializedPages, Stats.OwnedBytes, Render ? Render->Chunks.size() : 0,
+			Render ? Render->Bytes : 0, WorldRootTestAccess::TerrainBodyCount(*Runtime.WorldRoot)};
+	}
+
+	WorldRaycastResult CastTerrainChurnRay(Engine &Runtime, float X) {
+		RaycastParams Params;
+		Params.IncludeTerrain = true;
+		Params.FilterType = Enums::RaycastFilterType::Include;
+		Params.FilterDescendantsInstances.Values.emplace_back(Runtime.Workspace->GetTerrain());
+		return Runtime.Workspace->ResolveRaycast({X, 12, 12}, {0, -12, 0}, Params);
+	}
+
+	void RunTerrainChurn(Engine &Authority, Engine &Near, Engine &Distant, Character &NearActor,
+		Character &DistantActor, const GameSession &Server, const GameSession &Client,
+		HandoffTransport &Transport, ConnectionId DistantPeer, unsigned Cycles, const std::function<void()> &Exchange) {
+		const auto LocalActor = [](Engine &Runtime) {
+			const auto Owner = Runtime.Players->GetLocalPlayer().value_or(nullptr);
+			return Owner ? Owner->GetCharacter().value_or(nullptr) : nullptr;
+		};
+		const auto NearReplica = LocalActor(Near);
+		const auto DistantReplica = LocalActor(Distant);
+		if (!NearReplica || !DistantReplica) {
+			Check(false, "terrain churn needs both native replica actors");
+			return;
+		}
+		// Keep both probes over authored support across ordinary server steps.
+		NearActor.SetPosition({76.f, 8.8f, 12.f});
+		NearReplica->SetPosition({76.f, 8.8f, 12.f});
+		DistantActor.SetPosition({140.f, 9.f, 12.f});
+		DistantReplica->SetPosition({140.f, 9.f, 12.f});
+
+		const auto BothWindowsReleased = [&] {
+			return CastTerrainChurnRay(Near, 108.f).Succeeded() &&
+				NearActor.AdmitMotion(*Authority.WorldRoot, {}).Succeeded() &&
+				NearReplica->AdmitMotion(*Near.WorldRoot, {}).Succeeded() &&
+				DistantReplica->AdmitMotion(*Distant.WorldRoot, {}).Succeeded();
+		};
+		for (int Step = 0; Step < 150 && !BothWindowsReleased(); ++Step) {
+			Authority.Step();
+			Exchange();
+		}
+		if (!BothWindowsReleased()) {
+			Check(false, "terrain churn begins only after both existing windows are acknowledged");
+			return;
+		}
+
+		const auto NearBaseline = ReadTerrainChurnResources(Near);
+		const auto DistantBaseline = ReadTerrainChurnResources(Distant);
+		auto NearPeak = NearBaseline;
+		const auto BeforeBytes = Transport.TerrainBytes;
+		Transport.TerrainObservedPeer = DistantPeer;
+		Transport.ObservedTerrainBytes = 0;
+		const auto Terrain = Authority.Workspace->GetTerrain();
+		const auto ReplicaTerrain = Near.Workspace->GetTerrain();
+		const auto InitialRevision = Terrain->GetField().GetRevision();
+		const auto Started = std::chrono::steady_clock::now();
+		constexpr std::size_t MaximumBytesPerEdit = 64 * 1024;
+		const auto MaximumTotalBytes = std::size_t{Cycles} * (2 * 1024 * 1024) / DefaultTerrainChurnCycles;
+		std::size_t MaximumEditBytes = 0, Edits = 0, DistantMoves = 0, StencilSamples = 0;
+		float PreviousHeight = 0.f;
+		for (unsigned Index = 0; Index < Cycles * 3; ++Index) {
+			const auto Phase = Index % 3;
+			const auto Material = Phase == 2 ? 0u : 1000u + (Index / 3) * 2 + Phase;
+			const std::string Argument = ", " + std::to_string(Material) + ")";
+			const auto Command = Phase == 0
+				? "Terrain:FillBall(Vector3.new(58.4, 4.4, 12.4), 2.15" + Argument
+				: Phase == 1 ? "Terrain:PaintBall(Vector3.new(58.4, 4.4, 12.4), 2.8" + Argument
+				: "Terrain:RemoveBall(Vector3.new(58.4, 4.4, 12.4), 3.8)";
+			const auto Revision = Terrain->GetField().GetRevision();
+			const auto Sent = Transport.TerrainBytes;
+			auto ScriptValue = std::make_shared<Script>();
+			ScriptValue->SetRunContext(Enums::RunContext::Server);
+			ScriptValue->SetSource("local Terrain = game:GetService(\"Workspace\").Terrain\n" + Command);
+			ScriptValue->SetParent(Authority.DataModel);
+			for (int Step = 0; Step < 180 && Terrain->GetField().GetRevision() == Revision; ++Step) {
+				Authority.Step();
+				if (Terrain->GetField().GetRevision() == Revision) Exchange();
+			}
+			ScriptValue->Destroy();
+
+			const CharacterMotionRequest Motion{.Translation = {Index % 2 ? -0.25f : 0.25f, 0.f, 0.f}};
+			const auto Move = [&](Character &Actor, Engine &Runtime) {
+				const auto Start = Actor.GetPosition();
+				return Actor.AdmitMotion(*Runtime.WorldRoot, Motion).Succeeded() && Actor.GetPosition().x != Start.x;
+			};
+			const bool AuthorityMoved = Move(DistantActor, Authority);
+			const bool ReplicaMoved = Move(*DistantReplica, Distant);
+			const bool BothMoved = AuthorityMoved && ReplicaMoved;
+			DistantMoves += BothMoved;
+			const auto Center = Terrain->GetField().Read({58, 4, 12});
+			const auto SourceRay = CastTerrainChurnRay(Authority, 58.f);
+			const bool SourcePublished = Terrain->GetField().GetRevision() == Revision + 1 &&
+				Center && Center->Material == Material && (Center->Density < 0) == (Material != 0) &&
+				SourceRay.Succeeded() && SourceRay.HasHit() == (Material != 0);
+			const bool NearFenced = !NearActor.AdmitMotion(*Authority.WorldRoot, Motion).Succeeded();
+			bool NearReleased = false, ReplicaReleased = false;
+			if (SourcePublished) {
+				for (int Step = 0; Step < 250 && (!NearReleased || !ReplicaReleased); ++Step) {
+					Exchange();
+					if (ReplicaTerrain->GetField().Read({58, 4, 12}) != Center) continue;
+					if (!NearReleased) NearReleased = NearActor.AdmitMotion(*Authority.WorldRoot, Motion).Succeeded();
+					if (!ReplicaReleased) ReplicaReleased = NearReplica->AdmitMotion(*Near.WorldRoot, Motion).Succeeded();
+				}
+			}
+			bool ExactSamples = true;
+			for (std::int64_t Z = 11; Z <= 13; ++Z)
+				for (std::int64_t Y = 3; Y <= 5; ++Y)
+					for (std::int64_t X = 57; X <= 59; ++X) {
+						const auto A = Terrain->GetField().Read({X, Y, Z});
+						const auto B = ReplicaTerrain->GetField().Read({X, Y, Z});
+						const bool Match = A.has_value() && A == B;
+						ExactSamples &= Match;
+						StencilSamples += Match;
+					}
+			const auto NearRay = CastTerrainChurnRay(Near, 58.f);
+			const auto DistantRay = CastTerrainChurnRay(Distant, 140.f);
+			const bool ExactRays = NearRay.Succeeded() && NearRay.HasHit() == SourceRay.HasHit() &&
+				(!SourceRay.HasHit() || (NearRay.GetHitInstance() == ReplicaTerrain &&
+					glm::length(NearRay.Position - SourceRay.Position) < 1e-4f &&
+					glm::length(NearRay.Normal - SourceRay.Normal) < 1e-4f)) &&
+				(Phase != 1 || std::abs(PreviousHeight - SourceRay.Position.y) < 1e-4f) &&
+				DistantRay.Succeeded() && DistantRay.GetHitInstance() == Distant.Workspace->GetTerrain();
+			PreviousHeight = SourceRay.Position.y;
+			const auto Current = ReadTerrainChurnResources(Near);
+			NearPeak = {std::max(NearPeak.Entries, Current.Entries), std::max(NearPeak.Pages, Current.Pages),
+				std::max(NearPeak.FieldBytes, Current.FieldBytes), std::max(NearPeak.Meshes, Current.Meshes),
+				std::max(NearPeak.RenderBytes, Current.RenderBytes), std::max(NearPeak.Bodies, Current.Bodies)};
+			MaximumEditBytes = std::max(MaximumEditBytes, Transport.TerrainBytes - Sent);
+			const bool Bounded = Current.Entries <= TerrainWindowChunkCount && Current.Pages <= NearBaseline.Pages + 2 &&
+				Current.Meshes <= NearBaseline.Meshes + 4 && Current.Bodies <= NearBaseline.Bodies + 4 &&
+				Current.FieldBytes <= NearBaseline.FieldBytes + 1024 * 1024 &&
+				Current.RenderBytes <= NearBaseline.RenderBytes + 1024 * 1024 &&
+				ReadTerrainChurnResources(Distant) == DistantBaseline && Transport.ObservedTerrainBytes == 0 &&
+				MaximumEditBytes <= MaximumBytesPerEdit && Transport.TerrainBytes - BeforeBytes <= MaximumTotalBytes &&
+				Server.GetMetrics().ReadyPeers == 2;
+			if (!(SourcePublished && NearFenced && NearReleased && ReplicaReleased && BothMoved &&
+				ExactSamples && ExactRays && Bounded)) {
+				const auto ReplicaCenter = ReplicaTerrain->GetField().Read({58, 4, 12});
+				std::cerr << "[Terrain:Network] churn failed operation=" << Index + 1 << " phase=" << Phase
+					<< " source=" << SourcePublished << " old_fence=" << NearFenced << " release=" << NearReleased
+					<< " replica_release=" << ReplicaReleased << " distant_moves=" << BothMoved
+					<< " samples=" << ExactSamples << " rays=" << ExactRays << " bounds=" << Bounded
+					<< " material=" << Material << " replica_material=" << (ReplicaCenter ? ReplicaCenter->Material : 0)
+					<< " near_x=" << NearActor.GetPosition().x << " near_y=" << NearActor.GetPosition().y
+					<< " sent_this_edit=" << Transport.TerrainBytes - Sent << " client=" << Client.GetFailure() << '\n';
+				if (const auto &Offer = Transport.TerrainObservedOffer)
+					std::cerr << "[Terrain:Network] churn last offer revision=" << Offer->Identity.FieldRevision
+						<< " center=" << Offer->Center.X << ',' << Offer->Center.Y << ',' << Offer->Center.Z
+						<< " manifest_bytes=" << Offer->ManifestByteCount << " leaf_bytes=" << Offer->LeafByteCount << '\n';
+				break;
+			}
+			++Edits;
+		}
+		Transport.TerrainObservedPeer.reset();
+		const auto Elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - Started);
+		std::cout << "[Terrain:Network] churn cycles=" << Cycles << " operations=" << Edits
+			<< " first_revision=" << InitialRevision + 1
+			<< " last_revision=" << Terrain->GetField().GetRevision() << " elapsed_ms=" << Elapsed.count()
+			<< " exact_samples=" << StencilSamples << " distant_moves_per_peer=" << DistantMoves
+			<< " fragment_payload_bytes=" << Transport.TerrainBytes - BeforeBytes << " payload_limit_bytes=" << MaximumTotalBytes
+			<< " max_edit_fragment_bytes=" << MaximumEditBytes << " distant_fragment_bytes=" << Transport.ObservedTerrainBytes
+			<< " peak_near_entries=" << NearPeak.Entries << " peak_near_pages=" << NearPeak.Pages
+			<< " peak_near_field_bytes=" << NearPeak.FieldBytes << " peak_near_meshes=" << NearPeak.Meshes
+			<< " peak_near_render_bytes=" << NearPeak.RenderBytes << " peak_near_bodies=" << NearPeak.Bodies
+			<< " distant_entries=" << DistantBaseline.Entries << " distant_pages=" << DistantBaseline.Pages
+			<< " distant_meshes=" << DistantBaseline.Meshes << " distant_bodies=" << DistantBaseline.Bodies << '\n';
+		Check(Edits == Cycles * 3 && Terrain->GetField().GetRevision() == InitialRevision + Edits,
+			"all opt-in terrain churn operations committed, rolled, and retained bounded regional resources");
+	}
+
+	void TestNetworkTerrainBootstrap(bool NarrowQueue = false, unsigned ChurnCycles = 0) {
+		auto Field = std::make_unique<terrain::Field>();
+		for (const auto X : {12.0, 76.0, 140.0}) {
+			const terrain::BoxBrush Brush{{X, 4.63, 12}, {8.7, 2.0, 8.7}, terrain::BrushMode::Add, 5};
+			const auto Keys = terrain::GetRegionChunks(terrain::GetBrushBounds(Field->GetGrid(), Brush).value()).value();
+			auto Edit = terrain::Field::Prepare(Field->Capture(Keys).value(), Brush).value();
+			Check(Field->Commit(std::move(Edit)).has_value(), "build the canonical server field");
+		}
+		const std::array PressureKeys{terrain::ChunkKey{-1, 0, -1}};
+		std::vector<terrain::SampleWrite> PressureSamples;
+		for (int Z = -32; Z < 0; ++Z)
+			for (int Y = 0; Y < 32; ++Y)
+				for (int X = -32; X < 0; ++X) {
+					const auto Density = static_cast<std::int16_t>((X * X + 17 * Y + 311 * Z * Z) % 28'000 + 1);
+					PressureSamples.push_back({{X, Y, Z}, {Density, 0}});
+				}
+		Check(Field->Commit(terrain::Field::Prepare(Field->Capture(PressureKeys).value(), PressureSamples).value()).has_value(),
+			"the pressure fixture includes a large exact non-solid leaf");
+		const auto Project = ProjectId::New();
+		const auto Capture = terrain::CaptureTerrain(*Field, Project, terrain::GetTerrainDatasetId(Project)).value();
+		const auto Source = MakeTerrainSessionData(Project, 1, Capture.Artifacts, true);
+		const auto Receiver = MakeTerrainSessionData(Project, 1, std::span(Capture.Artifacts).last(1), false);
+		const auto SpawnWindow = SelectTerrainSessionWindow(*Source, {});
+		auto SpawnPins = SelectTerrainSessionWindow(*Receiver, {});
+		Check(SpawnWindow.Size > MaximumTerrainFragmentBytes && Receiver->Source.empty() &&
+			SpawnPins.ManifestDigest == SpawnWindow.ManifestDigest &&
+			SpawnWindow.Artifacts.size() < Source->Directory.Chunks.size(),
+			"matching manifest-only clients derive exactly the bounded spawn neighborhood");
+		auto EmptyWindow = SelectTerrainSessionWindow(*Receiver, {-40, 0, 0});
+		Check(EmptyWindow.Size == 0 && LoadTerrainSessionField(EmptyWindow, {})->GetStats().MaterializedPages == 0,
+			"an empty neighborhood still admits a verified field");
+		std::vector<std::uint8_t> Corrupt;
+		while (Corrupt.size() < SpawnWindow.Size) {
+			const auto Block = GetTerrainSessionFragment(SpawnWindow, Corrupt.size());
+			if (Block.empty()) throw std::runtime_error("Terrain window unexpectedly lost an immutable leaf");
+			const auto *Bytes = reinterpret_cast<const std::uint8_t *>(Block.data());
+			Corrupt.insert(Corrupt.end(), Bytes, Bytes + Block.size());
+		}
+		Corrupt.front() ^= 1;
+		bool Denied = false;
+		try { (void)LoadTerrainSessionField(SpawnPins, Corrupt); }
+		catch (const std::exception &) { Denied = true; }
+		Check(Denied, "same-length corrupt terrain fails artifact admission");
+		const auto FirstSlice = GetTerrainSessionFragment(SpawnWindow, 0);
+		auto First = EncodeTerrainFragment({7, 1, 0, FirstSlice});
+		Check(DecodeTerrainFragment(First).has_value(), "the explicit fragment codec accepts canonical bytes");
+		First.push_back(std::byte{0});
+		Check(!DecodeTerrainFragment(First), "fragment codec denies trailing bytes");
+		const TerrainWindowIdentity Identity{7, 1, 3, SpawnWindow.ManifestDigest};
+		const auto Offer = DecodeTerrainWindowOffer(EncodeTerrainWindowOffer({Identity, {-2, 0, 1}}));
+		Check(Offer && Offer->Center == terrain::ChunkKey{-2, 0, 1} &&
+			EncodeTerrainWindowOffer({Identity, {40'000, 0, 1}}).empty() &&
+			DecodeTerrainWindowReady(EncodeTerrainWindowReady(Identity)) == Identity,
+			"terrain offers preserve signed coordinates and reject centers without a complete halo");
+
+		auto World = std::make_shared<DataModel>();
+		auto Space = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
+		Space->RestoreTerrainField(std::move(Field));
+		HeadlessRenderer ServerRenderer(Vector2(64, 64)), ClientRenderer(Vector2(64, 64));
+		Engine Runtime(World, &ServerRenderer, nullptr,
+			EngineProviderConfiguration{.Mode = RuntimeMode::NetworkServer, .AdmitNetworkTerrain = true});
+		Runtime.ProcessService->Alive = true;
+		const TransportEndpoint Endpoint{"127.0.0.1", 36719};
+		auto Limits = GameSessionConfiguration::DefaultLimits();
+		Limits.MaximumReliableMessageBytes = NarrowQueue ? TerrainFragmentHeaderBytes + MaximumTerrainFragmentBytes : 32 * 1024;
+		Limits.MaximumQueuedReliableBytes = NarrowQueue ? Limits.MaximumReliableMessageBytes : 64 * 1024;
+		Check(SpawnWindow.Size > Limits.MaximumQueuedReliableBytes,
+			"withholding a complete window would exhaust the reliable queue without admission control");
+		auto ServerTransport = std::make_shared<HandoffTransport>(std::make_shared<GameNetworkingSocketsTransport>());
+		GameSession Server(ServerTransport,
+			{.Role = GameSessionRole::Server, .Endpoint = Endpoint, .Limits = Limits, .TerrainBootstrap = Source}, &Runtime);
+		Check(Server.Start().Succeeded(), "matching terrain server listens through GNS");
+		std::uint64_t Tick = 0;
+		const auto Exchange = [&](GameSession &Client, GameSession *Other = nullptr) {
+			(void)Server.Poll();
+			(void)Client.Poll();
+			if (Other) (void)Other->Poll();
+			Server.Step(++Tick);
+			Client.Step(Tick);
+			if (Other) Other->Step(Tick);
+			std::this_thread::sleep_for(3ms);
+		};
+		{
+			GameSession Wrong(std::make_shared<GameNetworkingSocketsTransport>(),
+				{.Role = GameSessionRole::Client, .Endpoint = Endpoint, .Limits = Limits});
+			Check(Wrong.Start().Succeeded(), "terrain mismatch probe connects through GNS");
+			for (int Step = 0; Step < 150 && Wrong.GetStatus() != GameSessionStatus::Failed; ++Step) Exchange(Wrong);
+			Check(Wrong.GetStatus() == GameSessionStatus::Failed && !Wrong.GetClientDataModel() &&
+				Server.GetMetrics().PlayersCreated == 0, "absent terrain binding fails before Player creation");
+			Wrong.Stop();
+		}
+		ServerTransport->HoldTerrain = true;
+		auto ClientTransport = std::make_shared<HandoffTransport>(std::make_shared<GameNetworkingSocketsTransport>());
+		GameSession Client(ClientTransport,
+			{.Role = GameSessionRole::Client, .Endpoint = Endpoint, .Limits = Limits, .TerrainBootstrap = Receiver});
+		Check(Client.Start().Succeeded(), "terrain client connects through GNS");
+		for (int Step = 0; Step < 150 && (!Client.GetMetrics().AcceptedPeers || !ServerTransport->TerrainDeferrals); ++Step)
+			Exchange(Client);
+		Check(Client.GetMetrics().AcceptedPeers == 1 && ServerTransport->TerrainDeferrals > 0 &&
+			!Client.GetClientDataModel() && Server.GetMetrics().ReadyPeers == 0,
+			"the structurally accepted client has no gameplay world while terrain delivery is stalled");
+		for (int Step = 0; Step < 64; ++Step) Exchange(Client);
+		Check(Client.GetStatus() != GameSessionStatus::Failed && Server.GetPeerIdentities().size() == 1 &&
+			ServerTransport->TerrainBytes == 0, "sustained transport backpressure retains one blocked fragment");
+		ServerTransport->HoldTerrain = false;
+		for (int Step = 0; Step < 300 && !Client.GetClientDataModel() &&
+			Client.GetStatus() != GameSessionStatus::Failed; ++Step) Exchange(Client);
+		const auto Replica = Client.GetClientDataModel();
+		Check(Replica != nullptr, "the client verifies the real streamed terrain closure");
+		if (!Replica) {
+			std::cerr << "[Terrain:Network] Client bootstrap failed: " << Client.GetFailure() << '\n';
+			return;
+		}
+		const auto ReplicaSpace = std::dynamic_pointer_cast<Workspace>(Replica->GetService("Workspace"));
+		Check(ReplicaSpace && !ReplicaSpace->IsTerrainCollisionReady() &&
+			ReplicaSpace->GetTerrain()->GetField().Read({12, 4, 12})->Material == 5 &&
+			ReplicaSpace->GetTerrain()->GetField().Read({140, 4, 12}) == terrain::AirSample &&
+			ServerTransport->TerrainBytes == SpawnWindow.Size,
+			"the client receives exact local data before readiness and no distant leaf bytes");
+		Check(ServerTransport->MaximumTerrainSlice == (NarrowQueue
+			? Limits.MaximumQueuedReliableBytes / 2 - ReliableServiceEnvelopeBytes - TerrainFragmentHeaderBytes
+			: MaximumTerrainFragmentBytes), "terrain fragment size observes the negotiated reliable queue and native envelope");
+		for (int Step = 0; Step < 12; ++Step) Exchange(Client);
+		Check(Server.GetMetrics().ReadyPeers == 0, "received field alone does not admit gameplay");
+
+		Engine ClientRuntime(Replica, &ClientRenderer, nullptr,
+			EngineProviderConfiguration{.Mode = RuntimeMode::NetworkClient, .AdmitNetworkTerrain = true});
+		ClientRuntime.ProcessService->Alive = true;
+		RaycastParams Query;
+		Query.IncludeTerrain = true;
+		const auto ClientHit = ClientRuntime.Workspace->ResolveRaycast({12, 18, 12}, {0, -18, 0}, Query);
+		const auto ServerHit = Runtime.Workspace->ResolveRaycast({12, 18, 12}, {0, -18, 0}, Query);
+		Check(ClientHit.GetHitInstance() == ReplicaSpace->GetTerrain() &&
+			ServerHit.GetHitInstance() == Space->GetTerrain(),
+			"both native providers return the terrain hit before client ready is queued");
+		const auto Missing = ClientRuntime.Workspace->ResolveRaycast({140, 18, 12}, {0, -18, 0}, Query);
+		const auto KnownAir = ClientRuntime.Workspace->ResolveRaycast({24, 18, 12}, {0, -18, 0}, Query);
+		Check(!Missing.Succeeded() && KnownAir.Succeeded() && !KnownAir.HasHit() &&
+			Runtime.Workspace->ResolveRaycast({140, 18, 12}, {0, -18, 0}, Query).GetHitInstance() == Space->GetTerrain(),
+			"covered air is distinct from unavailable client terrain");
+		ClientTransport->HoldTerrainReady = true;
+		Check(Client.AttachClientRuntime(ClientRuntime), "client movement manager attaches after provider admission");
+		const auto LocalPlayer = ClientRuntime.Players->GetLocalPlayer().value_or(nullptr);
+		const auto LocalCharacter = LocalPlayer ? LocalPlayer->GetCharacter().value_or(nullptr) : nullptr;
+		const auto TryLocalMove = [&] {
+			return LocalCharacter && LocalCharacter->AdmitMotion(*ClientRuntime.WorldRoot,
+				{.Translation = {0.25f, 0.0f, 0.0f}}).Succeeded();
+		};
+		for (int Step = 0; Step < 25; ++Step) Exchange(Client);
+		Check(ClientTransport->TerrainReadyDeferrals > 0 && LocalCharacter && !TryLocalMove() &&
+			Server.GetMetrics().ReadyPeers == 0, "installed collision alone cannot release local player movement");
+		auto SpawnEdit = std::make_shared<Script>();
+		SpawnEdit->SetRunContext(Enums::RunContext::Server);
+		SpawnEdit->SetSource(
+			"game.Workspace.Terrain:FillBall(Vector3.new(-18.4, 4.4, 12.4), 2.1, 31)");
+		const auto SpawnRevision = Space->GetTerrain()->GetField().GetRevision();
+		SpawnEdit->SetParent(Runtime.DataModel);
+		for (int Step = 0; Step < 180 && Space->GetTerrain()->GetField().GetRevision() == SpawnRevision; ++Step) {
+			Runtime.Step();
+			std::this_thread::sleep_for(3ms);
+		}
+		SpawnEdit->Destroy();
+		Check(Space->GetTerrain()->GetField().Read({-18, 4, 12})->Material == 31 &&
+			ReplicaSpace->GetTerrain()->GetField().Read({-18, 4, 12})->Material == 0,
+			"an authoritative edit can supersede the already installed spawn window");
+		ClientTransport->HoldTerrainReady = false;
+		ClientTransport->TerrainReadyDeferrals = 0;
+		ServerTransport->HoldTerrainReady = true;
+		for (int Step = 0; Step < 120 && Server.GetMetrics().ReadyPeers == 0; ++Step) Exchange(Client);
+		Check(Server.GetMetrics().ReadyPeers == 1 && !TryLocalMove(),
+			"server readiness cannot release client movement until the server confirmation arrives");
+		for (int Step = 0; Step < 250 && !ServerTransport->TerrainReadyDeferrals; ++Step) Exchange(Client);
+		Check(ServerTransport->TerrainReadyDeferrals > 0 &&
+			ReplicaSpace->GetTerrain()->GetField().Read({-18, 4, 12})->Material == 31 && !TryLocalMove(),
+			"the server replaces superseded spawn collision before sending the first movement confirmation");
+		ServerTransport->HoldTerrainReady = false;
+		bool ClientMotionReleased = false;
+		for (int Step = 0; Step < 120 && !ClientMotionReleased; ++Step) {
+			Exchange(Client);
+			ClientMotionReleased = TryLocalMove();
+		}
+		Check(ClientMotionReleased, "the bilateral collision acknowledgment releases the client's movement");
+		const auto Peers = Server.GetPeerIdentities();
+		if (Peers.size() == 1) {
+			const auto Owner = Server.GetAcceptedPlayer(Peers.front().Connection);
+			auto Character = Owner ? Owner->GetCharacter().value_or(nullptr) : nullptr;
+			Check(Character != nullptr, "the collision-ready peer owns a Character");
+			if (Character) {
+				Character->SetPosition({12.0f, 8.8f, 12.0f});
+				for (int Step = 0; Step < 35; ++Step) {
+					Runtime.Step();
+					ClientRuntime.Step();
+					Exchange(Client);
+				}
+				const auto Before = Character->GetPosition();
+				(void)ClientRuntime.ProcessEvent(KeyEvent{
+					.Device = {1}, .Physical = PhysicalKey::W, .Logical = LogicalKey::W,
+					.State = ButtonState::Pressed});
+				for (int Step = 0; Step < 38; ++Step) {
+					Runtime.Step();
+					ClientRuntime.Step();
+					Exchange(Client);
+				}
+				const auto After = Character->GetPosition();
+				Check(glm::length(glm::vec2(After.x - Before.x, After.z - Before.z)) > 0.15f && After.y > 6.6f,
+					"native input moves the authoritative Character over streamed terrain after readiness");
+				(void)ClientRuntime.ProcessEvent(KeyEvent{
+					.Device = {1}, .Physical = PhysicalKey::W, .Logical = LogicalKey::W,
+					.State = ButtonState::Released});
+				Character->SetPosition({56.0f, 8.8f, 12.0f});
+				if (LocalCharacter) LocalCharacter->SetPosition({56.0f, 8.8f, 12.0f});
+				const CharacterMotionRequest Cross{.Translation = {6.0f, 0.0f, 0.0f}};
+				const auto TryLocalCross = [&] {
+					return LocalCharacter && LocalCharacter->AdmitMotion(*ClientRuntime.WorldRoot, Cross).Succeeded();
+				};
+				const auto Rejected = Character->AdmitMotion(*Runtime.WorldRoot, Cross);
+				Check(!Rejected.Succeeded() && Character->GetPosition().x == 56.0f,
+					"authoritative motion is fenced before entering terrain without verified client collision");
+				std::cout << "[Terrain:Network] transferred=" << SpawnWindow.Size << " ground_y=" << After.y << '\n';
+
+				ServerTransport->HoldTerrain = true;
+				ClientTransport->HoldTerrainReady = true;
+				const auto Deferred = ServerTransport->TerrainDeferrals;
+				const auto BeforeWindowBytes = ServerTransport->TerrainBytes;
+				for (int Step = 0; Step < 150 && ServerTransport->TerrainDeferrals == Deferred; ++Step) Exchange(Client);
+				Check(ServerTransport->TerrainDeferrals > Deferred && !Character->AdmitMotion(*Runtime.WorldRoot, Cross).Succeeded(),
+					"crossing the focus boundary schedules a second region and waits for collision");
+				ServerTransport->HoldTerrain = false;
+				for (int Step = 0; Step < 250 && !ClientTransport->TerrainReadyDeferrals; ++Step) Exchange(Client);
+				auto NextWindow = SelectTerrainSessionWindow(*Source, {1, 0, 0});
+				const auto FullWindowBytes = NextWindow.Size;
+				ReuseTerrainSessionLeaves(NextWindow, SpawnWindow);
+				Check(ClientTransport->TerrainReadyDeferrals > 0 &&
+					ClientRuntime.Workspace->ResolveRaycast({76, 18, 12}, {0, -18, 0}, Query).GetHitInstance() == ReplicaSpace->GetTerrain() &&
+					NextWindow.Size < FullWindowBytes && ServerTransport->TerrainBytes - BeforeWindowBytes == NextWindow.Size &&
+					!Character->AdmitMotion(*Runtime.WorldRoot, Cross).Succeeded() && !TryLocalCross(),
+					"incremental leaves cut over native collision while both movement paths retain the intersection fence");
+				const auto EarlierReleaseDeferrals = ServerTransport->TerrainReadyDeferrals;
+				ServerTransport->HoldTerrainReady = true;
+				ClientTransport->HoldTerrainReady = false;
+				for (int Step = 0; Step < 150 && ServerTransport->TerrainReadyDeferrals == EarlierReleaseDeferrals; ++Step)
+					Exchange(Client);
+				Check(ServerTransport->TerrainReadyDeferrals > EarlierReleaseDeferrals && !TryLocalCross(),
+					"a rolling-window receipt cannot expand client motion until its exact confirmation arrives");
+				ServerTransport->HoldTerrainReady = false;
+				bool Crossed = false;
+				bool LocalCrossed = false;
+				for (int Step = 0; Step < 150 && (!Crossed || !LocalCrossed); ++Step) {
+					Exchange(Client);
+					if (!Crossed) Crossed = Character->AdmitMotion(*Runtime.WorldRoot, Cross).Succeeded();
+					if (!LocalCrossed) LocalCrossed = TryLocalCross();
+				}
+				Check(Crossed && Character->GetPosition().x > 60.0f && LocalCrossed,
+					"newly acknowledged coverage admits subsequent motion on both peers");
+
+				GameSession Late(std::make_shared<GameNetworkingSocketsTransport>(),
+					{.Role = GameSessionRole::Client, .Endpoint = Endpoint, .Limits = Limits, .TerrainBootstrap = Receiver});
+				ServerTransport->HoldTerrain = true;
+				Check(Late.Start().Succeeded(), "the second matching client connects concurrently");
+				const auto BeforeLateDeferral = ServerTransport->TerrainDeferrals;
+				for (int Step = 0; Step < 150 && ServerTransport->TerrainDeferrals == BeforeLateDeferral; ++Step)
+					Exchange(Client, &Late);
+				const auto ConcurrentPeers = Server.GetPeerIdentities();
+				auto LatePeer = std::ranges::find_if(ConcurrentPeers,
+					[&](const auto &Identity) { return Identity.Connection != Peers.front().Connection; });
+				auto LateOwner = LatePeer == ConcurrentPeers.end() ? nullptr : Server.GetAcceptedPlayer(LatePeer->Connection);
+				auto LateCharacter = LateOwner ? LateOwner->GetCharacter().value_or(nullptr) : nullptr;
+				Check(LateCharacter && ServerTransport->TerrainDeferrals > BeforeLateDeferral && !Late.GetClientDataModel(),
+					"a second client remains gated on its older held spawn offer");
+				if (LateCharacter) LateCharacter->SetPosition({140.0f, 9.0f, 12.0f});
+
+				auto EditScript = std::make_shared<Script>();
+				EditScript->SetRunContext(Enums::RunContext::Server);
+				EditScript->SetSource(R"(
+local Terrain = game:GetService("Workspace").Terrain
+Terrain:FillBlock(Vector3.new(58.4, 4.4, 12.4), Vector3.new(5.5, 3.5, 5.5), 17)
+)");
+				const auto BeforeEdit = Space->GetTerrain()->GetField().GetRevision();
+				EditScript->SetParent(Runtime.DataModel);
+				for (int Step = 0; Step < 180 && Space->GetTerrain()->GetField().GetRevision() == BeforeEdit; ++Step) {
+					Runtime.Step();
+					std::this_thread::sleep_for(3ms);
+				}
+				Character->SetPosition({52.0f, 8.8f, 12.0f});
+				Check(Space->GetTerrain()->GetField().GetRevision() > BeforeEdit &&
+					Runtime.Workspace->ResolveRaycast({58, 18, 12}, {0, -18, 0}, Query).GetHitInstance() == Space->GetTerrain() &&
+					!Character->AdmitMotion(*Runtime.WorldRoot, Cross).Succeeded(),
+					"committed server edit changes native collision and immediately holds older peer motion");
+				ServerTransport->HoldTerrain = false;
+				for (int Step = 0; Step < 300 && ReplicaSpace->GetTerrain()->GetField().Read({58, 4, 12})->Material != 17; ++Step)
+					Exchange(Client, &Late);
+				const auto ReceivedEdit = ReplicaSpace->GetTerrain()->GetField().Read({58, 4, 12});
+				const auto EditHit = ClientRuntime.Workspace->ResolveRaycast({58, 12, 12}, {0, -12, 0}, Query);
+				const bool ReplicatedEdit = ReceivedEdit && ReceivedEdit->Material == 17 &&
+					EditHit.GetHitInstance() == ReplicaSpace->GetTerrain();
+				if (!ReplicatedEdit)
+					std::cerr << "[Terrain:Network] edit material=" << (ReceivedEdit ? ReceivedEdit->Material : 0)
+						<< " query=" << EditHit.Message << " client=" << Client.GetFailure()
+						<< " sent=" << ServerTransport->TerrainBytes << '\n';
+				Check(ReplicatedEdit,
+					"live terrain revision installs exact material and replacement native collision");
+				EditScript->Destroy();
+
+				for (int Step = 0; Step < 200 && !Late.GetClientDataModel() && Late.GetStatus() != GameSessionStatus::Failed; ++Step)
+					Exchange(Client, &Late);
+				const auto LateWorld = Late.GetClientDataModel();
+				Check(LateWorld && LateCharacter &&
+					!LateCharacter->AdmitMotion(*Runtime.WorldRoot, {.Translation = {1.0f, 0.0f, 0.0f}}).Succeeded(),
+					"late join survives the overlapping edit and teleport while the moved owner remains fenced");
+				if (LateWorld) {
+					HeadlessRenderer LateRenderer(Vector2(64, 64));
+					Engine LateRuntime(LateWorld, &LateRenderer, nullptr,
+						EngineProviderConfiguration{.Mode = RuntimeMode::NetworkClient, .AdmitNetworkTerrain = true});
+					LateRuntime.ProcessService->Alive = true;
+					Check(Late.AttachClientRuntime(LateRuntime), "late client acknowledges locally installed collision");
+					bool LateMoved = false;
+					for (int Step = 0; Step < 300 && !LateMoved; ++Step) {
+						Exchange(Client, &Late);
+						const auto Hit = LateRuntime.Workspace->ResolveRaycast({140, 18, 12}, {0, -18, 0}, Query);
+						LateMoved = Hit.HasHit() && LateCharacter && LateCharacter->AdmitMotion(
+							*Runtime.WorldRoot, {.Translation = {1.0f, 0.0f, 0.0f}}).Succeeded();
+					}
+					Check(LateMoved && !LateRuntime.Workspace->ResolveRaycast({12, 12, 12}, {0, -12, 0}, Query).Succeeded() &&
+						LateRuntime.Workspace->GetTerrain()->GetField().GetStats().MaterializedPages <
+							Space->GetTerrain()->GetField().GetStats().MaterializedPages,
+						"late client activates distant collision and retires its original window");
+					if (LateMoved && ReplicatedEdit) {
+						const auto ApplyServerEdit = [&](const char *Operation) {
+							auto ScriptValue = std::make_shared<Script>();
+							ScriptValue->SetRunContext(Enums::RunContext::Server);
+							ScriptValue->SetSource(std::string("local Terrain = game:GetService(\"Workspace\").Terrain\n") + Operation);
+							const auto OldRevision = Space->GetTerrain()->GetField().GetRevision();
+							ScriptValue->SetParent(Runtime.DataModel);
+							for (int Step = 0; Step < 180 && Space->GetTerrain()->GetField().GetRevision() == OldRevision; ++Step) {
+								Runtime.Step();
+								std::this_thread::sleep_for(3ms);
+							}
+							ScriptValue->Destroy();
+							Character->SetPosition({52.0f, 8.8f, 12.0f});
+							LateCharacter->SetPosition({140.0f, 9.0f, 12.0f});
+							Check(Space->GetTerrain()->GetField().GetRevision() > OldRevision &&
+								LateCharacter->AdmitMotion(*Runtime.WorldRoot, {.Translation = {1.0f, 0.0f, 0.0f}}).Succeeded(),
+								"an edit keeps authoritative motion available in a disjoint acknowledged region");
+						};
+						ApplyServerEdit("Terrain:PaintBall(Vector3.new(58.4, 4.4, 12.4), 3.0, 29)");
+						for (int Step = 0; Step < 250 && ReplicaSpace->GetTerrain()->GetField().Read({58, 4, 12})->Material != 29; ++Step)
+							Exchange(Client, &Late);
+						Check(ReplicaSpace->GetTerrain()->GetField().Read({58, 4, 12})->Material == 29 &&
+							ClientRuntime.Workspace->ResolveRaycast({58, 12, 12}, {0, -12, 0}, Query).HasHit(),
+							"authorized paint replicates the exact material and retains the surface");
+						ApplyServerEdit("Terrain:RemoveBall(Vector3.new(58.4, 4.4, 12.4), 3.8)");
+						for (int Step = 0; Step < 250 && ReplicaSpace->GetTerrain()->GetField().Read({58, 4, 12})->Material != 0; ++Step)
+							Exchange(Client, &Late);
+						const auto Opening = ClientRuntime.Workspace->ResolveRaycast({58, 12, 12}, {0, -12, 0}, Query);
+						Check(Opening.Succeeded() && !Opening.HasHit() &&
+							ReplicaSpace->GetTerrain()->GetField().Read({58, 4, 12})->Material == 0,
+							"authorized excavation removes the covered collision");
+						if (ChurnCycles && LatePeer != ConcurrentPeers.end() && LateCharacter)
+							RunTerrainChurn(Runtime, ClientRuntime, LateRuntime, *Character, *LateCharacter, Server, Client,
+								*ServerTransport, LatePeer->Connection, ChurnCycles, [&] { Exchange(Client, &Late); });
+					}
+					Late.Stop();
+					LateRuntime.Destroy();
+				} else Late.Stop();
+			}
+		}
+		Client.Stop();
+		ClientRuntime.Destroy();
+		GameSession Reconnected(std::make_shared<GameNetworkingSocketsTransport>(),
+			{.Role = GameSessionRole::Client, .Endpoint = Endpoint, .Limits = Limits, .TerrainBootstrap = Receiver});
+		Check(Reconnected.Start().Succeeded(), "terrain client reconnects through GNS");
+		for (int Step = 0; Step < 300 && !Reconnected.GetClientDataModel() &&
+			Reconnected.GetStatus() != GameSessionStatus::Failed; ++Step) Exchange(Reconnected);
+		const auto NewPeers = Server.GetPeerIdentities();
+		Check(Reconnected.GetClientDataModel() && NewPeers.size() == 1 && Peers.size() == 1 &&
+			NewPeers.front().SessionEpoch != Peers.front().SessionEpoch && !NewPeers.front().Ready,
+			"reconnect repeats verified delivery under a fresh epoch and fresh collision gate");
+		if (const auto NewWorld = Reconnected.GetClientDataModel(); NewWorld && NewPeers.size() == 1) {
+			HeadlessRenderer ReconnectRenderer(Vector2(64, 64));
+			Engine NewRuntime(NewWorld, &ReconnectRenderer, nullptr,
+				EngineProviderConfiguration{.Mode = RuntimeMode::NetworkClient, .AdmitNetworkTerrain = true});
+			NewRuntime.ProcessService->Alive = true;
+			Check(Reconnected.AttachClientRuntime(NewRuntime), "reconnected runtime attaches native collision");
+			const auto Ready = [&] {
+				return std::ranges::any_of(Server.GetPeerIdentities(), [&](const auto &Peer) {
+					return Peer.Connection == NewPeers.front().Connection && Peer.Ready;
+				});
+			};
+			const auto ReconnectedPlayer = NewRuntime.Players->GetLocalPlayer().value_or(nullptr);
+			const auto ReconnectedCharacter = ReconnectedPlayer ? ReconnectedPlayer->GetCharacter().value_or(nullptr) : nullptr;
+			bool Released = false;
+			for (int Step = 0; Step < 150 && !Released; ++Step) {
+				Exchange(Reconnected);
+				Released = Ready() && ReconnectedCharacter && ReconnectedCharacter->AdmitMotion(*NewRuntime.WorldRoot,
+					{.Translation = {0.25f, 0.0f, 0.0f}}).Succeeded();
+			}
+			const auto Owner = Server.GetAcceptedPlayer(NewPeers.front().Connection);
+			const auto Controller = Owner ? Owner->GetCharacter().value_or(nullptr) : nullptr;
+			Check(Released && Controller, "fresh session owns a distinct controller and receives its movement confirmation");
+			if (Controller) {
+				Controller->SetPosition({12.0f, 8.8f, 12.0f});
+				Check(Controller->AdmitMotion(*Runtime.WorldRoot, {.Translation = {1.0f, 0.0f, 0.0f}}).Succeeded(),
+					"the reconnected player resumes motion after the new collision acknowledgment");
+				const auto ReleaseDeferrals = ServerTransport->TerrainReadyDeferrals;
+				Controller->SetPosition({46.0f, 8.8f, 12.0f});
+				ServerTransport->HoldTerrainReady = true;
+				for (int Step = 0; Step < 200 && ServerTransport->TerrainReadyDeferrals == ReleaseDeferrals; ++Step)
+					Exchange(Reconnected);
+				Check(ServerTransport->TerrainReadyDeferrals > ReleaseDeferrals &&
+					Reconnected.GetStatus() != GameSessionStatus::Failed, "the transport holds a later server confirmation");
+				Reconnected.Step(Tick + DefaultGameSessionHandshakeTimeoutTicks);
+				Check(Reconnected.GetStatus() == GameSessionStatus::Failed &&
+					Reconnected.GetFailure().find("Terrain motion release timed out") != std::string::npos &&
+					!NewRuntime.Workspace->ResolveRaycast({12, 18, 12}, {0, -18, 0}, Query).Succeeded(),
+					"a missing server confirmation has a bounded client deadline and removes coverage");
+				ServerTransport->HoldTerrainReady = false;
+			}
+			Reconnected.Stop();
+			NewRuntime.Destroy();
+		} else Reconnected.Stop();
+		Server.Stop();
+		Runtime.Destroy();
+	}
+
+	void TestNetworkTerrainActorEnvelope() {
+		constexpr terrain::GridSpec Grid{-1};
+		const TerrainSessionWindow Spawn{.Grid = Grid, .Center = {0, 0, 0}};
+		const TerrainSessionWindow West{.Grid = Grid, .Center = {-1, 0, 0}};
+		constexpr terrain::WorldPoint Radius{9, 9, 9};
+		Check(ContainsTerrainMotion(Spawn, {0.5, 10, 8}, Radius) &&
+			ContainsTerrainMotion(Spawn, {-5, 10, 8}, Radius) &&
+			ContainsTerrainMotion(West, {-5, 10, 8}, Radius) &&
+			!ContainsTerrainMotion(Spawn, {-5.5, 10, 8}, Radius) &&
+			!ContainsTerrainMotion(West, {5, 10, 8}, Radius) &&
+			!ContainsTerrainMotion(Spawn, {8, 8, 8}, {22, 22, 22}),
+			"half-spacing motion reserves the outer four samples and rejects an unrepresentable actor");
+
+		auto Field = std::make_unique<terrain::Field>(Grid);
+		for (const double X : {-24.0, -8.0, 8.0, 24.0}) {
+			const terrain::BoxBrush Ground{{X, 2.25, 8.0}, {8.2, 1.15, 3.55}, terrain::BrushMode::Add, 21};
+			const auto Keys = terrain::GetRegionChunks(terrain::GetBrushBounds(Grid, Ground).value()).value();
+			auto Edit = terrain::Field::Prepare(Field->Capture(Keys).value(), Ground);
+			if (!Edit) throw std::runtime_error("[Terrain:Network] Half-spacing ground preparation failed");
+			Check(Field->Commit(std::move(Edit.value())).has_value(), "half-spacing ground is authored");
+		}
+		const auto Project = ProjectId::New();
+		const auto Capture = terrain::CaptureTerrain(*Field, Project, terrain::GetTerrainDatasetId(Project)).value();
+		const auto Source = MakeTerrainSessionData(Project, 1, Capture.Artifacts, true);
+		const auto Receiver = MakeTerrainSessionData(Project, 1, std::span(Capture.Artifacts).last(1), false);
+		auto World = std::make_shared<DataModel>();
+		auto Space = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
+		Space->RestoreTerrainField(std::move(Field));
+		HeadlessRenderer ServerRenderer(Vector2(64, 64)), ClientRenderer(Vector2(64, 64));
+		Engine Runtime(World, &ServerRenderer, nullptr, EngineProviderConfiguration{
+			.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer, .AdmitNetworkTerrain = true});
+		Runtime.ProcessService->Alive = true;
+		Runtime.Players->SetCharacterAutoLoads(false);
+		auto Actor = std::make_shared<Part>();
+		Actor->SetName("TerrainEnvelopeActor");
+		Actor->SetAnchored(true);
+		Actor->SetSize({12, 12, 6});
+		Actor->SetPosition({0.5f, 10, 8});
+		Actor->SetParent(Space);
+		const auto Seating = Runtime.Players->PlayerAdded->Connect([Actor](std::shared_ptr<Player> Owner) {
+			Owner->SetPossession(Actor);
+		});
+		const auto Install = [](Engine &Target, Enums::RunContext Context, const char *SourceText) {
+			auto Value = std::make_shared<Script>();
+			Value->SetRunContext(Context);
+			Value->SetSource(SourceText);
+			Value->SetParent(Target.DataModel);
+			return Value;
+		};
+		const auto ServerScript = Install(Runtime, Enums::RunContext::Server, R"(
+local Players = game:GetService("Players")
+local Control = game:GetService("CharacterControlService")
+game:GetService("RunService").PreSimulation:Connect(function()
+	for _, Player in Players:GetPlayers() do
+		local Actor = Player.PossessedEntity
+		local Input = Control:GetPossessionInput(Player)
+		if Actor and Input and Input.Fresh then
+			Control:MovePossessedPart(Player, CFrame.new(Actor.Position + Vector3.new(Input.Movement.X * 0.5, 0, 0)))
+		end
+	end
+end)
+)");
+		const TransportEndpoint Endpoint{"127.0.0.1", 36720};
+		const auto Limits = GameSessionConfiguration::DefaultLimits();
+		auto ServerTransport = std::make_shared<HandoffTransport>(std::make_shared<GameNetworkingSocketsTransport>());
+		auto ClientTransport = std::make_shared<HandoffTransport>(std::make_shared<GameNetworkingSocketsTransport>());
+		std::unique_ptr<Engine> ClientRuntime;
+		GameSession Server(ServerTransport,
+			{.Role = GameSessionRole::Server, .Endpoint = Endpoint, .Limits = Limits, .TerrainBootstrap = Source}, &Runtime);
+		GameSession Client(ClientTransport,
+			{.Role = GameSessionRole::Client, .Endpoint = Endpoint, .Limits = Limits, .TerrainBootstrap = Receiver});
+		if (!Server.Start().Succeeded() || !Client.Start().Succeeded()) {
+			Check(false, "half-spacing terrain peers start through GNS");
+			return;
+		}
+		const auto Frame = [&] {
+			(void)Server.Poll();
+			(void)Client.Poll();
+			Runtime.Step();
+			if (ClientRuntime) ClientRuntime->Step();
+			Server.Step(Runtime.GetSimulationTick());
+			Client.Step(ClientRuntime ? ClientRuntime->GetSimulationTick() : Runtime.GetSimulationTick());
+			std::this_thread::sleep_for(3ms);
+		};
+		const auto Until = [&](auto Condition) {
+			for (int Step = 0; Step < 250 && !Condition() && Client.GetStatus() != GameSessionStatus::Failed; ++Step)
+				Frame();
+			return Condition();
+		};
+		if (!Until([&] { return static_cast<bool>(Client.GetClientDataModel()); })) {
+			Check(false, "half-spacing terrain bootstrap completes");
+			return;
+		}
+		ClientRuntime = std::make_unique<Engine>(Client.GetClientDataModel(), &ClientRenderer, nullptr,
+			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient,
+				.AdmitNetworkTerrain = true});
+		ClientRuntime->ProcessService->Alive = true;
+		ClientTransport->HoldTerrainReady = true;
+		Check(Client.AttachClientRuntime(*ClientRuntime), "half-spacing runtime attaches its native collision before acknowledgment");
+		const auto ClientScript = Install(*ClientRuntime, Enums::RunContext::Client, R"(
+local Players = game:GetService("Players")
+local Control = game:GetService("CharacterControlService")
+game:GetService("RunService").PreSimulation:Connect(function()
+	local Player = Players.LocalPlayer
+	if Player and Player.PossessedEntity then
+		script:SetAttribute("Submitted", Control:SubmitPossessionIntent(Vector2.new(-1, 0), 0, false))
+	end
+end)
+)");
+		const auto Submitted = [&]() -> std::optional<bool> {
+			const auto Value = ClientScript->GetAttributeValue("Submitted");
+			const auto *Flag = Value ? std::get_if<bool>(&*Value) : nullptr;
+			return Flag ? std::optional(*Flag) : std::nullopt;
+		};
+		RaycastParams Query;
+		Query.IncludeTerrain = true;
+		const auto WestHit = [&](Engine &Target) {
+			return Target.Workspace->ResolveRaycast({-24, 12, 8}, {0, -12, 0}, Query);
+		};
+		Check(WestHit(Runtime).GetHitInstance() == Space->GetTerrain() &&
+			!WestHit(*ClientRuntime).Succeeded(), "the initial replica lacks the western terrain dependency");
+		Check(Until([&] { return ClientTransport->TerrainReadyDeferrals > 0 && Submitted() == false; }) &&
+			Server.GetMetrics().ReadyPeers == 0 && Actor->GetPosition().x == 0.5f,
+			"held client acknowledgment fences native possession input at a safe half-spacing position");
+
+		ServerTransport->HoldTerrainReady = true;
+		ClientTransport->HoldTerrainReady = false;
+		Check(Until([&] { return ServerTransport->TerrainReadyDeferrals > 0; }) &&
+			Server.GetMetrics().ReadyPeers == 1 && Submitted() == false && Actor->GetPosition().x == 0.5f,
+			"server acceptance leaves possessed input fenced until confirmation reaches the client");
+
+		const auto BeforeWestReceipt = ClientTransport->TerrainReadyDeferrals;
+		ClientTransport->HoldTerrainReady = true;
+		ServerTransport->HoldTerrainReady = false;
+		Check(Until([&] {
+			return Actor->GetPosition().x <= -5.f && ClientTransport->TerrainReadyDeferrals > BeforeWestReceipt;
+		}) && Actor->GetPosition().x == -5.f && Submitted() == true && WestHit(*ClientRuntime).HasHit(),
+			"confirmed possession crosses signed zero, installs western collision, and stops at the old coverage fence");
+		const auto BeforeWestRelease = Server.GetMetrics().PossessionMotionAccepted;
+		for (int Step = 0; Step < 12; ++Step) Frame();
+		Check(Actor->GetPosition().x == -5.f && Server.GetMetrics().PossessionMotionAccepted == BeforeWestRelease,
+			"installed western collision cannot extend authoritative motion while its acknowledgment is held");
+
+		ClientTransport->HoldTerrainReady = false;
+		const auto ReplicaActor = [&]() {
+			const auto Owner = ClientRuntime->Players->GetLocalPlayer().value_or(nullptr);
+			return Owner ? std::dynamic_pointer_cast<Part>(Owner->GetPossessedEntity().value_or(nullptr)) : nullptr;
+		};
+		Check(Until([&] {
+			const auto Replica = ReplicaActor();
+			return Actor->GetPosition().x < -6.f && Replica && Replica->GetPosition().x < -6.f;
+		}) && Server.GetMetrics().PossessionMotionAccepted > BeforeWestRelease,
+			"acknowledged western window resumes native possessed motion and replicates its authoritative pose");
+		const auto Position = Actor->GetPosition();
+		const auto BeforeOversized = Server.GetMetrics().PossessionMotionAccepted;
+		Actor->SetSize({44, 1, 1});
+		for (int Step = 0; Step < 16; ++Step) Frame();
+		Check(Actor->GetPosition() == Position && Server.GetMetrics().PossessionMotionAccepted == BeforeOversized,
+			"an actor larger than available collision stays fenced even after the window is acknowledged");
+		std::cout << "[Terrain:Network] Half-spacing possession signed handoff reached x=" << Position.x << '\n';
+		Client.Stop();
+		ClientRuntime->Destroy();
+		Server.Stop();
+		Runtime.Destroy();
+	}
+#endif
 
 	void TestServerSessionSignalLifetime() {
 		auto Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
@@ -3386,6 +4192,30 @@ int main(int ArgumentCount, char **Arguments) {
 			return Failures == 0 ? 0 : 1;
 		}
 #if defined(GARGANTUAN_WITH_GNS)
+		if (ArgumentCount == 2 && (std::string_view(Arguments[1]) == "--terrain-gns" ||
+				std::string_view(Arguments[1]) == "--terrain-gns-narrow")) {
+			const bool Narrow = std::string_view(Arguments[1]) == "--terrain-gns-narrow";
+			TestNetworkTerrainBootstrap(Narrow);
+			if (!Narrow) TestNetworkTerrainActorEnvelope();
+			return Failures == 0 ? 0 : 1;
+		}
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--terrain-gns-envelope") {
+			TestNetworkTerrainActorEnvelope();
+			return Failures == 0 ? 0 : 1;
+		}
+		if (ArgumentCount >= 2 && std::string_view(Arguments[1]) == "--terrain-gns-churn") {
+			auto Cycles = DefaultTerrainChurnCycles;
+			if (ArgumentCount == 3) {
+				const std::string_view Text = Arguments[2];
+				const auto [End, Error] = std::from_chars(Text.data(), Text.data() + Text.size(), Cycles);
+				if (Error != std::errc{} || End != Text.data() + Text.size() || Cycles == 0 || Cycles > MaximumTerrainChurnCycles)
+					throw std::invalid_argument("expected --terrain-gns-churn [1..120]");
+			} else if (ArgumentCount != 2) {
+				throw std::invalid_argument("expected --terrain-gns-churn [1..120]");
+			}
+			TestNetworkTerrainBootstrap(false, Cycles);
+			return Failures == 0 ? 0 : 1;
+		}
 		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--generic-possession-gns") {
 			TestGenericPossessionRuntime(true);
 			return Failures == 0 ? 0 : 1;

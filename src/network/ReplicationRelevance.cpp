@@ -11,6 +11,7 @@
 #include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/PlayerGui.hpp"
 #include "gargantuan/classes/RemoteBase.hpp"
+#include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/gui/PlayerGuiScope.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
@@ -457,6 +458,7 @@ namespace gargantuan::network {
 
 		void RegisterObject(std::shared_ptr<Instance> Object) {
 			if (!Healthy || !Object || Object->GetDestroyed() || Object->IsDestroying()) return;
+			if (dynamic_cast<Terrain *>(Object.get())) return;
 			const auto Id = Object->GetObjectId();
 			if (!Id.IsValid() || ObjectLocations.contains(Id) || (IsExcluded && IsExcluded(Id))) return;
 			if (GetInstanceServicePolicy(*Object) == SchemaServicePolicy::ServerOnly) return;

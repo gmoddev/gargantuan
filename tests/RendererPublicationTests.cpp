@@ -20,8 +20,10 @@
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Lighting.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "terrain/RenderStage.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <filesystem>
@@ -645,6 +647,112 @@ namespace {
 		Check(Projected != Projection.GetObjects().end() &&
 			Projected->second.Item.ModelMatrix[3].x == 13.0f,
 			"projection applies the complete final transform despite a material-only hint");
+		Game->Destroy();
+	}
+
+	void TestOptionalTerrainPublicationBudget() {
+		using namespace gargantuan;
+		using namespace gargantuan::terrain;
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		RenderDirtyLimits Limits;
+		Limits.MaximumPublicationBytes = 32 * 1024;
+		RenderDirtyAccumulator Dirty(Limits);
+		RenderPublisher Publisher(&Dirty);
+		RenderProjection Projection;
+		RenderStage Stage(World->GetObjectId());
+		const auto MakeSurface = [](std::uint32_t Triangles) {
+			auto Surface = std::make_shared<SurfaceMesh>();
+			for (std::uint32_t Triangle = 0; Triangle < Triangles; ++Triangle) {
+				const auto X = static_cast<float>(Triangle % 12);
+				const auto Z = static_cast<float>(Triangle / 12);
+				const SurfacePoint Normal{0.0f, 1.0f, 0.0f};
+				Surface->Vertices.push_back({{X, 0.0f, Z}, Normal, 1});
+				Surface->Vertices.push_back({{X, 0.0f, Z + 0.5f}, Normal, 1});
+				Surface->Vertices.push_back({{X + 0.5f, 0.0f, Z}, Normal, 1});
+				for (std::uint32_t Vertex = 0; Vertex < 3; ++Vertex)
+					Surface->Indices.push_back(3 * Triangle + Vertex);
+			}
+			return Surface;
+		};
+		const auto MakeSceneMesh = [](RenderMeshIdentity Mesh, std::size_t VertexCount) {
+			return RenderMeshCreate{Mesh, 1, 1,
+				std::make_shared<const std::vector<RenderVertex>>(VertexCount),
+				std::make_shared<const std::vector<std::uint32_t>>(std::vector<std::uint32_t>{0, 1, 2})};
+		};
+		const auto Publish = [&] {
+			const auto Result = Publisher.Publish(*World, RenderCameraInput{}, 64, 64);
+			(void)Projection.Apply(*Result);
+			return Result;
+		};
+		const auto DrawsMesh = [&](RenderMeshIdentity Mesh) {
+			return Projection.GetTerrainDraws().size() == 1 && Projection.GetTerrainDraws().front().Mesh == Mesh;
+		};
+		constexpr ChunkKey Key{-1, 0, 0};
+		const std::array Chunks{ChunkPublicationCandidate{Key, MakeSurface(84), {}, true}};
+		auto Prepared = Stage.Stage({}, Chunks);
+		if (!Prepared) return Check(false, "publication budget fixture stages the fine mesh");
+		(*Prepared)->Install(1);
+		const auto Fine = Stage.Capture()->Chunks.at(Key).Resource.Mesh;
+		Publisher.SetTerrainRenderState(Stage.Capture());
+		(void)Publish();
+		Check(DrawsMesh(Fine), "publication budget fixture starts with the exact fine draw");
+
+		const auto &Source = Chunks.front().Visual;
+		const std::array Warm{RenderVisualChange{Key, Fine, RenderVisualAction::Warm, Source, MakeSurface(60)}};
+		Prepared = Stage.StageVisualDensity({}, {}, Warm);
+		if (!Prepared) return Check(false, "publication budget fixture stages the optional mesh");
+		(*Prepared)->Install(2);
+		if (!Stage.Capture()->VisualVariants.contains(Key))
+			return Check(false, "publication budget fixture admits its optional mesh");
+		const auto Reduced = Stage.Capture()->VisualVariants.at(Key).Reduced.Resource.Mesh;
+		const std::array Reduce{RenderVisualChange{Key, Fine, RenderVisualAction::Reduced, Source}};
+		Prepared = Stage.StageVisualDensity({}, {}, Reduce);
+		if (!Prepared) return Check(false, "publication budget fixture stages the reduced draw");
+		(*Prepared)->Install(3);
+		Publisher.SetTerrainRenderState(Stage.Capture());
+
+		constexpr RenderMeshIdentity LargeScene{99, 1};
+		Publisher.SetAssetMeshChanges({MakeSceneMesh(LargeScene, 520)}, {});
+		const auto Incremental = Publish();
+		Check(!Incremental->FullResync && Incremental->MeshCreates.size() == 1 &&
+			Projection.GetMeshBounds(LargeScene) && !Projection.GetMeshBounds(Reduced) && DrawsMesh(Fine),
+			"oversized incremental retains scene changes and binds the exact fine terrain");
+		const auto Quiet = Publish();
+		Check(Quiet->MeshCreates.empty() && Quiet->MeshRemoves.empty() && !Quiet->TerrainDraws &&
+			!Projection.GetMeshBounds(Reduced) && DrawsMesh(Fine),
+			"an identical rejected cache state leaves the published fine delta baseline unchanged");
+
+		constexpr RenderMeshIdentity SmallScene{100, 1};
+		Publisher.SetAssetMeshChanges({MakeSceneMesh(SmallScene, 230)}, {{LargeScene}});
+		Publisher.RequestFullResync();
+		const auto FullFallback = Publish();
+		Check(FullFallback->FullResync && FullFallback->MeshCreates.size() == 2 &&
+			Projection.GetMeshBounds(SmallScene) && !Projection.GetMeshBounds(LargeScene) &&
+			!Projection.GetMeshBounds(Reduced) && DrawsMesh(Fine),
+			"oversized full resync preserves the current scene and includes the original fine mesh");
+
+		Publisher.SetAssetMeshChanges({}, {{SmallScene}});
+		Publisher.RequestFullResync();
+		const auto FullRecovered = Publish();
+		Check(FullRecovered->FullResync && FullRecovered->MeshCreates.size() == 2 &&
+			Projection.GetMeshBounds(Fine) && Projection.GetMeshBounds(Reduced) &&
+			!Projection.GetMeshBounds(SmallScene) && DrawsMesh(Reduced),
+			"a later smaller full resync re-admits both exact current terrain identities");
+		const std::array Restore{RenderVisualChange{Key, Fine, RenderVisualAction::Fine}};
+		Prepared = Stage.StageVisualDensity({}, {}, Restore);
+		if (!Prepared) return Check(false, "publication budget fixture restores the fine draw");
+		(*Prepared)->Install(4);
+		Publisher.SetTerrainRenderState(Stage.Capture());
+		const auto Restored = Publish();
+		Check(Restored->TerrainDraws && Restored->MeshCreates.empty() && Restored->MeshRemoves.empty() && DrawsMesh(Fine),
+			"the recovered baseline permits a binding-only restoration");
+
+		Publisher.SetAssetMeshChanges({MakeSceneMesh(LargeScene, 750)}, {});
+		CheckThrows<std::length_error>([&] { (void)Publisher.Publish(*World, RenderCameraInput{}, 64, 64); },
+			"a scene that exceeds the limit by itself still fails the original publication gate");
+		Check(Publisher.GetLastPublicationId() == Restored->Id && DrawsMesh(Fine),
+			"a hard budget failure leaves the last published terrain in place");
 		Game->Destroy();
 	}
 
@@ -1568,6 +1676,7 @@ int main() {
 		TestIncrementalPublisher();
 		TestIncrementalWorldMembership();
 		TestDirtyDomainsDoNotMaskFinalState();
+		TestOptionalTerrainPublicationBudget();
 		TestDirtyAccumulatorBoundsAndConsumers();
 		TestSingleObjectBatchDirtyParity();
 		TestEnvironmentLightingFoundation();

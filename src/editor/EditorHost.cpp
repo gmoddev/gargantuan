@@ -14,7 +14,11 @@
 #include "gargantuan/classes/BasePart.hpp"
 #include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/LuaSourceContainer.hpp"
+#include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/filesystem/Project.hpp"
+#include "terrain/RenderStage.hpp"
+#include "terrain/ScenePersistence.hpp"
+#include "terrain/TerrainMutation.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/gui/GuiRuntime.hpp"
@@ -487,12 +491,14 @@ namespace gargantuan {
 				Method == "ImportGasModel" || Method == "OpenGasPlace" ||
 				Method == "DuplicateInstance" || Method == "ReparentInstance" ||
 				Method == "ImportAsset" || Method == "ReimportAsset" || Method == "DeleteAsset" ||
-				Method == "StartPackageBuild";
+				Method == "StartPackageBuild" || Method == "SubmitTerrainBrush" ||
+				Method == "UndoTerrainEdit" || Method == "RedoTerrainEdit" || Method == "CancelTerrainEdit";
 		}
 
-		std::optional<std::uint64_t> DecodeCanonicalJobId(const Json &Value) {
+		std::optional<std::uint64_t> DecodeCanonicalJobId(const Json &Value, bool AllowZero = false) {
 			if (!Value.is_string()) return std::nullopt;
 			const auto &Encoded = Value.get_ref<const std::string &>();
+			if (AllowZero && Encoded == "0") return 0;
 			std::uint64_t Parsed = 0;
 			const auto [End, Error] = std::from_chars(Encoded.data(), Encoded.data() + Encoded.size(), Parsed);
 			if (Encoded.empty() || Encoded.front() == '0' || Error != std::errc{} ||
@@ -927,6 +933,102 @@ namespace gargantuan {
 			return result;
 		}
 
+		constexpr std::size_t MaximumTerrainBrushSamples = 4096;
+
+		struct EditorTerrainBrush {
+			terrain::EditRequest Edit;
+			terrain::SampleBox Bounds;
+		};
+
+		std::optional<terrain::WorldPoint> DecodeTerrainWorldPoint(const Json &Value) {
+			if (!Value.is_array() || Value.size() != 3) return std::nullopt;
+			std::array<double, 3> Point;
+			for (std::size_t Axis = 0; Axis < Point.size(); ++Axis) {
+				if (!Value[Axis].is_number()) return std::nullopt;
+				Point[Axis] = Value[Axis].get<double>();
+				if (!std::isfinite(Point[Axis])) return std::nullopt;
+			}
+			return terrain::WorldPoint{Point[0], Point[1], Point[2]};
+		}
+
+		std::optional<terrain::SamplePoint> DecodeTerrainSamplePoint(const Json &Value) {
+			if (!Value.is_array() || Value.size() != 3) return std::nullopt;
+			std::array<std::int64_t, 3> Point;
+			constexpr auto Bound = terrain::MaximumSampleCoordinate + 1;
+			for (std::size_t Axis = 0; Axis < Point.size(); ++Axis) {
+				if (!Value[Axis].is_number_integer()) return std::nullopt;
+				const auto Component = Value[Axis].get<double>();
+				if (Component < -Bound || Component > Bound) return std::nullopt;
+				Point[Axis] = Value[Axis].get<std::int64_t>();
+			}
+			return terrain::SamplePoint{Point[0], Point[1], Point[2]};
+		}
+
+		std::expected<EditorTerrainBrush, std::string_view> DecodeTerrainBrush(const Json &Value, terrain::GridSpec Grid) {
+			using namespace terrain;
+			if (!Value.is_object() || !Value.contains("Shape") || !Value["Shape"].is_string())
+				return std::unexpected("Terrain brush needs a Shape");
+			const auto &Shape = Value["Shape"].get_ref<const std::string &>();
+			if (Shape == "Smooth") {
+				if (!HasOnlyFields(Value, {"Shape", "Min", "MaxExclusive", "Strength"}) || Value.size() != 4)
+					return std::unexpected("Smooth requires Min, MaxExclusive and Strength");
+				const auto Min = DecodeTerrainSamplePoint(Value["Min"]);
+				const auto Max = DecodeTerrainSamplePoint(Value["MaxExclusive"]);
+				const auto Strength = JsonCodec::DecodeUnsigned32(Value["Strength"]);
+				if (!Min || !Max || !Strength || *Strength == 0 || *Strength > 255)
+					return std::unexpected("Smooth requires integer lattice bounds and strength from 1 to 255");
+				const SampleBox Bounds{*Min, *Max};
+				if (auto Keys = GetRegionChunks(Bounds, 1); !Keys)
+					return std::unexpected(GetFieldErrorText(Keys.error()));
+				return EditorTerrainBrush{SmoothEdit{Bounds, static_cast<std::uint8_t>(*Strength)}, Bounds};
+			}
+			const bool Sphere = Shape == "Sphere";
+			if ((!Sphere && Shape != "Box") ||
+				!HasOnlyFields(Value, {"Shape", "Mode", "Center", Sphere ? "Radius" : "HalfExtent", "Material"}) ||
+				!Value.contains("Mode") || !Value["Mode"].is_string() || !Value.contains("Center"))
+				return std::unexpected("Sphere and Box require Mode, Center and their size");
+			const auto &ModeValue = Value["Mode"].get_ref<const std::string &>();
+			const auto Mode = ModeValue == "Add" ? std::optional(BrushMode::Add) :
+				ModeValue == "Subtract" ? std::optional(BrushMode::Subtract) :
+				ModeValue == "Paint" ? std::optional(BrushMode::Paint) : std::nullopt;
+			if (!Mode) return std::unexpected("Terrain brush Mode must be Add, Subtract or Paint");
+			MaterialId Material = 0;
+			if (*Mode == BrushMode::Subtract) {
+				if (Value.contains("Material")) return std::unexpected("Subtract clears material from excavated samples");
+			} else {
+				const auto Id = Value.contains("Material") ? JsonCodec::DecodeUnsigned32(Value["Material"]) : std::nullopt;
+				if (!Id || *Id == 0) return std::unexpected("Add and Paint require a nonzero material ID");
+				Material = *Id;
+			}
+			const auto Center = DecodeTerrainWorldPoint(Value["Center"]);
+			if (!Center) return std::unexpected("Terrain brush Center must contain three finite world coordinates");
+			if (Sphere) {
+				if (!Value.contains("Radius") || !Value["Radius"].is_number())
+					return std::unexpected("Sphere requires Radius in world units");
+				const SphereBrush Brush{*Center, Value["Radius"].get<double>(), *Mode, Material};
+				const auto Bounds = GetBrushBounds(Grid, Brush);
+				if (!Bounds) return std::unexpected(GetFieldErrorText(Bounds.error()));
+				return EditorTerrainBrush{Brush, *Bounds};
+			}
+			const auto HalfExtent = Value.contains("HalfExtent") ? DecodeTerrainWorldPoint(Value["HalfExtent"]) : std::nullopt;
+			if (!HalfExtent) return std::unexpected("Box requires three finite HalfExtent components in world units");
+			const BoxBrush Brush{*Center, *HalfExtent, *Mode, Material};
+			const auto Bounds = GetBrushBounds(Grid, Brush);
+			if (!Bounds) return std::unexpected(GetFieldErrorText(Bounds.error()));
+			return EditorTerrainBrush{Brush, *Bounds};
+		}
+
+		std::optional<std::size_t> CountTerrainBrushSamples(terrain::SampleBox Bounds) {
+			std::size_t Count = 1;
+			for (const auto Size : {Bounds.MaxExclusive.X - Bounds.Min.X, Bounds.MaxExclusive.Y - Bounds.Min.Y,
+				Bounds.MaxExclusive.Z - Bounds.Min.Z}) {
+				if (Size <= 0 || static_cast<std::uint64_t>(Size) > MaximumTerrainBrushSamples / Count)
+					return std::nullopt;
+				Count *= static_cast<std::size_t>(Size);
+			}
+			return Count;
+		}
+
 		GuiTextureChanges CollectEditorViewportAssets(const std::shared_ptr<DataModel> &World, RenderPublisher &Publisher,
 			std::span<const RenderTextureRemove> RetiredTextures) {
 			auto Assets = std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
@@ -1129,6 +1231,27 @@ namespace gargantuan {
 				GuiRuntimeMode::AuthoringPreview) {}
 	};
 
+	struct EditorHost::TerrainAuthoringState final {
+		enum class Action { Brush, Undo, Redo };
+
+		struct BrushHistory {
+			terrain::Revision AtRevision{};
+			bool Undone{};
+			std::vector<terrain::SampleWrite> Before;
+			std::vector<terrain::SampleWrite> After;
+		};
+
+		struct Work {
+			terrain::EditTicket Ticket{};
+			terrain::Revision StartingRevision{};
+			Action Operation{Action::Brush};
+			std::optional<BrushHistory> Patch;
+		};
+
+		std::optional<Work> Pending;
+		std::optional<BrushHistory> History;
+	};
+
 	struct EditorHost::PackageJob final {
 		std::uint64_t Id = 0;
 		std::uint64_t CapturedRevision = 0;
@@ -1192,6 +1315,7 @@ namespace gargantuan {
 
 	void EditorHost::ResetEditorViewportDocument() {
 		auto NewPublisher = std::make_unique<RenderPublisher>();
+		TerrainAuthoring.reset();
 		ResetViewportSpatial();
 		GuiPreview.reset();
 		RetiredGuiPreviewTextures.clear();
@@ -1396,6 +1520,7 @@ namespace gargantuan {
 	void EditorHost::PumpViewportPresentationForTesting() {
 		NextPlayStep = {};
 		NextViewportFrame = {};
+		PumpTerrainAuthoring();
 		PumpPlaySession();
 		PumpViewportPresentation();
 	}
@@ -1403,6 +1528,51 @@ namespace gargantuan {
 	void EditorHost::PumpPlaySessionForTesting() {
 		NextPlayStep = {};
 		PumpPlaySession();
+	}
+
+	void EditorHost::PumpTerrainAuthoring() {
+		if (!TerrainAuthoring || !TerrainAuthoring->Pending || !World) return;
+		const auto Space = std::dynamic_pointer_cast<Workspace>(World->FindFirstChildOfClass("Workspace", false));
+		const auto Owner = Space ? Space->GetTerrain() : nullptr;
+		if (!Owner) {
+			TerrainAuthoring.reset();
+			return;
+		}
+		Space->PollTerrainWork();
+		auto &Pending = *TerrainAuthoring->Pending;
+		const auto Receipt = Space->GetTerrainTicket(Pending.Ticket);
+		if (Receipt && Receipt->Status == "Pending") return;
+		const auto &Field = Owner->GetField();
+		const auto Revision = Field.GetRevision();
+		if (Revision != Pending.StartingRevision) {
+			World->AdvanceAuthoritativeRevision();
+			if (Receipt && Receipt->Revision) {
+				if (Pending.Patch) {
+					auto &Patch = *Pending.Patch;
+					std::size_t Changed = 0;
+					for (const auto Original : Patch.Before) {
+						const auto Value = Field.Read(Original.Point);
+						if (!Value || *Value == Original.Value) continue;
+						Patch.Before[Changed] = Original;
+						Patch.After[Changed++] = {Original.Point, *Value};
+					}
+					Patch.Before.resize(Changed);
+					Patch.After.resize(Changed);
+					Patch.AtRevision = Revision;
+					if (Changed) TerrainAuthoring->History = std::move(Patch);
+					else TerrainAuthoring->History.reset();
+				} else if (TerrainAuthoring->History) {
+					TerrainAuthoring->History->AtRevision = Revision;
+					TerrainAuthoring->History->Undone = Pending.Operation == TerrainAuthoringState::Action::Undo;
+				}
+				ViewportPublisher->SetTerrainRenderState(Space->GetTerrainRenderState());
+				NextViewportFrame = std::chrono::steady_clock::now();
+			} else {
+				// A provider violation after the field commit still makes the scene dirty.
+				TerrainAuthoring->History.reset();
+			}
+		}
+		TerrainAuthoring->Pending.reset();
 	}
 
 	std::string EditorHost::HandleRequest(std::string_view request) {
@@ -1450,6 +1620,10 @@ namespace gargantuan {
 				return SerializeBoundedResponse(ErrorResponse(
 					requestId, "PlaySessionActive", "Stop Play before changing the authoritative project"
 				));
+			if (TerrainAuthoring && TerrainAuthoring->Pending && method != "CancelTerrainEdit" &&
+				(IsAuthoringMethodWhilePlaying(method) || method == "StartPlaySession" || method == "ExportGasPlace"))
+				return SerializeBoundedResponse(ErrorResponse(requestId, "TerrainEditPending",
+					"Wait for the terrain edit to finish or cancel it first"));
 			std::optional<TransactionId> RequestTransaction;
 			if (parameters.contains("TransactionId")) {
 				if (!parameters["TransactionId"].is_string())
@@ -1497,6 +1671,9 @@ namespace gargantuan {
 					"AddTag", "RemoveTag", "SaveProject", "SaveProjectAs", "AuthoritativeRevision",
 					"CreateInstance", "DestroyInstance", "DuplicateInstance", "ReparentInstance",
 					"ExportGasModel", "ImportGasModel", "ExportGasPlace", "OpenGasPlace",
+					"TerrainGasPlaceV2", "TerrainMaterialBindingsV1", "TerrainProjectGridV1",
+					"TerrainAuthoringV1", "GetTerrainAuthoringState", "SubmitTerrainBrush",
+					"GetTerrainEditStatus", "CancelTerrainEdit", "UndoTerrainEdit", "RedoTerrainEdit", "RaycastTerrainSurface",
 					"BeginTransaction",
 					"CommitTransaction",
 					"AuthoritativeTransactions",
@@ -1806,11 +1983,17 @@ namespace gargantuan {
 				const auto Id = PlaySessionId{NextPlaySessionId++};
 				try {
 					auto Snapshot = CurrentProject->CaptureGame(World, World->GetAuthoritativeRevision());
+					const auto AdmitTerrain = terrain::GetSceneTerrainAdmission(CurrentProject->Identity,
+						[&Snapshot](const terrain::TerrainArtifactId &Artifact, std::size_t Maximum) {
+							const auto Artifacts = Snapshot.Terrain ? std::span<const terrain::TerrainArtifact>(Snapshot.Terrain->Artifacts)
+								: std::span<const terrain::TerrainArtifact>{};
+							return terrain::ReadCapturedTerrainArtifact(Artifacts, Artifact, Maximum);
+						});
 					auto NewPlaySession = std::make_unique<PlaySession>(
 						Id, std::move(Snapshot.Contents), CurrentProject->InstanceFileFormat,
 						CurrentProject->Root, ViewportWidth == 0 ? 720 : ViewportWidth,
 						ViewportHeight == 0 ? 540 : ViewportHeight, Snapshot.Revision, std::move(Snapshot.Assets),
-						AudioEnabled, std::move(Persistence)
+						AudioEnabled, std::move(Persistence), AdmitTerrain
 					);
 					AdvanceViewportGeneration();
 					ActivePlaySession = std::move(NewPlaySession);
@@ -2291,6 +2474,18 @@ namespace gargantuan {
 				auto CandidatePreRun = ReadProjectPreRunSource(Root);
 				const bool MatchingSchema = World && CandidatePreRun == ActivePreRunSource &&
 					ActivePreRunSchemaGeneration == GetRuntimeSchemaLifecycle().GetActiveGeneration();
+				auto Prepared = CandidateProject->PrepareGameLoad();
+				terrain::TerrainRenderPreview Preview;
+				if (const auto *Field = Prepared.GetTerrain()) {
+					auto Ready = terrain::TerrainRenderPreview::Prepare(*Field);
+					if (!Ready && Ready.error() == terrain::EditStatus::ReopenCapacityExceeded)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "TerrainReopenCapacityExceeded",
+							"Editable terrain supports up to 512 stored pages and 1024 contour candidates."));
+					if (!Ready)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "TerrainPreviewUnavailable",
+							"The project exceeds the edit viewport terrain budget or could not be prepared."));
+					Preview = std::move(*Ready);
+				}
 				struct StagedWorld {
 					std::shared_ptr<DataModel> Value;
 					void Retire() {
@@ -2306,15 +2501,18 @@ namespace gargantuan {
 					}
 				} CandidateWorld;
 				std::string Response;
+				ObjectId TerrainOwner;
 				const auto LoadDocument = [&] {
 					ScopedChangeJournalSuppression Suppression;
-					CandidateWorld.Value = CandidateProject->DeserializeGame();
+					CandidateWorld.Value = CandidateProject->DeserializeGame(std::move(Prepared));
 					auto &Document = CandidateWorld.Value;
 					Document->InitializeLoadedProjectRevision();
-					if (!std::dynamic_pointer_cast<Workspace>(Document->GetService("Workspace"))) {
+					const auto Space = std::dynamic_pointer_cast<Workspace>(Document->GetService("Workspace"));
+					if (!Space || !Space->GetTerrain()) {
 						Response = SerializeBoundedResponse(ErrorResponse(requestId, "InvalidProject", "Project has no valid Workspace"));
 						return false;
 					}
+					TerrainOwner = Space->GetTerrain()->GetObjectId();
 					auto Encoded = JsonCodec::Encode(SuccessResponse(requestId, {
 						{"Root", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Document->GetObjectId()))},
 						{"ProjectState", EncodeProjectState(Document, Document->GetAuthoritativeRevision(), CandidateProject)},
@@ -2328,24 +2526,7 @@ namespace gargantuan {
 					return true;
 				};
 
-				if (MatchingSchema) {
-					if (!LoadDocument()) return Response;
-					// Both graphs must retire while their schema is still active.
-					CandidateWorld.Retire();
-				} else {
-					// Check the payload without activating another schema or changing the
-					// current document. Semantic validation needs the candidate registry.
-					if (CandidateProject->InstanceFileFormat != InstanceSerialization::InstanceFormat::Json)
-						throw std::runtime_error("Binary instance formats are not yet implemented");
-					SourceMount Mount(*CandidateFilesystem);
-					SourceMountBudget Budget;
-					const auto Payload = Mount.ReadFile(CandidateProject->InstanceFilePath.lexically_relative(Root),
-						MaximumProtocolDocumentBytes, Budget);
-					if (!Payload) throw std::runtime_error(Payload.error().Format());
-					const auto Parsed = JsonCodec::Parse(*Payload, MaximumProtocolDocumentBytes, "Instance persistence");
-					if (!Parsed) throw std::runtime_error(Parsed.error().Format());
-					if (!Parsed->is_object()) throw std::runtime_error("Expected an instance document JSON object");
-				}
+				if (MatchingSchema && !LoadDocument()) return Response;
 
 				ResetEditorViewportDocument();
 				if (World) {
@@ -2366,13 +2547,16 @@ namespace gargantuan {
 				ViewportHeight = 0;
 				ViewportPresentationActive = false;
 				AdvanceViewportGeneration();
-				ActivePreRunSource = BootstrapProjectRuntimeSchema(Root);
-				ActivePreRunSchemaGeneration = GetRuntimeSchemaLifecycle().GetActiveGeneration();
-				if (!LoadDocument()) return Response;
+				if (!MatchingSchema) {
+					ActivePreRunSource = BootstrapProjectRuntimeSchema(Root);
+					ActivePreRunSchemaGeneration = GetRuntimeSchemaLifecycle().GetActiveGeneration();
+					if (!LoadDocument()) return Response;
+				}
 				Filesystem = std::move(CandidateFilesystem);
 				CurrentProject = std::move(CandidateProject);
 				World = std::move(CandidateWorld.Value);
 				World->Filesystem = Filesystem.get();
+				ViewportPublisher->SetTerrainRenderState(std::move(Preview).Bind(TerrainOwner));
 				PersistedRevision = World->GetAuthoritativeRevision();
 				ViewportCamera = RenderCameraInput{};
 				return Response;
@@ -2383,12 +2567,22 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "Unauthorized", "Project creation requires EditorCommands"
 					));
-				if (!HasOnlyFields(parameters, {"Destination", "Name"}) ||
+				if (!HasOnlyFields(parameters, {"Destination", "Name", "TerrainSampleSpacing"}) ||
 					!parameters.contains("Destination") || !parameters.contains("Name") ||
 					!parameters["Name"].is_string())
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "MalformedRequest", "CreateProject requires Destination and Name"
 					));
+				terrain::GridSpec Grid;
+				if (parameters.contains("TerrainSampleSpacing")) {
+					const auto &Value = parameters["TerrainSampleSpacing"];
+					const auto Spacing = Value.is_number() ? Value.get<double>() : 0.0;
+					if (Spacing != 0.5 && Spacing != 1.0 && Spacing != 2.0)
+						return SerializeBoundedResponse(ErrorResponse(
+							requestId, "InvalidTerrainSpacing", "Terrain sample spacing must be 0.5, 1 or 2 world units"
+						));
+					Grid.SpacingShift = Spacing == 0.5 ? -1 : (Spacing == 2.0 ? 1 : 0);
+				}
 				const auto Name = parameters["Name"].get<std::string>();
 				if (!IsValidProjectName(Name))
 					return SerializeBoundedResponse(ErrorResponse(
@@ -2431,8 +2625,11 @@ namespace gargantuan {
 					);
 					auto NewWorld = std::make_shared<DataModel>();
 					NewWorld->SetName(Name);
-					if (!std::dynamic_pointer_cast<Workspace>(NewWorld->GetService("Workspace")))
+					const auto Space = std::dynamic_pointer_cast<Workspace>(NewWorld->GetService("Workspace"));
+					if (!Space)
 						throw std::runtime_error("The canonical new project could not create Workspace");
+					if (Grid != terrain::GridSpec{})
+						Space->RestoreTerrainField(std::make_unique<terrain::Field>(Grid));
 					NewWorld->MarkPersistenceSubtreeArchivable();
 					NewWorld->Root = Staging;
 					NewWorld->Filesystem = StagingFilesystem.get();
@@ -2933,21 +3130,48 @@ namespace gargantuan {
 				auto &project = saveAs ? *destinationProject : *CurrentProject;
 				Project::PersistenceSnapshot snapshot;
 				try {
-					snapshot = project.CaptureGame(World, World->GetAuthoritativeRevision());
+					snapshot = project.CaptureGame(World, World->GetAuthoritativeRevision(), !saveAs);
 				} catch (const std::exception &) {
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "SerializationFailure", "The authoritative project could not be serialized"
 					));
 				}
 				try {
-					if (saveAs && project.Root != CurrentProject->Root) {
-						if (auto Source = ReadProjectPreRunSource(CurrentProject->Root)) {
-							std::filesystem::create_directories(project.Root);
-							if (!project.ReplacePreRunSource(ReadProjectPreRunSource(project.Root), *Source))
-								throw PreRunSourceConflict("PreRun destination changed during Save As");
+					const bool CopyProject = saveAs && project.Root != CurrentProject->Root;
+					const auto PreRun = CopyProject ? ReadProjectPreRunSource(CurrentProject->Root) : std::nullopt;
+					const auto Persist = [&](const Project &Candidate) {
+						Candidate.ValidatePersistenceDestination();
+						if (CopyProject) {
+							const auto ExistingPreRun = ReadProjectPreRunSource(Candidate.Root);
+							if (ExistingPreRun != PreRun) {
+								// An already saved scene must keep the schema with which it was written.
+								if (!PreRun || std::filesystem::exists(Candidate.InstanceFilePath) ||
+									!Candidate.ReplacePreRunSource(ExistingPreRun, *PreRun))
+									throw PreRunSourceConflict("PreRun destination conflicts with the project being saved");
+							}
 						}
+						Candidate.PersistGameAtomically(snapshot, PersistenceCheckpointForTesting);
+					};
+					if (CopyProject && !std::filesystem::exists(project.Root)) {
+						// Publish a new destination only after the complete project closure is present.
+						std::filesystem::create_directories(project.Root.parent_path());
+						const auto Staging = CreateOwnedStagingDirectory(project.Root);
+						try {
+							DiskFilesystem StagingFilesystem(Staging);
+							auto Candidate = Project::forDestination(&StagingFilesystem, project.InstanceFileFormat);
+							Candidate.Identity = project.Identity;
+							Persist(Candidate);
+							if (std::filesystem::exists(project.Root))
+								throw std::runtime_error("Save As destination appeared during persistence");
+							std::filesystem::rename(Staging, project.Root);
+						} catch (...) {
+							std::error_code Ignored;
+							std::filesystem::remove_all(Staging, Ignored);
+							throw;
+						}
+					} else {
+						Persist(project);
 					}
-					project.PersistGameAtomically(snapshot, PersistenceCheckpointForTesting);
 					PersistedRevision = snapshot.Revision;
 					if (saveAs) {
 						Filesystem = std::move(destinationFilesystem);
@@ -3204,12 +3428,181 @@ namespace gargantuan {
 				);
 			};
 
+			if (method == "GetTerrainAuthoringState" || method == "SubmitTerrainBrush" ||
+				method == "GetTerrainEditStatus" || method == "CancelTerrainEdit" ||
+				method == "UndoTerrainEdit" || method == "RedoTerrainEdit" || method == "RaycastTerrainSurface") {
+				using Action = TerrainAuthoringState::Action;
+				using namespace terrain;
+				const auto Fail = [&](std::string Code, std::string Message) {
+					return SerializeBoundedResponse(ErrorResponse(requestId, std::move(Code), std::move(Message)));
+				};
+				const auto Reply = [&](Json Value) {
+					return SerializeBoundedResponse(SuccessResponse(requestId, std::move(Value)));
+				};
+				const bool GetState = method == "GetTerrainAuthoringState";
+				const bool GetStatus = method == "GetTerrainEditStatus";
+				const bool Cancel = method == "CancelTerrainEdit";
+				const bool Query = method == "RaycastTerrainSurface";
+				if (StudioSecurity.Domain != ScriptExecutionDomain::Studio ||
+					!StudioSecurity.HasCapability(ScriptCapability::EditorCommands) ||
+					!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel) ||
+					(Query && !StudioSecurity.HasCapability(ScriptCapability::ViewportControl)) ||
+					(!GetState && !GetStatus && !Query && !StudioSecurity.HasCapability(ScriptCapability::MutateDataModel)))
+					return Fail("Unauthorized", "Terrain authoring requires trusted Studio capabilities");
+				const auto Space = std::dynamic_pointer_cast<Workspace>(World->FindFirstChildOfClass("Workspace", false));
+				const auto Owner = Space ? Space->GetTerrain() : nullptr;
+				if (!Owner || !CurrentProject) return Fail("TerrainUnavailable", "The project has no canonical Workspace terrain");
+				const auto Scope = World->GetObjectId();
+				if (!GetState) {
+					const auto Requested = parameters.contains("Scope") ?
+						JsonCodec::DecodeObjectId(parameters["Scope"]) : std::nullopt;
+					if (!Requested) return Fail("MalformedRequest", "Terrain requests need a valid Scope");
+					if (Requested->ToObjectId() != Scope) return Fail("StaleTerrainScope", "The project scope changed");
+				}
+				if (GetState || GetStatus) PumpTerrainAuthoring();
+				const auto &Field = Owner->GetField();
+				const auto Revision = Field.GetRevision();
+				const auto IsBusy = [&] { return TerrainAuthoring && TerrainAuthoring->Pending.has_value(); };
+				const auto HasHistory = [&] {
+					return TerrainAuthoring && TerrainAuthoring->History && TerrainAuthoring->History->AtRevision == Revision;
+				};
+				const auto State = [&] {
+					const bool HasUndo = HasHistory() && !TerrainAuthoring->History->Undone;
+					const bool HasRedo = HasHistory() && TerrainAuthoring->History->Undone;
+					return Json{
+						{"Scope", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Scope))},
+						{"TerrainRevision", std::to_string(Revision)},
+						{"SampleSpacing", Field.GetGrid().GetSpacing()},
+						{"MaximumBrushSamples", MaximumTerrainBrushSamples},
+						{"EditingAvailable", !ActivePlaySession && !ActiveAnimationPreview && !GuiPreview &&
+							StudioSecurity.HasCapability(ScriptCapability::MutateDataModel)},
+						{"Busy", IsBusy()},
+						{"CanUndo", !IsBusy() && !ActivePlaySession && HasUndo},
+						{"CanRedo", !IsBusy() && !ActivePlaySession && HasRedo},
+						{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
+					};
+				};
+				if (GetState) {
+					if (!parameters.empty()) return Fail("MalformedRequest", "GetTerrainAuthoringState takes no parameters");
+					return Reply(State());
+				}
+				if (GetStatus || Cancel) {
+					const auto Ticket = parameters.contains("Ticket") ? DecodeCanonicalJobId(parameters["Ticket"]) : std::nullopt;
+					if (!Ticket || !HasOnlyFields(parameters, {"Scope", "Ticket"}))
+						return Fail("MalformedRequest", "A canonical nonzero terrain ticket is required");
+					if (Cancel) {
+						if (!IsBusy() || TerrainAuthoring->Pending->Ticket != *Ticket)
+							return Fail("TerrainEditUnavailable", "The terrain edit is no longer pending");
+						const auto Result = Mutations.Apply(CancelTerrainEditCommand{Owner->GetObjectId(), Scope, *Ticket},
+							StudioMutationAuthority());
+						if (!Result.Succeeded()) return Fail(MutationStatusName(Result.Status), Result.Message);
+					}
+					const auto Receipt = Space->GetTerrainTicket(*Ticket);
+					if (!Receipt) return Fail("TerrainEditUnavailable", "The terrain ticket is unavailable in this scope");
+					auto Result = State();
+					Result["Ticket"] = std::to_string(*Ticket);
+					Result["Status"] = Cancel ? std::string_view("CancelRequested") : Receipt->Status;
+					Result["Diagnostic"] = Receipt->Diagnostic;
+					Result["CommittedTerrainRevision"] = Receipt->Revision ?
+						Json(std::to_string(*Receipt->Revision)) : Json(nullptr);
+					return Reply(std::move(Result));
+				}
+				const auto RequestedRevision = parameters.contains("ExpectedTerrainRevision") ?
+					DecodeCanonicalJobId(parameters["ExpectedTerrainRevision"], true) : std::nullopt;
+				if (!RequestedRevision) return Fail("MalformedRequest", "A canonical expected terrain revision is required");
+				if (*RequestedRevision != Revision || HasRevisionConflict())
+					return Fail("Conflict", "The project or terrain revision changed");
+				const auto Initialize = [&]() -> std::optional<std::string> {
+					try {
+						Space->InitializeTerrainRuntime(RuntimeMode::Offline);
+						if (Space->HasTerrainRuntime()) return std::nullopt;
+						return "Terrain collision is unavailable";
+					} catch (const std::exception &Error) {
+						return Error.what();
+					}
+				};
+				if (Query) {
+					if (!HasOnlyFields(parameters, {"Scope", "ExpectedTerrainRevision", "Origin", "Direction"}) ||
+						!parameters.contains("Origin") || !parameters.contains("Direction"))
+						return Fail("MalformedRequest", "Terrain raycast needs Origin and Direction");
+					if (ActivePlaySession || ActiveAnimationPreview || GuiPreview)
+						return Fail("ViewportUnavailable", "Terrain surface targeting requires the edit viewport");
+					const auto Origin = DecodeVector3(parameters["Origin"]);
+					const auto Direction = DecodeVector3(parameters["Direction"]);
+					const auto Distance = Direction ? glm::length(*Direction) : 0.f;
+					if (!Origin || !Direction || Distance <= 0 || Distance > 8192.f)
+						return Fail("MalformedRequest", "Terrain raycast requires a finite displacement of at most 8192 world units");
+					if (Field.GetStats().MaterializedPages == 0) return Reply({{"Hit", nullptr}});
+					if (auto Denial = Initialize()) return Fail("TerrainUnavailable", std::move(*Denial));
+					RaycastParams Filter;
+					Filter.FilterType = Enums::RaycastFilterType::Include;
+					Filter.FilterDescendantsInstances.Values.emplace_back(Owner);
+					Filter.IncludeTerrain = true;
+					const auto Hit = Space->ResolveRaycast(*Origin, *Direction, Filter);
+					if (!Hit.Succeeded()) return Fail("TerrainQueryFailed", Hit.Message);
+					if (!Hit.TerrainInstance) return Reply({{"Hit", nullptr}});
+					return Reply({{"Hit", {
+						{"Position", {Hit.Position.x, Hit.Position.y, Hit.Position.z}},
+						{"Normal", {Hit.Normal.x, Hit.Normal.y, Hit.Normal.z}},
+						{"Distance", Hit.Distance},
+					}}});
+				}
+				if (!Cursor) return Fail("SnapshotRequired", "GetSnapshot must establish a cursor");
+				if (RequestTransaction || World->Transactions.GetOpenCount() != 0)
+					return Fail("TransactionOpen", "Close the object transaction before editing terrain");
+				if (ActiveAnimationPreview || GuiPreview)
+					return Fail("ViewportUnavailable", "Close the active preview before editing terrain");
+				World->EnsureAuthoritativeRevisionAvailable();
+				TerrainAuthoringState::Work Pending{.StartingRevision = Revision};
+				EditRequest Edit;
+				if (method == "SubmitTerrainBrush") {
+					if (!HasOnlyFields(parameters, {"Scope", "ExpectedTerrainRevision", "ExpectedRevision", "Brush"}) ||
+						!parameters.contains("Brush"))
+						return Fail("MalformedRequest", "SubmitTerrainBrush needs a Brush");
+					auto Input = DecodeTerrainBrush(parameters["Brush"], Field.GetGrid());
+					if (!Input) return Fail("InvalidTerrainBrush", std::string(Input.error()));
+					const auto Count = CountTerrainBrushSamples(Input->Bounds);
+					if (!Count) return Fail("TerrainBrushLimit", "Use a smaller brush or region covering at most 4096 lattice samples");
+					Pending.Patch.emplace();
+					Pending.Patch->Before.reserve(*Count);
+					Pending.Patch->After.resize(*Count);
+					const auto [Min, Max] = Input->Bounds;
+					for (auto Z = Min.Z; Z < Max.Z; ++Z)
+						for (auto Y = Min.Y; Y < Max.Y; ++Y)
+							for (auto X = Min.X; X < Max.X; ++X) {
+								const SamplePoint Point{X, Y, Z};
+								Pending.Patch->Before.push_back({Point, Field.Read(Point).value()});
+							}
+					Edit = std::move(Input->Edit);
+				} else {
+					if (!HasOnlyFields(parameters, {"Scope", "ExpectedTerrainRevision", "ExpectedRevision"}))
+						return Fail("MalformedRequest", "Terrain history accepts the scope and expected revisions");
+					const bool Undo = method == "UndoTerrainEdit";
+					if (!HasHistory() || TerrainAuthoring->History->Undone == Undo)
+						return Fail(Undo ? "NothingToUndo" : "NothingToRedo", "No terrain brush is available at this revision");
+					const auto &History = *TerrainAuthoring->History;
+					Pending.Operation = Undo ? Action::Undo : Action::Redo;
+					Edit = Undo ? History.Before : History.After;
+				}
+				if (auto Denial = Initialize()) return Fail("TerrainUnavailable", std::move(*Denial));
+				if (!TerrainAuthoring) TerrainAuthoring = std::make_unique<TerrainAuthoringState>();
+				const auto Result = Mutations.Apply(SubmitTerrainEditCommand{Owner->GetObjectId(), Scope,
+					std::make_shared<const TerrainMutation>(TerrainMutation{std::move(Edit), RequestedRevision})},
+					StudioMutationAuthority());
+				if (!Result.Succeeded() || !Result.TerrainTicket)
+					return Fail(MutationStatusName(Result.Status), Result.Message);
+				Pending.Ticket = *Result.TerrainTicket;
+				TerrainAuthoring->Pending.emplace(std::move(Pending));
+				return Reply({{"Ticket", std::to_string(*Result.TerrainTicket)}, {"Status", "Pending"}});
+			}
+
 			if (method == "ExportGasModel" || method == "ExportGasPlace") {
 				if (!CurrentProject || !StudioSecurity.HasCapability(ScriptCapability::ReadDataModel) ||
 					!StudioSecurity.HasCapability(ScriptCapability::EditorCommands))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "GAS export requires project authoring access"));
 				const bool IsModel = method == "ExportGasModel";
 				SerializationResult<Gas::Document> Document;
+				std::optional<terrain::TerrainCapture> CapturedTerrain;
 				if (IsModel) {
 					if (!HasOnlyFields(parameters, {"Roots", "AssetIds"}) || !parameters.contains("Roots") ||
 						!parameters["Roots"].is_array() || parameters["Roots"].empty() || parameters["Roots"].size() > 256)
@@ -3254,7 +3647,7 @@ namespace gargantuan {
 				} else {
 					if (!parameters.empty())
 						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GASP export takes no parameters"));
-					Document = CurrentProject->CaptureGasPlace(World);
+					Document = CurrentProject->CaptureGasPlace(World, &CapturedTerrain);
 					if (Document && (Document->Place->PreRunSource != ActivePreRunSource ||
 						GetRuntimeSchemaLifecycle().GetActiveGeneration() != ActivePreRunSchemaGeneration))
 						return SerializeBoundedResponse(ErrorResponse(requestId, "GasExportFailed",
@@ -3267,9 +3660,16 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "GasExportFailed", Encoded.error().Message));
 				if (Encoded->size() > MaximumGasTransferBytes)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ResourceLimit", "GAS exceeds the EditorHost transfer limit"));
+				if (CapturedTerrain) {
+					try {
+						CurrentProject->PersistTerrainArtifacts(*CapturedTerrain);
+					} catch (const std::exception &Error) {
+						return SerializeBoundedResponse(ErrorResponse(requestId, "GasExportFailed", Error.what()));
+					}
+				}
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"DataBase64", EncodeBase64Chunks(*Encoded)},
-					{"DocumentKind", IsModel ? "Model" : "Place"}, {"FormatVersion", Gas::FormatVersion},
+					{"DocumentKind", IsModel ? "Model" : "Place"}, {"FormatVersion", Gas::GetFormatVersion(*Document)},
 				}));
 			}
 
@@ -3326,11 +3726,22 @@ namespace gargantuan {
 				} Staged;
 				auto &Candidate = Staged.World;
 				std::string Response;
+				std::shared_ptr<const terrain::RenderState> TerrainRender;
 				try {
 					ScopedChangeJournalSuppression Suppression;
 					Candidate = CurrentProject->LoadGasPlace(*Document);
-					if (!std::dynamic_pointer_cast<Workspace>(Candidate->GetService("Workspace")))
+					const auto Space = std::dynamic_pointer_cast<Workspace>(Candidate->GetService("Workspace"));
+					if (!Space || !Space->GetTerrain())
 						return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidProject", "GASP place has no valid Workspace"));
+					const auto Terrain = Space->GetTerrain();
+					auto Preview = terrain::TerrainRenderPreview::Prepare(Terrain->GetField());
+					if (!Preview && Preview.error() == terrain::EditStatus::ReopenCapacityExceeded)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "TerrainReopenCapacityExceeded",
+							"Editable terrain supports up to 512 stored pages and 1024 contour candidates."));
+					if (!Preview)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "TerrainPreviewUnavailable",
+							"The GASP place exceeds the edit viewport terrain budget or could not be prepared."));
+					TerrainRender = std::move(*Preview).Bind(Terrain->GetObjectId());
 					Candidate->InitializeLoadedProjectRevision();
 					Response = SerializeBoundedResponse(SuccessResponse(requestId, {
 						{"Root", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Candidate->GetObjectId()))},
@@ -3342,6 +3753,7 @@ namespace gargantuan {
 				ResetEditorViewportDocument();
 				World->Destroy();
 				World = std::move(Candidate);
+				ViewportPublisher->SetTerrainRenderState(std::move(TerrainRender));
 				ActiveAnimationPreview.reset();
 				PersistedRevision = 0;
 				Cursor.reset();
@@ -3636,7 +4048,7 @@ namespace gargantuan {
 				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Snapshot access requires ReadDataModel"));
 				if (!World) return SerializeBoundedResponse(ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded"));
-				auto snapshot = CaptureSnapshot(World);
+				auto snapshot = CaptureSnapshot(World, SnapshotAudience::Editor);
 				Cursor = snapshot.Cursor;
 				auto EncodedSnapshot = ParseGeneratedJson(SerializeSnapshot(snapshot), "Snapshot response");
 				AddEditorPropertyValues(EncodedSnapshot, StudioSecurity, World->GetObjectId());
@@ -3949,7 +4361,7 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "SetAttribute requires MutateDataModel"));
 				if (!Cursor)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
-				if (!HasOnlyFields(parameters, {"Object", "Attribute", "Value", "TransactionId"}) ||
+				if (!HasOnlyFields(parameters, {"Object", "Attribute", "Value", "TransactionId", "ExpectedRevision"}) ||
 					!parameters.contains("Object") || !parameters.contains("Attribute") ||
 					!parameters["Attribute"].is_string() || !parameters.contains("Value"))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "SetAttribute fields are invalid"));
@@ -3960,6 +4372,9 @@ namespace gargantuan {
 				auto target = ObjectRegistry::Get().Lookup(object->ToObjectId());
 				if (!target || target->GetReplicationScopeId() != World->GetObjectId())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleObject", "Object is not live in the open project"));
+				if (HasRevisionConflict())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Conflict",
+						"The authoritative project revision changed before attribute mutation"));
 				std::optional<WireValue> attributeValue = std::move(*value);
 				if (std::holds_alternative<std::monostate>(*attributeValue)) attributeValue.reset();
 				auto mutation = Mutations.Apply(UpdateAttributeCommand{
@@ -4304,6 +4719,8 @@ namespace gargantuan {
 					Wake = std::min(Wake, NextViewportFrame);
 				if (ActivePlaySession && NextPlayStep != std::chrono::steady_clock::time_point{})
 					Wake = std::min(Wake, NextPlayStep);
+				if (TerrainAuthoring && TerrainAuthoring->Pending)
+					Wake = std::min(Wake, std::chrono::steady_clock::now() + std::chrono::milliseconds(16));
 				Queue->Changed.wait_until(Lock, Wake, [&] { return Queue->End || !Queue->Lines.empty(); });
 				if (!Queue->Lines.empty()) {
 					Pending = std::move(Queue->Lines.front());
@@ -4336,6 +4753,7 @@ namespace gargantuan {
 					return 1;
 				}
 			}
+			PumpTerrainAuthoring();
 			const auto Now = std::chrono::steady_clock::now();
 			if (ProcessObserver && Now >= NextObserver) {
 				try {

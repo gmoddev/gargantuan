@@ -19,7 +19,10 @@
 #include "gargantuan/runtime/TagIndex.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/services/AudioMixService.hpp"
+#include "gargantuan/services/Workspace.hpp"
 #include "gargantuan/classes/PlayerGui.hpp"
+#include "gargantuan/classes/Terrain.hpp"
+#include "gargantuan/terrain/Field.hpp"
 #include "serialization/JsonCodec.hpp"
 
 #include <algorithm>
@@ -84,7 +87,7 @@ namespace gargantuan::InstanceSerialization {
 
 		template <class Visit>
 		void CollectDocumentNodes(std::span<const std::shared_ptr<Instance>> Roots, DocumentNodeIds &Ids,
-			Visit VisitNode) {
+			Visit VisitNode, bool IncludesTerrain = false) {
 			if (Roots.size() > MaximumPersistenceObjects)
 				throw std::length_error("Instance persistence hierarchy exceeds its object limit");
 			struct PendingNode {
@@ -94,10 +97,21 @@ namespace gargantuan::InstanceSerialization {
 			};
 			std::vector<PendingNode> Pending;
 			for (auto Root = Roots.rbegin(); Root != Roots.rend(); ++Root) {
+				if (auto *Model = dynamic_cast<DataModel *>(Root->get())) {
+					const auto Space = std::dynamic_pointer_cast<Workspace>(
+						Model->FindFirstChildOfClass("Workspace", false));
+					const auto TerrainValue = Space ? Space->GetTerrain() : nullptr;
+					if (TerrainValue && !IncludesTerrain &&
+						(TerrainValue->GetField().GetRevision() != 0 ||
+							TerrainValue->GetField().GetGrid() != terrain::GridSpec{}))
+						throw std::runtime_error("[Terrain:Persistence] An edited scene requires its terrain manifest");
+				}
 				if (dynamic_cast<AudioMixService *>(Root->get()))
 					throw std::invalid_argument("AudioMixService is a runtime-only service and cannot be a document root");
 				if (dynamic_cast<PlayerGui *>(Root->get()))
 					throw std::invalid_argument("PlayerGui is a runtime-only container and cannot be a document root");
+				if (dynamic_cast<Terrain *>(Root->get()))
+					throw std::invalid_argument("Terrain is a protected world projection and cannot be a document root");
 				Pending.push_back({*Root, 1, 0});
 			}
 			while (!Pending.empty()) {
@@ -112,7 +126,8 @@ namespace gargantuan::InstanceSerialization {
 				// A non-Archivable node is included, while its descendants remain outside the document.
 				if (Node->GetArchivable()) {
 					for (auto Child = Node->Children.rbegin(); Child != Node->Children.rend(); ++Child) {
-						if (dynamic_cast<AudioMixService *>(Child->get()) || dynamic_cast<PlayerGui *>(Child->get())) continue;
+						if (dynamic_cast<AudioMixService *>(Child->get()) || dynamic_cast<PlayerGui *>(Child->get()) ||
+							dynamic_cast<Terrain *>(Child->get())) continue;
 						if (Pending.size() >= MaximumPersistenceObjects - Ids.size())
 							throw std::length_error("Instance persistence hierarchy exceeds its object limit");
 						Pending.push_back({*Child, Depth + 1, Id});
@@ -319,13 +334,18 @@ namespace gargantuan::InstanceSerialization {
 		}
 	}
 
-	std::string Serialize(InstanceFormat format, std::shared_ptr<Instance> &instance) {
+	std::string Serialize(InstanceFormat format, std::shared_ptr<Instance> &instance,
+		std::optional<AssetContentId> TerrainManifest) {
 		switch (format) {
 		case InstanceFormat::Json: {
+			if (TerrainManifest && (!TerrainManifest->IsValid() || !dynamic_cast<DataModel *>(instance.get())))
+				throw std::invalid_argument("[Terrain:Persistence] The manifest requires a DataModel scene root");
 			Json::SerializationState state;
-			CollectDocumentNodes(std::span(&instance, 1), state.NodeIds, [](Instance &, std::uint32_t) {});
+			CollectDocumentNodes(std::span(&instance, 1), state.NodeIds, [](Instance &, std::uint32_t) {},
+				TerrainManifest.has_value());
 			auto serialized = Json::SerializeInstance(instance, state);
-			serialized["Version"] = 5;
+			serialized["Version"] = TerrainManifest ? TerrainSceneVersion : 5;
+			if (TerrainManifest) serialized["TerrainManifest"] = TerrainManifest->ToString();
 			auto Encoded = JsonCodec::Encode(serialized, "Instance persistence");
 			if (!Encoded) throw std::runtime_error(Encoded.error().Format());
 			return std::move(*Encoded);
@@ -455,7 +475,7 @@ namespace gargantuan::InstanceSerialization {
 			std::vector<std::pair<Instance *, std::uint32_t>> Ordered;
 			CollectDocumentNodes(Roots, Ids, [&](Instance &Object, std::uint32_t Parent) {
 				Ordered.emplace_back(&Object, Parent);
-			});
+			}, Kind == Gas::DocumentKind::Place && Result.Place && Result.Place->TerrainManifest.has_value());
 			Result.Nodes.reserve(Ordered.size());
 			GasCaptureBudget Budget;
 			std::unordered_set<std::string> SourceIds;
@@ -1138,6 +1158,23 @@ namespace gargantuan::InstanceSerialization {
 	}
 
 	namespace {
+		std::expected<std::optional<AssetContentId>, std::string> GetTerrainManifest(const json &Contents) {
+			const bool TerrainVersion = Contents["Version"] == TerrainSceneVersion;
+			if (!TerrainVersion) {
+				if (Contents.contains("TerrainManifest"))
+					return std::unexpected("Terrain manifest requires the terrain scene version");
+				return std::optional<AssetContentId>{};
+			}
+			if (!Contents.contains("ClassName") || Contents["ClassName"] != "DataModel" ||
+				!Contents.contains("TerrainManifest") || !Contents["TerrainManifest"].is_string())
+				return std::unexpected("Terrain scene is missing its DataModel or terrain manifest");
+			const auto &Encoded = Contents["TerrainManifest"].get_ref<const std::string &>();
+			const auto Digest = AssetContentId::Parse(Encoded);
+			if (!Digest || !Digest->IsValid() || Digest->ToString() != Encoded)
+				return std::unexpected("Terrain scene manifest digest is invalid");
+			return Digest;
+		}
+
 		std::expected<json, std::string> PrepareJson(std::string_view Encoded) {
 			if (Encoded.empty()) return std::unexpected("Instance document byte length is invalid");
 			auto Parsed = JsonCodec::Parse(Encoded, MaximumProtocolDocumentBytes, "Instance persistence");
@@ -1145,8 +1182,10 @@ namespace gargantuan::InstanceSerialization {
 			if (!Parsed->is_object()) return std::unexpected("Expected a JSON object");
 			if (!Parsed->contains("Version") || !(*Parsed)["Version"].is_number_integer() ||
 				((*Parsed)["Version"] != 0 && (*Parsed)["Version"] != 1 && (*Parsed)["Version"] != 2 &&
-					(*Parsed)["Version"] != 3 && (*Parsed)["Version"] != 4 && (*Parsed)["Version"] != 5))
+					(*Parsed)["Version"] != 3 && (*Parsed)["Version"] != 4 && (*Parsed)["Version"] != 5 &&
+					(*Parsed)["Version"] != TerrainSceneVersion))
 				return std::unexpected("Unsupported instance format version");
+			if (auto Manifest = GetTerrainManifest(*Parsed); !Manifest) return std::unexpected(std::move(Manifest.error()));
 			return std::move(*Parsed);
 		}
 
@@ -1237,7 +1276,8 @@ namespace gargantuan::InstanceSerialization {
 			return State;
 		}
 
-		DeserializationState DeserializeImpl(InstanceFormat format, std::istream &input, bool ApplyPendingTags, bool PreserveSourceIds = true) {
+		DeserializationState DeserializeImpl(InstanceFormat format, std::istream &input, bool ApplyPendingTags,
+			bool PreserveSourceIds = true, const TerrainSceneAdmission &AdmitTerrain = {}) {
 			DeserializationState state;
 			if (!input.good()) {
 				state.PushError("Bad stream from instance contents");
@@ -1257,7 +1297,25 @@ namespace gargantuan::InstanceSerialization {
 				state.Errors.push_back(std::move(Prepared.error()));
 				return state;
 			}
-			return MaterializeJson(*Prepared, ApplyPendingTags, PreserveSourceIds);
+			const auto Manifest = GetTerrainManifest(*Prepared).value();
+			if (Manifest && (!AdmitTerrain || !ApplyPendingTags)) {
+				state.PushError("Terrain scene requires authenticated terrain artifact admission");
+				return state;
+			}
+			auto Result = MaterializeJson(*Prepared, ApplyPendingTags, PreserveSourceIds);
+			if (Result.Ok && Manifest) {
+				try {
+					auto *World = dynamic_cast<DataModel *>(Result.Instance.get());
+					if (!World) throw std::invalid_argument("Terrain scene root must be a DataModel");
+					AdmitTerrain(*World, *Manifest);
+				} catch (const std::exception &Error) {
+					Result.Instance->Destroy();
+					Result.Instance.reset();
+					Result.Ok = false;
+					Result.PushError("Terrain scene admission failed: {}", Error.what());
+				}
+			}
+			return Result;
 		}
 
 		json ProjectGasNativeProperty(const Gas::Value &Value, const InstanceProperty &Property) {
@@ -1365,20 +1423,30 @@ namespace gargantuan::InstanceSerialization {
 		}
 	}
 
-	GasMaterializationResult MaterializeGasDocument(const Gas::Document &Document, bool PreserveSourceIds) {
+	GasMaterializationResult MaterializeGasDocument(const Gas::Document &Document, bool PreserveSourceIds,
+		const TerrainSceneAdmission &AdmitTerrain) {
+		GasMaterializationResult Result;
 		try {
 			AssertAuthoritativeMutation("MaterializeGasDocument");
 			RequireFrozenRuntimeSchema("MaterializeGasDocument");
 			// Native callers can assemble DTOs without decoding a file first.
 			if (auto Validated = Gas::Encode(Document); !Validated) return {{}, {Validated.error().Format()}};
+			const auto Manifest = Document.Place ? Document.Place->TerrainManifest : std::nullopt;
+			if (Manifest && !AdmitTerrain)
+				return {{}, {"GAS terrain place requires authenticated terrain artifact admission"}};
 			const auto Projected = ProjectGasForest(Document);
-			GasMaterializationResult Result;
 			auto State = MaterializeJsonRoots(Projected, 5, Document.Kind == Gas::DocumentKind::Place,
 				PreserveSourceIds, Result.Roots);
+			if (State.Ok && Manifest) {
+				auto *World = Result.Roots.size() == 1 ? dynamic_cast<DataModel *>(Result.Roots.front().get()) : nullptr;
+				if (!World) throw std::invalid_argument("GAS terrain place requires one DataModel root");
+				AdmitTerrain(*World, *Manifest);
+			}
 			for (const auto &Root : Result.Roots) Root->MarkPersistenceSubtreeArchivable();
 			Result.Errors = std::move(State.Errors);
 			return Result;
 		} catch (const std::exception &Error) {
+			for (const auto &Root : Result.Roots) if (Root) Root->Destroy();
 			return {{}, {std::string("GAS materialization failed: ") + Error.what()}};
 		}
 	}
@@ -1388,6 +1456,8 @@ namespace gargantuan::InstanceSerialization {
 		std::shared_ptr<const RuntimeSchemaRegistry> SchemaSnapshot) {
 		auto Prepared = PrepareJson(std::string_view(reinterpret_cast<const char *>(Bytes.data()), Bytes.size()));
 		if (!Prepared) return std::unexpected(std::move(Prepared.error()));
+		if ((*Prepared)["Version"] == TerrainSceneVersion)
+			return std::unexpected("Detached Instance content cannot own terrain");
 		if ((*Prepared)["Version"] == 5) {
 			struct NodeInfo {
 				const InstanceClassDefinition *Class = nullptr;
@@ -1536,8 +1606,15 @@ namespace gargantuan::InstanceSerialization {
 		return MaterializeJson(Prepared->Contents, false);
 	}
 
-	DeserializationState Deserialize(InstanceFormat format, std::istream &input) {
-		return DeserializeImpl(format, input, true);
+	std::expected<std::optional<AssetContentId>, std::string> InspectTerrainManifest(std::string_view Json) {
+		auto Parsed = PrepareJson(Json);
+		if (!Parsed) return std::unexpected(std::move(Parsed.error()));
+		return GetTerrainManifest(*Parsed);
+	}
+
+	DeserializationState Deserialize(InstanceFormat format, std::istream &input,
+		const TerrainSceneAdmission &AdmitTerrain) {
+		return DeserializeImpl(format, input, true, true, AdmitTerrain);
 	}
 
 	DeserializationState DeserializeDetached(InstanceFormat format, std::istream &input) {

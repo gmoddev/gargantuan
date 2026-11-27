@@ -2,15 +2,18 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/platform/HostEvent.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/Renderer.hpp"
+#include "gargantuan/services/Workspace.hpp"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <filesystem>
@@ -18,6 +21,7 @@
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <ranges>
+#include <span>
 #include <string>
 #include <thread>
 
@@ -30,8 +34,9 @@ namespace {
 		TestWorkspace() {
 			const auto Suffix = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" +
 								std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id()));
-			Root = std::filesystem::temp_directory_path() / ("gargantuan-packaging-" + Suffix);
-			std::filesystem::create_directory(Root);
+			Root = std::filesystem::temp_directory_path() / ("gpk-" + Suffix);
+			if (!std::filesystem::create_directory(Root))
+				throw std::runtime_error("Packaging test workspace already exists");
 			ProjectRoot = Root / "FirstCompleteGame";
 			std::filesystem::copy(
 				std::filesystem::path(GARGANTUAN_FIRST_COMPLETE_GAME_ROOT),
@@ -103,6 +108,99 @@ namespace {
 		Require(HasError(PackageBuilder::Validate(Root)), Message);
 	}
 
+	void TestTerrainClientBootstrap(Project &ProjectValue, const std::filesystem::path &Runtime,
+		const std::filesystem::path &Root) {
+		const auto World = ProjectValue.DeserializeGame();
+		const auto Space = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
+		Require(Space && Space->GetTerrain(), "terrain fixture requires the canonical Workspace shell");
+		auto Field = std::make_unique<terrain::Field>();
+		const std::array Writes{
+			terrain::SampleWrite{{0, 3, 4}, {-123, 7}},
+			terrain::SampleWrite{{128, 4, 5}, {-342, 9}},
+		};
+		const std::array Keys{terrain::GetChunkKey(Writes[0].Point), terrain::GetChunkKey(Writes[1].Point)};
+		auto Prepared = terrain::Field::Prepare(Field->Capture(Keys).value(), Writes).value();
+		Require(Field->Commit(std::move(Prepared)).has_value(), "prepare durable near and distant terrain leaves");
+		Space->RestoreTerrainField(std::move(Field));
+		World->InitializeLoadedProjectRevision();
+		const auto Revision = World->GetAuthoritativeRevision();
+		const auto Payload = PackageBuilder::Capture(ProjectValue, World, Revision, Revision);
+		World->Destroy();
+		Require(Payload.TerrainArtifacts.size() == 3, "capture exactly two terrain leaves and one manifest");
+		const auto Development = Root / "TerrainDevelopment";
+		const auto Release = Root / "TerrainRelease";
+		const auto BuildTerrainPackage = [&](const std::filesystem::path &Destination, PackageConfiguration Configuration) {
+			const auto Result = Build(Payload, Runtime, Destination, Configuration);
+			for (const auto &Diagnostic : Result.Diagnostics)
+				if (Diagnostic.Severity == PackageDiagnosticSeverity::Error)
+					throw std::runtime_error("Terrain fixture package build failed with " + Diagnostic.Code + ": " +
+						Diagnostic.Message + " " + Diagnostic.Item);
+			Require(Result.Ok, "build terrain fixture package");
+		};
+		BuildTerrainPackage(Development, PackageConfiguration::Development);
+		BuildTerrainPackage(Release, PackageConfiguration::Release);
+
+		std::vector<PackageDiagnostic> Diagnostics;
+		const auto FullPackage = PackageBuilder::Load(Development, Diagnostics);
+		Require(FullPackage && FullPackage->TerrainArtifacts.size() == 3, "complete package load retains every terrain leaf");
+		const auto CompleteWorld = PackageBuilder::LoadWorld(*FullPackage, Development);
+		const auto CompleteSpace = std::dynamic_pointer_cast<Workspace>(CompleteWorld->GetService("Workspace"));
+		Require(CompleteSpace && CompleteSpace->GetTerrain()->GetField().Read(Writes[1].Point) == Writes[1].Value,
+			"complete World loader restores the distant terrain value");
+		CompleteWorld->Destroy();
+		const auto Relative = [&](const terrain::TerrainArtifact &Artifact) {
+			return std::filesystem::path("content") / terrain::GetTerrainArtifactPath(Artifact.Id).value();
+		};
+		const auto Leaf = Relative(Payload.TerrainArtifacts.front());
+		const auto Manifest = Relative(Payload.TerrainArtifacts.back());
+		for (const auto &Artifact : Payload.TerrainArtifacts)
+			if (Artifact.Id.Purpose == terrain::TerrainArtifactPurpose::Chunk)
+				Require(std::filesystem::remove(Development / Relative(Artifact)), "remove local dormant GTCH fixture");
+		ExpectInvalid(Development, "full audit accepted a missing terrain leaf");
+		Require(!PackageBuilder::Load(Development, Diagnostics), "offline startup accepted a missing terrain leaf");
+
+		using enum PackageRuntimeLoadMode;
+		const auto Client = PackageBuilder::Load(Development, Diagnostics, LoopbackDevelopmentClient);
+		Require(Client && Client->LoadMode == LoopbackDevelopmentClient && Client->TerrainArtifacts.size() == 1 &&
+			Client->TerrainArtifacts.front().Id == Payload.TerrainArtifacts.back().Id &&
+			Client->PreRunSource == FullPackage->PreRunSource && Client->Assets.CatalogJson == FullPackage->Assets.CatalogJson,
+			"loopback startup loads only the canonical manifest and normal trusted startup data");
+		const auto CodeWorld = PackageBuilder::LoadClientCodeWorld(*Client, Development);
+		const auto CodeSpace = std::dynamic_pointer_cast<Workspace>(CodeWorld->GetService("Workspace"));
+		Require(CodeSpace && CodeSpace->GetTerrain()->GetField().GetStats().MaterializedPages == 0,
+			"client code hydration leaves the temporary terrain field empty");
+		CodeWorld->Destroy();
+		bool Denied = false;
+		try { (void)PackageBuilder::LoadWorld(*Client, Development); }
+		catch (const std::invalid_argument &) { Denied = true; }
+		Require(Denied, "manifest-only payload cannot enter the complete gameplay loader");
+
+		const auto ReleaseClient = PackageBuilder::Load(Release, Diagnostics, LoopbackDevelopmentClient);
+		Require(ReleaseClient && ReleaseClient->LoadMode == PackageRuntimeLoadMode::Complete &&
+			ReleaseClient->TerrainArtifacts.size() == 3, "Release packages always perform complete admission");
+		Require(std::filesystem::remove(Release / Leaf) &&
+			!PackageBuilder::Load(Release, Diagnostics, LoopbackDevelopmentClient),
+			"Release packages cannot opt into missing terrain leaves");
+
+		auto Metadata = Json::parse(ReadText(Development / "game.package.json"));
+		const auto OriginalMetadata = Metadata.dump();
+		for (auto &Entry : Metadata["Content"])
+			if (Entry["Path"] == Leaf.generic_string()) Entry["Size"] = Entry["Size"].get<std::uint64_t>() + 1;
+		const auto Content = Metadata["Content"].dump();
+		Metadata["ContentTableSha256"] = AssetContentId::Hash(std::span(
+			reinterpret_cast<const std::uint8_t *>(Content.data()), Content.size())).ToString();
+		WriteText(Development / "game.package.json", Metadata.dump());
+		Require(!PackageBuilder::Load(Development, Diagnostics, LoopbackDevelopmentClient) &&
+			HasDiagnostic(Diagnostics, "InvalidTerrainClosure"), "scoped admission rejects leaf metadata inconsistent with GTMF");
+		WriteText(Development / "game.package.json", OriginalMetadata);
+		auto ManifestBytes = ReadText(Development / Manifest);
+		ManifestBytes.front() ^= 1;
+		WriteText(Development / Manifest, ManifestBytes);
+		Require(!PackageBuilder::Load(Development, Diagnostics, LoopbackDevelopmentClient),
+			"scoped admission still rejects corrupt manifest bytes");
+		std::cout << "[Package:Terrain] Client verified its manifest and code without local GTCH leaves\n";
+	}
+
 	void RequireNoPrivateBackendArtifacts(const std::filesystem::path &Root) {
 		for (const auto &Entry : std::filesystem::recursive_directory_iterator(Root)) {
 			auto Relative = Entry.path().lexically_relative(Root).generic_string();
@@ -146,6 +244,7 @@ int main() {
 			ProjectValue.Identity == ReopenedProject.Identity && ProjectValue.Identity.IsValid(),
 			"project identity did not remain stable across reopen"
 		);
+		TestTerrainClientBootstrap(ProjectValue, Runtime, Workspace.Root);
 		auto World = ProjectValue.DeserializeGame();
 		// The sample's dynamic and skinned subtrees correctly remain bootstrap.
 		// Give this partition/determinism fixture an explicitly static unit.

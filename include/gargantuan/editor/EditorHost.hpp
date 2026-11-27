@@ -67,6 +67,8 @@ namespace gargantuan {
 		struct PackageJob;
 		struct AnimationPreviewJob;
 		struct GuiPreviewState;
+		struct TerrainAuthoringState;
+		std::unique_ptr<TerrainAuthoringState> TerrainAuthoring;
 		std::unique_ptr<AnimationPreviewJob> ActiveAnimationPreview;
 		std::uint64_t NextAnimationPreviewId = 1;
 		std::string SessionToken;
@@ -134,6 +136,7 @@ namespace gargantuan {
 		void RecordGuiPreviewFrame(std::uint64_t FrameNumber);
 		void EnsureViewportRenderer();
 		void ConsumePlayRenderPublications(EditorViewportRenderer *Renderer);
+		void PumpTerrainAuthoring();
 		void PumpPlaySession();
 		void PumpViewportPresentation();
 	};

@@ -4,8 +4,10 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/PlayerGui.hpp"
+#include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/gui/PlayerGuiScope.hpp"
 #include "gargantuan/services/Players.hpp"
+#include "gargantuan/services/Workspace.hpp"
 #include "gargantuan/classes/ServiceProvider.hpp"
 #include "gargantuan/InstanceProperty.hpp"
 #include "gargantuan/datatypes/Signal.hpp"
@@ -373,6 +375,19 @@ namespace gargantuan {
 	void Instance::Destroy() {
 		AssertAuthoritativeMutation("Instance::Destroy");
 		if (Destroyed || DestroyingState) return;
+		auto *TerrainValue = dynamic_cast<Terrain *>(this);
+		if (TerrainValue) {
+			const auto Owner = ParentReference.lock();
+			if (!Owner || !Owner->IsDestroying())
+				throw std::runtime_error("[Terrain:Ownership] Terrain retires with its Workspace");
+		}
+		if (const auto *WorkspaceValue = dynamic_cast<Workspace *>(this);
+			WorkspaceValue && WorkspaceValue->GetTerrain() &&
+			GetCurrentScriptSecurityContext().Domain != ScriptExecutionDomain::Core) {
+			const auto Owner = ParentReference.lock();
+			if (!Owner || !Owner->IsDestroying())
+				throw std::runtime_error("[Terrain:Ownership] The terrain Workspace is engine-owned");
+		}
 		if (GetCurrentScriptSecurityContext().Domain == ScriptExecutionDomain::Client &&
 			IsReplicaMaterialization() && IsProtectedGuiReplicaHierarchy(*this))
 			throw std::runtime_error("[Gui:Ownership] Replicated player GUI hierarchy is server-owned");
@@ -385,9 +400,11 @@ namespace gargantuan {
 		if (GetCurrentScriptSecurityContext().Domain == ScriptExecutionDomain::Client &&
 			GetInstanceServicePolicy(*this) == SchemaServicePolicy::Replicated)
 			throw std::runtime_error("[Storage:Authority] Replicated service state is server-authoritative");
-		if (auto dataModel = GetDataModel()) dataModel->EnsureAuthoritativeRevisionAvailable();
+		if (!TerrainValue)
+			if (auto dataModel = GetDataModel()) dataModel->EnsureAuthoritativeRevisionAvailable();
 		DestroyingState = true;
 		Destroyed = true;
+		if (TerrainValue) TerrainValue->RetireField();
 		auto dataModel = GetDataModel();
 		const auto objectId = GetObjectId();
 		const auto scope = GetReplicationScopeId();
@@ -397,7 +414,7 @@ namespace gargantuan {
 		CustomPropertyValues.clear();
 		AttributeChangedSignals.clear();
 		ObjectRegistry::Get().Invalidate(objectId);
-		if (scope.IsValid())
+		if (!TerrainValue && scope.IsValid())
 			ChangeJournal::Get().Commit(scope, objectId, PropertyUpdatedChange{"Destroyed", true, true});
 		if (auto Found = PropertyChangedSignals.find("Destroyed");
 			Found != PropertyChangedSignals.end() && Found->second) {
@@ -426,8 +443,8 @@ namespace gargantuan {
 			if (Signal) Signal->DisconnectAll();
 		}
 		PropertyChangedSignals.clear();
-		if (scope.IsValid()) ChangeJournal::Get().Commit(scope, objectId, ObjectDestroyedChange{});
-		if (dataModel) dataModel->AdvanceAuthoritativeRevision();
+		if (!TerrainValue && scope.IsValid()) ChangeJournal::Get().Commit(scope, objectId, ObjectDestroyedChange{});
+		if (!TerrainValue && dataModel) dataModel->AdvanceAuthoritativeRevision();
 		if (dataModel && dataModel.get() != this) {
 			OwningDataModel.reset();
 			dataModel->ReleaseInstance();
@@ -542,6 +559,7 @@ namespace gargantuan {
 	}
 
 	void Instance::MarkPersistenceSubtreeArchivable() {
+		if (dynamic_cast<Terrain *>(this)) return;
 		Archivable = true;
 		for (const auto &Child : Children) Child->MarkPersistenceSubtreeArchivable();
 	}
@@ -664,6 +682,8 @@ namespace gargantuan {
 	}
 
 	void Instance::ValidatePropertyMutation(std::string_view propertyName, const std::any &value) const {
+		if (dynamic_cast<const Terrain *>(this))
+			throw std::runtime_error("[Terrain:Ownership] Terrain identity properties are engine-owned");
 		auto *property = const_cast<Instance *>(this)->FindProperty(std::string(propertyName));
 		if (!property) throw std::invalid_argument("Property does not exist");
 		if (!property->IsValueValid(value)) throw std::invalid_argument("Property validation failed");
@@ -678,6 +698,7 @@ namespace gargantuan {
 		const ScriptSecurityContext &securityContext
 	) {
 		if (Destroyed || DestroyingState) return MutationStatus::StaleObject;
+		if (dynamic_cast<Terrain *>(this)) return MutationStatus::ProtectedObject;
 		if (securityContext.Domain == ScriptExecutionDomain::Client &&
 			GetInstanceServicePolicy(*this) == SchemaServicePolicy::Replicated) return MutationStatus::Unauthorized;
 		auto *property = FindProperty(std::string(propertyName));
@@ -695,6 +716,10 @@ namespace gargantuan {
 				auto Referenced = property->DecodeObjectReference(value);
 				if (Referenced) {
 					if (Referenced->GetDestroyed() || Referenced->IsDestroying()) return MutationStatus::StaleObject;
+					if (dynamic_cast<Terrain *>(Referenced.get()) &&
+						(property->PersistencePolicy == InstanceProperty::Persistence::Saved ||
+							property->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated))
+						return MutationStatus::ValidationFailed;
 					if (propertyName != "Parent" && Referenced->GetReplicationScopeId() != GetReplicationScopeId())
 						return MutationStatus::ValidationFailed;
 				}
@@ -762,6 +787,7 @@ namespace gargantuan {
 		if (SecurityContext.Domain == ScriptExecutionDomain::Client &&
 			GetInstanceServicePolicy(*this) == SchemaServicePolicy::Replicated) return MutationStatus::Unauthorized;
 		if (Destroyed || DestroyingState) return MutationStatus::StaleObject;
+		if (dynamic_cast<const Terrain *>(this)) return MutationStatus::ProtectedObject;
 		auto *Property = const_cast<Instance *>(this)->FindProperty(std::string(PropertyName));
 		if (!Property) return MutationStatus::InvalidProperty;
 		if (!Property->Write || Property->WritePermission == Enums::Permission::Never) return MutationStatus::ReadOnly;
@@ -793,6 +819,10 @@ namespace gargantuan {
 				Referenced = ObjectRegistry::Get().Lookup(Reference->Object.ToObjectId());
 				if (!Referenced || Referenced->GetDestroyed() || Referenced->IsDestroying())
 					return MutationStatus::StaleObject;
+				if (dynamic_cast<Terrain *>(Referenced.get()) &&
+					(Property->PersistencePolicy == InstanceProperty::Persistence::Saved ||
+						Property->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated))
+					return MutationStatus::ValidationFailed;
 				auto *ReferencedClass = InstanceClassRegistry::GetDefinition(Referenced.get());
 				if (!ReferencedClass || !GetActiveRuntimeSchemaRegistry().IsClassDerivedFrom(
 						ReferencedClass->Id, *Property->ObjectReferenceClassSchemaId
@@ -855,6 +885,7 @@ namespace gargantuan {
 	) {
 		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) return MutationStatus::WrongExecutionDomain;
 		if (!securityContext.HasCapability(ScriptCapability::MutateDataModel)) return MutationStatus::Unauthorized;
+		if (dynamic_cast<Terrain *>(this)) return MutationStatus::ProtectedObject;
 		if (securityContext.Domain == ScriptExecutionDomain::Client &&
 			GetInstanceServicePolicy(*this) == SchemaServicePolicy::Replicated) return MutationStatus::Unauthorized;
 		AssertIsAlive();
@@ -928,6 +959,7 @@ namespace gargantuan {
 	) {
 		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) return MutationStatus::WrongExecutionDomain;
 		if (!securityContext.HasCapability(ScriptCapability::MutateDataModel)) return MutationStatus::Unauthorized;
+		if (dynamic_cast<Terrain *>(this)) return MutationStatus::ProtectedObject;
 		if (securityContext.Domain == ScriptExecutionDomain::Client &&
 			GetInstanceServicePolicy(*this) == SchemaServicePolicy::Replicated) return MutationStatus::Unauthorized;
 		AssertIsAlive();
@@ -1185,6 +1217,16 @@ namespace gargantuan {
 		if (newParent) newParent->AssertIsAlive();
 		auto oldParent = ParentReference.lock();
 		if (oldParent == newParent) return;
+		const bool IsTerrain = dynamic_cast<Terrain *>(this) != nullptr;
+		if (newParent && dynamic_cast<Terrain *>(newParent.get()))
+			throw std::runtime_error("[Terrain:Ownership] Terrain cannot contain Instances");
+		if (!DestroyingState) {
+			if (IsTerrain && (oldParent || !dynamic_cast<Workspace *>(newParent.get())))
+				throw std::runtime_error("[Terrain:Ownership] Terrain has one engine-owned Workspace parent");
+			if (const auto *WorkspaceValue = dynamic_cast<Workspace *>(this);
+				WorkspaceValue && WorkspaceValue->GetTerrain())
+				throw std::runtime_error("[Terrain:Ownership] The terrain Workspace cannot be reparented");
+		}
 		if (GetCurrentScriptSecurityContext().Domain == ScriptExecutionDomain::Client && IsReplicaMaterialization() &&
 			(IsProtectedGuiReplicaHierarchy(*this) ||
 				(newParent && (dynamic_cast<PlayerGui *>(newParent.get()) || FindPlayerGuiScope(*newParent)))))
@@ -1204,7 +1246,7 @@ namespace gargantuan {
 				"Cannot parent {} '{}' to {} '{}': target belongs to a different DataModel",
 				GetClassName(), Name, newParent->GetClassName(), newParent->GetName()
 			));
-		if (!DestroyingState) {
+		if (!DestroyingState && !IsTerrain) {
 			if (oldDataModel) oldDataModel->EnsureAuthoritativeRevisionAvailable();
 			if (newDataModel && newDataModel != oldDataModel) newDataModel->EnsureAuthoritativeRevisionAvailable();
 		}
@@ -1316,7 +1358,8 @@ namespace gargantuan {
 		}
 
 		const auto newParentId = newParent ? std::optional(newParent->GetObjectId()) : std::nullopt;
-		if (!DestroyingState) {
+		// This shell is recreated during Workspace bootstrap in each realm.
+		if (!DestroyingState && !IsTerrain) {
 			if (oldScope == newScope && newScope.IsValid()) {
 				ChangeJournal::Get().Commit(newScope, objectId, ObjectReparentedChange{newParentId});
 			} else {
@@ -1327,7 +1370,7 @@ namespace gargantuan {
 
 		if (DeferredNotifications) *DeferredNotifications = std::move(subtree);
 		else NotifyParentChanged(self, oldParent, newParent, subtree);
-		if (!DestroyingState) {
+		if (!DestroyingState && !IsTerrain) {
 			if (oldDataModel) oldDataModel->AdvanceAuthoritativeRevision();
 			if (newDataModel && newDataModel != oldDataModel) newDataModel->AdvanceAuthoritativeRevision();
 		}
@@ -1357,6 +1400,7 @@ namespace gargantuan {
 			}))
 			throw std::runtime_error("[Gui:Ownership] Replicated player GUI hierarchy is server-owned");
 		for (auto &child : children) {
+			if (dynamic_cast<Terrain *>(child.get())) continue;
 			child->Destroy();
 		}
 	}

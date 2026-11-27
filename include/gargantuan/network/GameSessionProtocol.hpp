@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gargantuan/assets/AssetTypes.hpp"
 #include "gargantuan/network/Limits.hpp"
 #include "gargantuan/network/Sequence.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
@@ -12,8 +13,8 @@
 #include <vector>
 
 namespace gargantuan::network {
-	// Version 2 requires GRMT v3 at both endpoints.
-	inline constexpr std::uint16_t GameSessionProtocolVersion = 2;
+	// Version 3 binds optional terrain to the session handshake. GRMT v3 is still required.
+	inline constexpr std::uint16_t GameSessionProtocolVersion = 3;
 	inline constexpr std::size_t MaximumGameSessionFrameBytes = 256;
 
 	enum class GameSessionMessageKind : std::uint8_t {
@@ -29,6 +30,7 @@ namespace gargantuan::network {
 	struct GameSessionClientHello {
 		std::uint64_t Nonce = 0;
 		NetworkLimits AdvertisedLimits;
+		AssetContentId TerrainBinding;
 	};
 
 	struct GameSessionServerAccepted {
@@ -39,12 +41,14 @@ namespace gargantuan::network {
 		std::uint32_t PlayerId = 0;
 		SessionIdentityKind Identity = SessionIdentityKind::DevelopmentLocal;
 		NetworkLimits NegotiatedLimits;
+		AssetContentId TerrainBinding;
 	};
 
 	struct GameSessionClientReady {
 		std::uint64_t SessionEpoch = 0;
 		ReplicationEpoch Replication;
 		ObjectId Player;
+		AssetContentId TerrainBinding;
 	};
 
 	using GameSessionMessage = std::variant<GameSessionClientHello, GameSessionServerAccepted, GameSessionClientReady>;

@@ -44,7 +44,8 @@ namespace gargantuan {
 			std::uint64_t AuthoringRevision,
 			AssetProjectSnapshot Assets = {},
 			bool AudioEnabled = false,
-			std::shared_ptr<IPersistenceProvider> Persistence = {}
+			std::shared_ptr<IPersistenceProvider> Persistence = {},
+			const InstanceSerialization::TerrainSceneAdmission &AdmitTerrain = {}
 		);
 		~PlaySession();
 

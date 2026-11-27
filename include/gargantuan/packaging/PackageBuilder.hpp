@@ -3,6 +3,7 @@
 #include "gargantuan/assets/AssetTypes.hpp"
 #include "gargantuan/content/ContentAvailability.hpp"
 #include "gargantuan/filesystem/ProjectIdentity.hpp"
+#include "gargantuan/terrain/Persistence.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -25,6 +26,7 @@ namespace gargantuan {
 	inline constexpr std::uint32_t RuntimeCompatibilityVersion = 1;
 
 	enum class PackageConfiguration : std::uint8_t { Development, Release };
+	enum class PackageRuntimeLoadMode : std::uint8_t { Complete, LoopbackDevelopmentClient };
 	enum class PackagePhase : std::uint8_t {
 		Snapshot,
 		Validate,
@@ -84,6 +86,7 @@ namespace gargantuan {
 		// Captured units use the current schema. A qualified legacy payload may
 		// select version 4 only when every content unit matches that version.
 		std::uint32_t ContentInstanceSchemaVersion = PackageContentInstanceSchemaVersion;
+		std::vector<terrain::TerrainArtifact> TerrainArtifacts;
 	};
 
 	struct PackageSizeBreakdown {
@@ -142,6 +145,8 @@ namespace gargantuan {
 		AssetRuntimeSnapshot Assets;
 		std::optional<std::string> ContentManifestReference;
 		AssetContentId ContentManifestDigest;
+		std::vector<terrain::TerrainArtifact> TerrainArtifacts;
+		PackageRuntimeLoadMode LoadMode = PackageRuntimeLoadMode::Complete;
 	};
 
 	class PackageBuilder final {
@@ -157,9 +162,14 @@ namespace gargantuan {
 		[[nodiscard]] static std::optional<PackageInspection>
 		Inspect(const std::filesystem::path &PackageRoot, std::vector<PackageDiagnostic> &Diagnostics);
 		[[nodiscard]] static std::optional<RuntimePackagePayload>
-		Load(const std::filesystem::path &PackageRoot, std::vector<PackageDiagnostic> &Diagnostics);
+		Load(const std::filesystem::path &PackageRoot, std::vector<PackageDiagnostic> &Diagnostics,
+			PackageRuntimeLoadMode Mode = PackageRuntimeLoadMode::Complete);
 		[[nodiscard]] static std::shared_ptr<DataModel>
 		LoadWorld(const RuntimePackagePayload &Payload, const std::filesystem::path &PackageRoot);
+		// Code hydration source for the network client. Session admission supplies
+		// authoritative terrain to a separately materialized replica world.
+		[[nodiscard]] static std::shared_ptr<DataModel>
+		LoadClientCodeWorld(const RuntimePackagePayload &Payload, const std::filesystem::path &PackageRoot);
 		[[nodiscard]] static std::optional<ContentAvailabilityConfiguration> GetLocalContentConfiguration(
 			const RuntimePackagePayload &Payload,
 			const std::filesystem::path &PackageRoot,

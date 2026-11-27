@@ -15,6 +15,7 @@ namespace gargantuan {
 		glm::vec4 Tangent{1.0f, 0.0f, 0.0f, 1.0f};
 		std::array<std::uint16_t, 4> Joints{};
 		glm::vec4 Weights{1.0f, 0.0f, 0.0f, 0.0f};
+		std::array<std::uint8_t, 4> Tint{255, 255, 255, 255};
 	};
 
 	static constexpr int UI_SOLID_COLOR_INDEX = -1;

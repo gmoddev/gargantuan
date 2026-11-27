@@ -115,6 +115,24 @@ Tests should enforce them where practical.
 5. Destroy and scope exit remove all tag reverse-index entries before identity reuse.
 6. Queries return deterministic live identity order and never retain or return dead IDs.
 
+## Terrain ownership and publication
+
+1. The canonical Workspace Terrain is the public identity. The world owns
+   bulk scalar data and authoritative revisions. Private active chunk tickets
+   are scoped derived metadata and have no Instance or persistent identity.
+2. A lattice sample has one owner. Immutable captured neighbors carry halo
+   dependencies. Workers may construct candidates from captured values.
+   Main validates both the complete field dependencies and the active
+   generation before any candidate becomes authoritative or queryable.
+3. A routine reservation or provider denial leaves the prior committed field
+   and collision available. Provider staging and final installation stay
+   inside a Main safe point. Renderer consumption uses immutable values and
+   device-owned resources. Visual LOD and camera position do not determine
+   authoritative collision.
+4. Empty data, unavailable data and unread captured dependencies have
+   distinct semantics. Persistence and network admission must preserve those
+   distinctions and verify the exact revision and artifact closure.
+
 ## Rendering
 
 1. Renderer and pass code consume immutable extracted render state and do not

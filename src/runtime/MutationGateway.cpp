@@ -9,6 +9,8 @@
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/LuaSourceContainer.hpp"
+#include "gargantuan/classes/Terrain.hpp"
+#include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
@@ -16,9 +18,11 @@
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "../terrain/TerrainMutation.hpp"
 
 #include <algorithm>
 #include <exception>
+#include <format>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -181,6 +185,11 @@ namespace gargantuan {
 	std::shared_ptr<MutationCompletion>
 	MutationGateway::Submit(MutationCommand command, MutationAuthorityContext Authority) {
 		auto completion = std::make_shared<MutationCompletion>();
+		if (std::holds_alternative<SubmitTerrainEditCommand>(command) ||
+			std::holds_alternative<CancelTerrainEditCommand>(command)) {
+			completion->Complete({MutationStatus::Rejected, {}, "Terrain work must enter through Main admission"});
+			return completion;
+		}
 		{
 			std::scoped_lock lock(Mutex);
 			if (Pending.size() >= MaximumPendingMutations) {
@@ -294,7 +303,50 @@ namespace gargantuan {
 			return std::visit(
 				[&](auto &CommandValue) -> MutationResult {
 					using Command = std::decay_t<decltype(CommandValue)>;
-					if constexpr (std::is_same_v<Command, ImportGasModelCommand>) {
+					if constexpr (std::is_same_v<Command, SubmitTerrainEditCommand> ||
+						std::is_same_v<Command, CancelTerrainEditCommand>) {
+						const bool Gameplay = Authority.GetOrigin() == MutationCommandOrigin::LocalInternal &&
+							securityContext.Domain == ScriptExecutionDomain::Server;
+						const bool Studio = Authority.GetOrigin() == MutationCommandOrigin::Studio &&
+							securityContext.Domain == ScriptExecutionDomain::Studio &&
+							securityContext.HasCapability(ScriptCapability::EditorCommands);
+						if (!Gameplay && !Studio)
+							return {MutationStatus::Unauthorized, {}, "[Terrain:Access] Terrain editing authority is required"};
+						auto Target = std::dynamic_pointer_cast<Terrain>(ObjectRegistry::Get().Lookup(CommandValue.Object));
+						if (!Target || Target->GetDestroyed() || Target->IsDestroying())
+							return {MutationStatus::StaleObject, {}, "[Terrain:Edit] Terrain identity is unavailable"};
+						const auto Scope = Target->GetReplicationScopeId();
+						auto World = std::dynamic_pointer_cast<WorldRoot>(Target->GetParent().value_or(nullptr));
+						if (!World || !Scope.IsValid() || Scope != CommandValue.ExpectedScope)
+							return {MutationStatus::Unauthorized, {}, "[Terrain:Access] Terrain belongs to another world"};
+						if (Studio) {
+							const auto Model = Target->GetDataModel();
+							if (Authority.GetScope() != Scope || !Model)
+								return {MutationStatus::Unauthorized, {}, "[Terrain:Access] Studio scope does not own this terrain"};
+							if (Authority.GetTransactionId() || Model->Transactions.GetOpenCount() != 0 || Model->HasDeferredRevision())
+								return {MutationStatus::Rejected, {}, "[Terrain:Edit] Close the object transaction before editing terrain"};
+						}
+						if constexpr (std::is_same_v<Command, CancelTerrainEditCommand>) {
+							if (World->CancelTerrainEdit(*Target, CommandValue.Ticket))
+								return {MutationStatus::Success, CommandValue.Object, {}};
+							return {MutationStatus::Rejected, {}, "[Terrain:Edit] Ticket is unavailable or no longer cancelable"};
+						} else {
+							if (!CommandValue.Edit)
+								return {MutationStatus::ValidationFailed, {}, "[Terrain:Edit] Edit payload is absent"};
+							if (Studio && !CommandValue.Edit->ExpectedRevision)
+								return {MutationStatus::ValidationFailed, {}, "[Terrain:Edit] The expected terrain revision is required"};
+							auto Ticket = World->SubmitTerrainEdit(*Target, *CommandValue.Edit);
+							if (Ticket) return {MutationStatus::Success, CommandValue.Object, {}, *Ticket};
+							const auto Error = Ticket.error();
+							const auto Status = Error == terrain::EditStatus::Stale ? MutationStatus::Conflict :
+								(Error == terrain::EditStatus::LimitExceeded ||
+									Error == terrain::EditStatus::ReopenCapacityExceeded) ? MutationStatus::ResourceLimit :
+								Error == terrain::EditStatus::InvalidInput ? MutationStatus::ValidationFailed :
+								MutationStatus::Rejected;
+							return {Status, {}, std::format("[Terrain:Edit] {}. {}", terrain::GetEditStatusName(Error),
+								terrain::GetEditStatusDiagnostic(Error))};
+						}
+					} else if constexpr (std::is_same_v<Command, ImportGasModelCommand>) {
 						if (Authority.GetOrigin() != MutationCommandOrigin::Studio ||
 							!securityContext.HasCapability(ScriptCapability::EditorCommands))
 							return {MutationStatus::Unauthorized, {}, "GASM insertion requires Studio authoring authority"};

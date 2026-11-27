@@ -230,6 +230,20 @@ namespace gargantuan::network {
 		return State->Connections.emplace(Connection, Implementation::ConnectionQueue{.Limits = Limits}).second;
 	}
 
+	bool NetworkScheduler::HasReliableCapacity(ConnectionId Connection, std::size_t Bytes) const {
+		const auto Found = State->Connections.find(Connection);
+		if (Found == State->Connections.end() || !Found->second.Active) return false;
+		const auto &Queue = Found->second;
+		return Bytes <= Queue.Limits.MaximumQueuedReliableBytes - Queue.Statistics.QueuedReliableBytes &&
+			Bytes <= State->MaximumTotalQueuedReliableBytes - State->TotalQueuedReliableBytes;
+	}
+
+	bool NetworkScheduler::HasQueuedControl(ConnectionId Connection) const {
+		const auto Found = State->Connections.find(Connection);
+		return Found != State->Connections.end() &&
+			!Found->second.Queues[*SchedulerTrafficPrecedence(TrafficClass::Control)].empty();
+	}
+
 	SchedulerSubmitResult NetworkScheduler::Submit(NetworkMessageIntent Message) {
 		auto Iterator = State->Connections.find(Message.Destination());
 		if (Iterator == State->Connections.end() || !Iterator->second.Active)

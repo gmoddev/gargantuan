@@ -31,6 +31,11 @@ namespace gargantuan {
 		return *this;
 	};
 
+	SDLPipelineBuilder &SDLPipelineBuilder::SetVertexTintEnabled(bool Enabled) {
+		VertexTintEnabled = Enabled;
+		return *this;
+	}
+
 	SDLPipelineBuilder &SDLPipelineBuilder::SetDepthFormat(SDL_GPUTextureFormat format) {
 		DepthFormat = format;
 		return *this;
@@ -47,20 +52,22 @@ namespace gargantuan {
 			.pitch = sizeof(Vertex),
 			.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX,
 		}}};
-		static const std::array<SDL_GPUVertexAttribute, 6> Attributes{{
+		static const std::array<SDL_GPUVertexAttribute, 7> Attributes{{
 			{.location = 0, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, .offset = offsetof(Vertex, Position)},
 			{.location = 1, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, .offset = offsetof(Vertex, Normal)},
 			{.location = 2, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, .offset = offsetof(Vertex, Tangent)},
 			{.location = 3, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, .offset = offsetof(Vertex, UV)},
 			{.location = 4, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_USHORT4, .offset = offsetof(Vertex, Joints)},
 			{.location = 5, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, .offset = offsetof(Vertex, Weights)},
+			{.location = 6, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4_NORM, .offset = offsetof(Vertex, Tint)},
 		}};
 		SDL_GPUGraphicsPipelineCreateInfo info{};
 		info.vertex_shader = VertexShader;
 		info.fragment_shader = FragmentShader;
 
 		info.vertex_input_state.vertex_attributes = Attributes.data();
-		info.vertex_input_state.num_vertex_attributes = static_cast<Uint32>(Attributes.size());
+		info.vertex_input_state.num_vertex_attributes = static_cast<Uint32>(
+			VertexTintEnabled ? Attributes.size() : Attributes.size() - 1);
 		info.vertex_input_state.vertex_buffer_descriptions = BufferDescriptions.data();
 		info.vertex_input_state.num_vertex_buffers = static_cast<Uint32>(BufferDescriptions.size());
 

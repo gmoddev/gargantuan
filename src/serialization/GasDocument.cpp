@@ -427,15 +427,25 @@ namespace gargantuan::Gas {
 			Out.Raw(Place.Identity.Bytes);
 			Out.Put(static_cast<std::uint8_t>(Place.PreRunSource.has_value()));
 			if (Place.PreRunSource) Out.Text(*Place.PreRunSource, MaximumPreRunBytes);
+			if (Place.TerrainManifest) {
+				Require(Place.TerrainManifest->IsValid(), "Invalid terrain manifest identity");
+				Out.Raw(Place.TerrainManifest->Bytes);
+			}
 		}
 
-		PlaceMetadata ReadPlace(Reader In) {
+		PlaceMetadata ReadPlace(Reader In, bool HasTerrain) {
 			PlaceMetadata Place;
 			std::ranges::copy(In.Take(Place.Identity.Bytes.size()), Place.Identity.Bytes.begin());
 			Require(Place.Identity.IsValid(), "Invalid place identity");
 			const auto Present = In.U8();
 			Require(Present <= 1, "Invalid place source flag");
 			if (Present != 0) Place.PreRunSource = In.Text(MaximumPreRunBytes);
+			if (HasTerrain) {
+				AssetContentId Digest;
+				std::ranges::copy(In.Take(Digest.Bytes.size()), Digest.Bytes.begin());
+				Require(Digest.IsValid(), "Invalid terrain manifest identity");
+				Place.TerrainManifest = Digest;
+			}
 			In.Finish();
 			return Place;
 		}
@@ -450,7 +460,7 @@ namespace gargantuan::Gas {
 			const std::uint8_t Sections = Place ? 3 : 2;
 			Writer Out;
 			Out.Raw(Magic);
-			Out.Put(FormatVersion);
+			Out.Put(GetFormatVersion(DocumentValue));
 			Out.Put(static_cast<std::uint8_t>(Kind));
 			Out.Put(Sections);
 			Out.Put(SchemaVersion);
@@ -488,11 +498,14 @@ namespace gargantuan::Gas {
 			Reader Header(HashedBytes);
 			if (!std::ranges::equal(Header.Take(Magic.size()), Magic))
 				Fail(SerializationErrorCode::InvalidSyntax, "Invalid GAS magic");
-			if (Header.Get<std::uint16_t>() != FormatVersion)
+			const auto Version = Header.Get<std::uint16_t>();
+			if (Version != FormatVersion && Version != TerrainPlaceFormatVersion)
 				Fail(SerializationErrorCode::UnsupportedVersion, "Unsupported GAS format version");
 			Document Result;
 			Result.Kind = static_cast<DocumentKind>(Header.U8());
 			const bool Place = Result.Kind == DocumentKind::Place;
+			if (Version == TerrainPlaceFormatVersion && !Place)
+				Fail(SerializationErrorCode::UnsupportedVersion, "Terrain format requires a GAS place");
 			Require(Result.Kind == DocumentKind::Model || Place, "Unknown document kind");
 			const auto Count = Header.U8();
 			if (Header.U32() != SchemaVersion)
@@ -514,7 +527,7 @@ namespace gargantuan::Gas {
 				"Document integrity digest does not match");
 			Result.Nodes = ReadGraph(Reader(Sections[0]), Result.Kind);
 			Result.Dependencies = ReadDependencies(Reader(Sections[1]));
-			if (Place) Result.Place = ReadPlace(Reader(Sections[2]));
+			if (Place) Result.Place = ReadPlace(Reader(Sections[2]), Version == TerrainPlaceFormatVersion);
 			return Result;
 		} catch (SerializationError &Error) {
 			return std::unexpected(std::move(Error));
