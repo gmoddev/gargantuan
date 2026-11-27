@@ -85,7 +85,7 @@ namespace {
 		Require(Imported.Ok && Imported.Record.has_value(),"offset mesh import failed");
 		return Imported.Record->Reference.Value;
 	}
-	void Run(bool CharacterProfile, bool Socket) {
+	void Run(bool CharacterProfile, bool Socket, bool Reactivate = false) {
 		auto Sim = SimulatedNetwork::Create(
 			{.BaseLatency = 2ms, .MaximumReorderDelay = 5ms, .UnreliableReorderProbability = .25}
 		);
@@ -206,9 +206,15 @@ namespace {
 				);
 			if (ObserveStage && OwnerRuntime && Connection &&
 				Server.GetSpatialTransferStatus(*Connection) == SpatialTransferStatus::Progress) {
-				Require(!Find(*OwnerRuntime, "DistantGrid") && !Find(*OwnerRuntime,"DistantMeshScene") &&
-					!Find(*OwnerRuntime,"FarBoxMesh") && !Find(*OwnerRuntime,"OffsetMesh"),
-					"staging exposed a nonintersecting grid, mesh or scene ancestor");
+				for (const std::string_view Name : {"DistantGrid","DistantMeshScene","FarBoxMesh","OffsetMesh"}) {
+					if (const auto Unexpected = Find(*OwnerRuntime,Name)) {
+						const auto LocalActor = Find(*OwnerRuntime,"TransferBody");
+						const auto ReplicaWorld = LocalActor ? WorldRoot::GetEffectiveWorld(*LocalActor) : nullptr;
+						throw std::runtime_error("staging exposed "+Unexpected->GetFullName()+" tick="+std::to_string(Tick)+
+							" character="+std::to_string(CharacterProfile)+" authorityWorld="+WorldRoot::GetEffectiveWorld(*Actor)->GetName()+
+							" replicaWorld="+(ReplicaWorld ? ReplicaWorld->GetName() : "unresolved"));
+					}
+				}
 				const auto Grid = std::dynamic_pointer_cast<BlockGrid>(Find(*OwnerRuntime, "LandingGrid"));
 				SawScopedGrid |= Grid && Grid->HasReplicaField();
 			}
@@ -321,6 +327,9 @@ namespace {
 		);
 		if (!CharacterProfile) {
 			const auto Visual=MakeOffsetMesh(*World);
+			// The subsequent ordinary chart grant may legitimately publish this MeshPart after the staged interval.
+			OwnerRuntime->Assets->LoadRuntimeAssetSnapshot(ServerRuntime.Assets->CaptureRuntimeAssets());
+			Require(OwnerRuntime->Assets->ResolveCollisionForMesh(Visual).has_value(),"ordinary authorized mesh companion missing");
 			auto Scene=std::make_shared<Folder>();
 			Scene->SetName("DistantMeshScene");Scene->SetParent(Room);
 			const auto Mesh=[&](std::string Name,CFrame Pose,Enums::MeshCollisionMode Mode,const std::shared_ptr<Instance>& ParentValue) {
@@ -365,6 +374,21 @@ namespace {
 			"cancellation moved the actor"
 		);
 		ObserveStage = true;
+		const glm::vec3 SourceControllerVelocity(0,-3.270000219f,.007f);
+		auto WitnessedControllerLanding=std::make_shared<bool>(false);
+		SignalConnection::Pointer LandingObservation;
+		if (Avatar) {
+			const auto LocalAvatar=std::dynamic_pointer_cast<KinematicCharacter>(Find(*OwnerRuntime,"TransferCharacter"));
+			const auto Normal=glm::normalize(glm::vec3(.034f,1.f,-.091f));
+			Avatar->ApplyRuntimeControllerFacts(SourceControllerVelocity,Normal,true);
+			LocalAvatar->ApplyRuntimeControllerFacts(glm::round(SourceControllerVelocity*64.f)/64.f,glm::round(Normal*32767.f)/32767.f,true);
+			LandingObservation=LocalAvatar->GetPropertyChangedSignal("CFrame")->Connect(
+				[Weak=std::weak_ptr(LocalAvatar),WitnessedControllerLanding,SourceControllerVelocity,Target](std::monostate) {
+					const auto Replica=Weak.lock();
+					if (Replica && Replica->GetCFrame().FuzzyEq(Target) && Replica->GetVelocity()==SourceControllerVelocity &&
+						!Replica->GetGrounded() && Replica->GetFloorNormal()==glm::vec3(0)) *WitnessedControllerLanding=true;
+				});
+		}
 		std::shared_ptr<Script> Creator;
 		if (CharacterProfile) {
 			const auto Shared = std::make_shared<ModuleScript>();
@@ -430,6 +454,8 @@ script:SetAttribute("Isolated", true)
 			},
 			"bilateral movement did not converge"
 		);
+		ObserveStage = false;
+		if (LandingObservation) LandingObservation->Disconnect();
 		if (Creator) {
 			ServerRuntime.Script->Step();
 			Require(
@@ -474,6 +500,7 @@ script:SetAttribute("Isolated", true)
 			);
 			Require(
 				LocalAvatar && LocalAvatar->GetCFrame().FuzzyEq(Target) && Avatar->GetCFrame().FuzzyEq(Target) &&
+					*WitnessedControllerLanding &&
 					LocalAvatar->GetRootPart().value_or(nullptr) == ReplicaActor,
 				"character and physical root diverged"
 			);
@@ -487,6 +514,15 @@ script:SetAttribute("Isolated", true)
 				return Advanced;
 			}, "ordinary movement never received matching collision coverage after the handoff");
 			const auto Before=Avatar->GetCFrame().Position;
+			if (Reactivate) {
+				const auto Previous = Room->GetSpatialActivation();
+				Room->SetParent(nullptr);
+				Room->SetParent(Space);
+				Require(Room->GetSpatialActivation() != Previous &&
+					!Avatar->AdmitMotion(*Room, Step).Succeeded() && Avatar->GetCFrame().Position == Before,
+					"reactivated domain accepted motion under a retired receipt");
+				return;
+			}
 			auto NewWall=MakePart("ChangedCoverage",CFrame(2,30,1),Room);
 			Require(!Avatar->AdmitMotion(*Room,Step).Succeeded() && Avatar->GetCFrame().Position==Before,
 				"new authority geometry failed to invalidate the acknowledged movement area");
@@ -525,6 +561,7 @@ int main(int Count, char **Args) {
 		const bool Socket = Count > 1 && std::string_view(Args[1]) == "--gns";
 		Run(false, Socket);
 		Run(true, Socket);
+		Run(true, Socket, true);
 		std::cout
 			<< "[Spatial:Session] Controlled rigid and character transfers converged with an isolated spectator\n";
 		return 0;

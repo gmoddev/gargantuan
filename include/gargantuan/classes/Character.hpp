@@ -61,6 +61,7 @@ namespace gargantuan {
 			const CharacterMotionRequest &Request
 		);
 		void ApplyRuntimeTransform(const CFrame &Value);
+		[[nodiscard]] bool ApplyRuntimeSourceCheckpoint(const CFrame &Pose, glm::vec3 Velocity, glm::vec3 FloorNormal, bool Grounded);
 		void ApplyRuntimePresentationOffset(std::optional<CFrame> Value);
 		[[nodiscard]] CFrame GetPresentationCFrame() const;
 	};

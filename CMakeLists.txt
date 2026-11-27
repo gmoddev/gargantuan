@@ -1031,7 +1031,10 @@ if(BUILD_TESTING)
 		add_test(NAME gargantuan_spatial_creator_doors
 			COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialCreatorTrial.py"
 				--engine $<TARGET_FILE:gargantuan> --doors)
-		set_tests_properties(gargantuan_spatial_creator_play gargantuan_spatial_creator_doors PROPERTIES
+		add_test(NAME gargantuan_spatial_masonry_example
+			COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialCreatorTrial.py"
+				--engine $<TARGET_FILE:gargantuan> --masonry)
+		set_tests_properties(gargantuan_spatial_creator_play gargantuan_spatial_creator_doors gargantuan_spatial_masonry_example PROPERTIES
 			LABELS "spatial;blockgrid;creator;headless" TIMEOUT 65)
 		add_test(NAME gargantuan_spatial_grid_clipboard
 			COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialGridClipboardAuthoring.py"
@@ -1333,6 +1336,12 @@ if(BUILD_TESTING)
 		GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT="$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution"
 	)
 	add_dependencies(gargantuan_packaging_tests gargantuan_packager gargantuan_runtime_distribution)
+	add_executable(gargantuan_blockgrid_persistence_tests "tests/blockgrid/BlockGridPersistenceTests.cpp")
+	target_link_libraries(gargantuan_blockgrid_persistence_tests PRIVATE gargantuan_core)
+	add_dependencies(gargantuan_blockgrid_persistence_tests gargantuan_runtime_distribution)
+	add_test(NAME gargantuan_blockgrid_persistence COMMAND gargantuan_blockgrid_persistence_tests
+		"$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution")
+	set_tests_properties(gargantuan_blockgrid_persistence PROPERTIES LABELS "blockgrid;persistence;gas;packaging;editor")
 	add_executable(gargantuan_packaging_editor_host_tests "tests/PackagingEditorHostTests.cpp")
 	target_link_libraries(gargantuan_packaging_editor_host_tests PRIVATE gargantuan_core nlohmann_json)
 	target_compile_definitions(gargantuan_packaging_editor_host_tests PRIVATE

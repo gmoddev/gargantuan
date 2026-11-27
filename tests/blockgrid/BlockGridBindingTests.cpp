@@ -551,12 +551,40 @@ int main() try {
 		Moving:SetBlock(Vector3.zero,"Stone")
 		Moving:SetMotionMode("Dynamic",Moving:GetRevision())
 		Moving:SetAssemblyVelocity(Vector3.new(4,0,0),Vector3.zero,Moving:GetRevision())
+		local LocalParent=Instance.new("Folder")
+		LocalParent.Parent=Room
+		local SameChart=Moving:GetRevision()
+		Moving.Parent=LocalParent
+		assert(Moving:GetRevision()==SameChart and Moving.MotionMode=="Dynamic" and Moving:GetAssemblyState().LinearVelocity==Vector3.new(4,0,0))
 		Room.Parent=nil
+		local Inactive=Shapes:GetRevision()
+		local OfflineEdit=Shapes:BeginEdit(Inactive)
+		OfflineEdit:SetBlock(Vector3.new(12,0,0),"Stone")
+		local OfflineScan=Shapes:FindConnected({Vector3.zero},{Bounds={Min=Vector3.zero,MaxExclusive=Vector3.one}})
 		Room.Parent=workspace
 		assert(Shapes:GetRevision()~=Token and not pcall(function() Pending:Commit() end))
 		assert(Search:Step(1).Status=="Expired" and Shapes:GetBlock(Vector3.new(15,0,0))==nil)
+		assert(Shapes:GetRevision()~=Inactive and not pcall(function() OfflineEdit:Commit() end))
+		assert(OfflineScan:Step(1).Status=="Expired" and Shapes:GetBlock(Vector3.new(12,0,0))==nil)
 		assert(Moving.MotionMode=="Static" and Moving:GetAssemblyState().LinearVelocity==Vector3.zero)
 		Moving:Destroy()
+		local OtherChart=Instance.new("SpatialRegion")
+		OtherChart.Parent=workspace
+		Shapes.Parent=LocalParent
+		local AncestorToken=Shapes:GetRevision()
+		local AncestorEdit=Shapes:BeginEdit(AncestorToken)
+		AncestorEdit:SetBlock(Vector3.new(13,0,0),"Stone")
+		local AncestorScan=Shapes:FindConnected({Vector3.zero},{Bounds={Min=Vector3.zero,MaxExclusive=Vector3.one}})
+		LocalParent.Parent=OtherChart
+		LocalParent.Parent=Room
+		assert(Shapes:GetRevision()~=AncestorToken and not pcall(function() AncestorEdit:Commit() end))
+		assert(AncestorScan:Step(1).Status=="Expired" and Shapes:GetBlock(Vector3.new(13,0,0))==nil)
+		local DirectToken=Shapes:GetRevision()
+		Shapes.Parent=OtherChart
+		Shapes.Parent=Room
+		assert(Shapes:GetRevision()~=DirectToken and not pcall(function() Shapes:BeginEdit(DirectToken) end))
+		OtherChart:Destroy()
+		LocalParent:Destroy()
 		Shapes:SetBlock(Vector3.new(2,0,0),"project:stair")
 		Shapes:SetBlock(Vector3.new(3,0,0),"project:ghost")
 		Shapes:SetBlock(Vector3.new(4,0,0),"project:solid")

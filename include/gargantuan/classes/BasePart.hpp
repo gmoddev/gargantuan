@@ -31,7 +31,7 @@ namespace gargantuan {
 		friend class Character;
 		friend class WorldRoot;
 		friend class network::GameSession;
-		void SetSimulationCFrame(const gargantuan::CFrame &Value);
+		void SetSimulationCFrame(const gargantuan::CFrame &Value, bool Exact = false);
 		void SetCharacterPresentationOffset(std::optional<gargantuan::CFrame> Value);
 
 	  public:

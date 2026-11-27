@@ -213,6 +213,7 @@ namespace gargantuan {
 			.Collidable=D.CanCollide,.Anchored=D.Anchored,.Kinematic=D.Kinematic};
 		if (Actor) {
 			Profile.Controller=Actor->GetObjectId(); Profile.ControllerVelocity=Actor->GetVelocity();
+			Profile.FloorNormal=Actor->GetFloorNormal(); Profile.Grounded=Actor->GetGrounded();
 			Profile.CapsuleRadius=Actor->GetCapsuleRadius(); Profile.CapsuleHeight=Actor->GetCapsuleHeight();
 			if (!std::isfinite(Profile.CapsuleRadius) || !std::isfinite(Profile.CapsuleHeight) || Profile.CapsuleRadius<=0 ||
 				Profile.CapsuleHeight<2*Profile.CapsuleRadius || Profile.CapsuleHeight>MaximumPhysicsQueryExtent ||

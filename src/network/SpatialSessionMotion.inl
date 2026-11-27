@@ -79,7 +79,8 @@ bool CheckMotionWindow(ConnectionId Connection,const Peer &Value,WorldRoot &Worl
 		Controlled.get()!=&Subject || TransferIdentity(Controlled).ToObjectId()!=Frame.Subject ||
 		TransferIdentity(WorldRoot::GetEffectiveWorld(Subject)).ToObjectId()!=Frame.Domain ||
 		(&World!=Runtime->Workspace.get() ? Frame.Domain : ObjectId{})!=Value.AuthorizedSpatialRegion ||
-		(Configuration.Role==GameSessionRole::Server && Frame.Possession!=PlayerValue->GetPossessionRevision())) return false;
+		(Configuration.Role==GameSessionRole::Server && (Frame.Possession!=PlayerValue->GetPossessionRevision() ||
+			Value.MotionDomainActivation!=World.GetSpatialActivation()))) return false;
 	const auto Current=MotionDigest(Connection,Value,World,Subject,Frame.Bounds);
 	return Current && *Current==Frame.Digest;
 }
@@ -137,6 +138,10 @@ void PumpSpatialMotion(ConnectionId Connection,Peer &Value) {
 		if (QueueTerrainFrame(Connection,Value,EncodeMotionWindow(Reply))) Frame.Installed=true;
 		return;
 	}
+	if (Value.MotionWindow && Value.MotionDomainActivation!=Domain->GetSpatialActivation()) {
+		Value.MotionWindow.reset();
+		Value.NextMotionCheckTick=0;
+	}
 	if (TerrainTick < Value.NextMotionCheckTick) return;
 	Value.NextMotionCheckTick=TerrainTick;
 	SaturatingAdd(Value.NextMotionCheckTick,6);
@@ -158,6 +163,7 @@ void PumpSpatialMotion(ConnectionId Connection,Peer &Value) {
 	Value.MotionWindow.reset();
 	if (QueueTerrainFrame(Connection,Value,EncodeMotionWindow(Frame))) {
 		Value.LastMotionSerial=Frame.Serial;
+		Value.MotionDomainActivation=Domain->GetSpatialActivation();
 		Value.MotionWindow=Frame;
 	}
 }
@@ -180,6 +186,12 @@ void ReceiveMotionWindow(const ReceivedMessageEvent &Message,Peer &Value) {
 		auto Expected=*Value.MotionWindow;
 		Expected.Installed=true;
 		if (*Frame!=Expected) { Reject(Message.Connection,DisconnectReason::ProtocolViolation,"Conflicting motion coverage"); return; }
+		const auto World=TransferWorld(Expected.Domain);
+		if (!World || Value.MotionDomainActivation!=World->GetSpatialActivation()) {
+			Value.MotionWindow.reset();
+			Value.NextMotionCheckTick=0;
+			return;
+		}
 		Value.MotionWindow=Expected;
 	} else {
 		if (Frame->Serial<=Value.LastMotionSerial || Frame->Grant!=Value.CurrentGrantGeneration) {

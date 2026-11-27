@@ -144,6 +144,7 @@ namespace {
 
 	void TestIndependentPromptSpaces() {
 		Fixture Value;
+		Value.Character->SetPosition({0.0f, 0.0f, 0.0f});
 		auto Room = std::make_shared<SpatialRegion>();
 		Room->SetParent(Value.Runtime->Workspace);
 		auto [OutsidePart, Outside] = Value.MakePrompt("OutdoorDoor", {3, 0, 0});

@@ -86,6 +86,19 @@ With `UsePorts`, each face connection requires a matching port on both oriented 
 
 For rectangular selections, `ReadRegion` accepts a definition list or a channel equality filter. `ReadPacked` returns a palette, its definition digests and an X-fastest buffer. Use an edit's `WritePacked` to validate and apply it. For copying within a grid, `CopyRegion` and `MoveRegion` work on native cells inside the same edit.
 
+## Model durability and repair
+
+The optional `samples/BlockGridGameplay/Masonry.luau` ModuleScript stores wear on damaged blocks. Place it next to `MasonryExample.server.luau` and name the ModuleScript `Masonry`. The example builds a hollow workshop and cuts its doorway in one transaction. One `GetPropertyChangedSignal("BlockRevision")` notification covers the entire edit. For a hit on an occupied cell, the server adds wear or removes the block when it reaches 100. The example repairs a weathered 99-cell roof by scanning indexed overrides in batches of 32 operations.
+
+```luau
+local Masonry = require("./Masonry")
+Masonry.DefineWear(Grid) -- once for a new construction
+Masonry.Damage(Grid, Hit.GridHit.Cell, 25)
+local Repaired, Status = Masonry.Repair(Grid, Min, MaxExclusive)
+```
+
+Repair yields between cursor pages. It returns the number of cells already repaired and a status. If another edit changes the revision during a yield, it returns `Changed` and the game can schedule a fresh pass. Undamaged cells share a zero default. The game chooses which constructions receive this channel and when repairs run.
+
 ## Give an interior its own space
 
 ```luau
@@ -106,6 +119,10 @@ Each region exposes its own `Terrain` alongside its Parts and block grids. Smoot
 ## Author and save in Studio
 
 Insert a BlockGrid under Workspace or a SpatialRegion. Select it to open its cell inspector. Enter an integer cell and a size to fill a box with Stone or Brick. Use the adjacent-cell control to build against a picked face. Removal, Undo and Redo operate on the native field. Save the project to keep edit-world changes. Play starts with independent native resources. Stop returns to the authored construction.
+
+To reuse a group of cells, select its source grid and enter the two corners in the grid inspector. Copy the selection, select the destination grid, choose an anchor cell and inspect the rotated preview before pasting. Air inside the selection can clear an occupied destination cell. Undo and Redo operate on the complete paste. An edit to either grid after preview can invalidate the operation. Refresh the preview against the current revisions before pasting.
+
+For a custom mesh, import it into the project's asset catalog. Use the inspector's asset picker to choose the visual mesh, its companion collision when needed, and a material. Give the definition a project key, place a cell and save. On reopen, the grid resolves those project assets again.
 
 ## Enter a room through a door
 

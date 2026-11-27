@@ -144,7 +144,7 @@ namespace {
 				Actor->GetObjectId(),
 				Source->GetObjectId(),
 				Source->GetSpatialActivation(),
-				CFrame(10, 3, 0),
+				Actor->GetCFrame(),
 				CFrame(0, 3, 0)
 			};
 		}
@@ -354,6 +354,38 @@ namespace {
 
 	void CharacterAdmission() {
 		using enum SpatialTransferPhase;
+		{
+			Pair P;
+			P.Authority.AddController();
+			P.Replica.AddController();
+			P.Scope.Controller = ControllerKey;
+			P.Authority.Protect();
+			P.Replica.Protect();
+			const auto AuthorityPose = CFrame(10.25f,3,0)*CFrame::Angles(.13f,.31f,-.22f);
+			const glm::vec3 Velocity(1.007f,-3.270000219f,.083f), Floor = glm::normalize(glm::vec3(.035f,1.f,-.093f));
+			P.Authority.Avatar->ApplyRuntimeTransform(AuthorityPose);
+			P.Authority.Avatar->ApplyRuntimeControllerFacts(Velocity,Floor,true);
+			P.Replica.Avatar->ApplyRuntimeControllerFacts(glm::round(Velocity*64.f)/64.f,glm::round(Floor*32767.f)/32767.f,true);
+			const auto OfferPacket = Packet(P.Begin(),Offer);
+			Check(OfferPacket.ControllerVelocity==Velocity && OfferPacket.FloorNormal==Floor && OfferPacket.Grounded,
+				"reliable controller source facts did not survive the transfer codec");
+			auto WrongGeometry = OfferPacket;
+			WrongGeometry.SubjectGeometry = WrongGeometry.Collision;
+			Check(InstallSpatialControllerCheckpoint(WrongGeometry,*P.Replica.Destination,P.Replica.Adapters) &&
+				P.Replica.Actor->GetCFrame().Position!=AuthorityPose.Position,"a different subject geometry received a source correction");
+			Check(!InstallSpatialControllerCheckpoint(OfferPacket,*P.Replica.Destination,P.Replica.Adapters) &&
+				P.Replica.Actor->GetCFrame().Rotation==AuthorityPose.Rotation && P.Replica.Actor->GetCFrame().Position==AuthorityPose.Position &&
+				P.Replica.Avatar->GetVelocity()==Velocity && P.Replica.Avatar->GetFloorNormal()==Floor,
+				"fenced source checkpoint failed to recover a delayed pose and compact controller facts");
+			const auto ReadyPacket = Packet(P.ClientReceive(OfferPacket),Ready);
+			auto Changed = ReadyPacket;
+			Changed.ControllerVelocity.x += .001f;
+			Check(!P.ServerReceive(Changed).Reply,"modified controller facts advanced a grant");
+			const auto Reserved=Packet(P.ServerReceive(ReadyPacket),Reserve);
+			P.Replica.Avatar->ApplyRuntimeControllerFacts(Velocity+glm::vec3(.001f,0,0),Floor,true);
+			(void)Packet(P.ClientReceive(Reserved),Cancel);
+			Check(!P.Replica.AtDestination(),"a later local change within the same compact velocity bin went undetected");
+		}
 		{
 			Pair P;
 			P.Authority.AddController();

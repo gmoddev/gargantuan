@@ -240,7 +240,8 @@ namespace gargantuan::network {
 				std::optional<SpatialTransferFrame> WaitingOffer;
 				SpatialResidencyAudience Issuer;
 				std::shared_ptr<SpatialTransferStatus> Observation;
-				bool Started{}, Committed{};
+				const char *OfferPendingReason{};
+				bool Started{}, Committed{}, SourceCheckpointConsumed{};
 			};
 			std::uint64_t LastSerial{};
 			std::optional<Request> Pending;
@@ -297,7 +298,7 @@ namespace gargantuan::network {
 			std::shared_ptr<DomainTerrainDelivery> NamedTerrain;
 			std::uint64_t CurrentGrantGeneration{}, LastStagingSerial{};
 			std::optional<SpatialMotionWindow> MotionWindow;
-			std::uint64_t LastMotionSerial{}, NextMotionCheckTick{};
+			std::uint64_t LastMotionSerial{}, NextMotionCheckTick{}, MotionDomainActivation{};
 			std::uint32_t PlayerId = 0;
 			std::optional<TerrainSessionWindow> TerrainWindow;
 			TerrainWindowIdentity TerrainIdentity;
@@ -1082,7 +1083,7 @@ namespace gargantuan::network {
 				std::holds_alternative<std::monostate>(Message.Order);
 		}
 
-		auto FindTerrainSendSlot() {
+		decltype(TerrainSendSlots)::iterator FindTerrainSendSlot() {
 			for (auto &Slot : TerrainSendSlots)
 				if (Slot && Slot->Completion->IsComplete()) Slot.reset();
 			return std::ranges::find_if(TerrainSendSlots, [](const auto &Slot) { return !Slot; });

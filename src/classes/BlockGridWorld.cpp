@@ -266,6 +266,7 @@ namespace gargantuan {
 			});
 		});
 		Grid->WorldOwnedAdmission=true;
+		if (Grid->DomainMembershipRevision) ++Grid->DomainMembershipRevision;
 	}
 
 	std::function<void()> WorldRoot::PrepareBlockGridTransfer(BlockGrid& Source,const blockgrid::Field& SourceAfter,
@@ -393,6 +394,7 @@ namespace gargantuan {
 		if (!Value->GetDestroyed() && !Value->IsDestroying()) It->second.Grid->SetAdmission({});
 		BlockGridState->ReservedBoxes -= It->second.DesiredCount;
 		const auto Leaving=It->second.Grid;
+		if (Leaving->DomainMembershipRevision) ++Leaving->DomainMembershipRevision;
 		const bool WasDynamic=bool(It->second.Assembly);
 		if (const auto& Assembly=It->second.Assembly) {
 			--LiveAssemblies;

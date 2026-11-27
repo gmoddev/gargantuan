@@ -51,9 +51,9 @@ The fixed header occupies 20 bytes.
 | Offset | Type | Meaning |
 | ---: | --- | --- |
 | 0 | 8 bytes | `47 41 53 1a 0d 0a 02 0a` in hexadecimal |
-| 8 | `u16` | Binary format version, `1` |
+| 8 | `u16` | Binary format profile, `1` through `4` |
 | 10 | `u8` | Document kind, `1` for GASM or `2` for GASP |
-| 11 | `u8` | Section count, `2` for GASM or `3` for GASP |
+| 11 | `u8` | Section count, `2` for GASM or `3` for GASP, plus one for format `4` |
 | 12 | `u32` | GAS document schema version, `1` |
 | 16 | `u32` | Total byte length including the digest |
 
@@ -176,12 +176,39 @@ Project title is carried by the DataModel name. The GAS schema version in the
 header is separate from each runtime class, group, and enum definition version.
 Place metadata contains no runtime state or authority credentials.
 
+## Native BlockGrid section, format 4
+
+Writers select format 4 when at least one saved BlockGrid field exceeds 262,144 bytes.
+GASM uses section IDs 1, 2 and 4. GASP uses 1, 2, 3 and 4. Its place section
+begins with one byte selecting the ordinary place-metadata profile. Profile 1
+has ordinary metadata, profile 2 includes a Workspace terrain digest and profile
+3 includes domain terrain bindings. Older compatible readers continue to handle
+files that use their supported profiles.
+
+Only a saved native `Engine.BlockGrid` node can reference section 4. Its
+`NativeBlockCellSegmentsV2` binary record contains the four ASCII bytes `BGSM`,
+version byte 1, a little-endian `u32` canonical field length, a 32-byte SHA-256
+of that entire field and the ordered 32-byte SHA-256 digests of its segments.
+The number of digests is the length divided by 262,144 and rounded up. The range
+is two through 64. The final segment can be shorter, and all earlier segments
+have exactly 262,144 bytes. One node can carry one of the inline or segmented
+cell representations.
+
+Section 4 starts with a `u32` count. Each entry contains its 32-byte digest, a
+`u32` length and the raw bytes. Unique entries appear in ascending digest order.
+The required hashes and lengths come from the manifests in the graph. Readers
+check the exact closure, each digest and the ordered full-field digest before
+returning the document. Semantic loading then validates canonical native cells,
+definitions, channels and references using the ordinary field decoder.
+
 ## Limits and rejection
 
 | Resource | Maximum |
 | --- | ---: |
-| Complete document, including digest | 8,388,608 bytes |
-| Sections | Exactly two (GASM) or three (GASP) |
+| Ordinary document, or all format 4 bytes outside section 4 including the digest | 8,388,608 bytes |
+| Section 4 logical native bytes across all owners, counting repeated references | 67,108,864 bytes |
+| Section 4 distinct segment entries | 512 |
+| Section 4 physical byte ceiling | 4 + 512 × 36 + 67,108,864 bytes |
 | Nodes | 65,536 |
 | Hierarchy depth including root | 64 |
 | Native saved properties per node | 1,024 |
@@ -216,7 +243,7 @@ logical input. Reordering a tag, group, or dependency collection and changing
 the sign of zero leave canonical output identical. The writer adds no
 timestamps or allocation-order-dependent identities.
 
-Readers must reject every format and GAS schema version other than `1`,
+Readers must reject unsupported format profiles and GAS schema versions,
 unknown value tags, and missing, unexpected, duplicated, or unordered
 sections. A syntactically valid but unrecognized class or member identity can
 exist in the inert document because inspection and re-encoding require no live

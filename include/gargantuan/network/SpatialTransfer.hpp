@@ -42,13 +42,15 @@ namespace gargantuan::network {
 		glm::vec3 LinearVelocity{}, AngularVelocity{};
 		std::vector<SpatialWireProvider> Owners;
 		AssetContentId Collision, SubjectGeometry;
+		glm::vec3 ControllerVelocity{}, FloorNormal{};
+		bool Grounded{};
 	};
 
 	inline constexpr std::size_t MaximumSpatialTransferProviders = 64;
 	inline constexpr std::size_t MaximumSpatialTransferBytes = 1'024;
 	[[nodiscard]] bool IsSpatialTransfer(std::span<const std::byte> Bytes);
 	[[nodiscard]] std::vector<std::byte> EncodeSpatialTransfer(const SpatialTransferFrame &Frame);
-[[nodiscard]] std::optional<SpatialTransferFrame> DecodeSpatialTransfer(std::span<const std::byte> Bytes);
+	[[nodiscard]] std::optional<SpatialTransferFrame> DecodeSpatialTransfer(std::span<const std::byte> Bytes);
 	[[nodiscard]] CFrame GetSpatialTransferPose(const WireCFrame &Pose);
 
 	// Supplied by the authoritative content owner, or the replica's verified installed provider.
@@ -78,8 +80,14 @@ namespace gargantuan::network {
 
 	// An early reliable offer can precede its structural/leaf installation. This read-only check
 	// never consumes its serial, grants a lease, or moves the subject.
-	[[nodiscard]] bool IsSpatialOfferInstalled(const SpatialTransferFrame &Offer, WorldRoot &Destination,
+	// A null reason means all native providers and the controlled source agree.
+	[[nodiscard]] const char *GetSpatialOfferPendingReason(const SpatialTransferFrame &Offer, WorldRoot &Destination,
 		const SpatialTransferAdapters &Adapters);
+
+	// A controlling replica calls this once, after an authenticated offer has fenced the previous control epoch.
+	// Subsequent protocol checks compare the installed source state exactly.
+	[[nodiscard]] const char *InstallSpatialControllerCheckpoint(const SpatialTransferFrame &Offer,
+		WorldRoot &Destination, const SpatialTransferAdapters &Adapters);
 
 	// All calls run on Main. Mutation owners check the old and new bounds before changing collision,
 	// and check the whole provider on retirement or content replacement.

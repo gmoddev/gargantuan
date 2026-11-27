@@ -175,6 +175,11 @@ void RetireSessionTransfer(ConnectionId Connection, Peer &Value) {
 void FinishTransfer(ConnectionId Connection, Peer &Value, SpatialTransferStatus Status) {
 	if (!HasTransfer(Value)) return;
 	const auto Request = *Value.SpatialTransfer->Pending;
+	if (Status != SpatialTransferStatus::Applied)
+		LOG_INFO(App, "[Spatial:Transfer] %s ended status=%d started=%d committed=%d waiting=%s",
+			Configuration.Role == GameSessionRole::Server ? "Server" : "Player", static_cast<int>(Status),
+			static_cast<int>(Request.Started), static_cast<int>(Request.Committed),
+			Request.OfferPendingReason ? Request.OfferPendingReason : "none");
 	if (Configuration.Role == GameSessionRole::Server) {
 		const bool Promote = Status == SpatialTransferStatus::Applied;
 		if (!ReleaseTransferDomain(Connection, Request.Serial, Promote)) {
@@ -198,6 +203,10 @@ SpatialTransferStatus CancelTransfer(ConnectionId Connection, Peer &Value, Spati
 	auto &Lane = *Value.SpatialTransfer;
 	auto Step = Configuration.Role == GameSessionRole::Server ? Lane.Server.Cancel() : Lane.Replica.Cancel();
 	if (Step.Status == SpatialTransferStatus::Busy) return Step.Status;
+	if (!Step.Reply && Configuration.Role == GameSessionRole::Client && Lane.Pending->WaitingOffer) {
+		Step.Reply = *Lane.Pending->WaitingOffer;
+		Step.Reply->Phase = SpatialTransferPhase::Cancel;
+	}
 	if (Step.Reply) (void)SendTransferFrame(Connection, Value, *Step.Reply);
 	const auto Status = Lane.Pending->Committed || Step.Status == SpatialTransferStatus::CommittedUnconfirmed ?
 		SpatialTransferStatus::CommittedUnconfirmed : Reason;
@@ -369,7 +378,22 @@ void PumpSessionTransfer(ConnectionId Connection, Peer &Value) {
 	if (!Destination || !Source || !Subject) return;
 	if (!Request.DestinationActivation) Request.DestinationActivation = Destination->GetSpatialActivation();
 	if (!Server) {
-		if (!Request.WaitingOffer || !IsSpatialOfferInstalled(*Request.WaitingOffer, *Destination, Adapters)) return;
+		if (!Request.WaitingOffer) return;
+		if (Request.Scope.Controller.IsValid() && !Request.SourceCheckpointConsumed) {
+			// Ordinary snapshots quantize rotation and velocity and may still be in flight. The authenticated
+			// reliable offer establishes the final source state once while the old control epoch is fenced.
+			const auto Offer = *Request.WaitingOffer;
+			Request.SourceCheckpointConsumed = true;
+			const auto Reason = InstallSpatialControllerCheckpoint(Offer, *Destination, Adapters);
+			if (!HasTransfer(Value) || Lane.Pending->Scope != Offer.Scope || Lane.Pending->Serial != Offer.Serial) return;
+			if (Reason) {
+				Lane.Pending->OfferPendingReason = Reason;
+				(void)CancelTransfer(Connection, Value, SpatialTransferStatus::Denied);
+				return;
+			}
+		}
+		Request.OfferPendingReason = GetSpatialOfferPendingReason(*Request.WaitingOffer, *Destination, Adapters);
+		if (Request.OfferPendingReason) return;
 		auto Frame = std::move(*Request.WaitingOffer);
 		Request.WaitingOffer.reset();
 		Request.Started = true;

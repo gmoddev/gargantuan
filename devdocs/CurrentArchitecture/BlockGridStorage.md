@@ -12,9 +12,19 @@ The little-endian dataset starts with ASCII `BGRD`, version byte 1 and an unsign
 
 Run the `gargantuan_blockgrid_field` CTest for signed addressing, bounded transactions, provider denial, value snapshots, canonical round trips and malformed-input cases.
 
+## Saving a large grid
+
+Project save, Play, `Instance:Clone()` and trusted package capture use the same canonical cell encoder with the relevant authored or copy policy. Fields through 256 KiB retain their inline representation. Larger fields are sliced into 256 KiB segments with one SHA-256 digest per segment and a digest for the complete field. An individual grid can use its full 16 MiB native limit. A document admits 64 MiB of segmented native data across its owners, including repeated references. Identical segments share content by digest.
+
+The project JSON keeps the small ordered manifest on the owning grid. Writers establish and verify every required file under `.gargantuan/blockgrid/<sha256>.bgseg` before replacing the scene root. A failed save can leave unreferenced immutable segments. The prior root continues to select its previous closure. Reopening validates exact lengths, hashes and native records. Copying a project directory must include its `.gargantuan` directory. Play and clone retain an immutable in-memory capture for the lifetime of the restore.
+
+Portable GASM and GASP files carry their segments in GAS format 4. File-based GASP export and restore accept the extended profile. The Studio inline GAS transfer has a separate 512 KiB control-message limit. A trusted runtime package pins each required segment through its package manifest and verifies the full grid before exposing the world. Managed distributed players receive the existing per-recipient public grid stream.
+
+The `gargantuan_blockgrid_persistence` CTest covers a 393,216-cell grid, project save and reload, clone, Play, GASM, GASP, trusted package load, damaged or missing data, frozen captures and failed root replacement. The `gargantuan_gas_document` CTest also checks a 16,775,679-byte field with 703,950 occupied cells, 64 distinct segments and a 16,780,255-byte portable model.
+
 ## Creatable class and Main admission
 
-The nullable saved `SpatialRegion` reference uses the existing generation-aware membership mixin. A grid can remain parented to Workspace while participating in its assigned chart. Runtime block revisions include the effective WorldRoot identity. Changing the explicit assignment revokes previous guards even when the original chart is later restored.
+The nullable saved `SpatialRegion` reference uses the existing generation-aware membership mixin. A grid can remain parented to Workspace while participating in its assigned chart. Runtime block revisions and work handles bind to the effective WorldRoot, its activation and the grid's own native registration lifetime. Leaving and returning to the same chart invalidates earlier work, including a handle opened while the region was detached. Reparenting inside the same effective chart preserves the registration and a dynamic grid's body and velocity.
 
 `Instance.new("BlockGrid")` creates an independent, empty grid with unit cells and identity pose. Configure `CellSize` to 0.5, 1 or 2 while empty. A proper rigid `CFrame` locates the local grid, and `Visible`, `CanCollide` and `CanQuery` govern the corresponding consumers. These five descriptor properties participate in ordinary persistence. The native cells have their own versioned codec. `BlockRevision` is a scoped read-only observation, excluded from saved and replicated properties.
 

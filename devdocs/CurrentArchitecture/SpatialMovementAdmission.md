@@ -55,6 +55,8 @@ The protected network profile accepts an anchored or stationary kinematic source
 
 The host owns wire dispatch, authenticated epoch selection, reconnect and revocation, installed content provenance, subject control and reconciliation. Transport bindings must use the current controlling session when calling the state machine. A selected viewport or a client-supplied scope never grants movement authority.
 
+The server records the native domain activation when it issues an ordinary movement window. Detaching and reattaching a named space requires a new receipt even if the domain identity, bounds, owner list and cell contents coincide. The activation is local runtime state and adds no packet bytes.
+
 ### Requesting a player transfer
 
 A running server Script with MutateDataModel can call `Player:RequestSpatialTransfer(Destination, DestinationPose, Minimum, Maximum)`. The player and destination must belong to that Script's DataModel. Supply a Workspace or SpatialRegion, a rigid destination CFrame and strictly increasing corners in destination coordinates. Each axis supports a maximum extent of 512 units. The bounds must contain the complete landing box and controller capsule. The method returns a request handle and nil, or nil and a reason such as `Invalid`, `Unavailable`, `Denied` or `Busy`.
@@ -65,7 +67,7 @@ Online, a destination can stage for up to 15 seconds. The three-second bilateral
 
 ### Destination content in GameSession
 
-The native spatial handshake uses GSES 13, and a managed spatial package pair uses GSES 14. A trusted server transition can temporarily add one destination volume to an established peer. GSDA version 1 binds the connection epoch, monotone grant serial, destination source ObjectId, and a sorted list of up to 256 public structural identities. Each axis of the volume spans at most 512 units. The server derives the list from native collision providers, their ancestors and the controlled subject. Final replication policy must admit each identity and its hard references before the server queues the manifest. The grant expires after 15 seconds and is private to its connection.
+The native spatial handshake uses GSES 15, and a managed spatial package pair uses GSES 16. A trusted server transition can temporarily add one destination volume to an established peer. GSDA version 1 binds the connection epoch, monotone grant serial, destination source ObjectId, and a sorted list of up to 256 public structural identities. Each axis of the volume spans at most 512 units. The server derives the list from native collision providers, their ancestors and the controlled subject. Final replication policy must admit each identity and its hard references before the server queues the manifest. The grant expires after 15 seconds and is private to its connection. These profiles require the SR2 v3 source checkpoint. Earlier spatial peers reject the version before any gameplay content is transferred.
 
 Each destination has a separate BlockGrid subscription set. GBGS version 4 carries the grant serial on every message. Installation requires the current structural owner, native field, placement, and motion projection. A released stage retires its replica content. Promotion adopts the staged subscriptions and retires the previous chart. A transfer still requires independent native collision preparation on each endpoint. An empty-terrain grant binds the server's observation to the precise volume and serial. Both peers recheck actual terrain emptiness before using the binding.
 

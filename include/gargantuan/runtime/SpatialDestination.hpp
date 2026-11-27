@@ -19,11 +19,11 @@ namespace gargantuan {
 
 	struct SpatialMovementProfile {
 		ObjectId Controller;
-		glm::vec3 Size{}, ControllerVelocity{};
+		glm::vec3 Size{}, ControllerVelocity{}, FloorNormal{};
 		PhysicsShapeKind Shape{};
 		std::uint16_t CollisionGroup{}, CollisionMask{};
 		float CapsuleRadius{}, CapsuleHeight{};
-		bool Collidable{}, Anchored{}, Kinematic{};
+		bool Collidable{}, Anchored{}, Kinematic{}, Grounded{};
 	};
 
 	struct SpatialMovementRequest {
