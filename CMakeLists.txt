@@ -1045,6 +1045,14 @@ if(BUILD_TESTING)
 				COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialConstructionYardInput.py"
 					--engine $<TARGET_FILE:gargantuan> --durable)
 			set_tests_properties(gargantuan_spatial_construction_yard_restart PROPERTIES LABELS "spatial;blockgrid;persistence;headless;sample" TIMEOUT 150)
+			if(GARGANTUAN_WITH_GNS AND TARGET gargantuan_server AND TARGET gargantuan_player AND TARGET gargantuan_packager)
+				add_test(NAME gargantuan_spatial_construction_yard_multiplayer
+					COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialConstructionYardMultiplayer.py"
+						--engine $<TARGET_FILE:gargantuan> --packager $<TARGET_FILE:gargantuan_packager>
+						--player-runtime $<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
+						--server-runtime $<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution)
+				set_tests_properties(gargantuan_spatial_construction_yard_multiplayer PROPERTIES LABELS "spatial;network;persistence;headless;sample" TIMEOUT 240)
+			endif()
 		endif()
 	endif()
 	if(NOT GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION)
