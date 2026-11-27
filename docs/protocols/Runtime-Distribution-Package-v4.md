@@ -73,6 +73,15 @@ For unsigned Compiled/Protected, deliver the builder's manifest digest via trust
 
 ## Network compatibility
 
+Trusted package roots with segmented BlockGrid fields contain
+`content/.gargantuan/blockgrid/<sha256>.bgseg` files. Each required file has a
+`Project` manifest entry pinning its length and SHA-256. Package validation
+binds the complete set to the grid owners in the scene. Runtime world loading
+consumes the admitted immutable bytes. Subtrees that own segmented grid
+manifests remain in the bootstrap scene. Distributed Player capture omits
+authored grid segments and obtains public cells via authenticated grid streaming.
+The native section boundaries and per-document limits are specified in [GAS](GAS-v1.md).
+
 Legacy GSES v2 remains for ordinary terrain-free hosts. Format 4 network participants require matching 64-lowercase-hex client code identities in GSES v3 Hello and Accepted. Their readiness uses the existing epoch/player binding. Authoritative Server publishes no ModuleScript clear source on managed sessions. The Player uses its local package for approved scripts and denies nonempty reflected source on live structural frames. Initial package binding records the server identity for any later materialization of those scripts. Ordinary recreation under a reused hierarchy path does not replace an approved code binding. The package pair must be reissued to update authoritative executable client code.
 
 A managed Offline Player can carry the fully verified project terrain closure.

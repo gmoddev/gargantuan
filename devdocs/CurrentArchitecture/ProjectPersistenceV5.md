@@ -60,6 +60,10 @@ same local map, so forward references point to their new document's objects.
 
 ## Package content
 
+### Native grid scene profile
+
+A scene containing segmented BlockGrid data uses JSON version 8 and writes the underlying scene version (5, 6 or 7) in `GridBaseVersion`. This preserves reference and terrain semantics and makes older readers reject an unsupported scene. Grid nodes bind their own `NativeBlockCellSegmentsV2` records to immutable project files in `.gargantuan/blockgrid`. Verified native data travels with a prepared load, Play launch, clone or trusted package capture. The 8 MiB JSON limit still applies to the complete scene graph. [Native grid storage](BlockGridStorage.md)
+
 New package content manifests use Instance schema version 5. Existing schema
 version 4 package content remains readable; new builds publish v5. A content
 unit is a separate Instance document, so package partitioning retains any
