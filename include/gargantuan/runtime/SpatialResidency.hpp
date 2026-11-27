@@ -27,6 +27,9 @@ namespace gargantuan {
 		SpatialCollisionCondition Collision{SpatialCollisionCondition::Pending};
 		std::uint64_t Revision{};
 	};
+	struct SpatialDemandStatistics {
+		std::size_t Pending{}, Ready{}, Unavailable{};
+	};
 	struct SpatialCollisionWork {
 		std::size_t Holders{}, DistinctRequests{}, Captures{};
 	};

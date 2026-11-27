@@ -5,6 +5,12 @@ adds the optional `RuntimeDistributionPolicy` packaging capability, stateless
 revision-bound policy inspection, and a completion receipt for the exact
 published package. Signing and content keys are native provider inputs.
 
+## Spatial domain inspection and editor views
+
+`GetSpatialDomainState` accepts an edit DataModel Scope and Object identifying its attached Workspace or SpatialRegion. It reports the activation, tracked Parts, registered BlockGrids, terrain collision runtime presence and active collision-request counts grouped by observed readiness. Requesting this snapshot performs no capture or package loading. The separate Play form accepts only the active PlaySessionId and reports the live camera domain with its own runtime Scope. Stale or mixed identities fail.
+
+`SetEditorSpatialView` takes the same edit Scope and Object, requires ViewportControl and selects that domain for both rendering and picking. Selecting Workspace restores the outdoor view. The selection uses the existing transient Workspace.CurrentSpatialRegion. Play and preview own their respective views and reject this edit command.
+
 ## Implemented boundary
 
 Gargantuan Studio is a separately authored private application. The public
