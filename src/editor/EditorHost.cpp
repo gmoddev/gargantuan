@@ -1324,6 +1324,7 @@ namespace gargantuan {
 		enum class Action { Brush, Undo, Redo };
 
 		struct BrushHistory {
+			ObjectId Terrain;
 			terrain::Revision AtRevision{};
 			bool Undone{};
 			std::vector<terrain::SampleWrite> Before;
@@ -1331,6 +1332,7 @@ namespace gargantuan {
 		};
 
 		struct Work {
+			std::weak_ptr<WorldRoot> Space;
 			terrain::EditTicket Ticket{};
 			terrain::Revision StartingRevision{};
 			Action Operation{Action::Brush};
@@ -1475,7 +1477,9 @@ namespace gargantuan {
 		RetiredGuiPreviewTextures.clear();
 		StepViewportSpatial();
 		const auto Domain = WorkspaceService.GetCurrentSpatialRegion();
-		const auto &ViewWorld = Domain ? static_cast<const WorldRoot &>(**Domain) : static_cast<const WorldRoot &>(WorkspaceService);
+		auto &ViewWorld = Domain ? static_cast<WorldRoot &>(**Domain) : static_cast<WorldRoot &>(WorkspaceService);
+		if (Domain && !ViewWorld.HasTerrainRuntime() && ViewWorld.GetOwnedTerrain()->GetField().GetStats().MaterializedPages)
+			ViewWorld.InitializeTerrainRuntime(RuntimeMode::Offline);
 		ViewportPublisher->SetTerrainRenderState(Domain ? ViewWorld.GetTerrainRenderState() : DefaultViewportTerrain);
 		LastViewportPublication = ViewportPublisher->Publish(
 			ViewWorld, Camera, ViewportWidth, ViewportHeight
@@ -1628,14 +1632,15 @@ namespace gargantuan {
 
 	void EditorHost::PumpTerrainAuthoring() {
 		if (!TerrainAuthoring || !TerrainAuthoring->Pending || !World) return;
-		const auto Space = std::dynamic_pointer_cast<Workspace>(World->FindFirstChildOfClass("Workspace", false));
-		const auto Owner = Space ? Space->GetTerrain() : nullptr;
-		if (!Owner) {
+		auto &Pending = *TerrainAuthoring->Pending;
+		const auto Space = Pending.Space.lock();
+		const auto Owner = Space ? Space->GetOwnedTerrain() : nullptr;
+		if (!Owner || SpatialRegion::FindAttachedWorld(*Space) != World) {
+			if (Owner) (void)Space->CancelTerrainEdit(*Owner, Pending.Ticket);
 			TerrainAuthoring.reset();
 			return;
 		}
 		Space->PollTerrainWork();
-		auto &Pending = *TerrainAuthoring->Pending;
 		const auto Receipt = Space->GetTerrainTicket(Pending.Ticket);
 		if (Receipt && Receipt->Status == "Pending") return;
 		const auto &Field = Owner->GetField();
@@ -1661,8 +1666,7 @@ namespace gargantuan {
 					TerrainAuthoring->History->AtRevision = Revision;
 					TerrainAuthoring->History->Undone = Pending.Operation == TerrainAuthoringState::Action::Undo;
 				}
-				DefaultViewportTerrain = Space->GetTerrainRenderState();
-				ViewportPublisher->SetTerrainRenderState(DefaultViewportTerrain);
+				if (dynamic_cast<Workspace *>(Space.get())) DefaultViewportTerrain = Space->GetTerrainRenderState();
 				NextViewportFrame = std::chrono::steady_clock::now();
 			} else {
 				// A provider violation after the field commit still makes the scene dirty.
@@ -3882,22 +3886,34 @@ namespace gargantuan {
 					(Query && !StudioSecurity.HasCapability(ScriptCapability::ViewportControl)) ||
 					(!GetState && !GetStatus && !Query && !StudioSecurity.HasCapability(ScriptCapability::MutateDataModel)))
 					return Fail("Unauthorized", "Terrain authoring requires trusted Studio capabilities");
-				const auto Space = std::dynamic_pointer_cast<Workspace>(World->FindFirstChildOfClass("Workspace", false));
-				const auto Owner = Space ? Space->GetTerrain() : nullptr;
-				if (!Owner || !CurrentProject) return Fail("TerrainUnavailable", "The project has no canonical Workspace terrain");
-				const auto Scope = World->GetObjectId();
+				const auto Default = std::dynamic_pointer_cast<Workspace>(World->FindFirstChildOfClass("Workspace", false));
+				if (!Default || !CurrentProject) return Fail("TerrainUnavailable", "The project has no available terrain");
+				const auto Domain = Default->GetCurrentSpatialRegion();
+				std::shared_ptr<WorldRoot> Space = Domain ? std::static_pointer_cast<WorldRoot>(*Domain) : Default;
+				const auto Realm = World->GetObjectId();
+				auto Scope = Domain ? Space->GetObjectId() : Realm;
 				if (!GetState) {
 					const auto Requested = parameters.contains("Scope") ?
 						JsonCodec::DecodeObjectId(parameters["Scope"]) : std::nullopt;
 					if (!Requested) return Fail("MalformedRequest", "Terrain requests need a valid Scope");
-					if (Requested->ToObjectId() != Scope) return Fail("StaleTerrainScope", "The project scope changed");
+					if (Requested->ToObjectId() != Scope) {
+						if (!GetStatus && !Cancel) return Fail("StaleTerrainScope", "The selected terrain scope changed");
+						Scope = Requested->ToObjectId();
+						Space = Scope == Realm ? std::static_pointer_cast<WorldRoot>(Default) :
+							std::dynamic_pointer_cast<SpatialRegion>(ObjectRegistry::Get().Lookup(Scope));
+						if (!Space || SpatialRegion::FindAttachedWorld(*Space) != World)
+							return Fail("StaleTerrainScope", "The ticket's terrain scope has retired");
+					}
 				}
+				const auto Owner = Space->GetOwnedTerrain();
+				if (!Owner) return Fail("TerrainUnavailable", "The selected terrain is unavailable");
 				if (GetState || GetStatus) PumpTerrainAuthoring();
 				const auto &Field = Owner->GetField();
 				const auto Revision = Field.GetRevision();
 				const auto IsBusy = [&] { return TerrainAuthoring && TerrainAuthoring->Pending.has_value(); };
 				const auto HasHistory = [&] {
-					return TerrainAuthoring && TerrainAuthoring->History && TerrainAuthoring->History->AtRevision == Revision;
+					return TerrainAuthoring && TerrainAuthoring->History && TerrainAuthoring->History->Terrain == Owner->GetObjectId() &&
+						TerrainAuthoring->History->AtRevision == Revision;
 				};
 				const auto State = [&] {
 					const bool HasUndo = HasHistory() && !TerrainAuthoring->History->Undone;
@@ -3924,9 +3940,9 @@ namespace gargantuan {
 					if (!Ticket || !HasOnlyFields(parameters, {"Scope", "Ticket"}))
 						return Fail("MalformedRequest", "A canonical nonzero terrain ticket is required");
 					if (Cancel) {
-						if (!IsBusy() || TerrainAuthoring->Pending->Ticket != *Ticket)
+						if (!IsBusy() || TerrainAuthoring->Pending->Space.lock() != Space || TerrainAuthoring->Pending->Ticket != *Ticket)
 							return Fail("TerrainEditUnavailable", "The terrain edit is no longer pending");
-						const auto Result = Mutations.Apply(CancelTerrainEditCommand{Owner->GetObjectId(), Scope, *Ticket},
+						const auto Result = Mutations.Apply(CancelTerrainEditCommand{Owner->GetObjectId(), Realm, *Ticket},
 							StudioMutationAuthority());
 						if (!Result.Succeeded()) return Fail(MutationStatusName(Result.Status), Result.Message);
 					}
@@ -3986,7 +4002,7 @@ namespace gargantuan {
 				if (ActiveAnimationPreview || GuiPreview)
 					return Fail("ViewportUnavailable", "Close the active preview before editing terrain");
 				World->EnsureAuthoritativeRevisionAvailable();
-				TerrainAuthoringState::Work Pending{.StartingRevision = Revision};
+				TerrainAuthoringState::Work Pending{.Space = Space, .StartingRevision = Revision};
 				EditRequest Edit;
 				if (method == "SubmitTerrainBrush") {
 					if (!HasOnlyFields(parameters, {"Scope", "ExpectedTerrainRevision", "ExpectedRevision", "Brush"}) ||
@@ -3997,6 +4013,7 @@ namespace gargantuan {
 					const auto Count = CountTerrainBrushSamples(Input->Bounds);
 					if (!Count) return Fail("TerrainBrushLimit", "Use a smaller brush or region covering at most 4096 lattice samples");
 					Pending.Patch.emplace();
+					Pending.Patch->Terrain = Owner->GetObjectId();
 					Pending.Patch->Before.reserve(*Count);
 					Pending.Patch->After.resize(*Count);
 					const auto [Min, Max] = Input->Bounds;
@@ -4019,7 +4036,7 @@ namespace gargantuan {
 				}
 				if (auto Denial = Initialize()) return Fail("TerrainUnavailable", std::move(*Denial));
 				if (!TerrainAuthoring) TerrainAuthoring = std::make_unique<TerrainAuthoringState>();
-				const auto Result = Mutations.Apply(SubmitTerrainEditCommand{Owner->GetObjectId(), Scope,
+				const auto Result = Mutations.Apply(SubmitTerrainEditCommand{Owner->GetObjectId(), Realm,
 					std::make_shared<const TerrainMutation>(TerrainMutation{std::move(Edit), RequestedRevision})},
 					StudioMutationAuthority());
 				if (!Result.Succeeded() || !Result.TerrainTicket)

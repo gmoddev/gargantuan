@@ -1,0 +1,57 @@
+---
+title: Block construction and independent spaces
+description: Place, edit, pick and save native blocks in Workspace and in independent domains.
+---
+
+Create a `BlockGrid` from an authoritative gameplay Script. The default block is visible and collidable as soon as you place it.
+
+```luau
+local Wall = Instance.new("BlockGrid")
+Wall.Name = "GardenWall"
+Wall.Parent = workspace
+Wall:SetBlock(Vector3.new(0, 0, 0), "Stone")
+Wall:Fill(Vector3.new(0, 1, 0), Vector3.new(12, 3, 1), "Brick")
+```
+
+This wall has 25 blocks and one grid Instance. `Fill` includes the minimum coordinate and ends immediately before the maximum. The brick courses therefore occupy X coordinates 0 through 11 and Y coordinates 1 and 2. A grid may span the whole world. Create another when a construction needs its own transform, identity, visibility or collision settings.
+
+## Pick and remove one cell
+
+```luau
+local Hit = Wall:Raycast(Vector3.new(5.5, 8, 0.5), Vector3.new(0, -12, 0))
+if Hit then
+	print(Hit.Cell, Hit.Block.Definition)
+	Wall:RemoveBlock(Hit.Cell)
+end
+```
+
+The direction vector includes the length of the ray segment. A grid raycast returns the individual block even where one collision shape serves several cells. To compare the grid against ordinary Parts in a world query, set `Params.IncludeBlockGrids = true` on a new `RaycastParams`, then call `workspace:Raycast`. An ordinary Part hit has no `GridHit`. Terrain participates when you also enable `IncludeTerrain`.
+
+## Work in local coordinates
+
+`GetBlock(Cell)` returns the definition and orientation, or `nil` for air. `CellToWorld` returns a cell center and `WorldToCell` locates the containing cell. For an empty grid, set `CellSize` to 0.5, 1 or 2 before building. Moving `CFrame` moves existing cells together. The same local coordinate continues to identify the same block.
+
+Use `Clear(Min, MaxExclusive)` to remove a box. `ReadRegion` returns occupied cells and the revision of the read. Point and box edits are atomic. Keep opaque revision strings with their issuing grid and current world. In this implementation a single fill or clear visits up to 32,768 cells and a region read covers up to 4,096 cells. A large build can use several bounded edits. Each edit may also reach a physics or storage budget, so arrange large batches around meaningful application changes.
+
+## Give an interior its own space
+
+```luau
+local Room = Instance.new("SpatialRegion")
+Room.Name = "Workshop"
+Room.Parent = workspace
+
+local Floor = Instance.new("BlockGrid")
+Floor.Parent = Room
+Floor:Fill(Vector3.new(-8, 0, -8), Vector3.new(8, 1, 8), "Stone")
+workspace.CurrentSpatialRegion = Room
+```
+
+The floor can use the same coordinates as an outdoor wall. Query `Room` for interior geometry. Query `workspace` for outdoor geometry. Set `workspace.CurrentSpatialRegion = nil` to view the outdoors again. View selection changes what the camera renders. A character's physics affiliation is a separate decision. For a Part or BlockGrid that belongs elsewhere in the Instance hierarchy, set its `SpatialRegion` explicitly. Both the object and destination must belong to the same live DataModel.
+
+Each region exposes its own `Terrain` alongside its Parts and block grids. Smooth terrain and discrete construction can use different resolutions. Project save and reopen bind each authored terrain field to its own spatial owner. A packaged offline scene carries the field artifacts it needs.
+
+## Author and save in Studio
+
+Insert a BlockGrid under Workspace or a SpatialRegion. Select it to open its cell inspector. Enter an integer cell and a size to fill a box with Stone or Brick. Use the adjacent-cell control to build against a picked face. Removal, Undo and Redo operate on the native field. Save the project to keep edit-world changes. Play starts with independent native resources. Stop returns to the authored construction.
+
+The Construction Yard sample includes a project builder and a playable retaining wall and workshop. Its README explains how to open the project and exercise both domains. This production candidate currently admits native grids in trusted offline worlds. Network authorization and streaming require a separately qualified protocol.
