@@ -159,7 +159,7 @@ namespace gargantuan::network {
 			   StructuralReplication.IsValid() &&
 			   (!ResolveInitialSpatialAudience || (SpatialContent && Role == GameSessionRole::Server)) &&
 			   (!SpatialContent || (IsLoopbackTransportEndpoint(Endpoint) && !ReliableService &&
-				RuntimeDistributionIdentity.empty() && Limits.MaximumReliableMessageBytes >= MaximumGridStreamFragment + 128)) &&
+				Limits.MaximumReliableMessageBytes >= MaximumGridStreamFragment + 128)) &&
 			   (!ReliableService || (Role == GameSessionRole::Server && ReliableService->IsValid() &&
 				ReliableService->MaximumConnections <= MaximumGameSessionPeers)) &&
 			   (!DeclareNormalOrdinaryService || Role == GameSessionRole::Client) &&

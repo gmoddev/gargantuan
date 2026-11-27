@@ -1675,6 +1675,16 @@ namespace gargantuan {
 		AssertAuthoritativeMutation("PackageBuilder::Capture schema snapshot");
 		if (!World || !ProjectValue.Identity.IsValid() || AuthoritativeRevision == 0 || PersistedRevision == 0)
 			throw std::invalid_argument("Package snapshot source is invalid");
+		const bool ManagedMultiplayer = RuntimeDistribution &&
+			RuntimeDistribution->Target != RuntimeDistributionTarget::OfflinePlayer;
+		bool SpatialContent = false;
+		if (ManagedMultiplayer) {
+			for (const auto &Node : World->GetDescendants())
+				if (Node->IsA("BlockGrid") || Node->IsA("SpatialRegion")) {
+					SpatialContent = true;
+					break;
+				}
+		}
 		auto Terrain = terrain::CaptureSceneTerrain(*World, ProjectValue.Identity);
 		const auto TerrainManifest = Terrain ? std::optional(Terrain->ManifestDigest) : std::nullopt;
 		auto Domains = terrain::CaptureDocumentTerrain(World, ProjectValue.Identity, Terrain ? Terrain->ClosureBytes : 0);
@@ -1686,7 +1696,8 @@ namespace gargantuan {
 		if (Audience != PackageAudience::Trusted || (RuntimeDistribution &&
 			RuntimeDistribution->Target != RuntimeDistributionTarget::OfflinePlayer)) {
 			try {
-				for (const auto &Node : World->GetDescendants()) DataModel::CheckDefaultNetworkSpatialParticipant(*Node);
+				for (const auto &Node : World->GetDescendants())
+					DataModel::CheckDefaultNetworkSpatialParticipant(*Node,SpatialContent);
 			} catch (const std::invalid_argument &Error) {
 				throw RuntimeDistributionError("UnsupportedSpatialTarget", Error.what());
 			}
@@ -1721,6 +1732,7 @@ namespace gargantuan {
 			if (Distributed != (Audience == PackageAudience::DistributedPlayer))
 				throw RuntimeDistributionError("AudienceViolation", "The runtime distribution target and package audience disagree.");
 			Result.DistributionPlan = CaptureRuntimeDistribution(ProjectValue, World, *RuntimeDistribution, true);
+			Result.DistributionPlan->SpatialContent = SpatialContent;
 			if (RuntimeDistribution->Target != RuntimeDistributionTarget::OfflinePlayer) {
 				Json Bindings = Json::array();
 				auto ClientScripts = client_package::CaptureEligibleScripts(*World);
@@ -1728,7 +1740,7 @@ namespace gargantuan {
 				for (const auto &Script : ClientScripts)
 					Bindings.push_back({Script.SourceId, Script.Path, Script.Class});
 				Result.DistributionPlan->ClientCodeIdentity = HashText(Json{
-					{"Domain", "GargantuanClientCodeV1"}, {"Project", Result.Identity.ToString()},
+					{"Domain", SpatialContent ? "GargantuanSpatialClientCodeV1" : "GargantuanClientCodeV1"}, {"Project", Result.Identity.ToString()},
 					{"Session", Result.DistributionPlan->SessionIdentity}, {"Scripts", std::move(Bindings)},
 					{"Projection", HashText(client_package::CaptureCode(*World))},
 				}.dump());
@@ -1968,6 +1980,7 @@ namespace gargantuan {
 						.PublisherId = Project, .SigningKeyId = Policy.SigningKeyId,
 						.ContentKeyId = Policy.ContentKeyId, .Compiler = std::string(GetRuntimeScriptCompilerIdentity()),
 						.ClientCodeIdentity = Plan->ClientCodeIdentity,
+						.SpatialContent = Plan->SpatialContent,
 					};
 					Result.PlayerExecutableSha256 = Executable->Sha256;
 				}
@@ -2535,6 +2548,7 @@ namespace gargantuan {
 			Result.TerrainArtifacts = std::move(TerrainArtifacts);
 			if (Manifest->RuntimeDistribution) {
 				Result.ClientCodeIdentity = Manifest->RuntimeDistribution->ClientCodeIdentity;
+				Result.SpatialContent = Manifest->RuntimeDistribution->SpatialContent;
 				auto Catalog = std::move(*Manifest->ScriptCatalog);
 				runtime_distribution::AdmitCatalog(Catalog, *Manifest->RuntimeDistribution,
 					Result.Inspection.Identity.ToString(), Manifest->DistributionSecurity, Manifest->TrustedCompiler, ReadPinned);

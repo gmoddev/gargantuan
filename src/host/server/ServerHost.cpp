@@ -529,6 +529,12 @@ namespace gargantuan::host {
 		});
 		if (!Payload) return BootstrapExitCode;
 		const bool NetworkTerrain = !Payload->TerrainArtifacts.empty();
+		const bool SpatialContent = Payload->SpatialContent;
+		if (SpatialContent && (Payload->Inspection.Target != RuntimeDistributionTarget::DedicatedServer || !BindEndpoint ||
+			!network::IsLoopbackTransportEndpoint(*BindEndpoint) || HostConfiguration.ReliableService)) {
+			std::cerr << "[Spatial:Package] Packaged spatial sessions require a dedicated Server and a loopback endpoint.\n";
+			return 7;
+		}
 		if (NetworkTerrain && (Payload->Inspection.Configuration != PackageConfiguration::Development || !BindEndpoint ||
 			!network::IsLoopbackTransportEndpoint(*BindEndpoint) || HostConfiguration.ReliableService)) {
 			std::cerr << "[Terrain:Network] Terrain delivery currently requires a loopback Development package and standard reliable service.\n";
@@ -682,6 +688,7 @@ namespace gargantuan::host {
 					.EnableStreamingDiagnostics = Program.get<bool>("--streaming-diagnostics"),
 					.Persistence = std::move(Persistence),
 					.AdmitNetworkTerrain = NetworkTerrain,
+					.AdmitSpatialContent = SpatialContent,
 				}
 			);
 #if defined(GARGANTUAN_WITH_GNS)
@@ -765,6 +772,7 @@ namespace gargantuan::host {
 						.TerrainBootstrap = NetworkTerrain ? network::MakeTerrainSessionData(Payload->Inspection.Identity,
 							Payload->Inspection.Revision, Payload->TerrainArtifacts, true) : nullptr,
 						.RuntimeDistributionIdentity = Payload->ClientCodeIdentity,
+						.SpatialContent = SpatialContent,
 					},
 					Runtime.get()
 				);

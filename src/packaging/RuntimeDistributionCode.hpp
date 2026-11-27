@@ -38,6 +38,7 @@ namespace gargantuan {
 			std::string ContentKeyId;
 			std::string Compiler;
 			std::string ClientCodeIdentity;
+			bool SpatialContent{};
 		};
 
 		using ArtifactWriter = std::function<void(std::string, std::string_view)>;

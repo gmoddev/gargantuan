@@ -188,6 +188,11 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		return 3;
 	}
 	const bool NetworkTerrain = ClientEndpoint && !Payload->TerrainArtifacts.empty();
+	const bool SpatialContent = Payload->SpatialContent;
+	if (SpatialContent && (!Distributed || !ClientEndpoint || !network::IsLoopbackTransportEndpoint(*ClientEndpoint))) {
+		std::cerr << "[Spatial:Package] Packaged spatial sessions require a distributed Player and a loopback endpoint.\n";
+		return 7;
+	}
 	if (NetworkTerrain && (Payload->Inspection.Configuration != PackageConfiguration::Development ||
 		!network::IsLoopbackTransportEndpoint(*ClientEndpoint))) {
 		std::cerr << "[Terrain:Network] Terrain delivery currently requires a loopback Development package.\n";
@@ -252,6 +257,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 						Payload->Inspection.Revision, Payload->TerrainArtifacts, false) : nullptr,
 					.RuntimeDistributionIdentity = Payload->ClientCodeIdentity,
 					.HydratePackagedCode = PackageBuilder::MakeDistributedCodeHydrator(*Payload),
+					.SpatialContent = SpatialContent,
 				}
 			);
 			if (FarmScaleWorkload && !network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(*Session, false))
@@ -291,7 +297,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		}
 		const auto Mode = !ClientText.empty() ? RuntimeMode::NetworkClient : RuntimeMode::Offline;
 		auto ProviderConfiguration = EngineProviderConfiguration{
-			.AudioEnabled = !Headless, .Mode = Mode, .AdmitNetworkTerrain = NetworkTerrain};
+			.AudioEnabled = !Headless, .Mode = Mode, .AdmitNetworkTerrain = NetworkTerrain, .AdmitSpatialContent = SpatialContent};
 		if (Mode == RuntimeMode::Offline)
 			ProviderConfiguration.Content = PackageBuilder::GetLocalContentConfiguration(
 				*Payload, PackageRoot, ContentResidencyMode::FullyResident

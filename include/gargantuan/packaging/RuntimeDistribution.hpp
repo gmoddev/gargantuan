@@ -50,6 +50,7 @@ namespace gargantuan {
 		std::string PolicySha256;
 		std::string ClientCodeIdentity;
 		std::string SessionIdentity;
+		bool SpatialContent{};
 	};
 
 	[[nodiscard]] RuntimeDistributionRequest ParseRuntimeDistributionRequest(std::string_view Json);
