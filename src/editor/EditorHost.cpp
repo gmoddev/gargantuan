@@ -43,6 +43,7 @@
 #include "serialization/JsonCodec.hpp"
 #include "runtime/PreparedPropertyCommit.hpp"
 #include "editor/StreamingDiagnosticsEncoding.hpp"
+#include "editor/BlockGridClipboardPreview.hpp"
 
 #include <SDL3/SDL_filesystem.h>
 #include <SDL3/SDL_stdinc.h>
@@ -500,7 +501,7 @@ namespace gargantuan {
 				Method == "DuplicateInstance" || Method == "ReparentInstance" ||
 				Method == "ImportAsset" || Method == "ReimportAsset" || Method == "DeleteAsset" ||
 				Method == "StartPackageBuild" || Method == "SubmitTerrainBrush" || Method == "EditBlockGridRegion" ||
-				Method == "DefineBlockGridBlock" ||
+				Method == "DefineBlockGridBlock" || Method == "PasteBlockGridRegion" ||
 				Method == "UndoTerrainEdit" || Method == "RedoTerrainEdit" || Method == "CancelTerrainEdit";
 		}
 
@@ -1322,6 +1323,14 @@ namespace gargantuan {
 				GuiRuntimeMode::AuthoringPreview) {}
 	};
 
+	struct EditorHost::GridClipboardState {
+		ObjectId Scope;
+		std::uint64_t Serial{};
+		editor_detail::GridClipboard Captured;
+		struct Preview { ObjectId Target; blockgrid::Cell Min; unsigned Turns; std::string Revision; std::uint64_t Configuration; };
+		std::optional<Preview> Shown;
+	};
+
 	struct EditorHost::TerrainAuthoringState final {
 		enum class Action { Brush, Undo, Redo };
 
@@ -1853,6 +1862,7 @@ namespace gargantuan {
 					"TerrainAuthoringV1", "GetTerrainAuthoringState", "SubmitTerrainBrush",
 					"GetTerrainEditStatus", "CancelTerrainEdit", "UndoTerrainEdit", "RedoTerrainEdit", "RaycastTerrainSurface",
 					"ReadBlockGridCell", "EditBlockGridRegion", "ReadBlockGridPalette", "DefineBlockGridBlock",
+					"CopyBlockGridRegion", "PreviewBlockGridPaste", "PasteBlockGridRegion", "BlockGridDefinitionAssets",
 					"BeginTransaction",
 					"CommitTransaction",
 					"AuthoritativeTransactions",
@@ -3827,10 +3837,12 @@ namespace gargantuan {
 			};
 
 			if (method == "ReadBlockGridCell" || method == "EditBlockGridRegion" ||
-				method == "ReadBlockGridPalette" || method == "DefineBlockGridBlock") {
+				method == "ReadBlockGridPalette" || method == "DefineBlockGridBlock" || method == "CopyBlockGridRegion" ||
+				method == "PreviewBlockGridPaste" || method == "PasteBlockGridRegion") {
 				const bool Define = method == "DefineBlockGridBlock";
 				const bool Palette = method == "ReadBlockGridPalette";
-				const bool Edit = method == "EditBlockGridRegion" || Define;
+				const bool Paste = method == "PasteBlockGridRegion";
+				const bool Edit = method == "EditBlockGridRegion" || Paste || Define;
 				const auto Fail = [&](std::string Code, std::string Message) {
 					return SerializeBoundedResponse(ErrorResponse(requestId, std::move(Code), std::move(Message)));
 				};
@@ -3859,18 +3871,29 @@ namespace gargantuan {
 				}
 				if (Define) {
 					if (HasRevisionConflict()) return Fail("RevisionConflict","The project changed before the definition edit");
-					if (!HasOnlyFields(parameters, {"Scope","Object","Definition","Shape","Color","Revision","ExpectedRevision","TransactionId"}) ||
+					if (!HasOnlyFields(parameters, {"Scope","Object","Definition","Shape","Color","Material","Mesh","Collision","Revision","ExpectedRevision","TransactionId"}) ||
 						!parameters.contains("Definition") || !parameters["Definition"].is_string() ||
 						!parameters.contains("Revision") || !parameters["Revision"].is_string() ||
 						!parameters.contains("Shape") || !parameters["Shape"].is_string() ||
 						!parameters.contains("Color") || !parameters["Color"].is_array() || parameters["Color"].size() != 3)
 						return Fail("MalformedRequest","Provide a project definition key, primitive shape, RGB color and grid revision");
-					static constexpr std::array<std::string_view,4> Shapes{"Cube","Slab","Wedge","Stairs"};
+					static constexpr std::array<std::string_view,5> Shapes{"Cube","Slab","Wedge","Stairs","Mesh"};
 					const auto Found = std::ranges::find(Shapes, parameters["Shape"].get_ref<const std::string &>());
 					if (Found == Shapes.end()) return Fail("InvalidGridRequest","Unknown block shape");
 					blockgrid::Definition Spec;
 					Spec.Key = parameters["Definition"].get<std::string>();
 					Spec.Geometry = static_cast<blockgrid::Shape>(Found - Shapes.begin());
+					auto Assets=std::make_shared<blockgrid::AssetBinding>();
+					for (const auto& [Name,Slot]:std::array{std::pair{"Material",&Assets->Material},
+						std::pair{"Mesh",&Assets->Mesh},std::pair{"Collision",&Assets->Collision}}) {
+						if (!parameters.contains(Name)) continue;
+						const auto& Value=parameters[Name];
+						const auto Ref=Value.is_string()?AssetReference::Parse(Value.get_ref<const std::string&>()):std::nullopt;
+						if (!Ref || !Ref->ProjectAsset) return Fail("InvalidGridRequest","Choose a project catalog asset for "+std::string(Name));
+						*Slot=Ref->ProjectAsset->ToString();
+					}
+					if (!Assets->Mesh.empty() || !Assets->Material.empty() || !Assets->Collision.empty()) Spec.Assets=Assets;
+					if (Spec.Geometry==blockgrid::Shape::Mesh) Spec.CanCollide=!Assets->Collision.empty();
 					for (unsigned Index = 0; Index < 3; ++Index) {
 						const auto &Channel = parameters["Color"][Index];
 						if (!Channel.is_number_unsigned() || Channel.get<std::uint64_t>() > 255)
@@ -3886,6 +3909,47 @@ namespace gargantuan {
 				}
 				const auto Cell = DecodeGridCell(parameters["Cell"]);
 				if (!Cell) return Fail("InvalidGridRequest","Expected integer grid coordinates");
+				if (method=="CopyBlockGridRegion" || method=="PreviewBlockGridPaste" || Paste) {
+					try {
+						if (method=="CopyBlockGridRegion") {
+							if (!HasOnlyFields(parameters,{"Scope","Object","Cell","MaxExclusive"}) || !parameters.contains("MaxExclusive"))
+								return Fail("MalformedRequest","Copy requires a half-open source region");
+							const auto End=DecodeGridCell(parameters["MaxExclusive"],true);
+							if (!End) return Fail("InvalidGridRequest","Invalid source end");
+							auto Captured=editor_detail::GridClipboard::Capture(Grid->GetField(),{*Cell,*End});
+							if (!GridClipboard) GridClipboard=std::make_unique<GridClipboardState>();
+							if (GridClipboard->Serial==std::numeric_limits<std::uint64_t>::max()) return Fail("Limit","Clipboard handles exhausted");
+							GridClipboard->Scope=World->GetObjectId();
+							GridClipboard->Captured=std::move(Captured);
+							GridClipboard->Shown.reset();
+							return SerializeBoundedResponse(SuccessResponse(requestId,{{"Clipboard",std::to_string(++GridClipboard->Serial)},{"Cells",GridClipboard->Captured.Cells.size()}}));
+						}
+						if (!HasOnlyFields(parameters,{"Scope","Object","Cell","QuarterTurns","Clipboard","Revision","ExpectedRevision","TransactionId"}) ||
+							!parameters.contains("Clipboard") || !parameters["Clipboard"].is_string() || !parameters.contains("QuarterTurns") ||
+							!parameters["QuarterTurns"].is_number_unsigned() || parameters["QuarterTurns"].get<std::uint64_t>()>3)
+							return Fail("MalformedRequest","Provide the copied region and a quarter-turn from 0 through 3");
+						if (!GridClipboard || GridClipboard->Scope!=World->GetObjectId() || parameters["Clipboard"]!=std::to_string(GridClipboard->Serial))
+							return Fail("StaleClipboard","Copy a region in the current project");
+						const unsigned Turns=parameters["QuarterTurns"].get<unsigned>();
+						auto& Shown=GridClipboard->Shown;
+						if (Paste && (HasRevisionConflict() || !Shown || Shown->Target!=Grid->GetObjectId() || Shown->Min!=*Cell || Shown->Turns!=Turns ||
+							!parameters.contains("Revision") || parameters["Revision"]!=Shown->Revision || Shown->Revision!=Grid->GetBlockRevision() ||
+							Shown->Configuration!=Grid->GetConfigurationRevision()))
+							return Fail("RevisionConflict","Preview the current destination before pasting");
+						if (!Grid->EnsureAssetBindings()) return Fail("InvalidGridRequest","A destination definition asset is unavailable");
+						auto Request=GridClipboard->Captured.Plan(*Grid,*Cell,Turns);
+						if (Paste) {
+							const auto Result=Mutations.Apply(SubmitBlockGridEditCommand{Grid->GetObjectId(),World->GetObjectId(),Request},StudioMutationAuthority());
+							if (!Result.Succeeded()) return Fail(MutationStatusName(Result.Status),Result.Message);
+							Shown.reset();
+							return SerializeBoundedResponse(SuccessResponse(requestId,{{"Revision",Grid->GetBlockRevision()}}));
+						}
+						auto Preview=editor_detail::DescribePaste(*Grid,*Request);
+						Shown=GridClipboardState::Preview{Grid->GetObjectId(),*Cell,Turns,Grid->GetBlockRevision(),Grid->GetConfigurationRevision()};
+						Preview["Revision"]=Shown->Revision;
+						return SerializeBoundedResponse(SuccessResponse(requestId,std::move(Preview)));
+					} catch (const std::exception& Error) {return Fail("InvalidGridRequest",Error.what());}
+				}
 				if (Edit) {
 					if (HasRevisionConflict()) return Fail("RevisionConflict", "The project changed before the grid edit");
 					if (!HasOnlyFields(parameters, {"Scope", "Object", "Cell", "MaxExclusive", "Definition", "Orientation",

@@ -175,7 +175,7 @@ namespace gargantuan {
 		Field Staged=Cells;
 		std::vector<blockgrid::Definition> Resolved;
 		for (const auto& Candidate:Edit.Materials) {
-			if (!Candidate.Key.starts_with("material:") || Staged.FindDefinitionId(Candidate.Key))
+			if ((!Edit.ImportDefinitions && !Candidate.Key.starts_with("material:")) || Staged.FindDefinitionId(Candidate.Key))
 				throw std::domain_error("[BlockGrid:Conflict] Material binding already exists");
 			auto D=ResolveAssetDefinition(Candidate);
 			(void)Staged.Define(D); Resolved.push_back(std::move(D));

@@ -1025,6 +1025,10 @@ if(BUILD_TESTING)
 	set_tests_properties(gargantuan_spatial_construction_integration PROPERTIES LABELS "spatial;blockgrid;integration")
 	find_program(GARGANTUAN_SPATIAL_TEST_PYTHON NAMES python3 python)
 	if(GARGANTUAN_SPATIAL_TEST_PYTHON)
+		add_test(NAME gargantuan_spatial_grid_clipboard
+			COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialGridClipboardAuthoring.py"
+				--engine $<TARGET_FILE:gargantuan>)
+		set_tests_properties(gargantuan_spatial_grid_clipboard PROPERTIES LABELS "spatial;blockgrid;editor;headless" TIMEOUT 75)
 		add_test(NAME gargantuan_spatial_construction_yard
 			COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialConstructionYardInput.py"
 				--engine $<TARGET_FILE:gargantuan>)
