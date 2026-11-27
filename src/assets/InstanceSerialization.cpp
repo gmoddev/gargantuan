@@ -4,6 +4,7 @@
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
+#include "gargantuan/runtime/SpatialDomainMember.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/LuaSourceContainer.hpp"
 #include "gargantuan/classes/Sound.hpp"
@@ -173,6 +174,9 @@ namespace gargantuan::InstanceSerialization {
 				if (!Node || Depth > MaximumProtocolJsonDepth || Ids.size() >= MaximumPersistenceObjects)
 					throw std::length_error("Instance persistence hierarchy exceeds its depth or object limit");
 				const auto Id = static_cast<std::uint32_t>(Ids.size() + 1);
+				if (const auto *Member = dynamic_cast<const SpatialDomainMember *>(Node.get());
+					Member && Member->HasAssignedRegion() && !Member->GetAssignedRegion())
+					throw std::invalid_argument("[Spatial:Persistence] Clear or replace the destroyed domain assignment before saving");
 				if (!GatheringDomains) {
 					auto *Region = dynamic_cast<SpatialRegion *>(Node.get());
 					const auto Owner = Region ? Region->GetTerrain() : nullptr;
