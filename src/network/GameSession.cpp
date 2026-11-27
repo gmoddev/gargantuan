@@ -56,6 +56,7 @@
 #include <limits>
 #include <map>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -4174,6 +4175,40 @@ namespace gargantuan::network {
 		const GameSession &Session, ConnectionId Connection) {
 		return Session.State->Scheduler.GetStatistics(Connection);
 	}
+	std::string detail::GameSessionTestAccess::DescribeSpatialMotion(const GameSession &Session, ConnectionId Connection) {
+		const auto *State = Session.State.get();
+		if (!State || !State->Runtime) return "no runtime";
+		const auto It = State->Peers.find(Connection);
+		if (It == State->Peers.end()) return "no peer";
+		const auto &Peer = It->second;
+		const auto Player = State->TransferPlayer(Connection, Peer);
+		const auto Subject = Player ? GetSpatialTransferSubject(*Player) : nullptr;
+		const auto World = Subject ? WorldRoot::GetEffectiveWorld(*Subject) : nullptr;
+		std::ostringstream Out;
+		Out << "epoch=" << Peer.SessionEpoch << " grant=" << Peer.CurrentGrantGeneration
+			<< " stage=" << bool(Peer.Staging) << " transfer=" << State->HasTransfer(Peer)
+			<< " serial=" << Peer.LastMotionSerial;
+		if (!World) return Out.str() + " no controlled world";
+		const auto Bounds = Peer.MotionWindow ? Peer.MotionWindow->Bounds : State->ControlledMotionArea(Player);
+		if (const auto &Offer = Peer.MotionWindow) {
+			Out << " offer=" << Offer->Serial << " installed=" << Offer->Installed << " digest=" << Offer->Digest.ToString()
+				<< " current=" << State->CheckMotionWindow(Connection, Peer, *World, *Subject, *Offer);
+		}
+		const auto Receipt = World->PrepareSpatialDestination(Bounds);
+		if (!Receipt) return Out.str() + " nativeError=" + std::to_string(static_cast<int>(Receipt.error()));
+		const auto Digest = State->MotionDigest(Connection, Peer, *World, *Subject, Bounds);
+		Out << " local=" << (Digest ? Digest->ToString() : "unavailable");
+		for (const auto &Native : Receipt->Providers) {
+			if (Native.Provider == SpatialCollisionProvider::Rigid && Native.Owner == Subject->GetObjectId()) continue;
+			const auto Binding = State->ProjectMotionProvider(Connection, Peer, *World, Native, Bounds);
+			Out << " provider[" << static_cast<int>(Native.Provider) << "," << Native.Owner.Slot << "," << Native.Installed.size() << "]=";
+			if (!Binding) Out << "unavailable";
+			else Out << Binding->Owner.Owner.Slot << "," << Binding->LogicalRevision << "," << Binding->CoverageRevision << ","
+				<< Binding->Content.ToString() << ",resolved=" << (State->ResolveTransferOwner(Binding->Owner) == Native.Owner);
+		}
+		return Out.str();
+	}
+
 	detail::GameSessionTestAccess::GameplayClientCounters detail::GameSessionTestAccess::GetGameplayClientCounters(
 		const GameSession &Session) {
 		const auto &State = *Session.State;

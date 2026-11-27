@@ -18,6 +18,7 @@
 #include "gargantuan/terrain/Field.hpp"
 #include "gargantuan/network/TerrainSession.hpp"
 #include "../src/terrain/ScenePersistence.hpp"
+#include "../src/network/GameSessionTestAccess.hpp"
 #include "gargantuan/network/GameSession.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -181,6 +182,7 @@ namespace {
 			}
 		} End{Owner, Spectator, Server, OwnerRuntime, SpectatorRuntime, ServerRuntime};
 		std::uint64_t Tick{};
+		std::optional<CharacterMotionResult> LastMotion;
 		bool ObserveStage{}, SawScopedGrid{};
 		std::optional<ConnectionId> Connection;
 		auto Exchange = [&] {
@@ -222,6 +224,14 @@ namespace {
 				std::cerr << "[Spatial:Session] " << Failure << " tick=" << Tick << " character=" << CharacterProfile
 						  << " owner=" << Owner.GetFailure() << " spectator=" << Spectator.GetFailure()
 						  << " server=" << Server.GetFailure();
+				if (LastMotion) {
+					std::cerr << " motionStatus=" << static_cast<int>(LastMotion->Status)
+						<< " appliedX=" << LastMotion->AppliedTranslation.x << " contact=" << LastMotion->Collided
+						<< " physicsNs=" << LastMotion->PhysicsCpuNanoseconds;
+					if (Connection) std::cerr << " serverMotion={" << detail::GameSessionTestAccess::DescribeSpatialMotion(Server, *Connection) << '}';
+					if (const auto Primary=Owner.GetPrimaryConnection())
+						std::cerr << " ownerMotion={" << detail::GameSessionTestAccess::DescribeSpatialMotion(Owner, *Primary) << '}';
+				}
 				if (Connection) {
 					const auto Status = Server.GetSpatialTransferStatus(*Connection);
 					if (Status) std::cerr << " transfer=" << static_cast<int>(*Status);
@@ -471,8 +481,8 @@ script:SetAttribute("Isolated", true)
 			const CharacterMotionRequest Step{.Translation={.25f,0,0}};
 			Wait([&] {
 				if (!Advanced) {
-					const auto Result=Avatar->AdmitMotion(*Room,Step);
-					Advanced=Result.Succeeded() && Result.AppliedTranslation.x>.2f;
+					LastMotion=Avatar->AdmitMotion(*Room,Step);
+					Advanced=LastMotion->Succeeded() && LastMotion->AppliedTranslation.x>.2f;
 				}
 				return Advanced;
 			}, "ordinary movement never received matching collision coverage after the handoff");
