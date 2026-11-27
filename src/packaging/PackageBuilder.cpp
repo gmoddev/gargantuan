@@ -1686,11 +1686,12 @@ namespace gargantuan {
 				}
 		}
 		auto Terrain = terrain::CaptureSceneTerrain(*World, ProjectValue.Identity);
+		if (ManagedMultiplayer && Terrain) SpatialContent = true;
 		const auto TerrainManifest = Terrain ? std::optional(Terrain->ManifestDigest) : std::nullopt;
 		auto Domains = terrain::CaptureDocumentTerrain(World, ProjectValue.Identity, Terrain ? Terrain->ClosureBytes : 0);
 		const auto DomainBindings = terrain::GetDomainTerrainBindings(Domains);
-		if ((Terrain || !Domains.empty()) && (Audience != PackageAudience::Trusted ||
-			(RuntimeDistribution && RuntimeDistribution->Target != RuntimeDistributionTarget::OfflinePlayer)))
+		if ((Terrain || !Domains.empty()) && (Audience != PackageAudience::Trusted || ManagedMultiplayer) &&
+			!(ManagedMultiplayer && SpatialContent && Domains.empty()))
 			throw RuntimeDistributionError("UnsupportedTerrainTarget",
 				"Terrain requires a trusted package or a managed Offline Player.");
 		if (Audience != PackageAudience::Trusted || (RuntimeDistribution &&
@@ -1716,7 +1717,7 @@ namespace gargantuan {
 			.UnsavedChanges = Dirty,
 			.PreRunSource = ReadProjectPreRunSource(ProjectValue.Root),
 			.SchemaSnapshot = GetRuntimeSchemaLifecycle().GetActiveRegistry(),
-			.TerrainArtifacts = Terrain ? std::move(Terrain->Artifacts) : std::vector<terrain::TerrainArtifact>{},
+			.TerrainArtifacts = Terrain && Audience == PackageAudience::Trusted ? std::move(Terrain->Artifacts) : std::vector<terrain::TerrainArtifact>{},
 		};
 		if (!Domains.empty()) {
 			for (auto &[Node, Capture] : Domains)
@@ -1733,6 +1734,10 @@ namespace gargantuan {
 				throw RuntimeDistributionError("AudienceViolation", "The runtime distribution target and package audience disagree.");
 			Result.DistributionPlan = CaptureRuntimeDistribution(ProjectValue, World, *RuntimeDistribution, true);
 			Result.DistributionPlan->SpatialContent = SpatialContent;
+			if (SpatialContent && Terrain) {
+				Result.DistributionPlan->WorkspaceTerrainManifest = TerrainManifest->ToString();
+				Result.DistributionPlan->WorkspaceTerrainSpacingShift = Terrain->Index.Grid.SpacingShift;
+			}
 			if (RuntimeDistribution->Target != RuntimeDistributionTarget::OfflinePlayer) {
 				Json Bindings = Json::array();
 				auto ClientScripts = client_package::CaptureEligibleScripts(*World);
@@ -1981,6 +1986,8 @@ namespace gargantuan {
 						.ContentKeyId = Policy.ContentKeyId, .Compiler = std::string(GetRuntimeScriptCompilerIdentity()),
 						.ClientCodeIdentity = Plan->ClientCodeIdentity,
 						.SpatialContent = Plan->SpatialContent,
+						.WorkspaceTerrainManifest = Plan->WorkspaceTerrainManifest,
+						.WorkspaceTerrainSpacingShift = Plan->WorkspaceTerrainSpacingShift,
 					};
 					Result.PlayerExecutableSha256 = Executable->Sha256;
 				}
@@ -2411,8 +2418,15 @@ namespace gargantuan {
 				"The packaged project payload is malformed or exceeds its bounds."
 			);
 		}
+		const bool SpatialServerTerrain = Manifest->RuntimeDistribution && Manifest->RuntimeDistribution->SpatialContent &&
+			Manifest->Inspection.Target == RuntimeDistributionTarget::DedicatedServer && DomainBindings.empty();
+		if (SpatialServerTerrain &&
+			(TerrainDigest ? TerrainDigest->ToString() : std::string{}) != Manifest->RuntimeDistribution->WorkspaceTerrainManifest) {
+			AddDiagnostic(Diagnostics,PackageDiagnosticSeverity::Error,"Content","InvalidTerrainClosure","Spatial server terrain does not match its package binding.");
+			return Diagnostics;
+		}
 		if ((!DomainBindings.empty() && IsLoopbackClient) || ((TerrainDigest || !DomainBindings.empty()) &&
-			Manifest->Inspection.Target && Manifest->Inspection.Target != RuntimeDistributionTarget::OfflinePlayer)) {
+			Manifest->Inspection.Target && Manifest->Inspection.Target != RuntimeDistributionTarget::OfflinePlayer && !SpatialServerTerrain)) {
 			AddDiagnostic(Diagnostics, PackageDiagnosticSeverity::Error, "Content", "UnsupportedTerrainTarget",
 				"Terrain requires a trusted package or a managed Offline Player.");
 			return Diagnostics;
@@ -2549,6 +2563,8 @@ namespace gargantuan {
 			if (Manifest->RuntimeDistribution) {
 				Result.ClientCodeIdentity = Manifest->RuntimeDistribution->ClientCodeIdentity;
 				Result.SpatialContent = Manifest->RuntimeDistribution->SpatialContent;
+				Result.WorkspaceTerrainManifest = Manifest->RuntimeDistribution->WorkspaceTerrainManifest;
+				Result.WorkspaceTerrainSpacingShift = Manifest->RuntimeDistribution->WorkspaceTerrainSpacingShift;
 				auto Catalog = std::move(*Manifest->ScriptCatalog);
 				runtime_distribution::AdmitCatalog(Catalog, *Manifest->RuntimeDistribution,
 					Result.Inspection.Identity.ToString(), Manifest->DistributionSecurity, Manifest->TrustedCompiler, ReadPinned);

@@ -88,6 +88,23 @@ namespace gargantuan::network {
 		}
 	}
 
+	std::shared_ptr<TerrainSessionData> MakeTerrainReceiver(ProjectId Project, std::uint64_t PackageVersion,
+		AssetContentId Manifest, terrain::GridSpec Grid) {
+		if (!Project.IsValid() || !PackageVersion || !Manifest.IsValid() || !Grid.IsValid())
+			throw std::invalid_argument("[Terrain:Network] Invalid terrain receiver binding");
+		auto Data = std::make_shared<TerrainSessionData>();
+		GameBinaryWriter Binding(58);
+		Binding.Append(std::as_bytes(std::span(Project.Bytes)));
+		Binding.Integer(PackageVersion);
+		Binding.Append(std::as_bytes(std::span(Manifest.Bytes)));
+		Binding.Integer(TerrainStreamVersion);
+		Data->Binding = AssetContentId::Hash({reinterpret_cast<const std::uint8_t *>(Binding.Bytes.data()), Binding.Bytes.size()});
+		Data->Directory.Project = Project;
+		Data->Directory.Dataset = terrain::GetTerrainDatasetId(Project);
+		Data->Directory.Grid = Grid;
+		return Data;
+	}
+
 	std::shared_ptr<const TerrainSessionData> MakeTerrainSessionData(ProjectId Project, std::uint64_t PackageVersion,
 		std::span<const terrain::TerrainArtifact> Artifacts, bool Sender) {
 		if (Artifacts.empty()) return {};
@@ -112,13 +129,7 @@ namespace gargantuan::network {
 					throw std::invalid_argument("[Terrain:Network] Missing packaged terrain leaf");
 			}
 
-		auto Data = std::make_shared<TerrainSessionData>();
-		GameBinaryWriter Binding(58);
-		Binding.Append(std::as_bytes(std::span(Project.Bytes)));
-		Binding.Integer(PackageVersion);
-		Binding.Append(std::as_bytes(std::span(Manifest.Id.Digest.Bytes)));
-		Binding.Integer(TerrainStreamVersion);
-		Data->Binding = AssetContentId::Hash({reinterpret_cast<const std::uint8_t *>(Binding.Bytes.data()), Binding.Bytes.size()});
+		auto Data = MakeTerrainReceiver(Project,PackageVersion,Manifest.Id.Digest,Directory->Grid);
 		Data->Directory = std::move(*Directory);
 		if (Sender) Data->Source.assign(Artifacts.begin(), Artifacts.end() - 1);
 		return Data;
