@@ -659,7 +659,16 @@ namespace {
 		Pose.Position = {8,4,-6};
 		MakeGrid(Space,"WestGrid",{blockgrid::Stone,0},Pose);
 		auto Inside = MakeGrid(Region,"EastGrid",{blockgrid::Brick,1},Pose);
-		if (Session) AddPackageSessionProof(Game,Inside);
+		if (Session) {
+			// Keep the packaged Player's ordinary character in its observed grid neighborhood during the exchange.
+			auto SpawnFloor = std::make_shared<Part>();
+			SpawnFloor->SetName("SpawnFloor");
+			SpawnFloor->SetSize({6, 1, 6});
+			SpawnFloor->SetCFrame(CFrame(0, -.5f, 0));
+			SpawnFloor->SetAnchored(true);
+			SpawnFloor->SetParent(Space);
+			AddPackageSessionProof(Game,Inside);
+		}
 		else AddTerrainFixture(Space,Region);
 		if (WorkspaceTerrain) {
 			AddPackageWorkspaceTerrain(Space);
