@@ -7,6 +7,16 @@ return c({
 	since = "0.1.0",
 
 	properties = {
+		SpatialRegion = {
+			description = "Explicit independent spatial domain for this part and its spatial descendants. An unset value uses the enclosing world.",
+			type = t.Optional(t.Instance("SpatialRegion", true)),
+			unmodified = "std::nullopt",
+			overrideRead = "GetSpatialRegion",
+			overrideWrite = "SetSpatialRegion",
+			serializable = true,
+			replicated = true,
+			category = "World",
+		},
 		Anchored = {
 			description = "Whether to not interact with physics",
 			type = t.Bool,

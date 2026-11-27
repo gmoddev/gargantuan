@@ -100,23 +100,11 @@ namespace gargantuan {
 		}
 
 		bool IsInWorld(const Instance &Value, const WorldRoot &World) {
-			auto Parent = Value.ParentReference.lock();
-			while (Parent) {
-				if (auto *Ancestor = dynamic_cast<WorldRoot *>(Parent.get())) return Ancestor == &World;
-				if (dynamic_cast<ViewportFrame *>(Parent.get())) return false;
-				Parent = Parent->ParentReference.lock();
-			}
-			return false;
+			return WorldRoot::GetEffectiveWorld(Value).get() == &World;
 		}
 
 		bool IsVisualInWorld(const Instance &Value, const WorldRoot &World) {
-			auto Parent = Value.ParentReference.lock();
-			for (std::size_t Depth = 0; Parent && Depth < SemanticSpatialResolver::MaximumAttachmentDepth; ++Depth) {
-				if (auto *Ancestor = dynamic_cast<WorldRoot *>(Parent.get())) return Ancestor == &World;
-				if (dynamic_cast<ViewportFrame *>(Parent.get())) return false;
-				Parent = Parent->ParentReference.lock();
-			}
-			return false;
+			return WorldRoot::GetEffectiveWorld(Value).get() == &World;
 		}
 
 		RenderCameraSnapshot BuildCamera(
@@ -464,7 +452,7 @@ namespace gargantuan {
 		) {
 			const auto Object = Body ? Body->GetObjectId() : ObjectId{};
 			if (!Body || Body->GetDestroyed() || Body->IsDestroying() ||
-				Body->FindFirstAncestorWhichIsA("WorldRoot").get() != &World) {
+				WorldRoot::GetEffectiveWorld(*Body).get() != &World) {
 				Diagnostic = {RenderExtractionIssue::DeadObject, Object, "Skipped a dead deformable object"};
 				return std::nullopt;
 			}
@@ -1393,12 +1381,21 @@ namespace gargantuan {
 			// Discover visual-only socket meshes once per full resync. The limit is above
 			// the saved scene object bound and also bounds runtime-only scenes.
 			std::vector<std::shared_ptr<Instance>> Pending;
+			const auto StructuralVisual = [](const std::shared_ptr<Instance> &Node) {
+				if (!Node || dynamic_cast<WorldRoot *>(Node.get()) || dynamic_cast<ViewportFrame *>(Node.get())) return false;
+				const auto *Member = dynamic_cast<SpatialDomainMember *>(Node.get());
+				return !Member || !Member->HasAssignedRegion();
+			};
 			Pending.reserve(std::min(World.Children.size(), MaximumVisualTraversal));
 			if (World.Children.size() <= MaximumVisualTraversal)
-				for (const auto &Child : World.Children) Pending.push_back(Child);
+				for (const auto &Child : World.Children) if (StructuralVisual(Child)) Pending.push_back(Child);
+			for (const auto &[Id, Weak] : World.GetExplicitSpatialRoots()) {
+				if (Pending.size() > MaximumVisualTraversal) break;
+				if (auto Root = Weak.lock()) Pending.push_back(std::move(Root));
+			}
 			std::vector<std::shared_ptr<AttachmentMesh>> Visuals;
 			std::size_t Visited = 1;
-			bool VisualOverflow = World.Children.size() > MaximumVisualTraversal;
+			bool VisualOverflow = World.Children.size() > MaximumVisualTraversal || Pending.size() > MaximumVisualTraversal;
 			while (!Pending.empty() && !VisualOverflow) {
 				auto Current = std::move(Pending.back());
 				Pending.pop_back();
@@ -1413,7 +1410,7 @@ namespace gargantuan {
 					Visuals.push_back(std::move(Visual));
 				}
 				for (auto It = Current->Children.rbegin(); It != Current->Children.rend(); ++It)
-					Pending.push_back(*It);
+					if (StructuralVisual(*It)) Pending.push_back(*It);
 			}
 			LastProfile.VisualTraversalObjects = Visited;
 			if (VisualOverflow) {

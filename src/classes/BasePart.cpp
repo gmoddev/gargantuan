@@ -1,6 +1,7 @@
 #define GLM_ENABLE_EXPERIMENTAL
 
 #include "gargantuan/classes/BasePart.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/datatypes/CFrame.hpp"
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
@@ -10,6 +11,13 @@
 #include <stdexcept>
 
 namespace gargantuan {
+	std::optional<std::shared_ptr<SpatialRegion>> BasePart::GetSpatialRegion() const {
+		return GetAssignedRegion();
+	}
+	void BasePart::SetSpatialRegion(std::optional<std::shared_ptr<SpatialRegion>> Value) {
+		SetAssignedRegion(*this, std::move(Value));
+	}
+
 	namespace {
 		[[nodiscard]] bool ValidPhysicsVector(glm::vec3 Value) {
 			return std::isfinite(Value.x) && std::isfinite(Value.y) && std::isfinite(Value.z) &&

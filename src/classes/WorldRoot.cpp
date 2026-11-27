@@ -429,9 +429,9 @@ namespace gargantuan {
 		if (!PartA || !PartB || PartA == PartB || PartA->GetDestroyed() || PartB->GetDestroyed() ||
 			PartA->IsDestroying() || PartB->IsDestroying()) return {};
 
-		const auto ConstraintWorld = Constraint->FindFirstAncestorWhichIsA("WorldRoot");
-		const auto PartAWorld = PartA->FindFirstAncestorWhichIsA("WorldRoot");
-		const auto PartBWorld = PartB->FindFirstAncestorWhichIsA("WorldRoot");
+		const auto ConstraintWorld = GetEffectiveWorld(*Constraint);
+		const auto PartAWorld = GetEffectiveWorld(*PartA);
+		const auto PartBWorld = GetEffectiveWorld(*PartB);
 		if (ConstraintWorld.get() != this || PartAWorld.get() != this || PartBWorld.get() != this) return {};
 
 		const auto BodyA = CreatePartBody(PartA);
@@ -717,9 +717,9 @@ namespace gargantuan {
 		auto [PartA, PartB] = Constraint->GetActiveParts();
 		const bool ShouldExist = Constraint->GetEnabled() && PartA && PartB && PartA != PartB &&
 			!PartA->GetDestroyed() && !PartB->GetDestroyed() && !PartA->IsDestroying() && !PartB->IsDestroying() &&
-			Constraint->FindFirstAncestorWhichIsA("WorldRoot").get() == this &&
-			PartA->FindFirstAncestorWhichIsA("WorldRoot").get() == this &&
-			PartB->FindFirstAncestorWhichIsA("WorldRoot").get() == this;
+			GetEffectiveWorld(*Constraint).get() == this &&
+			GetEffectiveWorld(*PartA).get() == this &&
+			GetEffectiveWorld(*PartB).get() == this;
 		auto Existing = ConstraintJoints.find(Object);
 		if (!ShouldExist) {
 			if (Existing != ConstraintJoints.end()) {
@@ -796,7 +796,7 @@ namespace gargantuan {
 			auto Tracked = TrackedParts.find(Object);
 			auto Part = Tracked == TrackedParts.end() ? nullptr : Tracked->second.lock();
 			if (!Part || Part->GetDestroyed() || Part->IsDestroying() ||
-				Part->FindFirstAncestorWhichIsA("WorldRoot").get() != this) continue;
+				GetEffectiveWorld(*Part).get() != this) continue;
 			auto Found = PartBodies.find(Object);
 			if (Found == PartBodies.end() || !Physics.IsBodyValid(Found->second)) {
 				if (!CreatePartBody(Part).IsValid()) (void)MarkPartDirty(Object);
@@ -835,7 +835,7 @@ namespace gargantuan {
 			auto Tracked = TrackedDeformables.find(Object);
 			auto Body = Tracked == TrackedDeformables.end() ? nullptr : Tracked->second.lock();
 			if (!Body || Body->GetDestroyed() || Body->IsDestroying() ||
-				Body->FindFirstAncestorWhichIsA("WorldRoot").get() != this) continue;
+				GetEffectiveWorld(*Body).get() != this) continue;
 			auto Found = DeformableIds.find(Object);
 			if (Found == DeformableIds.end() || !Deformables.IsBodyValid(Found->second)) {
 				if (!CreateDeformableBody(Body).IsValid()) DirtyDeformables.insert(Object);
@@ -1047,6 +1047,18 @@ namespace gargantuan {
 		return (*State->Positions)[VertexIndex];
 	}
 
+	std::shared_ptr<WorldRoot> WorldRoot::GetEffectiveWorld(const Instance &Member) {
+		for (const Instance *Current = &Member; Current; Current = Current->ParentReference.lock().get()) {
+			if (const auto *Assigned = dynamic_cast<const SpatialDomainMember *>(Current);
+				Assigned && Assigned->HasAssignedRegion())
+				return Assigned->ResolveAssignedWorld(*Current);
+			if (dynamic_cast<const ViewportFrame *>(Current)) return {};
+			if (const auto *World = dynamic_cast<const WorldRoot *>(Current))
+				return std::static_pointer_cast<WorldRoot>(const_cast<WorldRoot *>(World)->shared_from_this());
+		}
+		return {};
+	}
+
 	WorldRoot::WorldRoot() : Physics(PhysicsWorldConfig{.Gravity = {0.0f, -Gravity, 0.0f}}) {
 		GravityConnection = GetPropertyChangedSignal("Gravity")->Connect([this](std::monostate) {
 			if (!ShuttingDownPhysics) GravityDirty = true;
@@ -1055,43 +1067,56 @@ namespace gargantuan {
 		DestroyingConnection = Destroying->Once([this](std::monostate) { ShutdownPhysics(); });
 
 		UnbindDescendants = BindDescendants([this](std::shared_ptr<Instance> Instance) {
-			if (ViewportFrame::FindContaining(*Instance)) return;
-			if (auto Part = std::dynamic_pointer_cast<BasePart>(Instance)) {
-				TrackPart(Part);
-				(void)CreatePartBody(Part);
-				for (const auto &[Id, _] : TrackedConstraints) DirtyConstraints.insert(Id);
-			} else if (auto Body = std::dynamic_pointer_cast<DeformableBody>(Instance)) {
-				TrackDeformable(Body);
-				(void)CreateDeformableBody(Body);
-			} else if (auto Attachment = std::dynamic_pointer_cast<SoftBodyAttachment>(Instance)) {
-				TrackSoftBodyAttachment(Attachment);
-			} else if (auto Material = std::dynamic_pointer_cast<SoftBodyMaterial>(Instance)) {
-				TrackSoftBodyMaterial(Material);
-			} else if (auto Constraint = std::dynamic_pointer_cast<gargantuan::Constraint>(Instance)) {
-				TrackConstraint(Constraint);
-				(void)CreateConstraintJoint(Constraint);
-			} else if (auto Light = std::dynamic_pointer_cast<LocalLight>(Instance)) {
-				LocalLights.insert_or_assign(Light->GetObjectId(), Light);
-			} else if (auto Probe = std::dynamic_pointer_cast<ReflectionProbe>(Instance)) {
-				ReflectionProbes.insert_or_assign(Probe->GetObjectId(), Probe);
-			}
+			if (SpatialDomainMember::GetAssignmentRoot(*Instance) || GetEffectiveWorld(*Instance).get() != this ||
+				ViewportFrame::FindContaining(*Instance))
+				return;
+			AdmitSpatialMember(Instance);
 		});
 
-		DescendantRemovedConnection = DescendantRemoved->Connect([this](std::shared_ptr<Instance> Instance) {
-			if (ShuttingDownPhysics) return;
-			if (auto Part = std::dynamic_pointer_cast<BasePart>(Instance)) RemovePart(Part);
-			else if (auto Body = std::dynamic_pointer_cast<DeformableBody>(Instance)) RemoveDeformable(Body);
-			else if (auto Attachment = std::dynamic_pointer_cast<SoftBodyAttachment>(Instance))
-				RemoveSoftBodyAttachment(Attachment);
-			else if (auto Material = std::dynamic_pointer_cast<SoftBodyMaterial>(Instance))
-				RemoveSoftBodyMaterial(Material);
-			else if (auto Constraint = std::dynamic_pointer_cast<gargantuan::Constraint>(Instance))
-				RemoveConstraint(Constraint);
-			else if (auto Light = std::dynamic_pointer_cast<LocalLight>(Instance))
-				LocalLights.erase(Light->GetObjectId());
-			else if (auto Probe = std::dynamic_pointer_cast<ReflectionProbe>(Instance))
-				ReflectionProbes.erase(Probe->GetObjectId());
+		DescendantRemovedConnection = DescendantRemoved->Connect([this](std::shared_ptr<Instance> Value) {
+			if (!ShuttingDownPhysics && !SpatialDomainMember::GetAssignmentRoot(*Value)) RemoveSpatialMember(Value);
 		});
+	}
+
+	void WorldRoot::AdmitSpatialMember(const std::shared_ptr<Instance> &Instance) {
+		if (auto Part = std::dynamic_pointer_cast<BasePart>(Instance)) {
+			if (TrackedParts.contains(Part->GetObjectId())) return;
+			TrackPart(Part);
+			(void)CreatePartBody(Part);
+			for (const auto &[Id, _] : TrackedConstraints)
+				DirtyConstraints.insert(Id);
+		} else if (auto Body = std::dynamic_pointer_cast<DeformableBody>(Instance)) {
+			TrackDeformable(Body);
+			(void)CreateDeformableBody(Body);
+		} else if (auto Attachment = std::dynamic_pointer_cast<SoftBodyAttachment>(Instance)) {
+			TrackSoftBodyAttachment(Attachment);
+		} else if (auto Material = std::dynamic_pointer_cast<SoftBodyMaterial>(Instance)) {
+			TrackSoftBodyMaterial(Material);
+		} else if (auto Constraint = std::dynamic_pointer_cast<gargantuan::Constraint>(Instance)) {
+			TrackConstraint(Constraint);
+			(void)CreateConstraintJoint(Constraint);
+		} else if (auto Light = std::dynamic_pointer_cast<LocalLight>(Instance)) {
+			LocalLights.insert_or_assign(Light->GetObjectId(), Light);
+		} else if (auto Probe = std::dynamic_pointer_cast<ReflectionProbe>(Instance)) {
+			ReflectionProbes.insert_or_assign(Probe->GetObjectId(), Probe);
+		}
+	}
+
+	void WorldRoot::RemoveSpatialMember(const std::shared_ptr<Instance> &Instance) {
+		if (auto Part = std::dynamic_pointer_cast<BasePart>(Instance)) {
+			if (TrackedParts.contains(Part->GetObjectId())) RemovePart(Part);
+		} else if (auto Body = std::dynamic_pointer_cast<DeformableBody>(Instance))
+			RemoveDeformable(Body);
+		else if (auto Attachment = std::dynamic_pointer_cast<SoftBodyAttachment>(Instance))
+			RemoveSoftBodyAttachment(Attachment);
+		else if (auto Material = std::dynamic_pointer_cast<SoftBodyMaterial>(Instance))
+			RemoveSoftBodyMaterial(Material);
+		else if (auto Constraint = std::dynamic_pointer_cast<gargantuan::Constraint>(Instance))
+			RemoveConstraint(Constraint);
+		else if (auto Light = std::dynamic_pointer_cast<LocalLight>(Instance))
+			LocalLights.erase(Light->GetObjectId());
+		else if (auto Probe = std::dynamic_pointer_cast<ReflectionProbe>(Instance))
+			ReflectionProbes.erase(Probe->GetObjectId());
 	}
 
 	WorldRoot::~WorldRoot() {

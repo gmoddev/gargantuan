@@ -1,4 +1,5 @@
 #include "gargantuan/Engine.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
 #include "runtime/PublicationLatencyDiagnostics.hpp"
 #include "runtime/RuntimeWorkDiagnostics.hpp"
 #include "terrain/TerrainMaterialPalette.hpp"
@@ -443,8 +444,15 @@ namespace gargantuan {
 				}
 				if (CharacterControl) CharacterControl->SetPreSimulationActive(false);
 				if (Destroyed) return;
-				runtime_detail::MeasureWork(runtime_detail::WorkPhase::Physics,
-					[&] { WorldRoot->StepPhysics(deltaTime, std::nullopt); });
+				runtime_detail::MeasureWork(runtime_detail::WorkPhase::Physics, [&] {
+					WorldRoot->StepPhysics(deltaTime, std::nullopt);
+					if (Destroyed) return;
+					for (const auto &Region : DataModel->GetSpatialRegions()) {
+						if (!Region->GetDestroyed() && !Region->IsDestroying() && Region->GetDataModel() == DataModel)
+							Region->StepPhysics(deltaTime, std::nullopt);
+						if (Destroyed) break;
+					}
+				});
 				if (Destroyed) return;
 				Workspace->GetCurrentCamera()->Step(deltaTime);
 				if (Destroyed) return;
@@ -561,11 +569,13 @@ namespace gargantuan {
 				const auto [viewportWidth, viewportHeight] = Renderer->GetViewportSize();
 				auto camera = Workspace->GetCurrentCamera();
 				const auto CameraInput = MakeRenderCameraInput(*camera);
-				WorldRoot->UpdateTerrainVisualDensity(CameraInput, viewportWidth, viewportHeight);
-				RenderPublishing.SetTerrainRenderState(WorldRoot->GetTerrainRenderState());
+				const auto Selected = Workspace->GetCurrentSpatialRegion();
+				const std::shared_ptr<gargantuan::WorldRoot> ViewWorld = Selected ? *Selected : WorldRoot;
+				ViewWorld->UpdateTerrainVisualDensity(CameraInput, viewportWidth, viewportHeight);
+				RenderPublishing.SetTerrainRenderState(ViewWorld->GetTerrainRenderState());
 				auto Publication = runtime_detail::MeasureWork(runtime_detail::WorkPhase::RenderPublication,
 					[&] { return RenderPublishing.Publish(
-						*WorldRoot, CameraInput, viewportWidth, viewportHeight); });
+						*ViewWorld, CameraInput, viewportWidth, viewportHeight); });
 				try {
 #if defined(GARGANTUAN_WORK_TRACE)
 					runtime_detail::WorkScope DrawWork(runtime_detail::WorkPhase::RenderDraw);

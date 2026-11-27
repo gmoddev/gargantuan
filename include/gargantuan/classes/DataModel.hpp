@@ -8,12 +8,14 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <cstddef>
 
 namespace gargantuan {
 	class ScopedAuthoritativeRevisionDeferral;
 	class AssetService;
 	class PackageBuilder;
+	class SpatialRegion;
 	class DataModel : public ServiceProvider {
 		I_DataModel;
 		~DataModel() override;
@@ -23,6 +25,13 @@ namespace gargantuan {
 		std::filesystem::path Root;
 		BaseFilesystem *Filesystem = nullptr;
 		TagIndex Tags;
+		[[nodiscard]] std::vector<std::shared_ptr<SpatialRegion>> GetSpatialRegions() const;
+
+	  private:
+		friend class SpatialRegion;
+		std::map<ObjectId, std::weak_ptr<SpatialRegion>> SpatialRegions;
+
+	  public:
 		AuthoritativeTransactionHistory Transactions;
 
 		static constexpr std::uint64_t InitialProjectRevision = 1;

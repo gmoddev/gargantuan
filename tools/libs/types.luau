@@ -4,6 +4,7 @@ export type Type = {
 	read cType: string,
 	read cIncludes: { string }?,
 	read cForwardStatement: string?,
+	read forwardObjectHeader: string?,
 	read luauType: string,
 	read editorDataType: string?,
 	read wireType: string?,
@@ -80,13 +81,14 @@ const types = {
 	}),
 }
 
-function types.Instance(className: string?): Type
+function types.Instance(className: string?, forward: boolean?): Type
 	className = className or "Instance"
 
 	return {
 		kind = "class",
 		cType = `std::shared_ptr<gargantuan::{className}>`,
-		cIncludes = { `"gargantuan/classes/{className}.hpp"` },
+		cIncludes = if forward then { "<memory>" } else { `"gargantuan/classes/{className}.hpp"` },
+		forwardObjectHeader = if forward then `"gargantuan/classes/{className}.hpp"` else nil,
 		cForwardStatement = `class {className};`,
 		luauType = className,
 		editorDataType = "ObjectReference",

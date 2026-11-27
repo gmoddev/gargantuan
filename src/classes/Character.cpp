@@ -132,7 +132,13 @@ namespace gargantuan {
 		return PresentationOffset ? Transform * *PresentationOffset : Transform;
 	}
 
-	CharacterMotionResult Character::AdmitMotion(WorldRoot &World, const CharacterMotionRequest &Request) {
+	CharacterMotionResult Character::AdmitMotion(WorldRoot &CallerWorld, const CharacterMotionRequest &Request) {
+		const auto SpatialRoot = RootPartValue ? WorldRoot::GetEffectiveWorld(*RootPartValue) : WorldRoot::GetEffectiveWorld(*this);
+		if (RootPartValue && SpatialDomainMember::GetAssignmentRoot(*RootPartValue) && !SpatialRoot)
+			return {.Status = PhysicsOperationStatus::ResourceLimit};
+		if (SpatialRoot && SpatialRoot->GetDataModel() != CallerWorld.GetDataModel())
+			return {.Status = PhysicsOperationStatus::InvalidDescription};
+		WorldRoot &World = SpatialRoot ? *SpatialRoot : CallerWorld;
 		CharacterMotionResult Result{
 			.RequestedTranslation = Request.Translation,
 			.Position = Transform.Position,

@@ -1,4 +1,5 @@
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/Terrain.hpp"
 
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
@@ -29,6 +30,15 @@ namespace gargantuan {
 		thread_local DataModel *DeferredRevisionWorld = nullptr;
 		thread_local bool *DeferredRevisionChanged = nullptr;
 	}
+	std::vector<std::shared_ptr<SpatialRegion>> DataModel::GetSpatialRegions() const {
+		std::vector<std::shared_ptr<SpatialRegion>> Result;
+		Result.reserve(SpatialRegions.size());
+		for (const auto &[Id, Weak] : SpatialRegions)
+			if (auto Region = Weak.lock(); Region && !Region->GetDestroyed() && !Region->IsDestroying())
+				Result.push_back(std::move(Region));
+		return Result;
+	}
+
 	DataModel::~DataModel() {
 		// Destroy() must leave final records readable while consumers own this
 		// world. Only the final shared-owner release retires the process caches.

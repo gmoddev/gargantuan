@@ -28,6 +28,7 @@ type GenerationState = {
 	publicBody: StringBuilder.StringBuilder,
 
 	includes: { [string]: true },
+	forwardObjects: { [string]: string },
 	DefaultOverrides: { any },
 }
 
@@ -58,6 +59,10 @@ for _, File in { "tools/classgen.luau", "tools/libs/classes.luau", "tools/libs/t
 end
 
 const function pushTypeDependencies(state: GenerationState, type: types.Type)
+	const object = type.optionalValue or type
+	if object.forwardObjectHeader and object.cForwardStatement then
+		state.forwardObjects[object.forwardObjectHeader] = object.cForwardStatement
+	end
 	if type.cIncludes then
 		for _, include in type.cIncludes do
 			state.includes[include] = true
@@ -281,6 +286,9 @@ const function assembleHeaderFile(state: GenerationState)
 	for include in orderedPairs(state.includes) do
 		headerBody:push("#include "):push(include):push(" // IWYU pragma: keep"):newline()
 	end
+	for _, declaration in orderedPairs(state.forwardObjects) do
+		headerBody:line(`namespace gargantuan \{ {declaration} }`)
+	end
 
 	headerBody
 		:newline()
@@ -302,6 +310,9 @@ const function assembleImplFile(state: GenerationState)
 		"/"
 	)
 	output:line(`#include {string.format("%q", IncludePath)}`)
+	for include in orderedPairs(state.forwardObjects) do
+		output:line(`#include {include}`)
+	end
 
 	output:line("namespace gargantuan {"):tab()
 
@@ -420,6 +431,7 @@ const function assembleFile(target: Target, inputFilepath: path.Pathlike)
 			['"gargantuan/InstanceProperty.hpp"'] = true,
 			['"gargantuan/reflection/InstanceClassRegistry.hpp"'] = true,
 		},
+		forwardObjects = {},
 		DefaultOverrides = ResolvedOverrides,
 	}
 
