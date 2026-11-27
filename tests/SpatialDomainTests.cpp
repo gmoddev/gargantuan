@@ -169,11 +169,11 @@ namespace {
 		Check(!A->ValidateSpatialDestination(WithGrid), "moving grid owner must invalidate a held destination");
 		const auto PartsGrid = std::make_shared<BlockGrid>();
 		blockgrid::Field Catalog;
-		Check(Catalog.Define({.Key="Low",.Geometry=blockgrid::Shape::Slab}) &&
-			Catalog.Define({.Key="Sensor",.CanCollide=false,.Queryable=true}), "shape catalog declarations");
+		Check(Catalog.Define({.Key="project:low",.Geometry=blockgrid::Shape::Slab}) &&
+			Catalog.Define({.Key="project:sensor",.CanCollide=false,.Queryable=true}), "shape catalog declarations");
 		const std::array<blockgrid::Write,2> Pieces{{
-			{blockgrid::SingleCell({0,0,0}), {Catalog.GetDefinitionId("Low"),0}},
-			{blockgrid::SingleCell({3,0,0}), {Catalog.GetDefinitionId("Sensor"),0}}}};
+			{blockgrid::SingleCell({0,0,0}), {Catalog.GetDefinitionId("project:low"),0}},
+			{blockgrid::SingleCell({3,0,0}), {Catalog.GetDefinitionId("project:sensor"),0}}}};
 		Check(Catalog.Apply(Pieces), "shape catalog membership");
 		PartsGrid->RestoreField(std::move(Catalog)); PartsGrid->SetCFrame(CFrame(31,0,0)); PartsGrid->SetParent(B);
 		const std::array CatalogOwner{PartsGrid->GetObjectId()};
