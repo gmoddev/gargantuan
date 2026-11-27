@@ -2290,12 +2290,20 @@ namespace gargantuan {
 				const auto Id = PlaySessionId{NextPlaySessionId++};
 				try {
 					auto Snapshot = CurrentProject->CaptureGame(World, World->GetAuthoritativeRevision());
-					const auto AdmitTerrain = terrain::GetSceneTerrainAdmission(CurrentProject->Identity,
+					const auto Reader = terrain::BudgetDocumentTerrainReads(
 						[&Snapshot](const terrain::TerrainArtifactId &Artifact, std::size_t Maximum) {
 							const auto Artifacts = Snapshot.Terrain ? std::span<const terrain::TerrainArtifact>(Snapshot.Terrain->Artifacts)
 								: std::span<const terrain::TerrainArtifact>{};
-							return terrain::ReadCapturedTerrainArtifact(Artifacts, Artifact, Maximum);
+							if (terrain::FindTerrainArtifact(Artifacts, Artifact))
+								return terrain::ReadCapturedTerrainArtifact(Artifacts, Artifact, Maximum);
+							for (const auto &[Node, Capture] : Snapshot.Domains)
+								if (terrain::FindTerrainArtifact(Capture.Artifacts, Artifact))
+									return terrain::ReadCapturedTerrainArtifact(Capture.Artifacts, Artifact, Maximum);
+							return std::expected<std::vector<std::uint8_t>, terrain::TerrainPersistenceError>(
+								std::unexpected(terrain::TerrainPersistenceError::MissingArtifact));
 						});
+					const auto AdmitTerrain = terrain::GetSceneTerrainAdmission(CurrentProject->Identity, Reader);
+					const auto AdmitDomains = terrain::GetDomainTerrainAdmission(CurrentProject->Identity, Reader);
 					auto ScriptSources = (DebugSourceId || parameters.value("IncludeScriptFailureLocations", false))
 						? CapturePlayScriptSources(*CurrentProject, World) : PlayScriptSources{};
 					ScriptSources.DebugSourceId = DebugSourceId;
@@ -2303,7 +2311,7 @@ namespace gargantuan {
 						Id, std::move(Snapshot.Contents), CurrentProject->InstanceFileFormat,
 						CurrentProject->Root, ViewportWidth == 0 ? 720 : ViewportWidth,
 						ViewportHeight == 0 ? 540 : ViewportHeight, Snapshot.Revision, std::move(Snapshot.Assets),
-						AudioEnabled && !DebugSourceId, std::move(Persistence), AdmitTerrain, std::move(ScriptSources)
+						AudioEnabled && !DebugSourceId, std::move(Persistence), AdmitTerrain, std::move(ScriptSources), AdmitDomains
 					);
 					AdvanceViewportGeneration();
 					ActivePlaySession = std::move(NewPlaySession);
@@ -4028,6 +4036,7 @@ namespace gargantuan {
 				const bool IsModel = method == "ExportGasModel";
 				SerializationResult<Gas::Document> Document;
 				std::optional<terrain::TerrainCapture> CapturedTerrain;
+				terrain::DomainTerrainCaptures CapturedDomains;
 				if (IsModel) {
 					if (!HasOnlyFields(parameters, {"Roots", "AssetIds"}) || !parameters.contains("Roots") ||
 						!parameters["Roots"].is_array() || parameters["Roots"].empty() || parameters["Roots"].size() > 256)
@@ -4072,7 +4081,7 @@ namespace gargantuan {
 				} else {
 					if (!parameters.empty())
 						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GASP export takes no parameters"));
-					Document = CurrentProject->CaptureGasPlace(World, &CapturedTerrain);
+					Document = CurrentProject->CaptureGasPlace(World, &CapturedTerrain, &CapturedDomains);
 					if (Document && (Document->Place->PreRunSource != ActivePreRunSource ||
 						GetRuntimeSchemaLifecycle().GetActiveGeneration() != ActivePreRunSchemaGeneration))
 						return SerializeBoundedResponse(ErrorResponse(requestId, "GasExportFailed",
@@ -4085,9 +4094,10 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "GasExportFailed", Encoded.error().Message));
 				if (Encoded->size() > MaximumGasTransferBytes)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ResourceLimit", "GAS exceeds the EditorHost transfer limit"));
-				if (CapturedTerrain) {
+				if (CapturedTerrain || !CapturedDomains.empty()) {
 					try {
-						CurrentProject->PersistTerrainArtifacts(*CapturedTerrain);
+						if (CapturedTerrain) CurrentProject->PersistTerrainArtifacts(*CapturedTerrain);
+						for (const auto &[Node, Capture] : CapturedDomains) CurrentProject->PersistTerrainArtifacts(Capture, Node);
 					} catch (const std::exception &Error) {
 						return SerializeBoundedResponse(ErrorResponse(requestId, "GasExportFailed", Error.what()));
 					}

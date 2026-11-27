@@ -24,6 +24,7 @@ namespace gargantuan {
 			std::string Contents;
 			AssetProjectSnapshot Assets;
 			std::optional<terrain::TerrainCapture> Terrain;
+			terrain::DomainTerrainCaptures Domains;
 		};
 
 		std::filesystem::path Root;
@@ -57,6 +58,8 @@ namespace gargantuan {
 			std::string Contents;
 			std::optional<AssetContentId> Manifest;
 			std::unique_ptr<terrain::Field> Terrain;
+			terrain::DomainTerrainBindings Bindings;
+			std::map<std::uint32_t, std::unique_ptr<terrain::Field>> DomainFields;
 		};
 
 		[[nodiscard]] PreparedGame PrepareGameLoad() const;
@@ -64,9 +67,11 @@ namespace gargantuan {
 		[[nodiscard]] std::shared_ptr<DataModel> DeserializeGame(PreparedGame Prepared);
 		// Capture a place from a world owned by this project's filesystem.
 		[[nodiscard]] SerializationResult<Gas::Document> CaptureGasPlace(const std::shared_ptr<DataModel> &World,
-			std::optional<terrain::TerrainCapture> *CapturedTerrain = nullptr) const;
-		void PersistTerrainArtifacts(const terrain::TerrainCapture &Capture) const;
-		[[nodiscard]] std::optional<AssetContentId> GetPersistedTerrainManifest() const;
+			std::optional<terrain::TerrainCapture> *CapturedTerrain = nullptr,
+			terrain::DomainTerrainCaptures *CapturedDomains = nullptr) const;
+		void PersistTerrainArtifacts(const terrain::TerrainCapture &Capture,
+			std::optional<std::uint32_t> DomainNode = std::nullopt) const;
+		[[nodiscard]] std::optional<AssetContentId> GetPersistedTerrainManifest(terrain::DomainTerrainBindings *Domains = nullptr) const;
 		void ValidatePersistenceDestination() const;
 		void ExportGasPlace(const std::shared_ptr<DataModel> &World, const std::filesystem::path &Destination,
 			const std::optional<std::string> &ExpectedPreRunSource) const;

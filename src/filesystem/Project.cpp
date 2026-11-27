@@ -1,3 +1,4 @@
+#include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/assets/GasDependencies.hpp"
 #include "gargantuan/assets/GasInstanceSerialization.hpp"
@@ -370,12 +371,15 @@ namespace gargantuan {
 		SourceMountBudget Budget;
 		auto Contents = Mount.ReadFile(InstanceFilePath.lexically_relative(Root), MaximumProtocolDocumentBytes, Budget);
 		if (!Contents) throw std::runtime_error(Contents.error().Format());
-		auto Manifest = InstanceSerialization::InspectTerrainManifest(*Contents);
+		auto Manifest = InstanceSerialization::InspectTerrainManifest(*Contents, &Result.Bindings);
 		if (!Manifest) throw std::runtime_error(Manifest.error());
 		Result.Contents = std::move(*Contents);
 		Result.Manifest = *Manifest;
+		const auto Reader = terrain::BudgetDocumentTerrainReads(GetProjectTerrainReader(*Filesystem));
 		if (Result.Manifest)
-			Result.Terrain = terrain::LoadSceneTerrain(Identity, *Result.Manifest, GetProjectTerrainReader(*Filesystem));
+			Result.Terrain = terrain::LoadSceneTerrain(Identity, *Result.Manifest, Reader);
+		for (const auto &[Node, Digest] : Result.Bindings)
+			Result.DomainFields.emplace(Node, terrain::LoadDomainTerrain(Identity, Node, Digest, Reader));
 		return Result;
 	}
 
@@ -394,6 +398,11 @@ namespace gargantuan {
 				const auto Space = std::dynamic_pointer_cast<Workspace>(World.GetService("Workspace"));
 				if (!Space) throw std::runtime_error("[Terrain:Persistence] Expected a canonical Workspace");
 				Space->RestoreTerrainField(std::move(Prepared.Terrain));
+			}, [&](SpatialRegion &Region, std::uint32_t Node, const AssetContentId &Digest) {
+				const auto It = Prepared.DomainFields.find(Node);
+				if (It == Prepared.DomainFields.end() || !It->second || Prepared.Bindings.at(Node) != Digest)
+					throw terrain::TerrainPersistenceFailure(terrain::TerrainPersistenceError::InvalidBinding);
+				Region.RestoreTerrainField(std::move(It->second));
 			});
 		if (!deserialized.Ok) {
 			std::ostringstream err;
@@ -424,7 +433,7 @@ namespace gargantuan {
 	};
 
 	SerializationResult<Gas::Document> Project::CaptureGasPlace(const std::shared_ptr<DataModel> &World,
-		std::optional<terrain::TerrainCapture> *CapturedTerrain) const {
+		std::optional<terrain::TerrainCapture> *CapturedTerrain, terrain::DomainTerrainCaptures *CapturedDomains) const {
 		try {
 			AssertAuthoritativeMutation("CaptureGasPlace");
 			RequireFrozenRuntimeSchema("CaptureGasPlace");
@@ -432,12 +441,13 @@ namespace gargantuan {
 				World->Filesystem != Filesystem || World->Root != Root)
 				return SerializationFailure(SerializationErrorCode::InvalidValue, "Expected a world owned by this project");
 			auto Terrain = terrain::CaptureSceneTerrain(*World, Identity);
-			if (Terrain && !CapturedTerrain)
+			auto Domains = terrain::CaptureDocumentTerrain(World, Identity, Terrain ? Terrain->ClosureBytes : 0);
+			if ((Terrain && !CapturedTerrain) || (!Domains.empty() && !CapturedDomains))
 				return SerializationFailure(SerializationErrorCode::InvalidValue, "Terrain place capture requires its artifact closure");
 			const std::array<std::shared_ptr<Instance>, 1> Roots{World};
 			auto Document = InstanceSerialization::CaptureGasDocument(Roots, Gas::DocumentKind::Place,
 				Gas::PlaceMetadata{Identity, ReadProjectPreRunSource(Root),
-					Terrain ? std::optional(Terrain->ManifestDigest) : std::nullopt});
+					Terrain ? std::optional(Terrain->ManifestDigest) : std::nullopt, terrain::GetDomainTerrainBindings(Domains)});
 			if (!Document) return Document;
 			if (!HasPortableSourcePaths(*Document))
 				return SerializationFailure(SerializationErrorCode::InvalidValue, "GAS place has a nonportable FileLink path");
@@ -448,6 +458,7 @@ namespace gargantuan {
 			if (!Dependencies) return std::unexpected(std::move(Dependencies.error()));
 			Document->Dependencies = std::move(*Dependencies);
 			if (CapturedTerrain) *CapturedTerrain = std::move(Terrain);
+			if (CapturedDomains) *CapturedDomains = std::move(Domains);
 			return Document;
 		} catch (const std::exception &) {
 			return SerializationFailure(SerializationErrorCode::InternalFailure, "Could not capture GAS place");
@@ -458,7 +469,8 @@ namespace gargantuan {
 		const std::optional<std::string> &ExpectedPreRunSource) const {
 		if (Destination.extension() != ".gasp") throw std::invalid_argument("GAS place export requires a .gasp destination");
 		std::optional<terrain::TerrainCapture> CapturedTerrain;
-		const auto Document = CaptureGasPlace(World, &CapturedTerrain);
+		terrain::DomainTerrainCaptures Domains;
+		const auto Document = CaptureGasPlace(World, &CapturedTerrain, &Domains);
 		if (!Document) throw std::runtime_error(Document.error().Format());
 		if (Document->Place->PreRunSource != ExpectedPreRunSource)
 			throw PreRunSourceConflict("Project PreRun source differs from the initialized schema source");
@@ -467,6 +479,7 @@ namespace gargantuan {
 		const auto Output = std::filesystem::absolute(Destination);
 		ValidateGasExportDestination(Output);
 		if (CapturedTerrain) PersistTerrainArtifacts(*CapturedTerrain);
+		for (const auto &[Node, Capture] : Domains) PersistTerrainArtifacts(Capture, Node);
 		PersistBytesAtomically(Output, *Bytes, [&] {
 			if (ExpectedPreRunSource != ReadProjectPreRunSource(Root))
 				throw PreRunSourceConflict("Project PreRun source changed during GAS export");
@@ -486,8 +499,9 @@ namespace gargantuan {
 			throw std::invalid_argument("GAS place has an invalid hierarchy or FileLink path");
 
 		ScopedChangeJournalSuppression Suppression;
+		const auto Reader = terrain::BudgetDocumentTerrainReads(GetProjectTerrainReader(*Filesystem));
 		auto Materialized = InstanceSerialization::MaterializeGasDocument(Document, true,
-			terrain::GetSceneTerrainAdmission(Identity, GetProjectTerrainReader(*Filesystem)));
+			terrain::GetSceneTerrainAdmission(Identity, Reader), terrain::GetDomainTerrainAdmission(Identity, Reader));
 		try {
 			if (!Materialized.Succeeded())
 				throw std::runtime_error(Materialized.Errors.empty()
@@ -541,6 +555,7 @@ namespace gargantuan {
 		if (Snapshot.Contents.size() > MaximumProtocolDocumentBytes)
 			throw std::length_error("Restored project exceeds the JSON persistence byte limit");
 		if (Snapshot.Terrain) PersistTerrainArtifacts(*Snapshot.Terrain);
+		for (const auto &[Node, Capture] : Snapshot.Domains) PersistTerrainArtifacts(Capture, Node);
 		PersistBytesAtomically(Destination, std::span(reinterpret_cast<const std::uint8_t *>(Snapshot.Contents.data()),
 			Snapshot.Contents.size()),
 			CheckDestination, AtomicWriteMode::Create);
@@ -555,16 +570,17 @@ namespace gargantuan {
 		if (revision == 0) throw std::invalid_argument("Cannot persist revision zero");
 		const auto Prior = ReuseDurableTerrain ? DurableTerrain->Index.load() : nullptr;
 		auto Terrain = terrain::CaptureSceneTerrain(*game, Identity, Prior.get());
+		auto Domains = terrain::CaptureDocumentTerrain(game, Identity, Terrain ? Terrain->ClosureBytes : 0);
 		auto root = std::static_pointer_cast<Instance>(game);
 		auto Contents = InstanceSerialization::Serialize(InstanceFileFormat, root,
-			Terrain ? std::optional(Terrain->ManifestDigest) : std::nullopt);
+			Terrain ? std::optional(Terrain->ManifestDigest) : std::nullopt, terrain::GetDomainTerrainBindings(Domains));
 		AssetProjectSnapshot AssetSnapshot;
 		if (auto Assets = std::dynamic_pointer_cast<AssetService>(game->FindFirstChildOfClass("AssetService", false)))
 			AssetSnapshot = Assets->CaptureProjectAssets();
-		return {revision, std::move(Contents), std::move(AssetSnapshot), std::move(Terrain)};
+		return {revision, std::move(Contents), std::move(AssetSnapshot), std::move(Terrain), std::move(Domains)};
 	}
 
-	void Project::PersistTerrainArtifacts(const terrain::TerrainCapture &Capture) const {
+	void Project::PersistTerrainArtifacts(const terrain::TerrainCapture &Capture, std::optional<std::uint32_t> DomainNode) const {
 		G_PROFILE("Terrain::PersistProjectArtifacts");
 		using namespace terrain;
 		using enum TerrainPersistenceError;
@@ -574,7 +590,8 @@ namespace gargantuan {
 			ManifestArtifact->Bytes->size() > MaximumTerrainManifestBytes ||
 			AssetContentId::Hash(*ManifestArtifact->Bytes) != ManifestId.Digest)
 			throw TerrainPersistenceFailure(CorruptArtifact);
-		const auto Manifest = DecodeTerrainManifest(*ManifestArtifact->Bytes, Identity, GetTerrainDatasetId(Identity));
+		const auto Dataset = DomainNode ? GetDomainTerrainDatasetId(Identity, *DomainNode) : GetTerrainDatasetId(Identity);
+		const auto Manifest = DecodeTerrainManifest(*ManifestArtifact->Bytes, Identity, Dataset);
 		if (!Manifest) throw TerrainPersistenceFailure(InvalidBinding);
 		if (Manifest->Chunks.size() > MaximumStartupSourceChunks) throw TerrainPersistenceFailure(LimitExceeded);
 		std::size_t Bytes = ManifestArtifact->Bytes->size();
@@ -632,13 +649,14 @@ namespace gargantuan {
 		Store(ManifestId, ManifestArtifact->Bytes->size());
 	}
 
-	std::optional<AssetContentId> Project::GetPersistedTerrainManifest() const {
+	std::optional<AssetContentId> Project::GetPersistedTerrainManifest(terrain::DomainTerrainBindings *Domains) const {
+		if (Domains) Domains->clear();
 		if (InstanceFileFormat != InstanceFormat::Json || !Filesystem->Exists(InstanceFilePath)) return std::nullopt;
 		SourceMount Mount(*Filesystem);
 		SourceMountBudget Budget;
 		const auto Contents = Mount.ReadFile(InstanceFilePath.lexically_relative(Root), MaximumProtocolDocumentBytes, Budget);
 		if (!Contents) throw std::runtime_error(Contents.error().Format());
-		const auto Manifest = InstanceSerialization::InspectTerrainManifest(*Contents);
+		const auto Manifest = InstanceSerialization::InspectTerrainManifest(*Contents, Domains);
 		if (!Manifest) throw std::runtime_error(Manifest.error());
 		return *Manifest;
 	}
@@ -659,10 +677,14 @@ namespace gargantuan {
 		ValidatePersistenceDestination();
 		if (InstanceFileFormat == InstanceFormat::Binary)
 			throw std::runtime_error("Binary instance formats are not yet implemented");
-		const auto Digest = InstanceSerialization::InspectTerrainManifest(snapshot.Contents);
+		terrain::DomainTerrainBindings Domains;
+		const auto Digest = InstanceSerialization::InspectTerrainManifest(snapshot.Contents, &Domains);
 		if (!Digest || *Digest != (snapshot.Terrain ? std::optional(snapshot.Terrain->ManifestDigest) : std::nullopt))
 			throw std::runtime_error("[Terrain:Persistence] Project scene and terrain closure do not match");
 		std::shared_ptr<const terrain::TerrainCaptureIndex> Index;
+		if (Domains != terrain::GetDomainTerrainBindings(snapshot.Domains))
+			throw std::runtime_error("[Terrain:Persistence] Scene and domain terrain closures differ");
+		for (const auto &[Node, Capture] : snapshot.Domains) PersistTerrainArtifacts(Capture, Node);
 		if (snapshot.Terrain) {
 			Index = std::make_shared<const terrain::TerrainCaptureIndex>(snapshot.Terrain->Index);
 			PersistTerrainArtifacts(*snapshot.Terrain);

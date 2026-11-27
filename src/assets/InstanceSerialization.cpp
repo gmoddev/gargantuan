@@ -3,6 +3,7 @@
 #include "assets/PreparedInstanceSerialization.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/BlockGrid.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/LuaSourceContainer.hpp"
 #include "gargantuan/classes/Sound.hpp"
@@ -135,9 +136,13 @@ namespace gargantuan::InstanceSerialization {
 
 		template <class Visit>
 		void CollectDocumentNodes(std::span<const std::shared_ptr<Instance>> Roots, DocumentNodeIds &Ids,
-			Visit VisitNode, bool IncludesTerrain = false) {
+			Visit VisitNode, bool IncludesTerrain = false, const terrain::DomainTerrainBindings *Domains = nullptr,
+			bool GatheringDomains = false) {
 			if (Roots.size() > MaximumPersistenceObjects)
 				throw std::length_error("Instance persistence hierarchy exceeds its object limit");
+			if (Domains && (Domains->size() > terrain::MaximumDomainTerrainBindings ||
+				(!Domains->empty() && (Domains->begin()->first == 0 || Domains->rbegin()->first > MaximumPersistenceObjects))))
+				throw std::invalid_argument("Invalid domain terrain owner table");
 			struct PendingNode {
 				std::shared_ptr<Instance> Object;
 				std::size_t Depth;
@@ -168,6 +173,14 @@ namespace gargantuan::InstanceSerialization {
 				if (!Node || Depth > MaximumProtocolJsonDepth || Ids.size() >= MaximumPersistenceObjects)
 					throw std::length_error("Instance persistence hierarchy exceeds its depth or object limit");
 				const auto Id = static_cast<std::uint32_t>(Ids.size() + 1);
+				if (!GatheringDomains) {
+					auto *Region = dynamic_cast<SpatialRegion *>(Node.get());
+					const auto Owner = Region ? Region->GetTerrain() : nullptr;
+					const bool Edited = Owner && (Owner->GetField().GetRevision() || Owner->GetField().GetGrid() != terrain::GridSpec{});
+					const auto Bound = Domains && Domains->contains(Id);
+					if (Edited != Bound || (Bound && !Domains->at(Id).IsValid()))
+						throw std::invalid_argument("[Terrain:Persistence] Domain terrain requires its matching place binding");
+				}
 				if (!Ids.emplace(Node.get(), Id).second)
 					throw std::invalid_argument("Instance persistence hierarchy repeats an object");
 				VisitNode(*Node, Parent);
@@ -182,6 +195,8 @@ namespace gargantuan::InstanceSerialization {
 					}
 				}
 			}
+			if (Domains && !Domains->empty() && Domains->rbegin()->first > Ids.size())
+				throw std::invalid_argument("Domain terrain owner is outside the document");
 		}
 
 		bool IsNativeSavedProperty(std::string_view Name, const InstanceProperty &Property) {
@@ -385,17 +400,34 @@ namespace gargantuan::InstanceSerialization {
 		}
 	}
 
+	void VisitDocumentRegions(const std::shared_ptr<DataModel> &Root, const std::function<void(SpatialRegion &, std::uint32_t)> &Visit) {
+		if (Root->GetSpatialRegions().empty()) return;
+		const std::shared_ptr<Instance> Base = Root;
+		DocumentNodeIds Ids;
+		CollectDocumentNodes(std::span(&Base, 1), Ids, [&](Instance &Owner, std::uint32_t) {
+			if (auto Region = dynamic_cast<SpatialRegion *>(&Owner)) Visit(*Region, Ids.at(&Owner));
+		}, true, nullptr, true);
+	}
+
 	std::string Serialize(InstanceFormat format, std::shared_ptr<Instance> &instance,
-		std::optional<AssetContentId> TerrainManifest) {
+		std::optional<AssetContentId> TerrainManifest, const terrain::DomainTerrainBindings &Domains) {
 		switch (format) {
 		case InstanceFormat::Json: {
 			if (TerrainManifest && (!TerrainManifest->IsValid() || !dynamic_cast<DataModel *>(instance.get())))
 				throw std::invalid_argument("[Terrain:Persistence] The manifest requires a DataModel scene root");
 			Json::SerializationState state;
 			CollectDocumentNodes(std::span(&instance, 1), state.NodeIds, [](Instance &, std::uint32_t) {},
-				TerrainManifest.has_value());
+				TerrainManifest.has_value(), &Domains);
 			auto serialized = Json::SerializeInstance(instance, state);
 			serialized["Version"] = TerrainManifest ? TerrainSceneVersion : 5;
+			if (!Domains.empty()) {
+				if (!dynamic_cast<DataModel *>(instance.get()) || Domains.size() > terrain::MaximumDomainTerrainBindings)
+					throw std::invalid_argument("[Terrain:Persistence] Invalid domain terrain table");
+				serialized["Version"] = DomainTerrainSceneVersion;
+				auto Entries = json::array();
+				for (const auto &[Node, Digest] : Domains) Entries.push_back({Node, Digest.ToString()});
+				serialized["DomainTerrain"] = std::move(Entries);
+			}
 			if (TerrainManifest) serialized["TerrainManifest"] = TerrainManifest->ToString();
 			auto Encoded = JsonCodec::Encode(serialized, "Instance persistence");
 			if (!Encoded) throw std::runtime_error(Encoded.error().Format());
@@ -536,7 +568,8 @@ namespace gargantuan::InstanceSerialization {
 			std::vector<std::pair<Instance *, std::uint32_t>> Ordered;
 			CollectDocumentNodes(Roots, Ids, [&](Instance &Object, std::uint32_t Parent) {
 				Ordered.emplace_back(&Object, Parent);
-			}, Kind == Gas::DocumentKind::Place && Result.Place && Result.Place->TerrainManifest.has_value());
+			}, Kind == Gas::DocumentKind::Place && Result.Place && Result.Place->TerrainManifest.has_value(),
+				Result.Place ? &Result.Place->Domains : nullptr);
 			Result.Nodes.reserve(Ordered.size());
 			GasCaptureBudget Budget;
 			std::unordered_set<std::string> SourceIds;
@@ -1231,7 +1264,9 @@ namespace gargantuan::InstanceSerialization {
 
 	namespace {
 		std::expected<std::optional<AssetContentId>, std::string> GetTerrainManifest(const json &Contents) {
-			const bool TerrainVersion = Contents["Version"] == TerrainSceneVersion;
+			if (Contents["Version"] == DomainTerrainSceneVersion && !Contents.contains("TerrainManifest"))
+				return std::optional<AssetContentId>{};
+			const bool TerrainVersion = Contents["Version"] == TerrainSceneVersion || Contents["Version"] == DomainTerrainSceneVersion;
 			if (!TerrainVersion) {
 				if (Contents.contains("TerrainManifest"))
 					return std::unexpected("Terrain manifest requires the terrain scene version");
@@ -1247,6 +1282,31 @@ namespace gargantuan::InstanceSerialization {
 			return Digest;
 		}
 
+		std::expected<terrain::DomainTerrainBindings, std::string> DecodeDomainBindings(const json &Contents) {
+			terrain::DomainTerrainBindings Result;
+			const auto Entries = Contents.find("DomainTerrain");
+			if (Contents["Version"] != DomainTerrainSceneVersion) {
+				if (Entries != Contents.end()) return std::unexpected("Domain terrain requires scene version 7");
+				return Result;
+			}
+			if (!Contents.contains("ClassName") || Contents["ClassName"] != "DataModel" || Entries == Contents.end() || !Entries->is_array() ||
+				Entries->empty() || Entries->size() > terrain::MaximumDomainTerrainBindings)
+				return std::unexpected("Invalid domain terrain binding table");
+			std::uint32_t Previous = 0;
+			for (const auto &Entry : *Entries) {
+				if (!Entry.is_array() || Entry.size() != 2 || !Entry[0].is_number_unsigned() || !Entry[1].is_string())
+					return std::unexpected("Invalid domain terrain binding");
+				const auto Node = JsonCodec::DecodeUnsigned32(Entry[0]);
+				const auto &Encoded = Entry[1].get_ref<const std::string &>();
+				const auto Digest = AssetContentId::Parse(Encoded);
+				if (!Node || *Node <= Previous || *Node > MaximumPersistenceObjects || !Digest || !Digest->IsValid() ||
+					Digest->ToString() != Encoded) return std::unexpected("Invalid domain terrain identity or digest");
+				Result.emplace(*Node, *Digest);
+				Previous = *Node;
+			}
+			return Result;
+		}
+
 		std::expected<json, std::string> PrepareJson(std::string_view Encoded) {
 			if (Encoded.empty()) return std::unexpected("Instance document byte length is invalid");
 			auto Parsed = JsonCodec::Parse(Encoded, MaximumProtocolDocumentBytes, "Instance persistence");
@@ -1255,14 +1315,16 @@ namespace gargantuan::InstanceSerialization {
 			if (!Parsed->contains("Version") || !(*Parsed)["Version"].is_number_integer() ||
 				((*Parsed)["Version"] != 0 && (*Parsed)["Version"] != 1 && (*Parsed)["Version"] != 2 &&
 					(*Parsed)["Version"] != 3 && (*Parsed)["Version"] != 4 && (*Parsed)["Version"] != 5 &&
-					(*Parsed)["Version"] != TerrainSceneVersion))
+					(*Parsed)["Version"] != TerrainSceneVersion && (*Parsed)["Version"] != DomainTerrainSceneVersion))
 				return std::unexpected("Unsupported instance format version");
 			if (auto Manifest = GetTerrainManifest(*Parsed); !Manifest) return std::unexpected(std::move(Manifest.error()));
+			if (auto Domains = DecodeDomainBindings(*Parsed); !Domains) return std::unexpected(std::move(Domains.error()));
 			return std::move(*Parsed);
 		}
 
 		DeserializationState MaterializeJsonRoots(std::span<const json> Documents, int Version,
-			bool ApplyPendingTags, bool PreserveSourceIds, std::vector<std::shared_ptr<Instance>> &Roots) {
+			bool ApplyPendingTags, bool PreserveSourceIds, std::vector<std::shared_ptr<Instance>> &Roots,
+			const terrain::DomainTerrainBindings &Domains = {}, const DomainTerrainAdmission &AdmitDomains = {}) {
 			DeserializationState state;
 			state.PreserveSourceIds = PreserveSourceIds;
 			state.FormatVersion = static_cast<std::uint32_t>(Version);
@@ -1327,6 +1389,12 @@ namespace gargantuan::InstanceSerialization {
 					if (dataModel) for (const auto &tag : tags)
 						(void)dataModel->Tags.Add(dataModel->GetObjectId(), instance->GetObjectId(), tag, ScriptSecurityContext::CoreTrusted());
 				}
+				for (const auto &[Id, Digest] : Domains) {
+					const auto It = state.DocumentNodes.find(Id);
+					auto *Region = It != state.DocumentNodes.end() ? dynamic_cast<SpatialRegion *>(It->second.get()) : nullptr;
+					if (!AdmitDomains || !Region) throw std::invalid_argument("Domain terrain has no authenticated spatial owner");
+					AdmitDomains(*Region, Id, Digest);
+				}
 				state.Ok = true;
 			} catch (const std::exception &error) {
 				state.PushError("Failed to resolve references or rebuild tag index: {}", error.what());
@@ -1340,16 +1408,17 @@ namespace gargantuan::InstanceSerialization {
 			return state;
 		}
 
-		DeserializationState MaterializeJson(const json &Contents, bool ApplyPendingTags, bool PreserveSourceIds = true) {
+		DeserializationState MaterializeJson(const json &Contents, bool ApplyPendingTags, bool PreserveSourceIds = true,
+			const DomainTerrainAdmission &AdmitDomains = {}) {
 			std::vector<std::shared_ptr<Instance>> Roots;
 			auto State = MaterializeJsonRoots(std::span(&Contents, 1), Contents["Version"].get<int>(),
-				ApplyPendingTags, PreserveSourceIds, Roots);
+				ApplyPendingTags, PreserveSourceIds, Roots, DecodeDomainBindings(Contents).value(), AdmitDomains);
 			if (State.Ok) State.Instance = std::move(Roots.front());
 			return State;
 		}
 
 		DeserializationState DeserializeImpl(InstanceFormat format, std::istream &input, bool ApplyPendingTags,
-			bool PreserveSourceIds = true, const TerrainSceneAdmission &AdmitTerrain = {}) {
+			bool PreserveSourceIds = true, const TerrainSceneAdmission &AdmitTerrain = {}, const DomainTerrainAdmission &AdmitDomains = {}) {
 			DeserializationState state;
 			if (!input.good()) {
 				state.PushError("Bad stream from instance contents");
@@ -1370,11 +1439,15 @@ namespace gargantuan::InstanceSerialization {
 				return state;
 			}
 			const auto Manifest = GetTerrainManifest(*Prepared).value();
+			if ((*Prepared)["Version"] == DomainTerrainSceneVersion && (!AdmitDomains || !ApplyPendingTags)) {
+				state.PushError("Domain terrain requires authenticated place admission");
+				return state;
+			}
 			if (Manifest && (!AdmitTerrain || !ApplyPendingTags)) {
 				state.PushError("Terrain scene requires authenticated terrain artifact admission");
 				return state;
 			}
-			auto Result = MaterializeJson(*Prepared, ApplyPendingTags, PreserveSourceIds);
+			auto Result = MaterializeJson(*Prepared, ApplyPendingTags, PreserveSourceIds, AdmitDomains);
 			if (Result.Ok && Manifest) {
 				try {
 					auto *World = dynamic_cast<DataModel *>(Result.Instance.get());
@@ -1506,7 +1579,7 @@ namespace gargantuan::InstanceSerialization {
 	}
 
 	GasMaterializationResult MaterializeGasDocument(const Gas::Document &Document, bool PreserveSourceIds,
-		const TerrainSceneAdmission &AdmitTerrain) {
+		const TerrainSceneAdmission &AdmitTerrain, const DomainTerrainAdmission &AdmitDomains) {
 		GasMaterializationResult Result;
 		try {
 			AssertAuthoritativeMutation("MaterializeGasDocument");
@@ -1514,11 +1587,13 @@ namespace gargantuan::InstanceSerialization {
 			// Native callers can assemble DTOs without decoding a file first.
 			if (auto Validated = Gas::Encode(Document); !Validated) return {{}, {Validated.error().Format()}};
 			const auto Manifest = Document.Place ? Document.Place->TerrainManifest : std::nullopt;
+			if (Document.Place && !Document.Place->Domains.empty() && !AdmitDomains)
+				return {{}, {"GAS domain terrain requires authenticated place admission"}};
 			if (Manifest && !AdmitTerrain)
 				return {{}, {"GAS terrain place requires authenticated terrain artifact admission"}};
 			const auto Projected = ProjectGasForest(Document);
 			auto State = MaterializeJsonRoots(Projected, 5, Document.Kind == Gas::DocumentKind::Place,
-				PreserveSourceIds, Result.Roots);
+				PreserveSourceIds, Result.Roots, Document.Place ? Document.Place->Domains : terrain::DomainTerrainBindings{}, AdmitDomains);
 			if (State.Ok && Manifest) {
 				auto *World = Result.Roots.size() == 1 ? dynamic_cast<DataModel *>(Result.Roots.front().get()) : nullptr;
 				if (!World) throw std::invalid_argument("GAS terrain place requires one DataModel root");
@@ -1538,7 +1613,7 @@ namespace gargantuan::InstanceSerialization {
 		std::shared_ptr<const RuntimeSchemaRegistry> SchemaSnapshot) {
 		auto Prepared = PrepareJson(std::string_view(reinterpret_cast<const char *>(Bytes.data()), Bytes.size()));
 		if (!Prepared) return std::unexpected(std::move(Prepared.error()));
-		if ((*Prepared)["Version"] == TerrainSceneVersion)
+		if ((*Prepared)["Version"] == TerrainSceneVersion || (*Prepared)["Version"] == DomainTerrainSceneVersion)
 			return std::unexpected("Detached Instance content cannot own terrain");
 		if ((*Prepared)["Version"] == 5) {
 			struct NodeInfo {
@@ -1689,15 +1764,17 @@ namespace gargantuan::InstanceSerialization {
 		return MaterializeJson(Prepared->Contents, false);
 	}
 
-	std::expected<std::optional<AssetContentId>, std::string> InspectTerrainManifest(std::string_view Json) {
+	std::expected<std::optional<AssetContentId>, std::string> InspectTerrainManifest(std::string_view Json,
+		terrain::DomainTerrainBindings *Domains) {
 		auto Parsed = PrepareJson(Json);
 		if (!Parsed) return std::unexpected(std::move(Parsed.error()));
+		if (Domains) *Domains = DecodeDomainBindings(*Parsed).value();
 		return GetTerrainManifest(*Parsed);
 	}
 
 	DeserializationState Deserialize(InstanceFormat format, std::istream &input,
-		const TerrainSceneAdmission &AdmitTerrain) {
-		return DeserializeImpl(format, input, true, true, AdmitTerrain);
+		const TerrainSceneAdmission &AdmitTerrain, const DomainTerrainAdmission &AdmitDomains) {
+		return DeserializeImpl(format, input, true, true, AdmitTerrain, AdmitDomains);
 	}
 
 	DeserializationState DeserializeDetached(InstanceFormat format, std::istream &input) {

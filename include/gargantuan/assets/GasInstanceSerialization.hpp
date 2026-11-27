@@ -29,5 +29,6 @@ namespace gargantuan::InstanceSerialization {
 	// an active frozen schema. The caller owns dependency admission, destination
 	// mutation, and any later activation.
 	[[nodiscard]] GasMaterializationResult MaterializeGasDocument(
-		const Gas::Document &Document, bool PreserveSourceIds, const TerrainSceneAdmission &AdmitTerrain = {});
+		const Gas::Document &Document, bool PreserveSourceIds, const TerrainSceneAdmission &AdmitTerrain = {},
+		const DomainTerrainAdmission &AdmitDomains = {});
 }

@@ -64,6 +64,47 @@ namespace gargantuan::terrain {
         return LoadOwnerTerrain(Identity, GetDomainTerrainDatasetId(Identity, DocumentNodeId), Digest, Reader);
     }
 
+    DomainTerrainCaptures CaptureDocumentTerrain(const std::shared_ptr<DataModel> &World, ProjectId Identity,
+        std::size_t WorkspaceClosureBytes) {
+        DomainTerrainCaptures Captures;
+        InstanceSerialization::VisitDocumentRegions(World, [&](SpatialRegion &Region, std::uint32_t Node) {
+            auto Capture = CaptureDomainTerrain(Region, Identity, Node);
+            if (!Capture) return;
+            if (Captures.size() >= MaximumDomainTerrainBindings || WorkspaceClosureBytes > MaximumTerrainClosureBytes ||
+                Capture->ClosureBytes > MaximumTerrainClosureBytes - WorkspaceClosureBytes)
+                throw TerrainPersistenceFailure(TerrainPersistenceError::LimitExceeded);
+            WorkspaceClosureBytes += Capture->ClosureBytes;
+            Captures.emplace(Node, std::move(*Capture));
+        });
+        return Captures;
+    }
+
+    DomainTerrainBindings GetDomainTerrainBindings(const DomainTerrainCaptures &Captures) {
+        DomainTerrainBindings Bindings;
+        for (const auto &[Node, Capture] : Captures) Bindings.emplace(Node, Capture.ManifestDigest);
+        return Bindings;
+    }
+
+    TerrainArtifactReader BudgetDocumentTerrainReads(TerrainArtifactReader Reader) {
+        auto Remaining = std::make_shared<std::size_t>(MaximumTerrainClosureBytes);
+        return [Reader = std::move(Reader), Remaining](const TerrainArtifactId &Id, std::size_t Maximum)
+            -> std::expected<std::vector<std::uint8_t>, TerrainPersistenceError> {
+            auto Bytes = Reader(Id, std::min(Maximum, *Remaining));
+            if (Bytes) {
+                if (Bytes->size() > *Remaining) return std::unexpected(TerrainPersistenceError::LimitExceeded);
+                *Remaining -= Bytes->size();
+            }
+            return Bytes;
+        };
+    }
+
+    InstanceSerialization::DomainTerrainAdmission GetDomainTerrainAdmission(ProjectId Identity,
+        TerrainArtifactReader Reader) {
+        return [Identity, Reader = std::move(Reader)](SpatialRegion &Region, std::uint32_t Node, const AssetContentId &Digest) {
+            Region.RestoreTerrainField(LoadDomainTerrain(Identity, Node, Digest, Reader));
+        };
+    }
+
     std::optional<TerrainCapture> CaptureSceneTerrain(DataModel &World, ProjectId Identity,
         const TerrainCaptureIndex *PriorDurable) {
         const auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(
