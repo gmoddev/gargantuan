@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <optional>
+#include <span>
 
 namespace gargantuan {
 	class IPhysicsBackend {
@@ -16,6 +17,10 @@ namespace gargantuan {
 		[[nodiscard]] virtual PhysicsBodyId CreateBody(const PhysicsBodyDesc &Description) = 0;
 		virtual PhysicsOperationResult UpdateBody(PhysicsBodyId Body, const PhysicsBodyDesc &Description) = 0;
 		virtual PhysicsOperationResult DestroyBody(PhysicsBodyId Body) = 0;
+		// Preflight a bounded Main-only swap. Jointed or stale native bodies must remain live.
+		virtual PhysicsOperationResult PrepareAssemblyReplacement(std::span<const PhysicsBodyId>,std::size_t) {
+			return {PhysicsOperationStatus::BackendFailure,"Assembly replacement is unsupported"};
+		}
 		[[nodiscard]] virtual PhysicsConstraintId CreateConstraint(const PhysicsConstraintDesc &Description) = 0;
 		[[nodiscard]] virtual PhysicsConstraintCreateResult TryCreateConstraint(const PhysicsConstraintDesc &Description) {
 			const auto Constraint = CreateConstraint(Description);
@@ -62,6 +67,7 @@ namespace gargantuan {
 		[[nodiscard]] PhysicsBodyId CreateBody(const PhysicsBodyDesc &Description);
 		PhysicsOperationResult UpdateBody(PhysicsBodyId Body, const PhysicsBodyDesc &Description);
 		PhysicsOperationResult DestroyBody(PhysicsBodyId Body);
+		PhysicsOperationResult PrepareAssemblyReplacement(std::span<const PhysicsBodyId> Existing,std::size_t Staged);
 		[[nodiscard]] PhysicsConstraintId CreateConstraint(const PhysicsConstraintDesc &Description);
 		[[nodiscard]] PhysicsConstraintCreateResult TryCreateConstraint(const PhysicsConstraintDesc &Description);
 		PhysicsOperationResult DestroyConstraint(PhysicsConstraintId Constraint);

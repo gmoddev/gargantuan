@@ -22,6 +22,7 @@ namespace gargantuan::blockgrid {
 		std::optional<Region> Extract;
 		ObjectId Source;
 		std::string SourceRevision;
+		bool SplitDynamic{};
 	};
 	[[nodiscard]] std::shared_ptr<const Patch> CapturePatch(const Field& Source, std::span<const Write> Writes);
 	[[nodiscard]] std::vector<Write> ReplayWrites(const Field& Source, const Patch& Value, bool Forward);

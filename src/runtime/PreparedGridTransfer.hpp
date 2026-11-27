@@ -39,6 +39,6 @@ namespace gargantuan {
 		static MutationResult Install(DataModel& World,const std::shared_ptr<WorldRoot>& Domain,const std::shared_ptr<Instance>& Parent,
 			const std::shared_ptr<BlockGrid>& Source,const std::shared_ptr<BlockGrid>& Destination,blockgrid::TransferFields Next,
 			Hierarchy Change,const std::shared_ptr<const GridTransferHistory>& Receipt,
-			std::optional<AuthoritativeTransactionHistory> History);
+			std::optional<AuthoritativeTransactionHistory> History,blockgrid::TransferMotion Motion=blockgrid::TransferMotion::Static);
 	};
 }

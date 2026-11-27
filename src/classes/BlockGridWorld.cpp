@@ -1,5 +1,7 @@
 #include "BlockGridWorldState.hpp"
 #include "gargantuan/blockgrid/Assets.hpp"
+#include "gargantuan/blockgrid/Momentum.hpp"
+#include "gargantuan/blockgrid/Transfer.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "../physics/Box3DShapeQuery.hpp"
 #include "gargantuan/classes/ViewportFrame.hpp"
@@ -133,8 +135,8 @@ namespace gargantuan {
 
 		template <typename Snapshot>
 		bool PrepareTopology(BlockGridWorldState &State, BlockGridParticipant &Member, const Snapshot &Cells,
-			const std::function<bool()>& AdmitMotion={}) {
-			const auto Mask=QueryProxyMask(*Member.Grid);
+			const std::function<bool()>& AdmitMotion={},std::optional<std::uint8_t> OverrideMask={}) {
+			const auto Mask=OverrideMask.value_or(QueryProxyMask(*Member.Grid));
 			const bool Patch = Mask && Member.TopologyCurrent && Member.TopologyMask==Mask &&
 				std::is_same_v<Snapshot, blockgrid::Field::Candidate>;
 			BlockGridLeafBoxes Changed;
@@ -267,7 +269,7 @@ namespace gargantuan {
 	}
 
 	std::function<void()> WorldRoot::PrepareBlockGridTransfer(BlockGrid& Source,const blockgrid::Field& SourceAfter,
-		BlockGrid& Destination,const blockgrid::Field& DestinationAfter) {
+		BlockGrid& Destination,const blockgrid::Field& DestinationAfter,blockgrid::TransferMotion Motion) {
 		if (SteppingPhysics || ShuttingDownPhysics || !BlockGridState || !Source.WorldOwnedAdmission || !Destination.WorldOwnedAdmission)
 			throw std::runtime_error("[BlockGrid:Admission] Both grids require a reservable world provider");
 		auto& Live=*BlockGridState;
@@ -276,28 +278,111 @@ namespace gargantuan {
 			throw std::domain_error("[BlockGrid:Admission] A transfer participant has left the collision domain");
 		auto& A=SourceMember->second;
 		auto& B=DestinationMember->second;
-		if (&A==&B || A.Assembly || B.Assembly)
-			throw std::domain_error("[BlockGrid:Motion] Freeze both assemblies before transferring cells");
+		const bool Moving=Motion!=blockgrid::TransferMotion::Static,Split=Motion==blockgrid::TransferMotion::Split;
+		if (&A==&B || bool(A.Assembly)!=Moving || bool(B.Assembly)!=(Motion==blockgrid::TransferMotion::Merge))
+			throw std::domain_error("[BlockGrid:Motion] Transfer requires an admitted body for each moving participant");
 		struct Coverage { BlockGridParticipant A,B; std::size_t WorldCount{}; };
 		auto Reserved=std::make_shared<Coverage>();
 		BlockGridWorldState Scratch;
 		Scratch.ReservedBoxes=Live.ReservedBoxes-A.DesiredCount-B.DesiredCount;
-		const auto Reserve=[&](BlockGridParticipant& Original,BlockGridParticipant& Staged,const blockgrid::Field& After) {
+		const auto Reserve=[&](BlockGridParticipant& Original,BlockGridParticipant& Staged,const blockgrid::Field& After,bool Dynamic) {
 			Staged.Grid=Original.Grid;
 			Staged.Desired=Original.Desired; Staged.DesiredCount=Original.DesiredCount;
 			Staged.TopologyMask=Original.TopologyMask; Staged.TopologyCurrent=Original.TopologyCurrent;
 			Scratch.ReservedBoxes+=Original.DesiredCount;
-			if (!After.AdmitTransferFrom(Original.Grid->GetField(),[&](const auto& Next,auto){return PrepareTopology(Scratch,Staged,Next);}))
+			const auto Mask=Participation(Original.Grid->GetCanCollide() && !Dynamic,Original.Grid->GetCanQuery());
+			if (!After.AdmitTransferFrom(Original.Grid->GetField(),[&](const auto& Next,auto){return PrepareTopology(Scratch,Staged,Next,{},Mask);}))
 				throw std::length_error("[BlockGrid:Admission] Transfer exceeds available collision coverage");
 		};
-		Reserve(A,Reserved->A,SourceAfter); Reserve(B,Reserved->B,DestinationAfter);
+		Reserve(A,Reserved->A,SourceAfter,Split); Reserve(B,Reserved->B,DestinationAfter,Moving);
 		Reserved->WorldCount=Scratch.ReservedBoxes;
-		return [&Live,&A,&B,Reserved=std::move(Reserved)]() noexcept {
+		auto Momentum=Moving?PrepareGridMomentum(A,SourceAfter,B,DestinationAfter,Motion):std::function<void()>{};
+		return [&Live,&A,&B,Reserved=std::move(Reserved),Momentum=std::move(Momentum)]() noexcept {
 			const auto Install=[](BlockGridParticipant& To,BlockGridParticipant& From) noexcept {
 				To.Desired.swap(From.Desired); To.DesiredCount=From.DesiredCount;
 				To.TopologyMask=From.TopologyMask; To.TopologyCurrent=true;
 			};
 			Install(A,Reserved->A); Install(B,Reserved->B); Live.ReservedBoxes=Reserved->WorldCount;
+			if (Momentum) Momentum();
+		};
+	}
+
+	std::function<void()> WorldRoot::PrepareGridMomentum(BlockGridParticipant& A,const blockgrid::Field& SourceAfter,
+		BlockGridParticipant& B,const blockgrid::Field& DestinationAfter,blockgrid::TransferMotion Motion) {
+		using namespace blockgrid;
+		const bool Split=Motion==TransferMotion::Split;
+		auto& Live=*BlockGridState;
+		if ((Split && Live.Assemblies.size()>=64) || A.Grid->AssemblyRevision==std::numeric_limits<std::uint64_t>::max() ||
+			B.Grid->AssemblyRevision==std::numeric_limits<std::uint64_t>::max())
+			throw std::length_error("[BlockGrid:Motion] Moving transfer capacity is exhausted");
+		const std::array<PhysicsBodyId,2> Old{A.Assembly->Body,B.Assembly?B.Assembly->Body:PhysicsBodyId{}};
+		if (!Physics.PrepareAssemblyReplacement(std::span(Old).first(Split?1:2),Split?2:1).Succeeded())
+			throw std::domain_error("[BlockGrid:Motion] Native constraints or stale bodies prevent replacement");
+		struct Candidate {
+			PhysicsWorld& Physics;
+			std::array<std::unique_ptr<BlockGridAssembly>,2> Bodies;
+			std::array<std::unique_ptr<AssemblyProjection>,2> Projections;
+			decltype(BlockGridWorldState::Assemblies) Owners;
+			bool Committed{};
+			explicit Candidate(PhysicsWorld& Value):Physics(Value) {}
+			~Candidate() {
+				if (!Committed) for (const auto& B:Bodies)
+					if (B && B->Body.IsValid()) (void)Physics.DestroyBody(B->Body);
+			}
+		};
+		auto Plan=std::make_shared<Candidate>(Physics);
+		Plan->Owners=Live.Assemblies;
+		for (const auto Id:Old) if (Id.IsValid()) Plan->Owners.erase(Id);
+		struct Sample { RigidMass Mass; RigidVelocity Velocity; };
+		const auto SampleBody=[&](PhysicsBodyId Id) {
+			const auto Body=Physics.GetBodyState(Id); const auto Mass=Physics.GetMassProperties(Id);
+			if (!Body || !Mass) throw std::runtime_error("[BlockGrid:Motion] Native mass and velocity must be available");
+			const auto R=glm::dmat3(Body->Transform.Rotation);
+			return Sample{{Mass->Mass,glm::dvec3(Body->Transform.Position)+R*glm::dvec3(Mass->LocalCenter),
+				R*glm::dmat3(Mass->LocalInertia)*glm::transpose(R)},
+				{glm::dvec3(Body->LinearVelocity),glm::dvec3(Body->AngularVelocity)}};
+		};
+		const auto Build=[&](unsigned Index,const BlockGrid& Grid,const Field& Cells) {
+			auto& C=Plan->Bodies[Index]; C=std::make_unique<BlockGridAssembly>();
+			C->Pose=Grid.GetCFrame(); C->Hulls=AssemblyHulls(Grid,Cells);
+			C->Body=Physics.CreateBody(AssemblyBody(Grid,C->Hulls));
+			if (!C->Body.IsValid()) throw std::runtime_error("[BlockGrid:Motion] Could not stage replacement convex assembly");
+			Plan->Owners.emplace(C->Body,Grid.GetObjectId());
+			return SampleBody(C->Body).Mass;
+		};
+		const auto SetVelocity=[&](unsigned Index,const BlockGrid& Grid,RigidVelocity V) {
+			const auto Id=Plan->Bodies[Index]->Body;
+			if (!Physics.SetLinearVelocity(Id,glm::vec3(V.Linear)).Succeeded() || !Physics.SetAngularVelocity(Id,glm::vec3(V.Angular)).Succeeded())
+				throw std::runtime_error("[BlockGrid:Motion] Native replacement velocity was unavailable");
+			const auto State=Physics.GetBodyState(Id); const auto M=Physics.GetMassProperties(Id);
+			if (!State || !M) throw std::runtime_error("[BlockGrid:Motion] Native replacement receipt was unavailable");
+			auto& P=Plan->Projections[Index]; P=std::make_unique<AssemblyProjection>();
+			P->Revision=Grid.AssemblyRevision+1; P->Dynamic=true; P->Pose=State->Transform; P->Mass=M->Mass;
+			P->LinearVelocity=State->LinearVelocity; P->AngularVelocity=State->AngularVelocity;
+			P->LocalCenterOfMass=M->LocalCenter; P->LocalInertia=M->LocalInertia;
+			if (!ValidAssemblyProjection(*P)) throw std::domain_error("[BlockGrid:Motion] Replacement motion is outside supported bounds");
+		};
+		const auto First=SampleBody(Old[0]);
+		if (Split) {
+			const auto Left=Build(0,*A.Grid,SourceAfter),Right=Build(1,*B.Grid,DestinationAfter);
+			const auto Velocities=SplitMomentum(First.Mass,First.Velocity,Left,Right);
+			SetVelocity(0,*A.Grid,Velocities[0]); SetVelocity(1,*B.Grid,Velocities[1]);
+		} else {
+			if (SourceAfter.GetOccupiedCount()) throw std::domain_error("[BlockGrid:Motion] Moving merge must empty its donor");
+			const auto Second=SampleBody(Old[1]); const auto Merged=Build(1,*B.Grid,DestinationAfter);
+			SetVelocity(1,*B.Grid,MergeMomentum(First.Mass,First.Velocity,Second.Mass,Second.Velocity,Merged));
+		}
+		return [this,&Live,&A,&B,Old,Split,Plan=std::move(Plan)]() noexcept {
+			// The freeze on Main spans admission and commit. All native IDs were checked and are joint-free.
+			for (auto Id:Old) if (Id.IsValid()) (void)Physics.DestroyBody(Id);
+			Live.Assemblies.swap(Plan->Owners);
+			const auto Install=[&](BlockGridParticipant& Member,unsigned I) noexcept {
+				Member.Assembly=std::move(Plan->Bodies[I]); Member.Grid->DynamicAssembly=bool(Member.Assembly);
+				Member.Grid->AssemblyState=std::move(Plan->Projections[I]); ++Member.Grid->AssemblyRevision;
+			};
+			Install(A,0); Install(B,1);
+			if (Split) ++LiveAssemblies; else --LiveAssemblies;
+			Plan->Committed=true;
 		};
 	}
 

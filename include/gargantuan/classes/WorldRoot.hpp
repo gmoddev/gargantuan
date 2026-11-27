@@ -27,7 +27,8 @@
 namespace gargantuan {
 	class AssetService;
 	class BlockGrid;
-	namespace blockgrid { class Field; }
+	namespace blockgrid { class Field; enum class TransferMotion : std::uint8_t; }
+	struct BlockGridParticipant;
 	struct BlockGridWorldState;
 	class LocalLight;
 	class ReflectionProbe;
@@ -210,7 +211,9 @@ namespace gargantuan {
 		std::unique_ptr<BlockGridWorldState> BlockGridState;
 		void AddBlockGrid(const std::shared_ptr<Instance> &Value);
 		[[nodiscard]] std::function<void()> PrepareBlockGridTransfer(BlockGrid& Source,const blockgrid::Field& SourceAfter,
-			BlockGrid& Destination,const blockgrid::Field& DestinationAfter);
+			BlockGrid& Destination,const blockgrid::Field& DestinationAfter,blockgrid::TransferMotion Motion);
+		[[nodiscard]] std::function<void()> PrepareGridMomentum(BlockGridParticipant& A,const blockgrid::Field& SourceAfter,
+			BlockGridParticipant& B,const blockgrid::Field& DestinationAfter,blockgrid::TransferMotion Motion);
 		void RemoveBlockGrid(const std::shared_ptr<Instance> &Value);
 		bool SyncBlockGridCollision();
 		[[nodiscard]] bool SetGridMotion(BlockGrid& Grid,bool Dynamic);

@@ -33,6 +33,10 @@ namespace gargantuan {
 		return Backend ? Backend->DestroyBody(Body)
 			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Physics backend is unavailable"};
 	}
+	PhysicsOperationResult PhysicsWorld::PrepareAssemblyReplacement(std::span<const PhysicsBodyId> Existing,std::size_t Staged) {
+		return Backend?Backend->PrepareAssemblyReplacement(Existing,Staged):
+			PhysicsOperationResult{PhysicsOperationStatus::BackendFailure,"Physics backend is unavailable"};
+	}
 	PhysicsConstraintId PhysicsWorld::CreateConstraint(const PhysicsConstraintDesc &Description) {
 		return Backend ? Backend->CreateConstraint(Description) : PhysicsConstraintId{};
 	}

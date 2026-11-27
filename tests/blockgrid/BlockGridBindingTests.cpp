@@ -254,6 +254,30 @@ namespace {
 			local Token=S:GetRevision()
 			assert(not pcall(function() S:ExtractRegion(Q,Q+Vector3.one,Token) end) and Token==S:GetRevision())
 			S:SetMotionMode("Static",Token)
+			local G=Instance.new("BlockGrid")
+			G.Parent=Room
+			G.CFrame=CFrame.new(5,8,2)
+			local X=Vector3.new(2,0,0)
+			G:SetBlock(Vector3.zero,"Stone")
+			G:SetBlock(X,"Brick")
+			G:SetMotionMode("Dynamic",G:GetRevision())
+			local Start=G:SetAssemblyVelocity(Vector3.new(3,-2,.5),Vector3.new(0,2,0),G:GetRevision())
+			assert(not pcall(function() G:SplitRegion(Vector3.zero,Vector3.new(3,1,1),Start) end))
+			assert(G:GetRevision()==Start and G:GetAssemblyState().Mass==2)
+			local Piece=G:SplitRegion(X,X+Vector3.one,Start)
+			local A,B=G:GetAssemblyState(),Piece:GetAssemblyState()
+			assert(Piece.Parent==G.Parent and Piece.MotionMode=="Dynamic" and G.MotionMode=="Dynamic")
+			assert(A.Mass==1 and B.Mass==1 and A.AngularVelocity==Vector3.new(0,2,0) and B.AngularVelocity==A.AngularVelocity)
+			assert((A.LinearVelocity-Vector3.new(3,-2,2.5)).Magnitude<.001 and (B.LinearVelocity-Vector3.new(3,-2,-1.5)).Magnitude<.001)
+			assert(G:GetBlock(X)==nil and Piece:GetBlock(Vector3.zero).Definition=="Brick")
+			G:SetAssemblyVelocity(Vector3.new(1,0,0),Vector3.zero,G:GetRevision())
+			Piece:SetAssemblyVelocity(Vector3.new(-1,0,0),Vector3.new(0,0,2),Piece:GetRevision())
+			assert(G:MergeFrom(Piece,G:GetRevision(),Piece:GetRevision())==G:GetRevision())
+			local Joined=G:GetAssemblyState()
+			assert(G.MotionMode=="Dynamic" and Piece.MotionMode=="Static" and Piece:GetBlock(Vector3.zero)==nil)
+			assert(Joined.Mass==2 and Joined.LinearVelocity.Magnitude<.001 and math.abs(Joined.AngularVelocity.Z-1/7)<.001)
+			assert(G:GetBlock(X).Definition=="Brick" and (Joined.LocalCenterOfMass-Vector3.new(1.5,.5,.5)).Magnitude<.001)
+			G:SetMotionMode("Static",G:GetRevision())
 		)");
 
 		const auto Parent=std::make_shared<SpatialRegion>(); Parent->SetParent(World->GetService("Workspace"));
@@ -333,6 +357,31 @@ namespace {
 		Check(Gateway.Apply(Command(Merge),Auth).Succeeded() && !D->GetField().GetOccupiedCount(),"Studio merge");
 		Check(Gateway.Undo(*World,Studio).Succeeded() && D->GetField().GetOccupiedCount()==1 && Source->GetField().GetOccupiedCount()==1,"undo merge");
 		Check(Gateway.Redo(*World,Studio).Succeeded() && D->GetField().GetOccupiedCount()==0 && Source->GetField().GetOccupiedCount()==2,"redo merge");
+		auto Move=std::make_shared<blockgrid::EditRequest>(); Move->ExpectedRevision=Source->GetBlockRevision();
+		Move->Motion=blockgrid::MotionEdit{true};
+		Check(Gateway.Apply(Command(Move),Server).Succeeded(),"admit dynamic before journal rollback");
+		const auto Native=Source->GetAssemblyProjection();
+		auto Split=std::make_shared<blockgrid::EditRequest>(); Split->ExpectedRevision=Source->GetBlockRevision();
+		Split->Bilateral=blockgrid::GridTransferEdit{blockgrid::SingleCell({1,0,0}),{}, {},true};
+		const auto Count=World->GetOwnedInstanceCount(),Clock=World->GetAuthoritativeRevision();
+		ChangeJournal::Get().SetCapacity(1);
+		const auto Failed=Gateway.Apply(Command(Split),Server);
+		ChangeJournal::Get().SetCapacity(Capacity);
+		const auto Remaining=Source->GetAssemblyProjection();
+		Check(!Failed.Succeeded() && Native && Remaining && Native->Revision==Remaining->Revision && Remaining->Mass==2 &&
+			World->GetOwnedInstanceCount()==Count && World->GetAuthoritativeRevision()==Clock && Source->GetBlockRevision()==*Split->ExpectedRevision,
+			"failed moving split must retire staged bodies and keep the original body, identity, fields and revision");
+		Check(Gateway.Apply(Command(Split),Server).Succeeded(),"moving split must recover after journal capacity is restored");
+		PhysicsWorld Physics(PhysicsWorldConfig{});
+		auto Hulls=std::make_shared<std::vector<PhysicsConvexChild>>(); Hulls->push_back({PhysicsShapeKind::Box,CFrame(),glm::vec3(1)});
+		PhysicsBodyDesc Body; Body.Shape={PhysicsShapeKind::ConvexAssembly,glm::vec3(1),{},Hulls};
+		const auto Left=Physics.CreateBody(Body); Body.Transform=CFrame(1,0,0); const auto Right=Physics.CreateBody(Body);
+		const auto Joint=Physics.CreateConstraint({.BodyA=Left,.BodyB=Right});
+		const std::array Joined{Left,Right};
+		Check(Joint.IsValid() && !Physics.PrepareAssemblyReplacement(Joined,1).Succeeded() && Physics.IsConstraintValid(Joint),
+			"moving replacement cannot implicitly destroy an existing native constraint");
+		Check(Physics.DestroyConstraint(Joint).Succeeded() && Physics.PrepareAssemblyReplacement(Joined,1).Succeeded(),
+			"unconstrained native retirement should recover");
 	}
 	void TestMovingGrid() {
 		auto World=std::make_shared<DataModel>();

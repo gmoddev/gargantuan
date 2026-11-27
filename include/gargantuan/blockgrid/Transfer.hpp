@@ -11,6 +11,7 @@ namespace gargantuan::blockgrid {
 		std::uint8_t Orientation{};
 	};
 	struct TransferFields { Field Source, Destination; };
+	enum class TransferMotion : std::uint8_t { Static,Split,Merge };
 	// Empty selection is rejected. The returned candidates own no live provider or instance state.
 	[[nodiscard]] TransferFields PlanGridTransfer(const Field& Source,const Field& Destination,
 		std::optional<Region> Bounds,GridLattice Mapping);

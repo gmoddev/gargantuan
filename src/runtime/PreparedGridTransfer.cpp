@@ -60,10 +60,11 @@ namespace gargantuan {
 			}
 			throw std::invalid_argument("[BlockGrid:Alignment] Grid rotation must preserve the cell lattice");
 		}
-		void CheckOwner(const std::shared_ptr<BlockGrid>& Grid,DataModel& World) {
+		void CheckOwner(const std::shared_ptr<BlockGrid>& Grid,DataModel& World,bool Moving=false) {
 			if (Grid->GetDestroyed() || Grid->IsDestroying() || Grid->GetDataModel().get()!=&World ||
 				Grid->IsReplicaMaterialization()) throw std::domain_error("[BlockGrid:Access] Grids must be authoritative in one DataModel");
-			if (Grid->IsDynamicAssembly()) throw std::domain_error("[BlockGrid:Motion] Freeze the assembly before transferring cells");
+			if (Grid->IsDynamicAssembly()!=Moving)
+				throw std::domain_error("[BlockGrid:Motion] Both participants must support the requested motion mode");
 			if (!Grid->EnsureAssetBindings()) throw std::domain_error("[BlockGrid:Unavailable] Project asset pins are unavailable");
 		}
 		void CheckLandingReservation(DataModel& World,const BlockGrid& Grid) {
@@ -87,6 +88,11 @@ namespace gargantuan {
 		const MutationAuthorityContext& Authority) {
 		const auto World=Grid->GetDataModel();
 		const auto& Op=*Request.Bilateral;
+		const auto Motion=Op.SplitDynamic?blockgrid::TransferMotion::Split:
+			!Op.Extract && Grid->IsDynamicAssembly()?blockgrid::TransferMotion::Merge:blockgrid::TransferMotion::Static;
+		if ((Op.SplitDynamic && !Op.Extract) || (Motion!=blockgrid::TransferMotion::Static &&
+			Authority.GetOrigin()!=MutationCommandOrigin::LocalInternal))
+			throw std::invalid_argument("[BlockGrid:Access] Moving transfers require an authoritative simulation command");
 		if (Grid->GetBlockRevision()!=*Request.ExpectedRevision)
 			throw std::domain_error("[BlockGrid:Conflict] Grid revision changed");
 		if (World->Transactions.GetOpenCount() || World->HasDeferredRevision() || Grid->IsTransferParked())
@@ -97,7 +103,7 @@ namespace gargantuan {
 		if (!Parent || !Domain || Parent->GetDestroyed() || Parent->IsDestroying())
 			throw std::domain_error("[BlockGrid:Admission] A live sibling parent and collision domain are required");
 		CheckLandingReservation(*World,*Grid);
-		CheckOwner(Grid,*World);
+		CheckOwner(Grid,*World,Motion!=blockgrid::TransferMotion::Static);
 		std::shared_ptr<BlockGrid> Source,Destination;
 		blockgrid::GridLattice Mapping;
 		if (Op.Extract) {
@@ -119,7 +125,7 @@ namespace gargantuan {
 				WorldRoot::GetEffectiveWorld(*Source)!=Domain || Source->IsTransferParked())
 				throw std::domain_error("[BlockGrid:Admission] Merge requires distinct siblings in the same collision domain");
 			CheckLandingReservation(*World,*Source);
-			CheckOwner(Source,*World);
+			CheckOwner(Source,*World,Motion==blockgrid::TransferMotion::Merge);
 			if (Source->GetBlockRevision()!=Op.SourceRevision) throw std::domain_error("[BlockGrid:Conflict] Source revision changed");
 			Mapping=Lattice(*Source,*Destination);
 		}
@@ -147,12 +153,12 @@ namespace gargantuan {
 			Action.Author=Authority.GetAuthor(); History.emplace(World->Transactions); History->Retain(std::move(Action));
 		}
 		return Install(*World,Domain,Parent,Source,Destination,std::move(Next),Op.Extract?Hierarchy::Attach:Hierarchy::Keep,
-			Receipt,std::move(History));
+			Receipt,std::move(History),Motion);
 	}
 	MutationResult PreparedGridTransfer::Install(DataModel& World,const std::shared_ptr<WorldRoot>& Domain,
 		const std::shared_ptr<Instance>& Parent,const std::shared_ptr<BlockGrid>& Source,const std::shared_ptr<BlockGrid>& Destination,
 		blockgrid::TransferFields Next,Hierarchy Change,const std::shared_ptr<const GridTransferHistory>& Receipt,
-		std::optional<AuthoritativeTransactionHistory> History) {
+		std::optional<AuthoritativeTransactionHistory> History,blockgrid::TransferMotion Motion) {
 		World.EnsureAuthoritativeRevisionAvailable();
 		CheckLandingReservation(World,*Source); CheckLandingReservation(World,*Destination);
 		const auto Starting=World.GetAuthoritativeRevision();
@@ -179,13 +185,17 @@ namespace gargantuan {
 						throw std::domain_error("[BlockGrid:Admission] Extracted grid cannot join the source domain");
 					Registered=true; Domain->AddBlockGrid(Destination);
 				}
-				auto Coverage=Domain->PrepareBlockGridTransfer(*Source,Next.Source,*Destination,Next.Destination);
+				auto Coverage=Domain->PrepareBlockGridTransfer(*Source,Next.Source,*Destination,Next.Destination,Motion);
 				auto Stamp=std::make_shared<const BlockGridTransferStamp>(BlockGridTransferStamp{
 					World.GetObjectId(),Starting+1,{Source->GetObjectId(),Destination->GetObjectId()},
 					{Source->RevisionToken(Next.Source.GetPublicRevision())+"/peers",Destination->RevisionToken(Next.Destination.GetPublicRevision())+"/peers"}});
 				auto S=Source->RevisionToken(Next.Source.GetRevision()),D=Destination->RevisionToken(Next.Destination.GetRevision());
 				Records.push_back({{},Source->GetObjectId(),PropertyUpdatedChange{"BlockRevision",std::move(S),false}});
 				Records.push_back({{},Destination->GetObjectId(),PropertyUpdatedChange{"BlockRevision",D,false}});
+				if (Motion!=blockgrid::TransferMotion::Static) {
+					const bool Split=Motion==blockgrid::TransferMotion::Split;
+					Records.push_back({{},(Split?Destination:Source)->GetObjectId(),PropertyUpdatedChange{"MotionMode",std::string(Split?"Dynamic":"Static"),false}});
+				}
 				Result={.Status=MutationStatus::Success,.Object=Destination->GetObjectId(),.BlockRevision=std::move(D)};
 				if (World.GetAuthoritativeRevision()!=Starting || World.Transactions.GetOpenCount())
 					throw std::domain_error("[BlockGrid:Conflict] World changed during transfer preparation");
@@ -219,6 +229,13 @@ namespace gargantuan {
 		}
 		if (Change!=Hierarchy::Keep) {
 			try { Destination->NotifyParentChanged(Destination,OldParent,Change==Hierarchy::Attach?Parent:nullptr,Deferred); } catch (...) {}
+		}
+		if (Motion!=blockgrid::TransferMotion::Static) {
+			const auto& ChangedGrid=Motion==blockgrid::TransferMotion::Split?Destination:Source;
+			const auto Found=ChangedGrid->PropertyChangedSignals.find("MotionMode");
+			if (Found!=ChangedGrid->PropertyChangedSignals.end() && Found->second) {
+				auto Signal=Found->second; try {Signal->Fire({});} catch (...) {}
+			}
 		}
 		for (const auto& Grid:{Source,Destination}) {
 			const auto Signal=Grid->PropertyChangedSignals.find("BlockRevision");
