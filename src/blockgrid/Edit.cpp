@@ -6,6 +6,12 @@
 namespace gargantuan::blockgrid {
 	std::shared_ptr<const Patch> CapturePatch(const Field& Source, std::span<const Write> Writes) {
 		if (Writes.size()>MaximumCommands) throw std::length_error("[BlockGrid:History] Command limit exceeded");
+		if (Source.GetChannelCount()) {
+			auto Captured=std::make_shared<Patch>();
+			const std::vector<Operation> Ops(Writes.begin(),Writes.end());
+			Captured->StateCells=Source.PlanOperations(Ops);
+			return Captured;
+		}
 		std::size_t Visits=0;
 		for (const auto& W : Writes) {
 			Visits+=Volume(W.Bounds,MaximumEditVisits-Visits);
@@ -34,6 +40,9 @@ namespace gargantuan::blockgrid {
 			Previous=D.Position;
 			if (Source.Get(D.Position)!=(Forward?D.Before:D.After))
 				throw std::domain_error("[BlockGrid:Conflict] A cell touched by history has diverged");
+			for (std::uint8_t I=0;I<Source.GetChannelCount();++I)
+				if (Source.GetChannel(I).Read(D.Position)!=Source.GetChannel(I).Spec.Default)
+					throw std::domain_error("[BlockGrid:Conflict] A later state override occupies a history cell");
 			Result.push_back({SingleCell(D.Position),Forward?D.After:D.Before});
 		}
 		return Result;

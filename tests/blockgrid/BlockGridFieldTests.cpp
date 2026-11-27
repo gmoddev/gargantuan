@@ -102,9 +102,57 @@ namespace {
 			Check(!Cast(ShapeField,Rotate({.25,2,.75},R,.5),Rotate({0,-2,0},R,0)));
 		}
 	}
+	void TestState() {
+		Field F;
+		const auto G=F.GetGeometryRevision(), P=F.GetPublicRevision();
+		const ChannelSpec Damage{"damage",ChannelKind::UInt8,0,true,false,true,false};
+		const ChannelSpec Device{"device",ChannelKind::Bool,0,true,true,true,true};
+		const ChannelSpec Heat{"heat",ChannelKind::Float32,ScalarBits(ChannelKind::Float32,2.5),false,true,false,true};
+		Check(F.DefineChannel(Damage) && !F.DefineChannel(Damage) && F.GetGeometryRevision()==G && F.GetPublicRevision()==P);
+		Check(F.DefineChannel(Device) && F.DefineChannel(Heat));
+		Reject([&]{ (void)ScalarBits(ChannelKind::Bool,1.); });
+		Reject([&]{ (void)ScalarBits(ChannelKind::UInt8,256.); });
+		Reject([&]{ (void)ScalarBits(ChannelKind::Float32,std::numeric_limits<double>::infinity()); });
+		Reject([&]{ (void)ScalarBits(ChannelKind::Int32,.25); });
+		Check(ScalarBits(ChannelKind::Float32,-0.)==0 && std::get<double>(ScalarValue(ChannelKind::Int32,ScalarBits(ChannelKind::Int32,-3.)))==-3);
+		const Cell A{-1,0,0},B{0,0,0},C{1,0,0};
+		const std::vector<Operation> Batch{Write{SingleCell(A),{Stone,0}},ValueWrite{A,0,9},ValueWrite{A,1,1},
+			ValueWrite{A,2,ScalarBits(ChannelKind::Float32,4.5)},Write{SingleCell(A),{Stone,2}}};
+		Check(F.ApplyOperations(Batch) && F.GetValue(A,0)==9 && F.GetValue(A,1)==1 && F.GetOverrideCount()==3);
+		const auto Machine=F;
+		const auto PublicBefore=Encode(F,DataProfile::RelevantPeers);
+		const auto PublicRev=F.GetPublicRevision(), Geo=F.GetGeometryRevision();
+		const std::array<Operation,1> PrivateChange{ValueWrite{A,0,10}};
+		bool ProviderCalled=false;
+		Check(F.ApplyOperations(PrivateChange,[&](const auto&,auto){ProviderCalled=true;return false;}) && !ProviderCalled);
+		Check(F.GetGeometryRevision()==Geo && F.GetPublicRevision()==PublicRev && PublicBefore==Encode(F,DataProfile::RelevantPeers));
+		Check(Machine.GetValue(A,0)==9 && F.GetValue(A,0)==10);
+		auto Saved=Decode(Encode(F)),Client=Decode(Encode(F,DataProfile::ClientPersistent)),Clone=Decode(Encode(F,DataProfile::Clone));
+		Check(Saved.GetChannelCount()==2 && Saved.GetValue(A,Saved.GetChannelId("damage"))==10);
+		Check(Client.GetChannelCount()==1 && Client.GetValue(A,Client.GetChannelId("device"))==1);
+		Check(Clone.GetValue(A,0)==0 && Clone.GetValue(A,1)==1 && Clone.GetValue(A,2)==ScalarBits(ChannelKind::Float32,4.5));
+		Check(Decode(PublicBefore).GetChannelCount()==2 && Encode(Saved)==Encode(F));
+		const std::array<Operation,1> Copy{Transfer{SingleCell(A),B,false}};
+		Check(F.ApplyOperations(Copy) && F.GetValue(B,0)==0 && F.GetValue(B,1)==1 && F.Get(B)==Block{Stone,2});
+		const std::array<Operation,1> Move{Transfer{{A,{1,1,1}},B,true}};
+		Check(F.ApplyOperations(Move) && !F.Get(A).Definition && F.GetValue(B,0)==10 && F.GetValue(C,0)==0);
+		auto Prior=Encode(F,DataProfile::RelevantPeers);
+		const auto R=F.GetRevision();
+		const std::array<Operation,2> Invalid{Write{SingleCell(B),{}},ValueWrite{B,0,1}};
+		Reject([&]{(void)F.ApplyOperations(Invalid);});
+		Check(F.GetRevision()==R && Prior==Encode(F,DataProfile::RelevantPeers));
+		const std::array<Operation,2> Reset{Write{SingleCell(B),{}},Write{SingleCell(B),{Stone,2}}};
+		Check(F.ApplyOperations(Reset) && F.GetValue(B,0)==0 && F.GetValue(B,1)==0);
+		Reject([&]{F.UndoChannelInsertion(Device);});
+		auto Broken=Encode(Saved); Broken.back()=255; Reject([&]{(void)Decode(Broken);});
+		Check(Fill(F,SingleCell(C),{Brick,0}) && F.GetValue(C,1)==0);
+		Check(F.GetOverrideCount()==0);
+		Reject([&]{(void)F.GetValue(A,0);});
+	}
 }
 int main() try {
 	TestDefinitions();
+	TestState();
 	Field Grid;
 	Check(!Grid.GetOccupiedCount() && !Grid.GetLeafCount() && Grid.Get({-1,-1,-1}) == Block{});
 	Check(Fill(Grid,{{-8,-8,-8},{0,0,0}},{Stone,0}) && Grid.GetOccupiedCount() == LeafVolume);

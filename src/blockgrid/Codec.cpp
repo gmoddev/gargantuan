@@ -34,7 +34,7 @@ namespace gargantuan::blockgrid {
 			}
 		};
 	}
-	std::vector<std::uint8_t> Encode(const Field& F) {
+	std::vector<std::uint8_t> EncodeBase(const Field& F) {
 		std::vector<std::uint8_t> Out(std::begin(Magic),std::end(Magic));
 		Out.reserve(F.EncodedBytes);
 		Out.push_back(F.Definitions?2:1);
@@ -67,7 +67,7 @@ namespace gargantuan::blockgrid {
 		}
 		return Out;
 	}
-	Field Decode(std::span<const std::uint8_t> Bytes) {
+	Field DecodeBase(std::span<const std::uint8_t> Bytes) {
 		if (Bytes.size() > MaximumEncodedBytes || Bytes.size() < sizeof(Magic)+5 ||
 			!std::equal(std::begin(Magic),std::end(Magic),Bytes.begin())) Invalid();
 		Reader In{Bytes, sizeof(Magic)};
@@ -158,5 +158,95 @@ namespace gargantuan::blockgrid {
 		if (In.Offset != Bytes.size()) Invalid();
 		Result.EncodedBytes = Bytes.size();
 		return Result;
+	}
+	std::vector<std::uint8_t> Encode(const Field& F,DataProfile Profile) {
+		if (Profile>DataProfile::RelevantPeers) throw std::invalid_argument("[BlockGrid:Codec] Invalid profile");
+		auto Base=EncodeBase(F);
+		if (!F.State) return Base;
+		const auto Eligible=[&](const ChannelData& C) {
+			if (Profile==DataProfile::Clone) return true;
+			if (Profile==DataProfile::Authored) return C.Spec.Persistent;
+			return C.Spec.RelevantPeers && (Profile==DataProfile::RelevantPeers || C.Spec.Persistent);
+		};
+		const auto Count=std::ranges::count_if(F.State->Channels,Eligible);
+		if (!Count) return Base;
+		std::vector<std::uint8_t> Out{'B','G','R','D',3};
+		Put(Out,static_cast<std::uint32_t>(Base.size()),4);
+		Out.insert(Out.end(),Base.begin(),Base.end());
+		Put(Out,static_cast<std::uint32_t>(Count),1);
+		for (const auto& C:F.State->Channels) {
+			if (!Eligible(C)) continue;
+			const auto& S=C.Spec;
+			Out.push_back(static_cast<std::uint8_t>(S.Name.size()));
+			Out.insert(Out.end(),S.Name.begin(),S.Name.end());
+			Put(Out,static_cast<unsigned>(S.Kind),1);
+			Put(Out,S.Default,4);
+			Put(Out,unsigned(S.Persistent)|(unsigned(S.RelevantPeers)<<1)|(unsigned(S.Indexed)<<2)|(unsigned(S.CopyValue)<<3),1);
+			const bool IncludeValues=Profile!=DataProfile::Clone || S.CopyValue;
+			Put(Out,IncludeValues?static_cast<std::uint32_t>(C.Count):0,4);
+			if (IncludeValues && C.Pages) for (const auto& [Origin,Page]:*C.Pages) for (const auto& E:*Page) {
+				const auto P=OffsetCell(Origin,E.Index);
+				for (auto U:{P.X,P.Y,P.Z}) Put(Out,std::bit_cast<std::uint32_t>(U),4);
+				Put(Out,E.Bits,4);
+			}
+		}
+		if (Out.size()>MaximumEncodedBytes) throw std::length_error("[BlockGrid:Codec] Dataset exceeds byte budget");
+		return Out;
+	}
+	std::vector<std::uint8_t> Encode(const Field& F) { return Encode(F,DataProfile::Authored); }
+	Field Decode(std::span<const std::uint8_t> Bytes) {
+		if (Bytes.size()<5 || Bytes[4]!=3) return DecodeBase(Bytes);
+		if (Bytes.size()>MaximumEncodedBytes || !std::equal(std::begin(Magic),std::end(Magic),Bytes.begin())) Invalid();
+		Reader In{Bytes,5};
+		const auto Length=In.Take(4);
+		if (Length>Bytes.size()-In.Offset) Invalid();
+		auto F=DecodeBase(Bytes.subspan(In.Offset,Length)); In.Offset+=Length;
+		const auto Count=In.Take(1);
+		if (Count==0 || Count>MaximumChannels) Invalid();
+		auto State=std::make_shared<ChannelState>();
+		std::set<std::string> Names;
+		for (unsigned I=0;I<Count;++I) {
+			ChannelSpec S;
+			const auto N=In.Take(1);
+			if (N>48 || N>Bytes.size()-In.Offset) Invalid();
+			S.Name.assign(reinterpret_cast<const char*>(Bytes.data()+In.Offset),N);In.Offset+=N;
+			S.Kind=static_cast<ChannelKind>(In.Take(1));S.Default=In.Take(4);
+			const auto Flags=In.Take(1);
+			if (Flags>15) Invalid();
+			S.Persistent=(Flags&1)!=0; S.RelevantPeers=(Flags&2)!=0; S.Indexed=(Flags&4)!=0; S.CopyValue=(Flags&8)!=0;
+			ValidateChannel(S);
+			if (!Names.insert(S.Name).second) Invalid();
+			ChannelData C{std::move(S)};
+			C.Count=In.Take(4);
+			if (C.Count>MaximumOverrides-State->Overrides || C.Count>(Bytes.size()-In.Offset)/16) Invalid();
+			State->Overrides+=C.Count;
+			if (C.Count) {
+				auto Pages=std::make_shared<ChannelData::Directory>();
+				std::shared_ptr<ChannelData::Page> Page;
+				std::optional<Cell> Last;
+				for (unsigned J=0;J<C.Count;++J) {
+					const Cell P{std::bit_cast<std::int32_t>(In.Take(4)),std::bit_cast<std::int32_t>(In.Take(4)),
+						std::bit_cast<std::int32_t>(In.Take(4))};
+					const auto Bits=In.Take(4);
+					if (!ValidCell(P) || !F.Get(P).Definition || Bits==C.Spec.Default) Invalid();
+					(void)ScalarValue(C.Spec.Kind,Bits);
+					const auto Origin=LeafOrigin(P);
+					if (!Last || *Last!=Origin) {
+						if (Last && !CellOrder{}(*Last,Origin)) Invalid();
+						Page=std::make_shared<ChannelData::Page>();
+						Pages->emplace_hint(Pages->end(),Origin,Page);
+						Last=Origin;
+					}
+					const auto Index=static_cast<std::uint16_t>(LeafIndex(P));
+					if (!Page->empty() && Page->back().Index>=Index) Invalid();
+					Page->push_back({Index,Bits});
+				}
+				C.Pages=std::move(Pages);
+			}
+			State->Channels.push_back(std::move(C));
+		}
+		if (In.Offset!=Bytes.size() || State->MaxEncodedBytes()+F.EncodedBytes>MaximumEncodedBytes) Invalid();
+		F.State=std::move(State);
+		return F;
 	}
 }

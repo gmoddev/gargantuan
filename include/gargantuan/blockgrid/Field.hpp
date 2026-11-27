@@ -39,6 +39,43 @@ namespace gargantuan::blockgrid {
 		bool operator==(const Block&) const = default;
 	};
 	struct Write { Region Bounds; Block Value; };
+	enum class ChannelKind : std::uint8_t { Bool, UInt8, Int32, Float32 };
+	enum class DataProfile : std::uint8_t { Authored, Clone, ClientPersistent, RelevantPeers };
+	inline constexpr std::size_t MaximumChannels=16, MaximumOverrides=65'536;
+	struct ChannelSpec {
+		std::string Name;
+		ChannelKind Kind{};
+		std::uint32_t Default{};
+		bool Persistent{}, RelevantPeers{}, Indexed{}, CopyValue{};
+		bool operator==(const ChannelSpec&) const = default;
+	};
+	struct ChannelData {
+		struct Entry { std::uint16_t Index; std::uint32_t Bits; };
+		using Page=std::vector<Entry>;
+		using Directory=std::map<Cell,std::shared_ptr<const Page>,CellOrder>;
+		ChannelSpec Spec;
+		std::shared_ptr<const Directory> Pages;
+		std::size_t Count{};
+		[[nodiscard]] std::uint32_t Read(Cell P) const;
+	};
+	struct ChannelState {
+		std::vector<ChannelData> Channels;
+		std::size_t Overrides{};
+		[[nodiscard]] std::size_t MaxEncodedBytes() const noexcept;
+	};
+	struct ValueWrite { Cell Position; std::uint8_t Channel; std::uint32_t Bits; };
+	struct Transfer { Region Source; Cell Destination; bool Move{}; };
+	struct PackedWrite { Region Destination; std::vector<Block> Values; };
+	using Operation=std::variant<Write,ValueWrite,Transfer,PackedWrite>;
+	using StateValues=std::array<std::uint32_t,MaximumChannels>;
+	struct CellState { Block Value; StateValues Values{}; bool operator==(const CellState&) const = default; };
+	struct StateChange { Cell Position; CellState Before,After; };
+	[[nodiscard]] std::uint32_t ScalarBits(ChannelKind Kind,std::variant<bool,double> Value);
+	[[nodiscard]] std::variant<bool,double> ScalarValue(ChannelKind Kind,std::uint32_t Bits);
+	void ValidateChannel(const ChannelSpec& Spec);
+	[[nodiscard]] Cell LeafOrigin(Cell Position) noexcept;
+	[[nodiscard]] unsigned LeafIndex(Cell Position) noexcept;
+	[[nodiscard]] Cell OffsetCell(Cell Origin,unsigned Index) noexcept;
 
 	[[nodiscard]] bool ValidCell(Cell Position) noexcept;
 	[[nodiscard]] bool ValidBlock(Block Value) noexcept;
@@ -58,6 +95,8 @@ namespace gargantuan::blockgrid {
 		friend class Field;
 		friend std::vector<std::uint8_t> Encode(const class Field&);
 		friend class Field Decode(std::span<const std::uint8_t>);
+		friend std::vector<std::uint8_t> EncodeBase(const class Field&);
+		friend class Field DecodeBase(std::span<const std::uint8_t>);
 		struct Entry { std::uint16_t Index; Block Value; bool operator==(const Entry&) const = default; };
 		using Sparse = std::vector<Entry>;
 		using Dense = std::vector<Block>;
@@ -114,6 +153,17 @@ namespace gargantuan::blockgrid {
 		[[nodiscard]] std::size_t GetDefinitionCount() const noexcept;
 		[[nodiscard]] bool IsValid(Block Value) const noexcept;
 		[[nodiscard]] std::uint64_t GetRevision() const noexcept { return Revision; }
+		[[nodiscard]] std::uint64_t GetGeometryRevision() const noexcept { return GeometryRevision; }
+		[[nodiscard]] std::uint64_t GetPublicRevision() const noexcept { return PublicRevision; }
+		[[nodiscard]] std::size_t GetChannelCount() const noexcept { return State?State->Channels.size():0; }
+		[[nodiscard]] std::size_t GetOverrideCount() const noexcept { return State?State->Overrides:0; }
+		[[nodiscard]] std::size_t GetSnapshotBytes() const noexcept;
+		[[nodiscard]] const ChannelData& GetChannel(std::uint8_t Id) const;
+		[[nodiscard]] std::uint8_t GetChannelId(std::string_view Name) const;
+		[[nodiscard]] std::uint32_t GetValue(Cell P,std::uint8_t Channel) const;
+		[[nodiscard]] CellState ReadState(Cell P) const;
+		[[nodiscard]] bool DefineChannel(ChannelSpec Value);
+		void UndoChannelInsertion(const ChannelSpec& Expected);
 		[[nodiscard]] std::size_t GetOccupiedCount() const noexcept { return Occupied; }
 		[[nodiscard]] std::size_t GetLeafCount() const noexcept { return Leaves.size(); }
 		// Visits immutable values in this Main-owned snapshot. The cell argument is the leaf's grid-local minimum.
@@ -126,21 +176,29 @@ namespace gargantuan::blockgrid {
 		[[nodiscard]] bool Apply(std::span<const Write> Writes, std::optional<std::uint64_t> Expected = {},
 			const Admission& BeforeCommit = {});
 		[[nodiscard]] bool ApplyCellPatch(std::span<const Write> Cells, const Admission& BeforeCommit = {});
+		[[nodiscard]] bool ApplyOperations(std::span<const Operation> Commands,const Admission& BeforeCommit={});
+		[[nodiscard]] std::vector<StateChange> PlanOperations(std::span<const Operation> Commands,std::size_t CommandLimit=MaximumCommands) const;
+		[[nodiscard]] bool ApplyChanges(std::span<const StateChange> Changes,const Admission& BeforeCommit={});
 
 	  private:
 		friend std::vector<std::uint8_t> Encode(const Field&);
 		friend Field Decode(std::span<const std::uint8_t>);
-		[[nodiscard]] bool ApplyChecked(std::span<const Write> Writes, const Admission& BeforeCommit);
+		friend std::vector<std::uint8_t> Encode(const Field&,DataProfile);
+		friend std::vector<std::uint8_t> EncodeBase(const Field&);
+		friend Field DecodeBase(std::span<const std::uint8_t>);
+		[[nodiscard]] bool ApplyChecked(std::span<const Write> Writes, const Admission& BeforeCommit,std::size_t StateBytes=0);
 		[[nodiscard]] static const Definition& Lookup(const Catalog* Bindings,std::uint16_t Id);
 		Directory Leaves;
 		std::shared_ptr<const Catalog> Definitions;
 		std::shared_ptr<Links> Dependencies;
+		std::shared_ptr<const ChannelState> State;
 		std::size_t Occupied{};
 		std::size_t EncodedBytes{9};
-		std::uint64_t Revision{1};
+		std::uint64_t Revision{1}, GeometryRevision{1}, PublicRevision{1};
 	};
 
 	[[nodiscard]] std::vector<std::uint8_t> Encode(const Field& Value);
+	[[nodiscard]] std::vector<std::uint8_t> Encode(const Field& Value,DataProfile Profile);
 	[[nodiscard]] Field Decode(std::span<const std::uint8_t> Bytes);
 	void ValidateDefinition(const Definition& Value);
 	[[nodiscard]] std::string DefinitionDigest(const Definition& Value);

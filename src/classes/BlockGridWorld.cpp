@@ -185,7 +185,7 @@ namespace gargantuan {
 			const bool ConfigChanged = Member.Pose.Position != Pose.Position || Member.Pose.Rotation != Pose.Rotation ||
 				Member.CellSize != Grid.GetCellSize() || Member.Collidable != Grid.GetCanCollide() ||
 				Member.Queryable != Grid.GetCanQuery();
-			if (!ConfigChanged && Member.Revision == Field.GetRevision() && Member.Ready) continue;
+			if (!ConfigChanged && Member.Revision == Field.GetGeometryRevision() && Member.Ready) continue;
 			const auto Mask=Participation(Grid.GetCanCollide(),Grid.GetCanQuery());
 			if ((!Member.TopologyCurrent || Member.TopologyMask != Mask) && !PrepareTopology(State, Member, Field)) {
 				Member.Ready = false;
@@ -217,7 +217,7 @@ namespace gargantuan {
 				State.Owners.emplace(Body, BlockGridCollider{Id, Box});
 			}
 			if (!Member.Ready) { Ready = false; continue; }
-			Member.Revision = Field.GetRevision();
+			Member.Revision = Field.GetGeometryRevision();
 			Member.Pose = Pose;
 			Member.CellSize = Grid.GetCellSize();
 			Member.Collidable = Grid.GetCanCollide();

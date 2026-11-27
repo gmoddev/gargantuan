@@ -146,11 +146,12 @@ namespace gargantuan {
 			Item.ModelMatrix = glm::mat4(Pose.Rotation * static_cast<float>(Grid.GetCellSize()));
 			Item.ModelMatrix[3] = glm::vec4(Pose.Position, 1);
 			Item.InverseModelMatrix = glm::inverse(Item.ModelMatrix);
-			const bool Changed = Old == PublishedGrids.end() || Old->second.Revision != Field.GetRevision();
+			const auto GeometryRevision = Field.GetGeometryRevision();
+			const bool Changed = Old == PublishedGrids.end() || Old->second.Revision != GeometryRevision;
 			const auto &Edit = Grid.GetLastCellEdit();
 			constexpr auto PatchBytes = CubeVertices * sizeof(RenderVertex) + sizeof(RenderMeshVertexUpdate) + sizeof(RenderObjectUpdate);
 			if (Changed && !Result.FullResync && Old != PublishedGrids.end() && Old->second.IsolatedCubeSlots && Edit &&
-				Field.GetRevision() - Old->second.Revision == 1 && Budget >= PatchBytes &&
+				GeometryRevision - Old->second.Revision == 1 && Budget >= PatchBytes &&
 				(Edit->After.Definition == blockgrid::Air || Field.GetDefinition(Edit->After.Definition).Geometry == blockgrid::Shape::Cube) &&
 				!HasFaceNeighbor(Field, Edit->Position)) {
 				auto GridState = Old->second;
@@ -174,7 +175,7 @@ namespace gargantuan {
 					Result.Updates.push_back({Id, RenderUpdateDomain::Geometry | RenderUpdateDomain::Transform, Item, GridState.Resource.Mesh, {}});
 					GridState.Item = Item;
 					GridState.Patched = true;
-					GridState.Revision = Field.GetRevision();
+					GridState.Revision = GeometryRevision;
 					Next.emplace(Id, std::move(GridState));
 					Budget -= PatchBytes;
 					return;
@@ -205,7 +206,7 @@ namespace gargantuan {
 				}
 				Result.Updates.push_back({Id, Domains, Item, Mesh->Mesh, {}});
 			}
-			if (Build) Next.emplace(Id, PublishedGrid{std::move(*Mesh), Item, Field.GetRevision(), std::move(Slots)});
+			if (Build) Next.emplace(Id, PublishedGrid{std::move(*Mesh), Item, GeometryRevision, std::move(Slots)});
 			else {
 				auto State = Old->second;
 				State.Item = Item;

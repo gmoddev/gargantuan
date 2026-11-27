@@ -168,7 +168,7 @@ namespace gargantuan {
 	}
 	void BlockGrid::RestoreField(blockgrid::Field Value) {
 		AssertCanMutate();
-		if (GetDataModel() || Cells.GetRevision()!=1 || Cells.GetLeafCount() || Cells.GetDefinitionCount() || Admission || Editing)
+		if (GetDataModel() || Cells.GetRevision()!=1 || Cells.GetLeafCount() || Cells.GetDefinitionCount() || Cells.GetChannelCount() || Admission || Editing)
 			throw std::logic_error("[BlockGrid:Restore] Only an unpublished detached grid may restore native data");
 		Cells=std::move(Value);
 	}
@@ -177,23 +177,25 @@ namespace gargantuan {
 		if (Editing) throw std::logic_error("[BlockGrid:Admission] Cannot replace an active admission hook");
 		Admission=std::move(BeforeCommit);
 	}
-	std::string BlockGrid::GetBlockRevision() const {
+	std::string BlockGrid::GetBlockRevision() const { return RevisionToken(Cells.GetRevision()); }
+	std::string BlockGrid::GetPublicBlockRevision() const { return RevisionToken(Cells.GetPublicRevision())+"/peers"; }
+	std::string BlockGrid::RevisionToken(std::uint64_t SourceRevision) const {
 		const auto Scope=GetReplicationScopeId(), Id=GetObjectId();
 		const auto World=WorldRoot::GetEffectiveWorld(*this);
 		const auto Domain=World?World->GetObjectId():ObjectId{};
 		return std::format("{}.{}:{}.{}:{}.{}:{}:{}",Scope.Slot,Scope.Generation,Id.Slot,Id.Generation,Domain.Slot,Domain.Generation,
-			ConfigurationRevision,Cells.GetRevision());
+			ConfigurationRevision,SourceRevision);
 	}
-	std::string BlockGrid::ApplyWrites(std::span<const blockgrid::Write> Writes, const std::optional<std::string>& Expected,
-		bool ReplayingCells,const blockgrid::BindingEdit* Binding,const blockgrid::BindingDelta* ReplayBinding,bool Forward) {
+	std::string BlockGrid::ApplyEdit(const blockgrid::EditRequest& Edit) {
 		AssertCanMutate();
 		const auto World=GetDataModel();
 		if (!World || Editing) throw std::logic_error("[BlockGrid:Edit] Grid is unavailable for admission");
-		if (Expected && *Expected!=GetBlockRevision()) throw std::domain_error("[BlockGrid:Conflict] Revision changed");
+		if (Edit.ExpectedRevision && *Edit.ExpectedRevision!=GetBlockRevision()) throw std::domain_error("[BlockGrid:Conflict] Revision changed");
 		World->EnsureAuthoritativeRevisionAvailable();
 		std::optional<blockgrid::CellDelta> PointEdit;
-		if (!Binding && !ReplayBinding && Writes.size() == 1) {
-			const auto &Write = Writes.front();
+		const auto PriorGeometry = Cells.GetGeometryRevision();
+		if (!Edit.Binding && !Edit.Channel && !Edit.Replay && Edit.Commands.empty() && Edit.Writes.size() == 1) {
+			const auto &Write = Edit.Writes.front();
 			if (blockgrid::ValidCell(Write.Bounds.Min) &&
 				blockgrid::SingleCell(Write.Bounds.Min).MaxExclusive == Write.Bounds.MaxExclusive)
 				PointEdit = blockgrid::CellDelta{Write.Bounds.Min, Cells.Get(Write.Bounds.Min), Write.Value};
@@ -202,20 +204,37 @@ namespace gargantuan {
 		{
 			struct Guard { bool& Flag; ~Guard(){ Flag=false; } } Reset{Editing};
 			Editing=true;
-			if (ReplayBinding) {
-				const auto& D=*ReplayBinding;
+			if (Edit.Replay && Edit.Replay->Binding) {
+				const auto& D=*Edit.Replay->Binding;
+				const bool Forward=Edit.Forward;
 				const auto Id=Cells.FindDefinitionId(D.After.Key);
 				const auto* Before=Forward?(D.Before?&*D.Before:nullptr):&D.After;
 				if (bool(Id)!=bool(Before) || (Id && Cells.GetDefinition(*Id)!=*Before))
 					throw std::domain_error("[BlockGrid:Conflict] Definition history has diverged");
 				if (Forward || D.Before) Changed=Cells.Define(Forward?D.After:*D.Before,bool(Id),Admission);
 				else { Cells.UndoDefinitionInsertion(D.After,Admission); Changed=true; }
-			} else if (Binding) Changed=Cells.Define(Binding->Spec,Binding->Replace,Admission);
-			else Changed=ReplayingCells ? Cells.ApplyCellPatch(Writes,Admission) : Cells.Apply(Writes,{},Admission);
+			} else if (Edit.Replay && Edit.Replay->Channel) {
+				if (Edit.Forward) {
+					for (std::uint8_t I=0;I<Cells.GetChannelCount();++I)
+						if (Cells.GetChannel(I).Spec.Name==Edit.Replay->Channel->Name) throw std::domain_error("[BlockGrid:Conflict] Channel already exists");
+					Changed=Cells.DefineChannel(*Edit.Replay->Channel);
+				} else { Cells.UndoChannelInsertion(*Edit.Replay->Channel); Changed=true; }
+			} else if (Edit.Replay && !Edit.Replay->StateCells.empty()) {
+				if (Edit.Forward) Changed=Cells.ApplyChanges(Edit.Replay->StateCells,Admission);
+				else {
+					auto Undo=Edit.Replay->StateCells;
+					for (auto& D:Undo) std::swap(D.Before,D.After);
+					Changed=Cells.ApplyChanges(Undo,Admission);
+				}
+			} else if (Edit.Replay) Changed=Cells.ApplyCellPatch(blockgrid::ReplayWrites(Cells,*Edit.Replay,Edit.Forward),Admission);
+			else if (Edit.Binding) Changed=Cells.Define(Edit.Binding->Spec,Edit.Binding->Replace,Admission);
+			else if (Edit.Channel) Changed=Cells.DefineChannel(*Edit.Channel);
+			else if (!Edit.Commands.empty()) Changed=Cells.ApplyOperations(Edit.Commands,Admission);
+			else Changed=Cells.Apply(Edit.Writes,{},Admission);
 		}
 		const auto Revision=GetBlockRevision();
 		if (Changed) {
-			LastCellEdit = PointEdit;
+			if (PriorGeometry != Cells.GetGeometryRevision()) LastCellEdit = PointEdit;
 			World->AdvanceAuthoritativeRevision();
 			NotifyPropertyCommitted("BlockRevision");
 		}

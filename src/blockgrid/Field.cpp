@@ -19,6 +19,13 @@ namespace gargantuan::blockgrid {
 	bool CellOrder::operator()(Cell A, Cell B) const noexcept {
 		return std::tie(A.Z,A.Y,A.X) < std::tie(B.Z,B.Y,B.X);
 	}
+	Cell LeafOrigin(Cell P) noexcept { return Origin(P); }
+	unsigned LeafIndex(Cell P) noexcept {
+		const auto Base=Origin(P); return Index(P.X-Base.X,P.Y-Base.Y,P.Z-Base.Z);
+	}
+	Cell OffsetCell(Cell Base,unsigned I) noexcept {
+		return {Base.X+int(I%LeafSide),Base.Y+int((I/LeafSide)%LeafSide),Base.Z+int(I/(LeafSide*LeafSide))};
+	}
 	bool ValidCell(Cell P) noexcept {
 		return P.X >= -CoordinateLimit && P.X < CoordinateLimit && P.Y >= -CoordinateLimit &&
 			P.Y < CoordinateLimit && P.Z >= -CoordinateLimit && P.Z < CoordinateLimit;
@@ -183,16 +190,24 @@ namespace gargantuan::blockgrid {
 	bool Field::Apply(std::span<const Write> Writes, std::optional<std::uint64_t> Expected, const Admission& BeforeCommit) {
 		if (Expected && *Expected != Revision) throw std::domain_error("[BlockGrid:Conflict] Grid revision changed");
 		if (Writes.size() > MaximumCommands) throw std::length_error("[BlockGrid:Limit] Too many edit commands");
-		return ApplyChecked(Writes,BeforeCommit);
+		if (GetOverrideCount()) {
+			std::vector<Operation> Ops(Writes.begin(),Writes.end());
+			return ApplyOperations(Ops,BeforeCommit);
+		}
+		return ApplyChecked(Writes,BeforeCommit,State?State->MaxEncodedBytes():0);
 	}
 	bool Field::ApplyCellPatch(std::span<const Write> Writes,const Admission& BeforeCommit) {
 		if (Writes.size()>MaximumEditVisits) throw std::length_error("[BlockGrid:Limit] Cell patch limit exceeded");
 		for (const auto& W : Writes)
 			if (!(SingleCell(W.Bounds.Min).MaxExclusive==W.Bounds.MaxExclusive))
 				throw std::invalid_argument("[BlockGrid:History] Expected individual cell writes");
-		return ApplyChecked(Writes,BeforeCommit);
+		if (GetOverrideCount()) {
+			std::vector<Operation> Ops(Writes.begin(),Writes.end());
+			return ApplyChanges(PlanOperations(Ops,MaximumEditVisits),BeforeCommit);
+		}
+		return ApplyChecked(Writes,BeforeCommit,State?State->MaxEncodedBytes():0);
 	}
-	bool Field::ApplyChecked(std::span<const Write> Writes,const Admission& BeforeCommit) {
+	bool Field::ApplyChecked(std::span<const Write> Writes,const Admission& BeforeCommit,std::size_t StateBytes) {
 		std::size_t Visits = 0;
 		for (const auto& W : Writes) {
 			if (!IsValid(W.Value)) throw std::invalid_argument("[BlockGrid:Definition] Invalid definition or orientation");
@@ -251,7 +266,7 @@ namespace gargantuan::blockgrid {
 			} else if (Old != Leaves.end()) Removed.push_back(Key);
 		}
 		if (Replacements.empty() && Removed.empty()) return false;
-		if (NewOccupied > MaximumOccupiedCells || NewLeaves > MaximumLeaves || NewBytes > MaximumEncodedBytes ||
+		if (NewOccupied > MaximumOccupiedCells || NewLeaves > MaximumLeaves || NewBytes+StateBytes > MaximumEncodedBytes ||
 			Revision == std::numeric_limits<std::uint64_t>::max()) throw std::length_error("[BlockGrid:Limit] Grid capacity exhausted");
 		if ((Dependencies?Dependencies->size():0)-RemovedLinks.size()+(AddedLinks?AddedLinks->size():0)>MaximumDefinitionLeafLinks)
 			throw std::length_error("[BlockGrid:Limit] Definition dependency capacity exhausted");
@@ -274,6 +289,8 @@ namespace gargantuan::blockgrid {
 		Occupied = NewOccupied;
 		EncodedBytes = NewBytes;
 		++Revision;
+		++GeometryRevision;
+		++PublicRevision;
 		return true;
 	}
 }
