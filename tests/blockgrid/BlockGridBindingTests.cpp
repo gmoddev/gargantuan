@@ -75,6 +75,7 @@ namespace {
 			Bulk:WritePacked(A,Max,Buffer)
 			Bulk:Commit()
 			assert(Destination:GetBlock(A).Definition==Alias and not pcall(function() Destination:GetDefinitionDigest(Other) end))
+			G:RemoveBlock(A)
 			local Rev=G:GetRevision()
 			for _, Bad in {{Shape="Mesh",Mesh=Mesh},{Shape="Mesh",Mesh=Large,Collision="None"},
 				{Shape="Mesh",Mesh=Mat,Collision="None"},{Shape="Mesh",Mesh=Mesh,Collision="Asset",CollisionAsset=Mat},
