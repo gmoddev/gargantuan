@@ -112,7 +112,7 @@ namespace gargantuan::InstanceSerialization {
 			return Result;
 		}
 
-		blockgrid::Field ReadCellBytes(const json &Chunks) {
+		blockgrid::SegmentData ReadCellBytes(const json &Chunks) {
 			if (!Chunks.is_array() || Chunks.empty() ||
 				Chunks.size() > (Gas::MaximumBinaryBytes * 2 + MaximumProtocolStringBytes - 1) / MaximumProtocolStringBytes)
 				throw std::invalid_argument("[BlockGrid:Load] Invalid cell payload length");
@@ -132,7 +132,36 @@ namespace gargantuan::InstanceSerialization {
 				for (std::size_t I = 0; I < Text.size(); I += 2)
 					Bytes.push_back(static_cast<std::uint8_t>((Nibble(Text[I]) << 4) | Nibble(Text[I+1])));
 			}
-			return blockgrid::Decode(Bytes);
+			return Bytes;
+		}
+		blockgrid::SegmentManifest ReadGridManifest(const json& Chunks) {
+			constexpr std::size_t MaximumBytes=41+32*((blockgrid::MaximumEncodedBytes+blockgrid::SegmentBytes-1)/blockgrid::SegmentBytes);
+			if (!Chunks.is_array() || Chunks.size()!=1 || !Chunks.front().is_string() ||
+				Chunks.front().get_ref<const std::string&>().size()>2*MaximumBytes)
+				throw std::invalid_argument("[BlockGrid:Load] Invalid cell manifest length");
+			return blockgrid::DecodeSegmentManifest(ReadCellBytes(Chunks));
+		}
+		blockgrid::SegmentRequirements CollectGridSegments(const json& Root) {
+			blockgrid::SegmentRequirements Result;
+			std::vector<const json*> Pending{&Root};
+			std::size_t Seen{};
+			while (!Pending.empty()) {
+				const auto* Node=Pending.back();Pending.pop_back();
+				if (++Seen>MaximumPersistenceObjects || !Node->is_object()) throw std::invalid_argument("[BlockGrid:Load] Invalid document hierarchy");
+				const auto Manifest=Node->find(blockgrid::SegmentKey);
+				if (Manifest!=Node->end()) {
+					if (Node->value("ClassName",std::string{})!="BlockGrid" || Node->contains(BlockCellsKey))
+						throw std::invalid_argument("[BlockGrid:Load] Conflicting or misplaced native cell manifest");
+					Result.Add(ReadGridManifest(*Manifest));
+				}
+				const auto Children=Node->find("Children");
+				if (Children!=Node->end()) {
+					if (!Children->is_array() || Children->size()>MaximumPersistenceObjects-Seen-Pending.size())
+						throw std::length_error("[BlockGrid:Load] Invalid document child count");
+					for (const auto& Child:*Children) Pending.push_back(&Child);
+				}
+			}
+			return Result;
 		}
 
 		template <class Visit>
@@ -257,6 +286,8 @@ namespace gargantuan::InstanceSerialization {
 
 		struct SerializationState {
 			bool Cloning{};
+			bool HasGridSegments{};
+			blockgrid::SegmentCapture* GridSegments{};
 			std::unordered_map<std::shared_ptr<Instance>, json> InstanceMap;
 			DocumentNodeIds NodeIds;
 			std::unordered_set<std::string> SourceIds;
@@ -368,9 +399,12 @@ namespace gargantuan::InstanceSerialization {
 			serialized["ClassDefinitionVersion"] = definition->DefinitionVersion;
 			serialized["NodeId"] = state.NodeIds.at(instance.get());
 			serialized["Properties"] = properties;
-			if (auto Grid = dynamic_cast<const BlockGrid *>(instance.get()))
-				serialized[BlockCellsKey] = ProjectCellBytes(blockgrid::Encode(Grid->GetField(), state.Cloning ?
-					blockgrid::DataProfile::Clone : blockgrid::DataProfile::Authored));
+			if (auto Grid = dynamic_cast<const BlockGrid *>(instance.get())) {
+				auto Bytes=blockgrid::Encode(Grid->GetField(),state.Cloning?blockgrid::DataProfile::Clone:blockgrid::DataProfile::Authored);
+				if (state.GridSegments && Bytes.size()>blockgrid::SegmentBytes) {
+					serialized[blockgrid::SegmentKey]=ProjectCellBytes(state.GridSegments->Store(Bytes));state.HasGridSegments=true;
+				} else serialized[BlockCellsKey]=ProjectCellBytes(Bytes);
+			}
 			serialized["Attributes"] = json::object();
 			for (const auto &[name, value] : instance->GetAttributeValues(ScriptSecurityContext::CoreTrusted()))
 				serialized["Attributes"][name] = JsonCodec::EncodeWireValue(value);
@@ -426,13 +460,15 @@ namespace gargantuan::InstanceSerialization {
 	}
 
 	static std::string SerializeTree(InstanceFormat format, std::shared_ptr<Instance> &instance,
-		std::optional<AssetContentId> TerrainManifest, const terrain::DomainTerrainBindings &Domains, bool Cloning) {
+		std::optional<AssetContentId> TerrainManifest, const terrain::DomainTerrainBindings &Domains, bool Cloning,
+		blockgrid::SegmentCapture* GridSegments) {
 		switch (format) {
 		case InstanceFormat::Json: {
 			if (TerrainManifest && (!TerrainManifest->IsValid() || !dynamic_cast<DataModel *>(instance.get())))
 				throw std::invalid_argument("[Terrain:Persistence] The manifest requires a DataModel scene root");
 			Json::SerializationState state;
 			state.Cloning = Cloning;
+			state.GridSegments=GridSegments;
 			CollectDocumentNodes(std::span(&instance, 1), state.NodeIds, [](Instance &, std::uint32_t) {},
 				TerrainManifest.has_value(), &Domains, Cloning);
 			auto serialized = Json::SerializeInstance(instance, state);
@@ -446,6 +482,9 @@ namespace gargantuan::InstanceSerialization {
 				serialized["DomainTerrain"] = std::move(Entries);
 			}
 			if (TerrainManifest) serialized["TerrainManifest"] = TerrainManifest->ToString();
+			if (state.HasGridSegments) {
+				serialized["GridBaseVersion"]=serialized["Version"];serialized["Version"]=SegmentedGridSceneVersion;
+			}
 			auto Encoded = JsonCodec::Encode(serialized, "Instance persistence");
 			if (!Encoded) throw std::runtime_error(Encoded.error().Format());
 			return std::move(*Encoded);
@@ -457,12 +496,12 @@ namespace gargantuan::InstanceSerialization {
 	};
 
 	std::string Serialize(InstanceFormat Format, std::shared_ptr<Instance> &Root, std::optional<AssetContentId> Manifest,
-		const terrain::DomainTerrainBindings &Domains) {
-		return SerializeTree(Format, Root, Manifest, Domains, false);
+		const terrain::DomainTerrainBindings &Domains,blockgrid::SegmentCapture* GridSegments) {
+		return SerializeTree(Format, Root, Manifest, Domains, false,GridSegments);
 	}
 
-	std::string SerializeClone(std::shared_ptr<Instance> Root) {
-		return SerializeTree(InstanceFormat::Json, Root, {}, {}, true);
+	std::string SerializeClone(std::shared_ptr<Instance> Root,blockgrid::SegmentCapture* GridSegments) {
+		return SerializeTree(InstanceFormat::Json, Root, {}, {}, true,GridSegments);
 	}
 
 	std::string SerializeEmptyProject(InstanceFormat Format, std::string_view ProjectName) {
@@ -482,6 +521,7 @@ namespace gargantuan::InstanceSerialization {
 
 	namespace {
 		struct GasCaptureBudget {
+			blockgrid::SegmentCapture Grids;
 			std::size_t ValueCount = 0;
 			std::size_t TextBytes = 0;
 
@@ -552,7 +592,10 @@ namespace gargantuan::InstanceSerialization {
 			Node.Name = Object.GetName();
 			Budget.AddText(Node.Name);
 			if (auto Grid = dynamic_cast<const BlockGrid *>(&Object)) {
-				auto Entry = Node.SavedProperties.emplace(BlockCellsKey, blockgrid::Encode(Grid->GetField())).first;
+				auto Bytes=blockgrid::Encode(Grid->GetField());
+				const bool Segmented=Bytes.size()>blockgrid::SegmentBytes;
+				auto Entry=Node.SavedProperties.emplace(Segmented?blockgrid::SegmentKey:BlockCellsKey,
+					Segmented?Budget.Grids.Store(Bytes):std::move(Bytes)).first;
 				Budget.AddValue(Entry->first, Entry->second);
 			}
 			VisitSavedProperties(*Definition, [&](const std::string &Name, const InstanceProperty &Property) {
@@ -603,6 +646,7 @@ namespace gargantuan::InstanceSerialization {
 				CollectSourceId(*Object, SourceIds);
 				Result.Nodes.push_back(CaptureGasNode(*Object, Parent, Ids, Budget));
 			}
+			Result.GridSegments=std::move(Budget.Grids.Parts);
 			if (auto Validated = Gas::Encode(Result); !Validated) return std::unexpected(Validated.error());
 			return Result;
 		} catch (const std::length_error &Error) {
@@ -1123,11 +1167,16 @@ namespace gargantuan::InstanceSerialization {
 				return state.ReturnError("Unknown error setting property '{}' in {}", key, state.FormatCurrentPath());
 			}
 		}
-		if (const auto Payload = contents.find(BlockCellsKey); Payload != contents.end()) {
+		const auto InlineCells=contents.find(BlockCellsKey), SegmentedCells=contents.find(blockgrid::SegmentKey);
+		if (InlineCells!=contents.end() || SegmentedCells!=contents.end()) {
 			try {
 				auto *Grid = dynamic_cast<BlockGrid *>(instance.get());
 				if (!Grid) throw std::invalid_argument("Unexpected native cell record on another class");
-				Grid->RestoreField(ReadCellBytes(*Payload));
+				if (SegmentedCells!=contents.end()) {
+					if (!state.GridSegments || InlineCells!=contents.end()) throw std::invalid_argument("Missing or conflicting native cell segments");
+					const auto Manifest=ReadGridManifest(*SegmentedCells);
+					Grid->RestoreField(blockgrid::Decode(blockgrid::JoinSegments(Manifest,*state.GridSegments)));
+				} else Grid->RestoreField(blockgrid::Decode(ReadCellBytes(*InlineCells)));
 			} catch (const std::exception &Error) {
 				instance->Destroy();
 				return state.ReturnError("Invalid BlockGrid data in {}: {}", state.FormatCurrentPath(), Error.what());
@@ -1333,11 +1382,32 @@ namespace gargantuan::InstanceSerialization {
 			return Result;
 		}
 
-		std::expected<json, std::string> PrepareJson(std::string_view Encoded) {
+		std::expected<json, std::string> PrepareJson(std::string_view Encoded,blockgrid::SegmentRequirements* Grids=nullptr) {
 			if (Encoded.empty()) return std::unexpected("Instance document byte length is invalid");
 			auto Parsed = JsonCodec::Parse(Encoded, MaximumProtocolDocumentBytes, "Instance persistence");
 			if (!Parsed) return std::unexpected("Failed to parse JSON: " + Parsed.error().Format());
 			if (!Parsed->is_object()) return std::unexpected("Expected a JSON object");
+			if (Parsed->contains("Version") && (*Parsed)["Version"]==SegmentedGridSceneVersion) {
+				if (!Parsed->contains("GridBaseVersion") || !(*Parsed)["GridBaseVersion"].is_number_integer() ||
+					(*Parsed)["GridBaseVersion"]<5 || (*Parsed)["GridBaseVersion"]>DomainTerrainSceneVersion)
+					return std::unexpected("Invalid segmented scene profile");
+				const auto Underlying=(*Parsed)["GridBaseVersion"].get<int>();
+				try {
+					auto Found=CollectGridSegments(*Parsed);
+					if (Found.Parts.empty()) return std::unexpected("Missing native grid manifest");
+					if (Grids) *Grids=std::move(Found);
+				}
+				catch (const std::exception& E) { return std::unexpected(std::string(E.what())); }
+				(*Parsed)["Version"]=Underlying;
+			} else {
+				if (Parsed->contains("GridBaseVersion")) return std::unexpected("Invalid native grid scene header");
+				if (Grids) {
+					try {
+						*Grids=CollectGridSegments(*Parsed);
+						if (!Grids->Parts.empty()) return std::unexpected("A segmented grid requires scene version 8");
+					} catch (const std::exception& E) { return std::unexpected(std::string(E.what())); }
+				}
+			}
 			if (!Parsed->contains("Version") || !(*Parsed)["Version"].is_number_integer() ||
 				((*Parsed)["Version"] != 0 && (*Parsed)["Version"] != 1 && (*Parsed)["Version"] != 2 &&
 					(*Parsed)["Version"] != 3 && (*Parsed)["Version"] != 4 && (*Parsed)["Version"] != 5 &&
@@ -1350,9 +1420,11 @@ namespace gargantuan::InstanceSerialization {
 
 		DeserializationState MaterializeJsonRoots(std::span<const json> Documents, int Version,
 			bool ApplyPendingTags, bool PreserveSourceIds, std::vector<std::shared_ptr<Instance>> &Roots,
-			const terrain::DomainTerrainBindings &Domains = {}, const DomainTerrainAdmission &AdmitDomains = {}) {
+			const terrain::DomainTerrainBindings &Domains = {}, const DomainTerrainAdmission &AdmitDomains = {},
+			const blockgrid::SegmentMap* GridSegments=nullptr) {
 			DeserializationState state;
 			state.PreserveSourceIds = PreserveSourceIds;
+			state.GridSegments=GridSegments;
 			state.FormatVersion = static_cast<std::uint32_t>(Version);
 			auto Rollback = [&] {
 				// Failed child attachment can leave constructed nodes outside any root.
@@ -1435,16 +1507,17 @@ namespace gargantuan::InstanceSerialization {
 		}
 
 		DeserializationState MaterializeJson(const json &Contents, bool ApplyPendingTags, bool PreserveSourceIds = true,
-			const DomainTerrainAdmission &AdmitDomains = {}) {
+			const DomainTerrainAdmission &AdmitDomains = {},const blockgrid::SegmentMap* GridSegments=nullptr) {
 			std::vector<std::shared_ptr<Instance>> Roots;
 			auto State = MaterializeJsonRoots(std::span(&Contents, 1), Contents["Version"].get<int>(),
-				ApplyPendingTags, PreserveSourceIds, Roots, DecodeDomainBindings(Contents).value(), AdmitDomains);
+				ApplyPendingTags, PreserveSourceIds, Roots, DecodeDomainBindings(Contents).value(), AdmitDomains,GridSegments);
 			if (State.Ok) State.Instance = std::move(Roots.front());
 			return State;
 		}
 
 		DeserializationState DeserializeImpl(InstanceFormat format, std::istream &input, bool ApplyPendingTags,
-			bool PreserveSourceIds = true, const TerrainSceneAdmission &AdmitTerrain = {}, const DomainTerrainAdmission &AdmitDomains = {}) {
+			bool PreserveSourceIds = true, const TerrainSceneAdmission &AdmitTerrain = {}, const DomainTerrainAdmission &AdmitDomains = {},
+			const blockgrid::SegmentMap* GridSegments=nullptr) {
 			DeserializationState state;
 			if (!input.good()) {
 				state.PushError("Bad stream from instance contents");
@@ -1459,7 +1532,8 @@ namespace gargantuan::InstanceSerialization {
 				state.PushError("Instance document byte length is invalid");
 				return state;
 			}
-			auto Prepared = PrepareJson(*Encoded);
+			blockgrid::SegmentRequirements RequiredGrids;
+			auto Prepared = PrepareJson(*Encoded,&RequiredGrids);
 			if (!Prepared) {
 				state.Errors.push_back(std::move(Prepared.error()));
 				return state;
@@ -1473,7 +1547,14 @@ namespace gargantuan::InstanceSerialization {
 				state.PushError("Terrain scene requires authenticated terrain artifact admission");
 				return state;
 			}
-			auto Result = MaterializeJson(*Prepared, ApplyPendingTags, PreserveSourceIds, AdmitDomains);
+			try {
+				if (Prepared->contains("GridBaseVersion") || (GridSegments && !GridSegments->empty())) {
+					if (!GridSegments || !Prepared->contains("GridBaseVersion")) throw std::invalid_argument("Missing or unreferenced native cell closure");
+					blockgrid::VerifySegments(RequiredGrids,*GridSegments);
+				}
+			} catch (const std::exception& E) { state.PushError("Invalid native grid closure: {}",E.what());return state; }
+			auto Result = MaterializeJson(*Prepared, ApplyPendingTags, PreserveSourceIds, AdmitDomains,GridSegments);
+			Result.GridSegments=nullptr;
 			if (Result.Ok && Manifest) {
 				try {
 					auto *World = dynamic_cast<DataModel *>(Result.Instance.get());
@@ -1542,7 +1623,7 @@ namespace gargantuan::InstanceSerialization {
 			auto Properties = json::object();
 			std::optional<json> Cells;
 			for (const auto &[Name, Value] : Node.SavedProperties) {
-				if (Name == BlockCellsKey) {
+				if (Name == BlockCellsKey || Name==blockgrid::SegmentKey) {
 					const auto *Bytes = std::get_if<Gas::Binary>(&Value);
 					if (Node.Class != SchemaId::FromNativeName("Engine", "BlockGrid") || !Bytes)
 						throw std::invalid_argument("GAS native cell record has invalid owner or type");
@@ -1577,7 +1658,7 @@ namespace gargantuan::InstanceSerialization {
 				{"Tags", Node.Tags},
 				{"Children", json::array()},
 			};
-			if (Cells) EncodedNode[BlockCellsKey] = std::move(*Cells);
+			if (Cells) EncodedNode[Node.SavedProperties.contains(blockgrid::SegmentKey)?blockgrid::SegmentKey:BlockCellsKey] = std::move(*Cells);
 			return EncodedNode;
 		}
 
@@ -1619,7 +1700,8 @@ namespace gargantuan::InstanceSerialization {
 				return {{}, {"GAS terrain place requires authenticated terrain artifact admission"}};
 			const auto Projected = ProjectGasForest(Document);
 			auto State = MaterializeJsonRoots(Projected, 5, Document.Kind == Gas::DocumentKind::Place,
-				PreserveSourceIds, Result.Roots, Document.Place ? Document.Place->Domains : terrain::DomainTerrainBindings{}, AdmitDomains);
+				PreserveSourceIds, Result.Roots, Document.Place ? Document.Place->Domains : terrain::DomainTerrainBindings{}, AdmitDomains,
+				&Document.GridSegments);
 			if (State.Ok && Manifest) {
 				auto *World = Result.Roots.size() == 1 ? dynamic_cast<DataModel *>(Result.Roots.front().get()) : nullptr;
 				if (!World) throw std::invalid_argument("GAS terrain place requires one DataModel root");
@@ -1791,22 +1873,28 @@ namespace gargantuan::InstanceSerialization {
 	}
 
 	std::expected<std::optional<AssetContentId>, std::string> InspectTerrainManifest(std::string_view Json,
-		terrain::DomainTerrainBindings *Domains) {
-		auto Parsed = PrepareJson(Json);
+		terrain::DomainTerrainBindings *Domains,blockgrid::SegmentRequirements* Grids) {
+		auto Parsed = PrepareJson(Json,Grids);
 		if (!Parsed) return std::unexpected(std::move(Parsed.error()));
 		if (Domains) *Domains = DecodeDomainBindings(*Parsed).value();
 		return GetTerrainManifest(*Parsed);
 	}
 
 	DeserializationState Deserialize(InstanceFormat format, std::istream &input,
-		const TerrainSceneAdmission &AdmitTerrain, const DomainTerrainAdmission &AdmitDomains) {
-		return DeserializeImpl(format, input, true, true, AdmitTerrain, AdmitDomains);
+		const TerrainSceneAdmission &AdmitTerrain, const DomainTerrainAdmission &AdmitDomains,const blockgrid::SegmentMap* GridSegments) {
+		return DeserializeImpl(format, input, true, true, AdmitTerrain, AdmitDomains,GridSegments);
+	}
+	blockgrid::SegmentRequirements InspectGridSegments(std::string_view Text) {
+		blockgrid::SegmentRequirements Result;
+		const auto Parsed=PrepareJson(Text,&Result);
+		if (!Parsed) throw std::invalid_argument(Parsed.error());
+		return Result;
 	}
 
 	DeserializationState DeserializeDetached(InstanceFormat format, std::istream &input) {
 		return DeserializeImpl(format, input, false);
 	}
-	DeserializationState DeserializeClone(InstanceFormat Format, std::istream &Input) {
-		return DeserializeImpl(Format, Input, false, false);
+	DeserializationState DeserializeClone(InstanceFormat Format, std::istream &Input,const blockgrid::SegmentMap* GridSegments) {
+		return DeserializeImpl(Format, Input, false, false,{},{},GridSegments);
 	}
 }

@@ -2339,7 +2339,7 @@ namespace gargantuan {
 						Id, std::move(Snapshot.Contents), CurrentProject->InstanceFileFormat,
 						CurrentProject->Root, ViewportWidth == 0 ? 720 : ViewportWidth,
 						ViewportHeight == 0 ? 540 : ViewportHeight, Snapshot.Revision, std::move(Snapshot.Assets),
-						AudioEnabled && !DebugSourceId, std::move(Persistence), AdmitTerrain, std::move(ScriptSources), AdmitDomains
+						AudioEnabled && !DebugSourceId, std::move(Persistence), AdmitTerrain, std::move(ScriptSources), AdmitDomains,&Snapshot.GridSegments
 					);
 					AdvanceViewportGeneration();
 					ActivePlaySession = std::move(NewPlaySession);

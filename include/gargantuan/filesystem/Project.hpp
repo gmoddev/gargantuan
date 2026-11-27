@@ -25,6 +25,7 @@ namespace gargantuan {
 			AssetProjectSnapshot Assets;
 			std::optional<terrain::TerrainCapture> Terrain;
 			terrain::DomainTerrainCaptures Domains;
+			blockgrid::SegmentMap GridSegments;
 		};
 
 		std::filesystem::path Root;
@@ -60,6 +61,7 @@ namespace gargantuan {
 			std::unique_ptr<terrain::Field> Terrain;
 			terrain::DomainTerrainBindings Bindings;
 			std::map<std::uint32_t, std::unique_ptr<terrain::Field>> DomainFields;
+			blockgrid::SegmentMap GridSegments;
 		};
 
 		[[nodiscard]] PreparedGame PrepareGameLoad() const;
@@ -95,6 +97,7 @@ namespace gargantuan {
 
 	  private:
 		struct DurableTerrainState;
+		void PersistGridSegments(std::string_view Scene,const blockgrid::SegmentMap& Segments) const;
 		BaseFilesystem *Filesystem;
 		std::shared_ptr<DurableTerrainState> DurableTerrain;
 		Project(BaseFilesystem *fs);

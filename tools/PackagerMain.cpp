@@ -48,11 +48,17 @@ namespace {
 		if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(Path)))
 			return SerializationFailure(SerializationErrorCode::InvalidValue, "GASP input must be a regular file.");
 		const auto Size = std::filesystem::file_size(Path);
-		if (Size > Gas::MaximumDocumentBytes)
+		if (Size > Gas::MaximumFileBytes)
 			return SerializationFailure(SerializationErrorCode::LimitExceeded, "GASP input exceeds the document limit.");
 		std::ifstream Input(Path, std::ios::binary);
 		if (!Input)
 			return SerializationFailure(SerializationErrorCode::InvalidValue, "GASP input could not be opened.");
+		if (Size>Gas::MaximumDocumentBytes) {
+			std::array<std::uint8_t,Gas::FilePrefixBytes> Prefix{};
+			if (!Input.read(reinterpret_cast<char*>(Prefix.data()),Prefix.size()) || !Gas::AdmitsFileLength(Prefix,Size))
+				return SerializationFailure(SerializationErrorCode::LimitExceeded,"GASP input exceeds its document profile.");
+			Input.seekg(0);
+		}
 		Gas::Binary Bytes(static_cast<std::size_t>(Size));
 		if (!Bytes.empty() && !Input.read(reinterpret_cast<char *>(Bytes.data()), static_cast<std::streamsize>(Size)))
 			return SerializationFailure(SerializationErrorCode::TruncatedInput, "GASP input could not be read in full.");

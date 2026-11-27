@@ -1027,6 +1027,7 @@ namespace gargantuan {
 			std::filesystem::path Lease;
 		};
 
+		std::string PackageGridPath(const AssetContentId& Id) { return "content/.gargantuan/blockgrid/"+blockgrid::SegmentFileName(Id); }
 		void ValidateStagingPaths(
 			const std::filesystem::path &Destination,
 			const std::filesystem::path &Candidate,
@@ -1055,6 +1056,7 @@ namespace gargantuan {
 				Check("content/" + Artifact.RelativePath);
 			for (const auto &Unit : Payload.ContentUnits) Check(Unit.Entry.BlobReference);
 			for (const auto &Artifact : Payload.TerrainArtifacts) Check(GetPackageTerrainPath(Artifact.Id));
+			for (const auto& [Id,Part]:Payload.GridSegments) Check(PackageGridPath(Id));
 #else
 			(void)Destination;
 			(void)Candidate;
@@ -1230,7 +1232,7 @@ namespace gargantuan {
 				Pending.pop_back();
 				if (!Node->is_object() || ++Result.Objects > MaximumPackageContentObjectsPerUnit) return Result;
 				const auto ClassName = Node->value("ClassName", "");
-				if (ClassName == "Script" || ClassName == "ModuleScript" || ClassName == "RemoteEvent" ||
+				if (Node->contains(blockgrid::SegmentKey) || ClassName == "Script" || ClassName == "ModuleScript" || ClassName == "RemoteEvent" ||
 					ClassName == "RemoteFunction" || ClassName == "Character" || ClassName == "KinematicCharacter" ||
 					ClassName == "Player" || ClassName == "Camera" || ClassName == "Terrain" || ClassName == "FileLink")
 					Result.BootstrapOnly = true;
@@ -1789,7 +1791,9 @@ namespace gargantuan {
 		}
 		if (Audience != PackageAudience::Trusted) throw std::invalid_argument("Unknown package audience");
 		auto Root = std::static_pointer_cast<Instance>(World);
-		Result.ProjectJson = InstanceSerialization::Serialize(ProjectValue.InstanceFileFormat, Root, TerrainManifest, DomainBindings);
+		blockgrid::SegmentCapture Grids;
+		Result.ProjectJson = InstanceSerialization::Serialize(ProjectValue.InstanceFileFormat,Root,TerrainManifest,DomainBindings,&Grids);
+		Result.GridSegments=std::move(Grids.Parts);
 		if (Result.ProjectJson.size() > MaximumProjectSnapshotBytes)
 			throw std::length_error("Project snapshot exceeds the package byte limit");
 		Result.Assets = Assets->CaptureRuntimeAssets();
@@ -1861,7 +1865,7 @@ namespace gargantuan {
 						"Terrain requires a trusted package or a managed Offline Player.");
 				if (Distributed) {
 					if (!Request.Payload.ProjectJson.empty() || Request.Payload.PreRunSource ||
-						!Request.Payload.ContentUnits.empty() || !Request.Payload.Assets.CatalogJson.empty() ||
+						!Request.Payload.GridSegments.empty() || !Request.Payload.ContentUnits.empty() || !Request.Payload.Assets.CatalogJson.empty() ||
 						!Request.Payload.Assets.Artifacts.empty() || Client->Project != Request.Payload.Identity ||
 						Client->Revision != Request.Payload.AuthoritativeRevision)
 						throw std::runtime_error("Distributed Player package contains trusted project payload");
@@ -1879,6 +1883,7 @@ namespace gargantuan {
 					.Package = {Request.Payload.Identity, Request.Payload.AuthoritativeRevision},
 					.InstanceSchemaVersion = Request.Payload.ContentInstanceSchemaVersion,
 				};
+				blockgrid::VerifySegments(InstanceSerialization::InspectGridSegments(Request.Payload.ProjectJson),Request.Payload.GridSegments);
 				auto Meshes = SnapshotSpatialMeshes(Request.Payload.Assets);
 				ResidencySpatialMetadata Metadata{ResidencySpatialMetadataVersion, ContentManifest.Package, {}};
 				for (const auto &Unit : Request.Payload.ContentUnits) {
@@ -2069,6 +2074,14 @@ namespace gargantuan {
 					Entries.push_back(WriteAndHash(*Target, Relative, "Asset", *Artifact.Bytes));
 				}
 				std::size_t TerrainBytes = 0;
+				for (const auto& [Digest,Part]:Request.Payload.GridSegments) {
+					if (Request.Cancellation.IsCancelled()) throw std::runtime_error("Package build cancelled");
+					const auto Relative=PackageGridPath(Digest);
+					const auto Target=ResolvePackageFile(Candidate,Relative,false);
+					if (!Target || !Part.Bytes || AssetContentId::Hash(*Part.Bytes)!=Digest)
+						throw std::runtime_error("[BlockGrid:Package] Invalid immutable grid segment");
+					Entries.push_back(WriteAndHash(*Target,Relative,"Project",*Part.Bytes));
+				}
 				for (const auto &Artifact : Request.Payload.TerrainArtifacts) {
 					if (Request.Cancellation.IsCancelled()) throw std::runtime_error("Package build cancelled");
 					if (!Artifact.Bytes || Artifact.Bytes->size() > terrain::MaximumTerrainClosureBytes - TerrainBytes ||
@@ -2378,7 +2391,7 @@ namespace gargantuan {
 		std::optional<PackageAudience> ExpectedAudience = std::nullopt,
 		const RuntimeDistributionAdmission &Admission = {},
 		std::vector<terrain::TerrainArtifact> *TerrainArtifacts = nullptr,
-		PackageRuntimeLoadMode Mode = PackageRuntimeLoadMode::Complete) {
+		PackageRuntimeLoadMode Mode = PackageRuntimeLoadMode::Complete,blockgrid::SegmentMap* GridSegments=nullptr) {
 		std::vector<PackageDiagnostic> Diagnostics;
 		if (!PackageRoot.is_absolute() || !std::filesystem::is_directory(PackageRoot) || IsReparseOrLink(PackageRoot)) {
 			AddDiagnostic(
@@ -2420,6 +2433,7 @@ namespace gargantuan {
 		const bool IsLoopbackClient = CanDeferTerrain(*Manifest, Mode);
 		std::optional<AssetContentId> TerrainDigest;
 		terrain::DomainTerrainBindings DomainBindings;
+		blockgrid::SegmentRequirements GridRequirements;
 		try {
 			if (Distributed) {
 				client_package::ValidateCode(ReadPinnedPackageFile(
@@ -2431,7 +2445,7 @@ namespace gargantuan {
 					!(*ProjectJson)["Version"].is_number_unsigned() || !ProjectJson->contains("ClassName") ||
 					!(*ProjectJson)["ClassName"].is_string() || (*ProjectJson)["ClassName"] != "DataModel")
 					throw std::runtime_error("Packaged project snapshot is malformed");
-				const auto Digest = InstanceSerialization::InspectTerrainManifest(ProjectText, &DomainBindings);
+				const auto Digest = InstanceSerialization::InspectTerrainManifest(ProjectText, &DomainBindings,&GridRequirements);
 				if (!Digest) throw std::runtime_error(Digest.error());
 				TerrainDigest = *Digest;
 			}
@@ -2459,6 +2473,23 @@ namespace gargantuan {
 			return Diagnostics;
 		}
 		std::set<std::string> DeferredChunks;
+		if (!HasErrors(Diagnostics)) try {
+			const auto Count=std::ranges::count_if(Manifest->Content,[](const ContentEntry& E) {
+				return E.Path.starts_with("content/.gargantuan/blockgrid/");
+			});
+			if (std::size_t(Count)!=GridRequirements.Parts.size()) throw std::invalid_argument("Unexpected grid segment count");
+			const auto Parts=blockgrid::ReadSegments(GridRequirements,[&](const AssetContentId& Id,std::size_t Size) {
+				const auto Path=PackageGridPath(Id);
+				const auto Entry=std::ranges::find(Manifest->Content,Path,&ContentEntry::Path);
+				if (Entry==Manifest->Content.end() || Entry->Category!="Project" || Entry->Size!=Size || Entry->Sha256!=Id.ToString())
+					throw std::invalid_argument("Grid segment differs from its mandatory package pin");
+				const auto Bytes=ReadPinnedPackageFile(PackageRoot,*Manifest,Path,Size);
+				return blockgrid::Segment{std::make_shared<const blockgrid::SegmentData>(Bytes.begin(),Bytes.end())};
+			});
+			if (GridSegments) *GridSegments=Parts;
+		} catch (const std::exception& Error) {
+			AddDiagnostic(Diagnostics,PackageDiagnosticSeverity::Error,"Content","InvalidGridClosure","A packaged grid segment failed verification.",Error.what());
+		}
 		if (!HasErrors(Diagnostics)) {
 			try {
 				std::size_t Admitted = 0;
@@ -2576,7 +2607,8 @@ namespace gargantuan {
 		const RuntimeDistributionAdmission &Admission, PackageRuntimeLoadMode Mode) {
 		std::optional<ParsedPackageManifest> Manifest;
 		std::vector<terrain::TerrainArtifact> TerrainArtifacts;
-		Diagnostics = ValidatePackageRoot(PackageRoot, &Manifest, std::nullopt, Admission, &TerrainArtifacts, Mode);
+		blockgrid::SegmentMap GridSegments;
+		Diagnostics = ValidatePackageRoot(PackageRoot, &Manifest, std::nullopt, Admission, &TerrainArtifacts, Mode,&GridSegments);
 		if (HasErrors(Diagnostics)) return std::nullopt;
 		if (!Manifest) return std::nullopt;
 		try {
@@ -2587,6 +2619,7 @@ namespace gargantuan {
 			if (CanDeferTerrain(*Manifest, Mode) && !TerrainArtifacts.empty())
 				Result.LoadMode = PackageRuntimeLoadMode::LoopbackDevelopmentClient;
 			Result.TerrainArtifacts = std::move(TerrainArtifacts);
+			Result.GridSegments=std::move(GridSegments);
 			if (Manifest->RuntimeDistribution) {
 				Result.ClientCodeIdentity = Manifest->RuntimeDistribution->ClientCodeIdentity;
 				Result.SpatialContent = Manifest->RuntimeDistribution->SpatialContent;
@@ -2650,7 +2683,7 @@ namespace gargantuan {
 		if (!PackageRoot.is_absolute() || !std::filesystem::is_directory(PackageRoot) || IsReparseOrLink(PackageRoot))
 			throw std::invalid_argument("Packaged runtime root is invalid");
 		std::stringstream Input(Payload.ProjectJson);
-		auto Parsed = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Input, AdmitTerrain, AdmitDomains);
+		auto Parsed = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Input, AdmitTerrain, AdmitDomains,&Payload.GridSegments);
 		if (!Parsed.Ok || !Parsed.Instance || !Parsed.Instance->IsA("DataModel"))
 			throw std::runtime_error("The packaged project snapshot could not be loaded");
 		auto World = std::dynamic_pointer_cast<DataModel>(Parsed.Instance);

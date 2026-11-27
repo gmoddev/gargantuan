@@ -236,10 +236,17 @@ namespace gargantuan {
 #endif
 			std::ifstream Existing(Destination, std::ios::binary | std::ios::ate);
 			const auto Length = Existing.tellg();
-			if (Length <= 0 || Length > static_cast<std::streamoff>(Gas::MaximumDocumentBytes))
+			if (Length <= 0 || Length > static_cast<std::streamoff>(Gas::MaximumFileBytes))
 				throw std::invalid_argument("Existing GAS export destination has an invalid length");
-			Gas::Binary Bytes(static_cast<std::size_t>(Length));
 			Existing.seekg(0);
+			if (Length>static_cast<std::streamoff>(Gas::MaximumDocumentBytes)) {
+				std::array<std::uint8_t,Gas::FilePrefixBytes> Prefix{};
+				if (!Existing.read(reinterpret_cast<char*>(Prefix.data()),Prefix.size()) ||
+					!Gas::AdmitsFileLength(Prefix,static_cast<std::uintmax_t>(Length)))
+					throw std::invalid_argument("Existing GAS export destination exceeds its document profile");
+				Existing.seekg(0);
+			}
+			Gas::Binary Bytes(static_cast<std::size_t>(Length));
 			if (!Existing.read(reinterpret_cast<char *>(Bytes.data()), static_cast<std::streamsize>(Bytes.size())) ||
 				Existing.peek() != std::char_traits<char>::eof())
 				throw std::runtime_error("Could not read the existing GAS export destination");
@@ -303,7 +310,9 @@ namespace gargantuan {
 		self.InstanceFilePath = self.RootConfiguration / GetProjectInstanceFilename(format);
 		self.InstanceFileFormat = format;
 		if (instance) {
-			instanceFileContents = InstanceSerialization::Serialize(format, instance);
+			blockgrid::SegmentCapture Grids;
+			instanceFileContents=InstanceSerialization::Serialize(format,instance,{},{},&Grids);
+			self.PersistGridSegments(instanceFileContents,Grids.Parts);
 		} else if (format == InstanceFormat::Json) {
 			instanceFileContents = InstanceSerialization::SerializeEmptyProject(format, projectName);
 		} else if (format == InstanceFormat::Binary) {
@@ -371,9 +380,16 @@ namespace gargantuan {
 		SourceMountBudget Budget;
 		auto Contents = Mount.ReadFile(InstanceFilePath.lexically_relative(Root), MaximumProtocolDocumentBytes, Budget);
 		if (!Contents) throw std::runtime_error(Contents.error().Format());
-		auto Manifest = InstanceSerialization::InspectTerrainManifest(*Contents, &Result.Bindings);
+		blockgrid::SegmentRequirements Required;
+		auto Manifest = InstanceSerialization::InspectTerrainManifest(*Contents, &Result.Bindings,&Required);
 		if (!Manifest) throw std::runtime_error(Manifest.error());
 		Result.Contents = std::move(*Contents);
+		Result.GridSegments=blockgrid::ReadSegments(Required,[&](const AssetContentId& Id,std::size_t Size) {
+			SourceMountBudget SegmentBudget;
+			const auto Bytes=Mount.ReadFile(std::filesystem::path(".gargantuan")/"blockgrid"/blockgrid::SegmentFileName(Id),Size,SegmentBudget);
+			if (!Bytes) throw std::runtime_error(Bytes.error().Format());
+			return blockgrid::Segment{std::make_shared<const blockgrid::SegmentData>(Bytes->begin(),Bytes->end())};
+		});
 		Result.Manifest = *Manifest;
 		const auto Reader = terrain::BudgetDocumentTerrainReads(GetProjectTerrainReader(*Filesystem));
 		if (Result.Manifest)
@@ -403,7 +419,7 @@ namespace gargantuan {
 				if (It == Prepared.DomainFields.end() || !It->second || Prepared.Bindings.at(Node) != Digest)
 					throw terrain::TerrainPersistenceFailure(terrain::TerrainPersistenceError::InvalidBinding);
 				Region.RestoreTerrainField(std::move(It->second));
-			});
+			},&Prepared.GridSegments);
 		if (!deserialized.Ok) {
 			std::ostringstream err;
 			err << "Failed to deserialize instance file:" << std::endl;
@@ -555,6 +571,7 @@ namespace gargantuan {
 		if (Snapshot.Contents.size() > MaximumProtocolDocumentBytes)
 			throw std::length_error("Restored project exceeds the JSON persistence byte limit");
 		if (Snapshot.Terrain) PersistTerrainArtifacts(*Snapshot.Terrain);
+		PersistGridSegments(Snapshot.Contents,Snapshot.GridSegments);
 		for (const auto &[Node, Capture] : Snapshot.Domains) PersistTerrainArtifacts(Capture, Node);
 		PersistBytesAtomically(Destination, std::span(reinterpret_cast<const std::uint8_t *>(Snapshot.Contents.data()),
 			Snapshot.Contents.size()),
@@ -572,12 +589,42 @@ namespace gargantuan {
 		auto Terrain = terrain::CaptureSceneTerrain(*game, Identity, Prior.get());
 		auto Domains = terrain::CaptureDocumentTerrain(game, Identity, Terrain ? Terrain->ClosureBytes : 0);
 		auto root = std::static_pointer_cast<Instance>(game);
+		blockgrid::SegmentCapture Grids;
 		auto Contents = InstanceSerialization::Serialize(InstanceFileFormat, root,
-			Terrain ? std::optional(Terrain->ManifestDigest) : std::nullopt, terrain::GetDomainTerrainBindings(Domains));
+			Terrain ? std::optional(Terrain->ManifestDigest) : std::nullopt, terrain::GetDomainTerrainBindings(Domains),&Grids);
 		AssetProjectSnapshot AssetSnapshot;
 		if (auto Assets = std::dynamic_pointer_cast<AssetService>(game->FindFirstChildOfClass("AssetService", false)))
 			AssetSnapshot = Assets->CaptureProjectAssets();
-		return {revision, std::move(Contents), std::move(AssetSnapshot), std::move(Terrain), std::move(Domains)};
+		return {revision, std::move(Contents), std::move(AssetSnapshot), std::move(Terrain), std::move(Domains),std::move(Grids.Parts)};
+	}
+	void Project::PersistGridSegments(std::string_view Scene,const blockgrid::SegmentMap& Segments) const {
+		const auto Required=InstanceSerialization::InspectGridSegments(Scene);
+		blockgrid::VerifySegments(Required,Segments);
+		if (Segments.empty()) return;
+		const auto Dir=RootConfiguration/"blockgrid";
+		RequirePlainPersistenceDirectory(RootConfiguration);
+		std::filesystem::create_directory(Dir);
+		const auto CheckDirectory=[&] { RequirePlainPersistenceDirectory(RootConfiguration);RequirePlainPersistenceDirectory(Dir); };
+		CheckDirectory();
+		SourceMount Mount(*Filesystem);
+		for (const auto& [Id,Part]:Segments) {
+			const auto File=Dir/blockgrid::SegmentFileName(Id);
+			const auto Existing=[&] {
+				SourceMountBudget Budget;
+				const auto Bytes=Mount.ReadFile(File.lexically_relative(Root),Part.Bytes->size(),Budget);
+				if (!Bytes) {
+					if (Bytes.error().Code==SourceMountErrorCode::Missing) return false;
+					throw std::runtime_error(Bytes.error().Format());
+				}
+				const std::span Data(reinterpret_cast<const std::uint8_t*>(Bytes->data()),Bytes->size());
+				if (Data.size()!=Part.Bytes->size() || AssetContentId::Hash(Data)!=Id)
+					throw std::runtime_error("[BlockGrid:Persistence] Existing segment differs from its content address");
+				return true;
+			};
+			if (Existing()) continue;
+			try { PersistBytesAtomically(File,*Part.Bytes,CheckDirectory,AtomicWriteMode::Create); }
+			catch (...) { if (!Existing()) throw; }
+		}
 	}
 
 	void Project::PersistTerrainArtifacts(const terrain::TerrainCapture &Capture, std::optional<std::uint32_t> DomainNode) const {
@@ -708,6 +755,7 @@ namespace gargantuan {
 			}
 		}
 		CheckIdentity();
+		PersistGridSegments(snapshot.Contents,snapshot.GridSegments);
 		for (const auto &Artifact : snapshot.Assets.Artifacts) {
 			if (!Artifact.Bytes || Artifact.RelativePath.empty())
 				throw std::runtime_error("Asset persistence snapshot contains an invalid artifact");

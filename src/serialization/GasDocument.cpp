@@ -59,7 +59,7 @@ namespace gargantuan::Gas {
 
 			template <std::unsigned_integral Integer>
 			void Put(Integer Value) {
-				CheckLimit(sizeof(Integer) <= MaximumDocumentBytes - Bytes.size(), "Document is too large");
+				CheckLimit(sizeof(Integer) <= Limit - Bytes.size(), "Document is too large");
 				for (std::size_t Index = 0; Index < sizeof(Integer); ++Index)
 					Bytes.push_back(static_cast<std::uint8_t>(Value >> (8 * Index)));
 			}
@@ -75,7 +75,7 @@ namespace gargantuan::Gas {
 			}
 
 			void Raw(std::span<const std::uint8_t> Value) {
-				CheckLimit(Value.size() <= MaximumDocumentBytes - Bytes.size(), "Document is too large");
+				CheckLimit(Value.size() <= Limit - Bytes.size(), "Document is too large");
 				Bytes.insert(Bytes.end(), Value.begin(), Value.end());
 			}
 
@@ -94,6 +94,7 @@ namespace gargantuan::Gas {
 				for (std::size_t Index = 0; Index < 4; ++Index)
 					Bytes[Offset + Index] = static_cast<std::uint8_t>(Value >> (8 * Index));
 			}
+			std::size_t Limit=MaximumDocumentBytes;
 		};
 
 		class Reader {
@@ -422,6 +423,19 @@ namespace gargantuan::Gas {
 			return Result;
 		}
 
+		blockgrid::SegmentRequirements GridRequirements(const Document& Doc) {
+			blockgrid::SegmentRequirements Result;
+			for (const auto& N:Doc.Nodes) {
+				const auto Found=N.SavedProperties.find(blockgrid::SegmentKey);
+				if (Found==N.SavedProperties.end()) continue;
+				const auto* Encoded=std::get_if<Binary>(&Found->second);
+				Require(N.Class==SchemaId::FromNativeName("Engine","BlockGrid") && Encoded &&
+					!N.SavedProperties.contains("NativeBlockCellsV1"),"Native segment manifest has an invalid owner or representation");
+				try { Result.Add(blockgrid::DecodeSegmentManifest(*Encoded)); }
+				catch (const std::exception&) { Fail(SerializationErrorCode::InvalidValue,"Invalid native segment manifest or aggregate"); }
+			}
+			return Result;
+		}
 		void WritePlace(Writer &Out, const PlaceMetadata &Place) {
 			Require(Place.Identity.IsValid(), "Invalid place identity");
 			Out.Raw(Place.Identity.Bytes);
@@ -481,7 +495,10 @@ namespace gargantuan::Gas {
 			const bool Place = Kind == DocumentKind::Place;
 			Require(Kind == DocumentKind::Model || Place, "Unknown document kind");
 			Require(Place == DocumentValue.Place.has_value(), "Place section does not match document kind");
-			const std::uint8_t Sections = Place ? 3 : 2;
+			const auto Required=GridRequirements(DocumentValue);
+			const bool Segmented=!Required.Parts.empty();
+			Require(Segmented==!DocumentValue.GridSegments.empty(),"Missing or unreferenced native grid section");
+			const std::uint8_t Sections = static_cast<std::uint8_t>((Place?3:2)+unsigned(Segmented));
 			Writer Out;
 			Out.Raw(Magic);
 			Out.Put(GetFormatVersion(DocumentValue));
@@ -490,7 +507,7 @@ namespace gargantuan::Gas {
 			Out.Put(SchemaVersion);
 			Out.Put(std::uint32_t{0});
 			for (std::uint32_t Section = 1; Section <= Sections; ++Section) {
-				Out.Put(Section); Out.Put(std::uint32_t{0}); Out.Put(std::uint32_t{0});
+				Out.Put(!Place && Segmented && Section==Sections?4u:Section); Out.Put(std::uint32_t{0}); Out.Put(std::uint32_t{0});
 			}
 			const auto WriteSection = [&](std::size_t Index, const auto &Write) {
 				const auto Offset = Out.Bytes.size();
@@ -501,8 +518,23 @@ namespace gargantuan::Gas {
 			};
 			WriteSection(0, [&] { WriteGraph(Out, DocumentValue); });
 			WriteSection(1, [&] { WriteDependencies(Out, DocumentValue.Dependencies); });
-			if (Place) WriteSection(2, [&] { WritePlace(Out, *DocumentValue.Place); });
+			if (Place) WriteSection(2, [&] {
+				if (Segmented) Out.Put(static_cast<std::uint8_t>(!DocumentValue.Place->Domains.empty()?DomainTerrainPlaceFormatVersion:
+					DocumentValue.Place->TerrainManifest?TerrainPlaceFormatVersion:FormatVersion));
+				WritePlace(Out, *DocumentValue.Place);
+			});
 			CheckLimit(Out.Bytes.size() <= MaximumDocumentBytes - DigestBytes, "Document is too large");
+			if (Segmented) {
+				try { blockgrid::VerifySegments(Required,DocumentValue.GridSegments); }
+				catch (const std::exception&) { Fail(SerializationErrorCode::InvalidValue,"Invalid native grid segment closure"); }
+				Out.Limit=MaximumFileBytes;
+				WriteSection(Sections-1,[&] {
+					Out.Count(DocumentValue.GridSegments.size(),blockgrid::MaximumDocumentSegments);
+					for (const auto& [Digest,Data]:DocumentValue.GridSegments) {
+						Out.Raw(Digest.Bytes);Out.Count(Data.Bytes->size(),blockgrid::SegmentBytes);Out.Raw(*Data.Bytes);
+					}
+				});
+			}
 			Out.Patch32(16, Out.Bytes.size() + DigestBytes);
 			Out.Raw(AssetContentId::Hash(Out.Bytes).Bytes);
 			return std::move(Out.Bytes);
@@ -513,9 +545,21 @@ namespace gargantuan::Gas {
 		}
 	}
 
+	bool AdmitsFileLength(std::span<const std::uint8_t> Prefix,std::uintmax_t Length) {
+		if (Length<=MaximumDocumentBytes) return true;
+		if (Length>MaximumFileBytes || Prefix.size()<FilePrefixBytes ||
+			!std::ranges::equal(Prefix.first(Magic.size()),Magic)) return false;
+		Reader Header(Prefix.subspan(Magic.size()));
+		if (Header.Get<std::uint16_t>()!=SegmentedGridFormatVersion) return false;
+		const auto Kind=static_cast<DocumentKind>(Header.U8());
+		const auto Count=Header.U8();
+		return ((Kind==DocumentKind::Model && Count==3) || (Kind==DocumentKind::Place && Count==4)) &&
+			Header.U32()==SchemaVersion && Header.U32()==Length;
+	}
+
 	SerializationResult<Document> Decode(std::span<const std::uint8_t> Bytes) {
 		try {
-			CheckLimit(Bytes.size() <= MaximumDocumentBytes, "Document is too large");
+			CheckLimit(AdmitsFileLength(Bytes,Bytes.size()), "Document is too large for its profile");
 			if (Bytes.size() < HeaderBytes + DigestBytes)
 				Fail(SerializationErrorCode::TruncatedInput, "Incomplete GAS document");
 			const auto HashedBytes = Bytes.first(Bytes.size() - DigestBytes);
@@ -523,26 +567,30 @@ namespace gargantuan::Gas {
 			if (!std::ranges::equal(Header.Take(Magic.size()), Magic))
 				Fail(SerializationErrorCode::InvalidSyntax, "Invalid GAS magic");
 			const auto Version = Header.Get<std::uint16_t>();
-			if (Version != FormatVersion && Version != TerrainPlaceFormatVersion && Version != DomainTerrainPlaceFormatVersion)
+			const bool Segmented=Version==SegmentedGridFormatVersion;
+			if (!Segmented && Version != FormatVersion && Version != TerrainPlaceFormatVersion && Version != DomainTerrainPlaceFormatVersion)
 				Fail(SerializationErrorCode::UnsupportedVersion, "Unsupported GAS format version");
 			Document Result;
 			Result.Kind = static_cast<DocumentKind>(Header.U8());
 			const bool Place = Result.Kind == DocumentKind::Place;
-			if (Version != FormatVersion && !Place)
+			CheckLimit(Segmented || Bytes.size()<=MaximumDocumentBytes,"Ordinary document is too large");
+			if (!Segmented && Version != FormatVersion && !Place)
 				Fail(SerializationErrorCode::UnsupportedVersion, "Terrain format requires a GAS place");
 			Require(Result.Kind == DocumentKind::Model || Place, "Unknown document kind");
 			const auto Count = Header.U8();
 			if (Header.U32() != SchemaVersion)
 				Fail(SerializationErrorCode::UnsupportedVersion, "Unsupported GAS schema version");
-			Require(Header.U32() == Bytes.size() && Count == (Place ? 3 : 2), "Invalid document length or section count");
-			std::array<std::span<const std::uint8_t>, 3> Sections;
+			Require(Header.U32() == Bytes.size() && Count == (Place?3:2)+unsigned(Segmented), "Invalid document length or section count");
+			std::array<std::span<const std::uint8_t>, 4> Sections;
 			std::size_t Offset = HeaderBytes + Count * DirectoryEntryBytes;
 			for (std::uint32_t Index = 0; Index < Count; ++Index) {
 				const auto Id = Header.U32();
 				const auto Start = Header.U32();
 				const auto Length = Header.U32();
-				Require(Id == Index + 1 && Start == Offset && Start <= HashedBytes.size() &&
+				const bool Parts=Segmented && Index+1==Count;
+				Require(Id == (Parts?4:Index+1) && Start == Offset && Start <= HashedBytes.size() &&
 					Length != 0 && Length <= HashedBytes.size() - Start, "Invalid section directory");
+				if (Parts) CheckLimit(Start<=MaximumDocumentBytes-DigestBytes,"Ordinary sections too large");
 				Sections[Index] = HashedBytes.subspan(Start, Length);
 				Offset += Length;
 			}
@@ -551,7 +599,25 @@ namespace gargantuan::Gas {
 				"Document integrity digest does not match");
 			Result.Nodes = ReadGraph(Reader(Sections[0]), Result.Kind);
 			Result.Dependencies = ReadDependencies(Reader(Sections[1]));
-			if (Place) Result.Place = ReadPlace(Reader(Sections[2]), Version);
+			if (Place) {
+				Reader PlaceSection(Sections[2]);
+				const auto Profile=Segmented?PlaceSection.U8():Version;
+				Require(Profile>=FormatVersion && Profile<=DomainTerrainPlaceFormatVersion,"Invalid native place profile");
+				Result.Place=ReadPlace(PlaceSection,Profile);
+			}
+			const auto Required=GridRequirements(Result);
+			Require(Segmented==!Required.Parts.empty(),"Missing or unreferenced native grid section");
+			if (Segmented) {
+				Reader Parts(Sections[Count-1]);
+				Require(Parts.Count(blockgrid::MaximumDocumentSegments,37)==Required.Parts.size(),"Invalid native grid segment count");
+				try { Result.GridSegments=blockgrid::ReadSegments(Required,[&](const AssetContentId& Digest,std::size_t Size) {
+					Require(std::ranges::equal(Parts.Take(32),Digest.Bytes) && Parts.U32()==Size,"Unexpected native segment identity or length");
+					const auto Raw=Parts.Take(Size);
+					return blockgrid::Segment{std::make_shared<const Binary>(Raw.begin(),Raw.end())};
+				}); }
+				catch (const std::exception&) { Fail(SerializationErrorCode::InvalidValue,"Invalid native grid digest or closure"); }
+				Parts.Finish();
+			}
 			return Result;
 		} catch (SerializationError &Error) {
 			return std::unexpected(std::move(Error));
