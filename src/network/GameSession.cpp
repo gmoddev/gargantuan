@@ -45,7 +45,6 @@
 #include "gargantuan/network/TerrainSession.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/ServicePolicy.hpp"
-#include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/JobSystem.hpp"
 #include "gargantuan/services/CharacterControlService.hpp"
@@ -1721,16 +1720,9 @@ namespace gargantuan::network {
 			}
 			// Configuration callbacks may stop the session. Dispatch only after the applier
 			// has published its receiver, semantic snapshot and next sequence together.
-			std::optional<ScopedSignalDeferral> StructuralSignals;
-			if (Configuration.SpatialContent && ClientRuntimeAttached && Frame->Kind==ReplicationMessageKind::Incremental)
-				StructuralSignals.emplace();
-			auto Result = Replica.ApplyFrame(*Frame, Prepare);
-			if (StructuralSignals) {
-				const auto Root=Replica.GetReplicaRoot();
-				ScopedChangeJournalSuppression SuppressReplicaJournal(Root ? Root->GetObjectId() : ObjectId{});
-				StructuralSignals->Commit();
-				if (!Peers.contains(Message.Connection)) return;
-			}
+			const bool DeferSignals=Configuration.SpatialContent && ClientRuntimeAttached && Frame->Kind==ReplicationMessageKind::Incremental;
+			auto Result=DeferSignals ? Replica.ApplyFrameWithDeferredSignals(*Frame,Prepare) : Replica.ApplyFrame(*Frame,Prepare);
+			if (DeferSignals && !Peers.contains(Message.Connection)) return;
 			Metrics.ClientStructuralApplyNanoseconds += static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - ApplyStarted).count());
 			if (!Result.Succeeded()) {
