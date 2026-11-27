@@ -29,6 +29,15 @@ namespace {
 		auto Source=gargantuan::blockgrid::test::LargePublicField();
 		const auto Canonical=Encode(Source,DataProfile::RelevantPeers);
 		Check(Canonical.size()>1024*1024 && Source.GetOccupiedCount()==393216);
+		Field RayField;
+		const Cell NearStone{-4,1,1},FarStone{18,1,1};
+		Check(Fill(RayField,SingleCell(NearStone),{Stone,0}) && Fill(RayField,SingleCell(FarStone),{Stone,0}));
+		const ReplicaCoverage RayView{.Origins={{16,0,0}},.Rectangle=Region{{-8,0,0},{8,8,8}}};
+		const auto NearHit=Cast(RayField,{-7.5,1.5,1.5},{6,0,0},MaximumRayVisits,&RayView);
+		const auto FarHit=Cast(RayField,{16.5,1.5,1.5},{6,0,0},MaximumRayVisits,&RayView);
+		Check(NearHit && NearHit->Position==NearStone && FarHit && FarHit->Position==FarStone);
+		Check(!Cast(RayField,{-7.5,2.5,1.5},{15,0,0},MaximumRayVisits,&RayView));
+		Reject([&]{(void)Cast(RayField,{7.5,1.5,1.5},{15,0,0},MaximumRayVisits,&RayView);});
 		ReplicaCoverage Near;
 		for (int Z=0;Z<24;Z+=8) for (int Y=0;Y<24;Y+=8) for (int X=0;X<24;X+=8) Near.Origins.push_back({X,Y,Z});
 		Check(Near.Contains({{0,0,0},{24,24,24}}) && !Near.Contains({{0,0,0},{25,24,24}}));

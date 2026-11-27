@@ -145,7 +145,7 @@ namespace gargantuan::blockgrid {
 			if (!ValidCell(Here)) return Best;
 			if (Coverage && !Coverage->Whole) {
 				const auto Page=LeafOrigin(Here);
-				if (Page!=LastPage && !std::ranges::binary_search(Coverage->Origins,Page,CellOrder{}))
+				if (Page!=LastPage && !Coverage->Contains(SingleCell(Here)))
 					throw std::runtime_error("[BlockGrid:Unavailable] Ray entered a page outside installed replica coverage");
 				LastPage=Page;
 			}
