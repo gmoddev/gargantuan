@@ -396,16 +396,38 @@ namespace gargantuan {
 				std::size_t Primitives = 0;
 				std::size_t MeshIndices = 0;
 				std::size_t Rigs = 0;
+				if (Scene->Geometry) {
+					const auto &Geometry = *Scene->Geometry;
+					if (!Scene->World.IsValid() || Geometry.Meshes.size() > MaximumRenderViewportPrimitives ||
+						(Geometry.Terrain && Geometry.Terrain->size() > MaximumRenderViewportPrimitives))
+						throw std::length_error("Render publication exceeds the domain viewport geometry bound");
+					Primitives = Geometry.Terrain ? Geometry.Terrain->size() : 0;
+					std::size_t Bytes = 0;
+					RenderMeshIdentity PreviousMesh{};
+					for (const auto &Mesh : Geometry.Meshes) {
+						if (!Mesh.Mesh.IsValid() || Mesh.Mesh <= PreviousMesh || !Mesh.Vertices || !Mesh.Indices ||
+							Mesh.Indices->size() > MaximumRenderViewportMeshIndices - MeshIndices ||
+							Mesh.Vertices->size() > (MaximumRenderViewportGeometryBytes - Bytes) / sizeof(RenderVertex))
+							throw std::invalid_argument("Render publication contains invalid domain mesh geometry");
+						PreviousMesh = Mesh.Mesh;
+						MeshIndices += Mesh.Indices->size(); Bytes += Mesh.Vertices->size() * sizeof(RenderVertex);
+						if (Mesh.Indices->size() > (MaximumRenderViewportGeometryBytes - Bytes) / sizeof(std::uint32_t))
+							throw std::length_error("Render publication exceeds the domain viewport mesh byte bound");
+						Bytes += Mesh.Indices->size() * sizeof(std::uint32_t);
+					}
+				}
 				ObjectId Previous;
 				for (const auto &Object : Scene->Objects) {
 					const auto &Visual = Object.Visual;
+					const bool Generated = Visual.Mesh && Scene->Geometry &&
+						std::ranges::binary_search(Scene->Geometry->Meshes, *Visual.Mesh, {}, &RenderMeshCreate::Mesh);
 					Primitives += Visual.Primitives ? Visual.Primitives->size() : 1;
 					if (Primitives > MaximumRenderViewportPrimitives || !IsValid(Visual.Item) ||
 						Visual.Item.Object <= Previous || !IsValid(Visual.Material) || !AreValid(Visual.Primitives) ||
-						(bool(Visual.Primitives) != bool(Visual.Mesh)))
+						(!Generated && (bool(Visual.Primitives) != bool(Visual.Mesh))))
 						throw std::invalid_argument("Render publication contains invalid viewport geometry");
 					Previous = Visual.Item.Object;
-					if (Visual.Primitives) for (const auto &Range : *Visual.Primitives) {
+					if (Visual.Primitives && !Generated) for (const auto &Range : *Visual.Primitives) {
 						MeshIndices += Range.IndexCount;
 						if (MeshIndices > MaximumRenderViewportMeshIndices)
 							throw std::length_error("Render publication exceeds the viewport index bound");
@@ -727,6 +749,13 @@ namespace gargantuan {
 	void RenderProjection::ApplyViewportScene(const RenderViewportScene &Scene, const RenderProjection &Resources) {
 		Clear();
 		Frame = {Scene.Width, Scene.Height, 1.0f, Scene.Camera};
+		if (Scene.Geometry) {
+			RenderPublication Geometry;
+			Geometry.Id = 1; Geometry.FullResync = true; Geometry.Frame = Frame;
+			Geometry.MeshCreates = Scene.Geometry->Meshes;
+			Geometry.TerrainDraws = Scene.Geometry->Terrain;
+			(void)Apply(Geometry);
+		}
 		Frame.Environment.AmbientColor = glm::vec3(0.45f);
 		Frame.Environment.SunDirection = glm::normalize(glm::vec3(-0.5f, 1.0f, 0.75f));
 		const auto Available = [&](const RenderMaterialState &Material) {
@@ -739,13 +768,17 @@ namespace gargantuan {
 			const auto &Visual = Object.Visual;
 			if (!Available(Visual.Material)) continue;
 			if (Visual.Mesh) {
-				const auto Mesh = Resources.Meshes.find(*Visual.Mesh);
-				if (Mesh == Resources.Meshes.end()) continue;
+				auto Mesh = Meshes.find(*Visual.Mesh);
+				if (Mesh == Meshes.end()) {
+					const auto Shared = Resources.Meshes.find(*Visual.Mesh);
+					if (Shared == Resources.Meshes.end()) continue;
+					Mesh = Meshes.emplace(Shared->first, Shared->second).first;
+				}
 				if (Visual.Primitives && (!std::ranges::all_of(*Visual.Primitives, [&](const auto &Primitive) {
 					return static_cast<std::uint64_t>(Primitive.FirstIndex) + Primitive.IndexCount <= Mesh->second.IndexCount &&
 						Available(Primitive.Material);
 				}))) continue;
-				Meshes.try_emplace(Mesh->first, Mesh->second);
+
 				if (Object.Pose && Mesh->second.Skeleton == Object.Pose->Palette.Skeleton &&
 					Mesh->second.SkeletonJointCount == Object.Pose->Palette.Entries->size())
 					AnimationPoses.insert_or_assign(Visual.Item.Object, *Object.Pose);

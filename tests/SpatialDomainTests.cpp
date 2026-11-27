@@ -3,6 +3,9 @@
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/Terrain.hpp"
+#include "gargantuan/classes/Camera.hpp"
+#include "gargantuan/classes/ViewportFrame.hpp"
+#include "gargantuan/render/SpatialViewportCapture.hpp"
 #include "../src/terrain/ScenePersistence.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
@@ -95,6 +98,24 @@ namespace {
 			Check(!Draws.empty() && std::ranges::all_of(Draws, [&](const auto &Draw) {
 				return Draw.Item.Object == Scope->GetTerrain()->GetObjectId();
 			}), "camera must publish only its selected terrain surface");
+		}
+		const auto View = std::make_shared<ViewportFrame>();
+		View->SetParent(Default);
+		const auto CameraObject = std::make_shared<gargantuan::Camera>();
+		CameraObject->SetCFrame(CFrame(8, 12, 25));
+		CameraObject->SetParent(View); View->SetCurrentCamera(CameraObject);
+		SpatialViewportCapture Capture;
+		for (const auto &Scope : {Low, High}) {
+			View->SetSpatialRegion(Scope);
+			const auto First = Capture.Capture(*View, *Scope, nullptr, 128, 96).value();
+			const auto Again = Capture.Capture(*View, *Scope, nullptr, 128, 96).value();
+			Check(First.World == Scope->GetObjectId() && First.Geometry && First.Geometry == Again.Geometry,
+				"unchanged live domain GUI view must reuse its immutable geometry");
+			RenderProjection Secondary, Empty;
+			Secondary.ApplyViewportScene(First, Empty);
+			Check(!Secondary.GetTerrainDraws().empty() && std::ranges::all_of(Secondary.GetTerrainDraws(),
+				[&](const auto &Draw) { return Draw.Item.Object == Scope->GetTerrain()->GetObjectId(); }),
+				"a secondary domain camera needs its own terrain resources even when the main world is empty");
 		}
 		Game->Destroy(); Reopened->Destroy();
 	}

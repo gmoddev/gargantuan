@@ -300,10 +300,16 @@ namespace gargantuan {
 	inline constexpr std::size_t MaximumRenderViewportPrimitives = 256;
 	inline constexpr std::size_t MaximumRenderViewportMeshIndices = 1'048'576;
 	inline constexpr std::size_t MaximumRenderViewportRigs = 8;
+	inline constexpr std::size_t MaximumRenderViewportGeometryBytes = 4 * 1024 * 1024;
 
 	struct RenderViewportObject {
 		RenderObjectCreate Visual;
 		std::optional<RenderAnimationPoseUpdate> Pose;
+	};
+
+	struct RenderViewportGeometry {
+		std::vector<RenderMeshCreate> Meshes;
+		std::shared_ptr<const std::vector<RenderObjectCreate>> Terrain;
 	};
 
 	struct RenderViewportScene {
@@ -313,6 +319,8 @@ namespace gargantuan {
 		std::uint32_t Height = 0;
 		std::uint64_t AssetRevision = 0;
 		std::vector<RenderViewportObject> Objects;
+		ObjectId World;
+		std::shared_ptr<const RenderViewportGeometry> Geometry;
 	};
 	using RenderViewportScenes = std::vector<std::shared_ptr<const RenderViewportScene>>;
 	inline constexpr std::size_t MaximumRenderTerrainChunks = 512;

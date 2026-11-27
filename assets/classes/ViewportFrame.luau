@@ -6,6 +6,16 @@ return c({
 	description = "Composes a local 3D presentation scene into a GUI rectangle.",
 	since = "0.9.0",
 	properties = {
+		SpatialRegion = {
+			description = "Live spatial domain shown by this camera. Unset uses this frame's local presentation children.",
+			type = t.Optional(t.Instance("SpatialRegion", true)),
+			unmodified = "std::nullopt",
+			overrideRead = "GetSpatialRegion",
+			overrideWrite = "SetSpatialRegion",
+			serializable = false,
+			replicated = false,
+			category = "Camera",
+		},
 		CurrentCamera = {
 			description = "Camera inside this ViewportFrame's presentation subtree.",
 			type = t.Optional(t.Instance("Camera")),
