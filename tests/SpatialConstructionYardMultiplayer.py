@@ -116,21 +116,27 @@ local Probe = game.ReplicatedStorage.YardProcessProbe
 local Actions = game.ReplicatedStorage.YardRequest
 local Cell = Vector3.new(-2,2,-5)
 local Role, DigVisible, Rejoined, RestoredSurface
+local AppliedDoors=0
+Actions.OnClientEvent:Connect(function(Value)
+	if Value=="DoorApplied" then AppliedDoors+=1 end
+end)
 Probe.OnClientEvent:Connect(function(Value, Expected)
 	if Value=="dig-visible" then DigVisible=true
 	elseif Value=="rejoined" then Rejoined=true
 	else Role=Value; RestoredSurface=Expected end
 end)
-local function Wait(Predicate)
+local function Wait(Label, Predicate)
+	local LastError
 	for _=1,800 do
 		local Ok, Value=pcall(Predicate)
 		if Ok and Value then return Value end
+		if not Ok then LastError=tostring(Value) end
 		task.wait(.04)
 	end
-	error("[Spatial:YardProcess] Timed out waiting for the next action, role "..tostring(Role))
+	error(string.format("[Spatial:YardProcess] Timeout at %s; role=%s appliedDoors=%d lastQuery=%s",Label,tostring(Role),AppliedDoors,tostring(LastError)))
 end
 local function Send(Remote,Value)
-	Wait(function() return Remote:TryFireServer(Value) end)
+	Wait("send "..Value,function() return Remote:TryFireServer(Value) end)
 end
 local function Tile(Grid)
 	local Block=Grid and Grid:GetBlock(Cell)
@@ -142,26 +148,26 @@ local function Outside()
 		Player.Character.RootPart.SpatialRegion==nil and Space:FindFirstChild("RetainingWall")
 end
 task.spawn(function()
-	Wait(function() if not Role then Probe:TryFireServer("join") end return Role end)
-	Wait(Outside)
+	Wait("join role",function() if not Role then Probe:TryFireServer("join") end return Role end)
+	Wait("outdoor character and construction",Outside)
 	if Role=="builder" then
 		Send(Actions,"YardBuild")
-		Wait(function() return Tile(Space.RetainingWall) end)
+		Wait("outdoor brick",function() return Tile(Space.RetainingWall) end)
 		warn("[Spatial:YardProcess] Builder placed exterior brick")
-		Wait(function() if not DigVisible then Probe:TryFireServer("poll") end return DigVisible end)
+		Wait("second Player excavation confirmation",function() if not DigVisible then Probe:TryFireServer("poll") end return DigVisible end)
 		Send(Actions,"YardDoor")
-		Wait(function() return Player.Character.RootPart.SpatialRegion~=nil and Space:FindFirstChild("Workshop") end)
+		Wait("confirmed workshop arrival",function() return AppliedDoors==1 and Player.Character.RootPart.SpatialRegion~=nil and Space:FindFirstChild("Workshop") end)
 		Send(Actions,"YardBuild")
-		Wait(function() return Tile(Space.Workshop.WorkshopBlocks) end)
+		Wait("interior brick",function() return Tile(Space.Workshop.WorkshopBlocks) end)
 		Send(Actions,"YardDoor")
-		Wait(function() return Outside() and Tile(Space.RetainingWall) end)
+		Wait("confirmed return",function() return AppliedDoors==2 and Outside() and Tile(Space.RetainingWall) end)
 		Send(Probe,"return-visible")
 	elseif Role=="digger" then
-		Wait(function() return Tile(Space.RetainingWall) end)
+		Wait("outdoor brick",function() return Tile(Space.RetainingWall) end)
 		assert(not Space:FindFirstChild("Workshop"))
-		local Before=Wait(Surface)
+		local Before=Wait("initial terrain surface",Surface)
 		Send(Actions,"YardDig")
-		local After=Wait(function()
+		local After=Wait("changed terrain surface",function()
 			local Value=Surface()
 			return Value~=Before and Value
 		end)
@@ -169,14 +175,14 @@ task.spawn(function()
 		Send(Probe,"dig-visible")
 		warn("[Spatial:YardProcess] Second Player observed the brick and excavated replicated terrain")
 	elseif Role=="rejoin" then
-		Wait(function() Probe:TryFireServer("poll") return Rejoined and Tile(Space.RetainingWall) end)
+		Wait("rejoined edited construction",function() Probe:TryFireServer("poll") return Rejoined and Tile(Space.RetainingWall) end)
 		warn("[Spatial:YardProcess] Reconnected Player materialized the edited yard")
 	elseif Role=="restart" then
-		Wait(function() return Tile(Space.RetainingWall) end)
-		Wait(function() return RestoredSurface and Surface()==RestoredSurface end)
+		Wait("outdoor brick",function() return Tile(Space.RetainingWall) end)
+		Wait("replayed terrain collision",function() return RestoredSurface and Surface()==RestoredSurface end)
 		warn("[Spatial:YardSurface] "..RestoredSurface)
 		Send(Actions,"YardDoor")
-		Wait(function() return Player.Character.RootPart.SpatialRegion~=nil and Tile(Space.Workshop.WorkshopBlocks) end)
+		Wait("confirmed restored workshop",function() return AppliedDoors==1 and Player.Character.RootPart.SpatialRegion~=nil and Tile(Space.Workshop.WorkshopBlocks) end)
 		warn("[Spatial:YardProcess] Fresh Server replayed both constructions")
 	end
 end)
