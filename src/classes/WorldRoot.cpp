@@ -1,4 +1,5 @@
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "BlockGridWorldState.hpp"
 #include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
@@ -429,9 +430,9 @@ namespace gargantuan {
 		if (!PartA || !PartB || PartA == PartB || PartA->GetDestroyed() || PartB->GetDestroyed() ||
 			PartA->IsDestroying() || PartB->IsDestroying()) return {};
 
-		const auto ConstraintWorld = Constraint->FindFirstAncestorWhichIsA("WorldRoot");
-		const auto PartAWorld = PartA->FindFirstAncestorWhichIsA("WorldRoot");
-		const auto PartBWorld = PartB->FindFirstAncestorWhichIsA("WorldRoot");
+		const auto ConstraintWorld = GetEffectiveWorld(*Constraint);
+		const auto PartAWorld = GetEffectiveWorld(*PartA);
+		const auto PartBWorld = GetEffectiveWorld(*PartB);
 		if (ConstraintWorld.get() != this || PartAWorld.get() != this || PartBWorld.get() != this) return {};
 
 		const auto BodyA = CreatePartBody(PartA);
@@ -717,9 +718,9 @@ namespace gargantuan {
 		auto [PartA, PartB] = Constraint->GetActiveParts();
 		const bool ShouldExist = Constraint->GetEnabled() && PartA && PartB && PartA != PartB &&
 			!PartA->GetDestroyed() && !PartB->GetDestroyed() && !PartA->IsDestroying() && !PartB->IsDestroying() &&
-			Constraint->FindFirstAncestorWhichIsA("WorldRoot").get() == this &&
-			PartA->FindFirstAncestorWhichIsA("WorldRoot").get() == this &&
-			PartB->FindFirstAncestorWhichIsA("WorldRoot").get() == this;
+			GetEffectiveWorld(*Constraint).get() == this &&
+			GetEffectiveWorld(*PartA).get() == this &&
+			GetEffectiveWorld(*PartB).get() == this;
 		auto Existing = ConstraintJoints.find(Object);
 		if (!ShouldExist) {
 			if (Existing != ConstraintJoints.end()) {
@@ -796,7 +797,7 @@ namespace gargantuan {
 			auto Tracked = TrackedParts.find(Object);
 			auto Part = Tracked == TrackedParts.end() ? nullptr : Tracked->second.lock();
 			if (!Part || Part->GetDestroyed() || Part->IsDestroying() ||
-				Part->FindFirstAncestorWhichIsA("WorldRoot").get() != this) continue;
+				GetEffectiveWorld(*Part).get() != this) continue;
 			auto Found = PartBodies.find(Object);
 			if (Found == PartBodies.end() || !Physics.IsBodyValid(Found->second)) {
 				if (!CreatePartBody(Part).IsValid()) (void)MarkPartDirty(Object);
@@ -835,7 +836,7 @@ namespace gargantuan {
 			auto Tracked = TrackedDeformables.find(Object);
 			auto Body = Tracked == TrackedDeformables.end() ? nullptr : Tracked->second.lock();
 			if (!Body || Body->GetDestroyed() || Body->IsDestroying() ||
-				Body->FindFirstAncestorWhichIsA("WorldRoot").get() != this) continue;
+				GetEffectiveWorld(*Body).get() != this) continue;
 			auto Found = DeformableIds.find(Object);
 			if (Found == DeformableIds.end() || !Deformables.IsBodyValid(Found->second)) {
 				if (!CreateDeformableBody(Body).IsValid()) DirtyDeformables.insert(Object);
@@ -977,6 +978,9 @@ namespace gargantuan {
 	void WorldRoot::ShutdownPhysics() {
 		if (ShuttingDownPhysics) return;
 		ShuttingDownPhysics = true;
+		while (BlockGridState && !BlockGridState->Members.empty())
+			RemoveBlockGrid(BlockGridState->Members.begin()->second.Grid);
+		BlockGridState.reset();
 		TerrainRuntimeValue.reset();
 		TerrainEditTickets.reset();
 		Deformables.Shutdown();
@@ -1047,6 +1051,18 @@ namespace gargantuan {
 		return (*State->Positions)[VertexIndex];
 	}
 
+	std::shared_ptr<WorldRoot> WorldRoot::GetEffectiveWorld(const Instance &Member) {
+		for (const Instance *Current = &Member; Current; Current = Current->ParentReference.lock().get()) {
+			if (const auto *Assigned = dynamic_cast<const SpatialDomainMember *>(Current);
+				Assigned && Assigned->HasAssignedRegion())
+				return Assigned->ResolveAssignedWorld(*Current);
+			if (dynamic_cast<const ViewportFrame *>(Current)) return {};
+			if (const auto *World = dynamic_cast<const WorldRoot *>(Current))
+				return std::static_pointer_cast<WorldRoot>(const_cast<WorldRoot *>(World)->shared_from_this());
+		}
+		return {};
+	}
+
 	WorldRoot::WorldRoot() : Physics(PhysicsWorldConfig{.Gravity = {0.0f, -Gravity, 0.0f}}) {
 		GravityConnection = GetPropertyChangedSignal("Gravity")->Connect([this](std::monostate) {
 			if (!ShuttingDownPhysics) GravityDirty = true;
@@ -1055,43 +1071,58 @@ namespace gargantuan {
 		DestroyingConnection = Destroying->Once([this](std::monostate) { ShutdownPhysics(); });
 
 		UnbindDescendants = BindDescendants([this](std::shared_ptr<Instance> Instance) {
-			if (ViewportFrame::FindContaining(*Instance)) return;
-			if (auto Part = std::dynamic_pointer_cast<BasePart>(Instance)) {
-				TrackPart(Part);
-				(void)CreatePartBody(Part);
-				for (const auto &[Id, _] : TrackedConstraints) DirtyConstraints.insert(Id);
-			} else if (auto Body = std::dynamic_pointer_cast<DeformableBody>(Instance)) {
-				TrackDeformable(Body);
-				(void)CreateDeformableBody(Body);
-			} else if (auto Attachment = std::dynamic_pointer_cast<SoftBodyAttachment>(Instance)) {
-				TrackSoftBodyAttachment(Attachment);
-			} else if (auto Material = std::dynamic_pointer_cast<SoftBodyMaterial>(Instance)) {
-				TrackSoftBodyMaterial(Material);
-			} else if (auto Constraint = std::dynamic_pointer_cast<gargantuan::Constraint>(Instance)) {
-				TrackConstraint(Constraint);
-				(void)CreateConstraintJoint(Constraint);
-			} else if (auto Light = std::dynamic_pointer_cast<LocalLight>(Instance)) {
-				LocalLights.insert_or_assign(Light->GetObjectId(), Light);
-			} else if (auto Probe = std::dynamic_pointer_cast<ReflectionProbe>(Instance)) {
-				ReflectionProbes.insert_or_assign(Probe->GetObjectId(), Probe);
-			}
+			if (SpatialDomainMember::GetAssignmentRoot(*Instance) || GetEffectiveWorld(*Instance).get() != this ||
+				ViewportFrame::FindContaining(*Instance))
+				return;
+			AdmitSpatialMember(Instance);
 		});
 
-		DescendantRemovedConnection = DescendantRemoved->Connect([this](std::shared_ptr<Instance> Instance) {
-			if (ShuttingDownPhysics) return;
-			if (auto Part = std::dynamic_pointer_cast<BasePart>(Instance)) RemovePart(Part);
-			else if (auto Body = std::dynamic_pointer_cast<DeformableBody>(Instance)) RemoveDeformable(Body);
-			else if (auto Attachment = std::dynamic_pointer_cast<SoftBodyAttachment>(Instance))
-				RemoveSoftBodyAttachment(Attachment);
-			else if (auto Material = std::dynamic_pointer_cast<SoftBodyMaterial>(Instance))
-				RemoveSoftBodyMaterial(Material);
-			else if (auto Constraint = std::dynamic_pointer_cast<gargantuan::Constraint>(Instance))
-				RemoveConstraint(Constraint);
-			else if (auto Light = std::dynamic_pointer_cast<LocalLight>(Instance))
-				LocalLights.erase(Light->GetObjectId());
-			else if (auto Probe = std::dynamic_pointer_cast<ReflectionProbe>(Instance))
-				ReflectionProbes.erase(Probe->GetObjectId());
+		DescendantRemovedConnection = DescendantRemoved->Connect([this](std::shared_ptr<Instance> Value) {
+			if (!ShuttingDownPhysics && !SpatialDomainMember::GetAssignmentRoot(*Value)) RemoveSpatialMember(Value);
 		});
+	}
+
+	void WorldRoot::AdmitSpatialMember(const std::shared_ptr<Instance> &Instance) {
+			AddBlockGrid(Instance);
+		if (auto Part = std::dynamic_pointer_cast<BasePart>(Instance)) {
+			if (TrackedParts.contains(Part->GetObjectId())) return;
+			TrackPart(Part);
+			(void)CreatePartBody(Part);
+			for (const auto &[Id, _] : TrackedConstraints)
+				DirtyConstraints.insert(Id);
+		} else if (auto Body = std::dynamic_pointer_cast<DeformableBody>(Instance)) {
+			TrackDeformable(Body);
+			(void)CreateDeformableBody(Body);
+		} else if (auto Attachment = std::dynamic_pointer_cast<SoftBodyAttachment>(Instance)) {
+			TrackSoftBodyAttachment(Attachment);
+		} else if (auto Material = std::dynamic_pointer_cast<SoftBodyMaterial>(Instance)) {
+			TrackSoftBodyMaterial(Material);
+		} else if (auto Constraint = std::dynamic_pointer_cast<gargantuan::Constraint>(Instance)) {
+			TrackConstraint(Constraint);
+			(void)CreateConstraintJoint(Constraint);
+		} else if (auto Light = std::dynamic_pointer_cast<LocalLight>(Instance)) {
+			LocalLights.insert_or_assign(Light->GetObjectId(), Light);
+		} else if (auto Probe = std::dynamic_pointer_cast<ReflectionProbe>(Instance)) {
+			ReflectionProbes.insert_or_assign(Probe->GetObjectId(), Probe);
+		}
+	}
+
+	void WorldRoot::RemoveSpatialMember(const std::shared_ptr<Instance> &Instance) {
+			RemoveBlockGrid(Instance);
+		if (auto Part = std::dynamic_pointer_cast<BasePart>(Instance)) {
+			if (TrackedParts.contains(Part->GetObjectId())) RemovePart(Part);
+		} else if (auto Body = std::dynamic_pointer_cast<DeformableBody>(Instance))
+			RemoveDeformable(Body);
+		else if (auto Attachment = std::dynamic_pointer_cast<SoftBodyAttachment>(Instance))
+			RemoveSoftBodyAttachment(Attachment);
+		else if (auto Material = std::dynamic_pointer_cast<SoftBodyMaterial>(Instance))
+			RemoveSoftBodyMaterial(Material);
+		else if (auto Constraint = std::dynamic_pointer_cast<gargantuan::Constraint>(Instance))
+			RemoveConstraint(Constraint);
+		else if (auto Light = std::dynamic_pointer_cast<LocalLight>(Instance))
+			LocalLights.erase(Light->GetObjectId());
+		else if (auto Probe = std::dynamic_pointer_cast<ReflectionProbe>(Instance))
+			ReflectionProbes.erase(Probe->GetObjectId());
 	}
 
 	WorldRoot::~WorldRoot() {
@@ -1202,6 +1233,8 @@ namespace gargantuan {
 		if (TerrainPhysics && (TerrainPhysics->IsStaging() || !TerrainPhysics->IsHealthy()))
 			return {.Status = PhysicsOperationStatus::BackendFailure, .Message = "[Terrain:Query] Terrain collision is unavailable"};
 		ApplyPendingPhysicsChanges();
+		if (!SyncBlockGridCollision())
+			return {.Status = PhysicsOperationStatus::ResourceLimit, .Message = "[BlockGrid:Motion] Collision is unavailable"};
 		return Physics.MoveKinematicCapsule(Request);
 	}
 
@@ -1211,6 +1244,9 @@ namespace gargantuan {
 		if (TerrainPhysics && (TerrainPhysics->IsStaging() || !TerrainPhysics->IsHealthy()))
 			return {PhysicsOperationStatus::BackendFailure, "[Terrain:Query] Terrain collision is unavailable"};
 		ApplyPendingPhysicsChanges();
+		Filter.IncludeBlockGrids = Params.IncludeBlockGrids;
+		if (Filter.IncludeBlockGrids && !SyncBlockGridCollision())
+			return {PhysicsOperationStatus::ResourceLimit, "[BlockGrid:Query] Collision is unavailable"};
 		if (Params.CollisionGroup < 0 || Params.CollisionGroup > MaximumPhysicsCollisionGroup ||
 			Params.CollisionMask < 0 || Params.CollisionMask > MaximumPhysicsCollisionMask)
 			return {PhysicsOperationStatus::InvalidDescription, "RaycastParams collision filter is outside the 16-group bound"};
@@ -1268,6 +1304,8 @@ namespace gargantuan {
 				return {PhysicsOperationStatus::InvalidDescription, "RaycastParams descendant traversal limit reached"};
 			if (Value == CandidateTerrain && !AppendTerrainBodies())
 				return {PhysicsOperationStatus::InvalidDescription, "RaycastParams collider limit reached"};
+			if (Params.IncludeBlockGrids && !AppendBlockGridFilter(Value->GetObjectId(), Filter.Bodies))
+				return {PhysicsOperationStatus::InvalidDescription, "RaycastParams collider limit reached"};
 			if (auto Part = std::dynamic_pointer_cast<BasePart>(Value)) {
 				auto Found = PartBodies.find(Part->GetObjectId());
 				if (Found != PartBodies.end() && Physics.IsBodyValid(Found->second)) {
@@ -1319,6 +1357,7 @@ namespace gargantuan {
 
 	std::shared_ptr<gargantuan::Instance> WorldRaycastResult::GetHitInstance() const {
 		if (Instance) return Instance;
+		if (GridInstance) return GridInstance;
 		return TerrainInstance;
 	}
 
@@ -1338,6 +1377,8 @@ namespace gargantuan {
 		);
 		const PhysicsRaycastHit *SelectedHit = nullptr;
 		std::shared_ptr<BasePart> SelectedPart;
+		std::shared_ptr<BlockGrid> SelectedGrid;
+		std::optional<glm::ivec3> SelectedCell;
 		const auto *TerrainPhysics = GetTerrainPhysics();
 		const auto CandidateTerrain = IncludeTerrain ? GetTerrainQueryOwner() : nullptr;
 		std::optional<terrain::ChunkKey> SelectedChunk;
@@ -1345,9 +1386,12 @@ namespace gargantuan {
 		for (const auto &Candidate : BackendResult.Candidates) {
 			if (Candidate.Distance - NearestDistance > TieEpsilon) break;
 			auto CandidatePart = ResolvePart(Candidate.Body);
+			auto CandidateGrid = CandidatePart ? nullptr : ResolveBlockGrid(Candidate.Body);
+			const auto Cell = CandidateGrid ? ResolveBlockCell(Candidate.Body, Candidate.Position) : std::nullopt;
 			std::optional<terrain::ChunkKey> CandidateChunk;
 			ObjectId CandidateObject{};
 			if (CandidatePart) CandidateObject = CandidatePart->GetObjectId();
+			else if (CandidateGrid) CandidateObject = CandidateGrid->GetObjectId();
 			else if (CandidateTerrain) {
 				if (const auto Owner = TerrainPhysics->FindOwner(Candidate.Body)) {
 					CandidateObject = CandidateTerrain->GetObjectId();
@@ -1357,9 +1401,13 @@ namespace gargantuan {
 			if (!CandidateObject.IsValid())
 				return Fail(PhysicsOperationStatus::BackendFailure, "Physics raycast hit has no live semantic owner");
 			if (!SelectedHit || CandidateObject < SelectedObject ||
-				(CandidateObject == SelectedObject && CandidateChunk < SelectedChunk)) {
+				(CandidateObject == SelectedObject && (CandidateChunk < SelectedChunk ||
+					(Cell && SelectedCell && std::tie(Cell->x, Cell->y, Cell->z) <
+						std::tie(SelectedCell->x, SelectedCell->y, SelectedCell->z))))) {
 				SelectedHit = &Candidate;
 				SelectedPart = std::move(CandidatePart);
+				SelectedGrid = std::move(CandidateGrid);
+				SelectedCell = Cell;
 				SelectedChunk = CandidateChunk;
 				SelectedObject = CandidateObject;
 			}
@@ -1372,6 +1420,8 @@ namespace gargantuan {
 			.Normal = SelectedHit->Normal,
 			.Distance = SelectedHit->Distance,
 			.TerrainInstance = SelectedChunk ? CandidateTerrain : nullptr,
+			.GridInstance = std::move(SelectedGrid),
+			.Cell = SelectedCell,
 		};
 	}
 
@@ -1393,6 +1443,10 @@ namespace gargantuan {
 		lua_createtable(L, 0, 4);
 		StackValue<std::shared_ptr<Instance>>::Push(L, Result.GetHitInstance());
 		lua_setfield(L, -2, "Instance");
+		if (Result.Cell) {
+			Result.GridInstance->PushGridHit(L, {Result.Cell->x, Result.Cell->y, Result.Cell->z}, Result.Position, Result.Normal);
+			lua_setfield(L, -2, "GridHit");
+		}
 		StackValue<glm::vec3>::Push(L, Result.Position);
 		lua_setfield(L, -2, "Position");
 		StackValue<glm::vec3>::Push(L, Result.Normal);
@@ -1544,6 +1598,7 @@ namespace gargantuan {
 		SteppingPhysics = true;
 		const StepGuard Guard{SteppingPhysics};
 		runtime_detail::MeasureWork(runtime_detail::WorkPhase::PhysicsUpdate, [&] { ApplyPendingPhysicsChanges(); });
+		if (!SyncBlockGridCollision()) return;
 		constexpr auto MaximumAccumulatedTime = static_cast<double>(MAX_STEPS_PER_FRAME) * STEP_INTERVAL;
 		StepAccumulator = static_cast<float>(std::min(
 			static_cast<double>(StepAccumulator) + DeltaTime, MaximumAccumulatedTime));

@@ -1,4 +1,5 @@
 #include "gargantuan/runtime/AuthoritativeTransactions.hpp"
+#include "gargantuan/blockgrid/Edit.hpp"
 
 #include "gargantuan/classes/DataModel.hpp"
 
@@ -64,6 +65,9 @@ namespace gargantuan {
 						   WireValueBytes(Typed.After);
 				else if constexpr (std::is_same_v<ChangeType, ReparentTransactionChange>)
 					return sizeof(Typed);
+				else if constexpr (std::is_same_v<ChangeType, BlockGridTransactionChange>)
+					return sizeof(Typed) + sizeof(blockgrid::Patch) +
+						(Typed.Delta ? Typed.Delta->Cells.capacity()*sizeof(blockgrid::CellDelta) : 0);
 				else
 					return sizeof(Typed) + Typed.Objects.size() * sizeof(ObjectId) + Typed.PersistentSnapshot.size();
 			},
@@ -192,7 +196,8 @@ namespace gargantuan {
 						using ChangeType = std::decay_t<decltype(Typed)>;
 						if constexpr (std::is_same_v<ChangeType, PropertyTransactionChange>) {
 							Referenced.insert(Typed.Object); IncludeWireReference(Typed.Before); IncludeWireReference(Typed.After);
-						} else if constexpr (std::is_same_v<ChangeType, ScriptSourceTransactionChange>) {
+						} else if constexpr (std::is_same_v<ChangeType, ScriptSourceTransactionChange> ||
+							std::is_same_v<ChangeType, BlockGridTransactionChange>) {
 							Referenced.insert(Typed.Object);
 						} else if constexpr (std::is_same_v<ChangeType, AttributeTransactionChange>) {
 							Referenced.insert(Typed.Object);

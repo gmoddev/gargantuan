@@ -839,7 +839,8 @@ namespace gargantuan {
 					auto Owner = Context->Self->FindShapeOwner(Shape);
 					if (!Owner) return 1.0f;
 					const auto *Record = Context->Self->FindBody(*Owner);
-					if (!Record || !Record->Description.CanCollide ||
+					if (!Record || !Record->Description.CanQuery.value_or(Record->Description.CanCollide) ||
+						(Record->Description.RequiresBlockGridQuery && !Context->Filter->IncludeBlockGrids) ||
 						!PhysicsCanCollide(Context->Filter->CollisionGroup, Context->Filter->CollisionMask,
 							Record->Description.CollisionGroup, Record->Description.CollisionMask)) return 1.0f;
 					const bool Listed = std::binary_search(

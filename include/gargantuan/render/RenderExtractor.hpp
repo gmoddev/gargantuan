@@ -152,6 +152,14 @@ namespace gargantuan {
 			std::uint64_t TopologyRevision = 0;
 			std::uint64_t VertexRevision = 0;
 		};
+		struct PublishedGrid {
+			RenderMeshCreate Resource;
+			RenderItem Item;
+			std::uint64_t Revision;
+		};
+		using GridMeshes = std::unordered_map<ObjectId, PublishedGrid>;
+		GridMeshes PublishedGrids;
+		GridMeshes PrepareBlockGrids(const WorldRoot &World, RenderPublication &Result, std::size_t Budget) const;
 		struct PublishedTexture {
 			std::uint64_t Revision = 0;
 			std::uint32_t Width = 0;

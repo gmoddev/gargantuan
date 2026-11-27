@@ -20,6 +20,8 @@ namespace gargantuan {
 
 		void InitializeTerrain();
 		std::weak_ptr<Terrain> TerrainChild;
+		std::weak_ptr<SpatialRegion> ViewRegion;
+		SignalConnection::Pointer ViewRegionAncestry;
 		bool TerrainRestored = false;
 	};
 }

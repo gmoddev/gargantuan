@@ -23,6 +23,8 @@
 
 namespace gargantuan {
 	class AssetService;
+	class BlockGrid;
+	struct BlockGridWorldState;
 	class LocalLight;
 	class ReflectionProbe;
 	class Terrain;
@@ -52,12 +54,14 @@ namespace gargantuan {
 		glm::vec3 Normal{0.0f};
 		float Distance = 0.0f;
 		std::shared_ptr<Terrain> TerrainInstance;
+		std::shared_ptr<BlockGrid> GridInstance;
+		std::optional<glm::ivec3> Cell;
 
 		[[nodiscard]] bool Succeeded() const {
 			return Status == PhysicsOperationStatus::Success;
 		}
 		[[nodiscard]] bool HasHit() const {
-			return Instance != nullptr || TerrainInstance != nullptr;
+			return Instance != nullptr || TerrainInstance != nullptr || GridInstance != nullptr;
 		}
 
 		[[nodiscard]] std::shared_ptr<gargantuan::Instance> GetHitInstance() const;
@@ -66,6 +70,7 @@ namespace gargantuan {
 	class WorldRoot : public Instance {
 		I_WorldRoot;
 		friend class Character;
+		friend class SpatialDomainMember;
 
 		static constexpr int MAX_STEPS_PER_FRAME = 4;
 		static constexpr float STEP_INTERVAL = 1.0f / 60.0f;
@@ -74,6 +79,8 @@ namespace gargantuan {
 
 		WorldRoot();
 		~WorldRoot() override;
+		[[nodiscard]] static std::shared_ptr<WorldRoot> GetEffectiveWorld(const Instance &Member);
+		[[nodiscard]] const std::map<ObjectId, std::weak_ptr<Instance>> &GetExplicitSpatialRoots() const { return ExplicitSpatialRoots; }
 
 		PhysicsWorld Physics;
 		SoftBodyWorld Deformables;
@@ -143,6 +150,8 @@ namespace gargantuan {
 		std::uint64_t CollisionAssetChangeSequence = 0;
 		std::map<ObjectId, std::weak_ptr<LocalLight>> LocalLights;
 		std::map<ObjectId, std::weak_ptr<ReflectionProbe>> ReflectionProbes;
+		void ForEachBlockGrid(const std::function<void(const BlockGrid &)> &Visit) const;
+		[[nodiscard]] bool HasBlockGrids() const { return BlockGridState != nullptr; }
 
 		void StepPhysics(double DeltaTime, std::optional<std::vector<std::shared_ptr<Instance>>> Instances);
 		[[nodiscard]] PhysicsKinematicMotionResult ResolveKinematicMotion(const PhysicsKinematicMotionRequest &Request);
@@ -155,6 +164,7 @@ namespace gargantuan {
 			std::vector<std::shared_ptr<BasePart>> Parts;
 			bool Truncated = false;
 			std::shared_ptr<Terrain> TerrainInstance;
+			std::vector<std::shared_ptr<BlockGrid>> BlockGrids;
 			[[nodiscard]] bool Succeeded() const { return Status == PhysicsOperationStatus::Success; }
 		};
 		[[nodiscard]] OverlapResult ResolveOverlap(const PhysicsQueryShape &Shape, const RaycastParams &Params = {}, std::size_t MaxResults = MaximumPhysicsOverlapResults);
@@ -169,6 +179,13 @@ namespace gargantuan {
 
 	  private:
 		friend class Engine;
+		std::unique_ptr<BlockGridWorldState> BlockGridState;
+		void AddBlockGrid(const std::shared_ptr<Instance> &Value);
+		void RemoveBlockGrid(const std::shared_ptr<Instance> &Value);
+		bool SyncBlockGridCollision();
+		bool AppendBlockGridFilter(ObjectId Object, std::vector<PhysicsBodyId> &Bodies) const;
+		std::shared_ptr<BlockGrid> ResolveBlockGrid(PhysicsBodyId Body) const;
+		std::optional<glm::ivec3> ResolveBlockCell(PhysicsBodyId Body, glm::vec3 Position) const;
 		friend class EditorHost;
 		friend class MutationGateway;
 		friend class Terrain;
@@ -196,6 +213,11 @@ namespace gargantuan {
 		void ReadbackDynamicBodies();
 		[[nodiscard]] SoftBodyId CreateDeformableBody(const std::shared_ptr<DeformableBody> &Body);
 		[[nodiscard]] PhysicsConstraintId CreateConstraintJoint(const std::shared_ptr<Constraint> &Constraint);
+		std::map<ObjectId, std::weak_ptr<Instance>> ExplicitSpatialRoots;
+		static void MoveSpatialMembers(const std::shared_ptr<Instance> &Root,
+			const std::shared_ptr<WorldRoot> &Before, const std::shared_ptr<WorldRoot> &After);
+		void AdmitSpatialMember(const std::shared_ptr<Instance> &Member);
+		void RemoveSpatialMember(const std::shared_ptr<Instance> &Member);
 		void TrackPart(const std::shared_ptr<BasePart> &Part);
 		bool MarkPartDirty(ObjectId Object);
 		void TrackDeformable(const std::shared_ptr<DeformableBody> &Body);

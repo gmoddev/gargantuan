@@ -17,6 +17,7 @@
 
 namespace gargantuan {
 	class DataModel;
+	namespace blockgrid { struct Patch; }
 
 	inline constexpr std::size_t MaximumOpenAuthoringTransactions = 1;
 	inline constexpr std::size_t MaximumTransactionLabelBytes = 128;
@@ -83,6 +84,10 @@ namespace gargantuan {
 		std::optional<ObjectId> BeforeParent;
 		std::optional<ObjectId> AfterParent;
 	};
+	struct BlockGridTransactionChange {
+		ObjectId Object;
+		std::shared_ptr<const blockgrid::Patch> Delta;
+	};
 
 	enum class SubtreeTransactionKind { Create, Destroy, Duplicate };
 	struct SubtreeTransactionChange {
@@ -100,7 +105,8 @@ namespace gargantuan {
 		TagTransactionChange,
 		ExtensionTransactionChange,
 		ReparentTransactionChange,
-		SubtreeTransactionChange>;
+		SubtreeTransactionChange,
+		BlockGridTransactionChange>;
 
 	enum class TransactionReplayPolicy { Legacy, PreparedPropertyBatch };
 	struct CommittedTransaction {

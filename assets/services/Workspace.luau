@@ -7,6 +7,16 @@ return c({
 	since = "0.1.0",
 
 	properties = {
+		CurrentSpatialRegion = {
+			description = "SpatialRegion shown by the main camera. Leave unset for the ordinary Workspace.",
+			type = t.Optional(t.Instance("SpatialRegion")),
+			unmodified = "std::nullopt",
+			overrideRead = "GetCurrentSpatialRegion",
+			overrideWrite = "SetCurrentSpatialRegion",
+			serializable = false,
+			replicated = false,
+			category = "Camera",
+		},
 		CurrentCamera = {
 			description = "The current camera.",
 			type = t.Instance("Camera"),

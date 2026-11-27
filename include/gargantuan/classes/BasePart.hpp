@@ -2,6 +2,7 @@
 
 #include "gargantuan/classes/generated/BasePart.hpp"
 #include "gargantuan/physics/PhysicsTypes.hpp"
+#include "gargantuan/runtime/SpatialDomainMember.hpp"
 
 #include <glm/glm.hpp>
 #include <optional>
@@ -12,7 +13,7 @@ namespace gargantuan {
 	class Character;
 	namespace network { class GameSession; }
 
-	class BasePart : public Instance {
+	class BasePart : public Instance, public SpatialDomainMember {
 		I_BasePart;
 
 		glm::vec3 AccumulatedImpulse = {0.0f, 0.0f, 0.0f};

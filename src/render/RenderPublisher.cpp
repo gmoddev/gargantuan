@@ -100,23 +100,11 @@ namespace gargantuan {
 		}
 
 		bool IsInWorld(const Instance &Value, const WorldRoot &World) {
-			auto Parent = Value.ParentReference.lock();
-			while (Parent) {
-				if (auto *Ancestor = dynamic_cast<WorldRoot *>(Parent.get())) return Ancestor == &World;
-				if (dynamic_cast<ViewportFrame *>(Parent.get())) return false;
-				Parent = Parent->ParentReference.lock();
-			}
-			return false;
+			return WorldRoot::GetEffectiveWorld(Value).get() == &World;
 		}
 
 		bool IsVisualInWorld(const Instance &Value, const WorldRoot &World) {
-			auto Parent = Value.ParentReference.lock();
-			for (std::size_t Depth = 0; Parent && Depth < SemanticSpatialResolver::MaximumAttachmentDepth; ++Depth) {
-				if (auto *Ancestor = dynamic_cast<WorldRoot *>(Parent.get())) return Ancestor == &World;
-				if (dynamic_cast<ViewportFrame *>(Parent.get())) return false;
-				Parent = Parent->ParentReference.lock();
-			}
-			return false;
+			return WorldRoot::GetEffectiveWorld(Value).get() == &World;
 		}
 
 		RenderCameraSnapshot BuildCamera(
@@ -464,7 +452,7 @@ namespace gargantuan {
 		) {
 			const auto Object = Body ? Body->GetObjectId() : ObjectId{};
 			if (!Body || Body->GetDestroyed() || Body->IsDestroying() ||
-				Body->FindFirstAncestorWhichIsA("WorldRoot").get() != &World) {
+				WorldRoot::GetEffectiveWorld(*Body).get() != &World) {
 				Diagnostic = {RenderExtractionIssue::DeadObject, Object, "Skipped a dead deformable object"};
 				return std::nullopt;
 			}
@@ -1323,6 +1311,7 @@ namespace gargantuan {
 			VisualIncomplete = false;
 			if (Scope.IsValid()) Dirty->ReleaseConsumer(DirtyConsumer, Scope);
 			PublishedWorld = &World;
+			PublishedGrids.clear();
 			Scope = CurrentScope;
 			FullResyncRequested = true;
 			PublishedItems.clear();
@@ -1393,12 +1382,21 @@ namespace gargantuan {
 			// Discover visual-only socket meshes once per full resync. The limit is above
 			// the saved scene object bound and also bounds runtime-only scenes.
 			std::vector<std::shared_ptr<Instance>> Pending;
+			const auto StructuralVisual = [](const std::shared_ptr<Instance> &Node) {
+				if (!Node || dynamic_cast<WorldRoot *>(Node.get()) || dynamic_cast<ViewportFrame *>(Node.get())) return false;
+				const auto *Member = dynamic_cast<SpatialDomainMember *>(Node.get());
+				return !Member || !Member->HasAssignedRegion();
+			};
 			Pending.reserve(std::min(World.Children.size(), MaximumVisualTraversal));
 			if (World.Children.size() <= MaximumVisualTraversal)
-				for (const auto &Child : World.Children) Pending.push_back(Child);
+				for (const auto &Child : World.Children) if (StructuralVisual(Child)) Pending.push_back(Child);
+			for (const auto &[Id, Weak] : World.GetExplicitSpatialRoots()) {
+				if (Pending.size() > MaximumVisualTraversal) break;
+				if (auto Root = Weak.lock()) Pending.push_back(std::move(Root));
+			}
 			std::vector<std::shared_ptr<AttachmentMesh>> Visuals;
 			std::size_t Visited = 1;
-			bool VisualOverflow = World.Children.size() > MaximumVisualTraversal;
+			bool VisualOverflow = World.Children.size() > MaximumVisualTraversal || Pending.size() > MaximumVisualTraversal;
 			while (!Pending.empty() && !VisualOverflow) {
 				auto Current = std::move(Pending.back());
 				Pending.pop_back();
@@ -1413,7 +1411,7 @@ namespace gargantuan {
 					Visuals.push_back(std::move(Visual));
 				}
 				for (auto It = Current->Children.rbegin(); It != Current->Children.rend(); ++It)
-					Pending.push_back(*It);
+					if (StructuralVisual(*It)) Pending.push_back(*It);
 			}
 			LastProfile.VisualTraversalObjects = Visited;
 			if (VisualOverflow) {
@@ -1511,12 +1509,17 @@ namespace gargantuan {
 			std::ranges::sort(OrderedTextures, {}, &std::pair<RenderTextureIdentity, PublishedTexture>::first);
 			for (const auto &[Texture, State] : OrderedTextures)
 				Result->TextureCreates.push_back({Texture, State.Revision, State.Width, State.Height, State.Format, State.Pixels});
+			const auto Limit = Dirty->GetLimits().MaximumPublicationBytes;
+			auto Grids = World.HasBlockGrids() ? PrepareBlockGrids(World, *Result,
+				Limit - std::min(Limit, EstimatePublicationBytes(*Result))) : GridMeshes{};
+			for (const auto &[Object, Grid] : Grids) Replacement.emplace(Object, Grid.Item);
 			auto Terrain = PrepareTerrain(*Result);
 			if (!Terrain) {
 				Dirty->RequestFullResync(Scope, "Render full-resync publication exceeds its byte limit");
 				throw std::length_error("Render full-resync publication exceeds its byte limit");
 			}
 			PublishedItems = std::move(Replacement);
+			PublishedGrids = std::move(Grids);
 			PublishedDeformables = std::move(DeformableReplacement);
 			CommittedAnimationPoses = AnimationPoses;
 			PublishedEnvironment = Environment;
@@ -1654,6 +1657,7 @@ namespace gargantuan {
 		for (const auto &[Object, Domains] : DirtyObjects) {
 			const auto ExtractionStart = ProfilingEnabled ? ProfileClock::now() : ProfileClock::time_point{};
 			auto Previous = PublishedItems.find(Object);
+			if (PublishedGrids.contains(Object)) continue;
 			auto InstanceValue = ObjectRegistry::Get().Lookup(Object);
 			auto PartValue = std::dynamic_pointer_cast<Part>(InstanceValue);
 			auto MeshPartValue = std::dynamic_pointer_cast<MeshPart>(InstanceValue);
@@ -1884,6 +1888,9 @@ namespace gargantuan {
 		Result->TextureCreates = PendingTextureCreates;
 		Result->TextureUpdates = PendingTextureUpdates;
 		Result->TextureRemoves = PendingTextureRemoves;
+		const auto Limit = Dirty->GetLimits().MaximumPublicationBytes;
+		auto Grids = World.HasBlockGrids() || !PublishedGrids.empty() ? PrepareBlockGrids(World, *Result,
+			Limit - std::min(Limit, EstimatePublicationBytes(*Result))) : GridMeshes{};
 		auto Terrain = PrepareTerrain(*Result);
 		if (!Terrain) {
 			Dirty->RequestFullResync(Scope, "Incremental render publication exceeds its byte limit");
@@ -1898,6 +1905,7 @@ namespace gargantuan {
 			for (const auto &Remove : Result->Removes) PublishedItems.erase(Remove.Object);
 			for (const auto &Create : Result->Creates) PublishedItems.emplace(Create.Item.Object, Create.Item);
 			for (const auto &Update : Result->Updates) PublishedItems.at(Update.Object) = Update.Item;
+			PublishedGrids = std::move(Grids);
 			for (const auto Object : DeformableCacheRemoves) PublishedDeformables.erase(Object);
 			for (const auto &[Object, State] : DeformableCacheUpdates)
 				PublishedDeformables.insert_or_assign(Object, State);

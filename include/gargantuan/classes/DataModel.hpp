@@ -8,12 +8,14 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <cstddef>
 
 namespace gargantuan {
 	class ScopedAuthoritativeRevisionDeferral;
 	class AssetService;
 	class PackageBuilder;
+	class SpatialRegion;
 	class DataModel : public ServiceProvider {
 		I_DataModel;
 		~DataModel() override;
@@ -23,6 +25,13 @@ namespace gargantuan {
 		std::filesystem::path Root;
 		BaseFilesystem *Filesystem = nullptr;
 		TagIndex Tags;
+		[[nodiscard]] std::vector<std::shared_ptr<SpatialRegion>> GetSpatialRegions() const;
+
+	  private:
+		friend class SpatialRegion;
+		std::map<ObjectId, std::weak_ptr<SpatialRegion>> SpatialRegions;
+
+	  public:
 		AuthoritativeTransactionHistory Transactions;
 
 		static constexpr std::uint64_t InitialProjectRevision = 1;
@@ -39,6 +48,11 @@ namespace gargantuan {
 		void AdoptInstances(std::size_t Count);
 		void ReleaseInstance() noexcept;
 		[[nodiscard]] std::size_t GetOwnedInstanceCount() const { return OwnedInstanceCount; }
+		// The current game protocol admits a single coordinate domain and has no native cell stream.
+		struct DefaultNetworkSpatialProfile {};
+		[[nodiscard]] std::shared_ptr<const DefaultNetworkSpatialProfile> AcquireDefaultNetworkSpatialProfile();
+		[[nodiscard]] bool HasDefaultNetworkSpatialProfile() const { return !NetworkSpatialProfile.expired(); }
+		static void CheckDefaultNetworkSpatialParticipant(const Instance &Node);
 		[[nodiscard]] std::string_view GetPackagedClientCodeIdentity() const { return PackagedClientCodeIdentity; }
 
 	  private:
@@ -51,6 +65,7 @@ namespace gargantuan {
 		[[nodiscard]] bool HasDeferredRevision() const noexcept;
 		std::uint64_t AuthoritativeRevision = InitialProjectRevision;
 		bool RevisionBatchActive = false;
+		std::weak_ptr<const DefaultNetworkSpatialProfile> NetworkSpatialProfile;
 		bool RevisionBatchChanged = false;
 		std::string PackagedClientCodeIdentity;
 		std::size_t OwnedInstanceCount = 1;
