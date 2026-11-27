@@ -68,4 +68,5 @@ namespace gargantuan::InstanceSerialization {
 	// Clone/duplicate create new logical resources. Undo/Redo uses the ordinary
 	// identity-preserving detached reconstruction above.
 	DeserializationState DeserializeClone(InstanceFormat Format, std::istream &Input);
+	[[nodiscard]] std::string SerializeClone(std::shared_ptr<Instance> Root);
 }

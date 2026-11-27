@@ -10,6 +10,8 @@
 #include "gargantuan/physics/PhysicsBackend.hpp"
 #include "gargantuan/physics/SoftBodyBackend.hpp"
 #include "gargantuan/runtime/RuntimeMode.hpp"
+#include "gargantuan/runtime/SpatialDestination.hpp"
+#include <span>
 
 #include <cstdint>
 #include <expected>
@@ -80,6 +82,13 @@ namespace gargantuan {
 		WorldRoot();
 		~WorldRoot() override;
 		[[nodiscard]] static std::shared_ptr<WorldRoot> GetEffectiveWorld(const Instance &Member);
+		[[nodiscard]] std::expected<SpatialDestinationReceipt, PhysicsOperationStatus> PrepareSpatialDestination(
+			const SpatialDestinationBounds &Bounds, std::span<const ObjectId> RequiredOwners = {});
+		[[nodiscard]] bool ValidateSpatialDestination(const SpatialDestinationReceipt &Receipt);
+		[[nodiscard]] std::uint64_t GetSpatialActivation() const noexcept { return SpatialActivation; }
+		// Main-only checked teleport for one ordinary rigid Part. Clearance uses its conservative oriented box.
+		[[nodiscard]] PhysicsOperationResult CommitSpatialTransfer(const std::shared_ptr<BasePart> &Member,
+			const SpatialMovementRequest &Movement, const SpatialDestinationReceipt &Receipt);
 		[[nodiscard]] const std::map<ObjectId, std::weak_ptr<Instance>> &GetExplicitSpatialRoots() const { return ExplicitSpatialRoots; }
 
 		PhysicsWorld Physics;
@@ -159,12 +168,14 @@ namespace gargantuan {
 		ResolveRaycast(glm::vec3 Origin, glm::vec3 Direction, const RaycastParams &Params = {});
 		[[nodiscard]] WorldRaycastResult ResolveShapeCast(const PhysicsQueryShape &Shape, glm::vec3 Direction, const RaycastParams &Params = {});
 		struct OverlapResult {
+			struct GridCell { std::shared_ptr<BlockGrid> Grid; glm::ivec3 Cell; std::string Revision; };
 			PhysicsOperationStatus Status = PhysicsOperationStatus::Success;
 			std::string Message;
 			std::vector<std::shared_ptr<BasePart>> Parts;
 			bool Truncated = false;
 			std::shared_ptr<Terrain> TerrainInstance;
 			std::vector<std::shared_ptr<BlockGrid>> BlockGrids;
+			std::vector<GridCell> GridCells;
 			[[nodiscard]] bool Succeeded() const { return Status == PhysicsOperationStatus::Success; }
 		};
 		[[nodiscard]] OverlapResult ResolveOverlap(const PhysicsQueryShape &Shape, const RaycastParams &Params = {}, std::size_t MaxResults = MaximumPhysicsOverlapResults);
@@ -188,6 +199,8 @@ namespace gargantuan {
 		bool AppendBlockGridFilter(ObjectId Object, std::vector<PhysicsBodyId> &Bodies) const;
 		std::shared_ptr<BlockGrid> ResolveBlockGrid(PhysicsBodyId Body) const;
 		std::optional<glm::ivec3> ResolveBlockCell(PhysicsBodyId Body, glm::vec3 Position) const;
+		PhysicsOperationStatus VisitBlockOverlap(PhysicsBodyId Body,const PhysicsQueryShape& Query,std::size_t& Work,
+			const std::function<bool(glm::ivec3)>& Emit) const;
 		friend class EditorHost;
 		friend class MutationGateway;
 		friend class Terrain;
@@ -222,9 +235,9 @@ namespace gargantuan {
 		[[nodiscard]] PhysicsConstraintId CreateConstraintJoint(const std::shared_ptr<Constraint> &Constraint);
 		std::map<ObjectId, std::weak_ptr<Instance>> ExplicitSpatialRoots;
 		static void MoveSpatialMembers(const std::shared_ptr<Instance> &Root,
-			const std::shared_ptr<WorldRoot> &Before, const std::shared_ptr<WorldRoot> &After);
+			const std::shared_ptr<WorldRoot> &Before, const std::shared_ptr<WorldRoot> &After, const CFrame *DestinationPose = nullptr);
 		void AdmitSpatialMember(const std::shared_ptr<Instance> &Member);
-		void RemoveSpatialMember(const std::shared_ptr<Instance> &Member);
+		void RemoveSpatialMember(const std::shared_ptr<Instance> &Member, bool PreserveMotion = false);
 		void TrackPart(const std::shared_ptr<BasePart> &Part);
 		bool MarkPartDirty(ObjectId Object);
 		void TrackDeformable(const std::shared_ptr<DeformableBody> &Body);
@@ -232,7 +245,7 @@ namespace gargantuan {
 		void TrackSoftBodyMaterial(const std::shared_ptr<SoftBodyMaterial> &Material);
 		void TrackConstraint(const std::shared_ptr<Constraint> &Constraint);
 		void RefreshJointAttachmentConnections(const std::shared_ptr<Constraint> &Constraint);
-		void RemovePart(const std::shared_ptr<BasePart> &Part);
+		void RemovePart(const std::shared_ptr<BasePart> &Part, bool PreserveMotion = false);
 		void RemoveDeformable(const std::shared_ptr<DeformableBody> &Body);
 		void RemoveSoftBodyAttachment(const std::shared_ptr<SoftBodyAttachment> &Attachment);
 		void RemoveSoftBodyMaterial(const std::shared_ptr<SoftBodyMaterial> &Material);
@@ -253,6 +266,11 @@ namespace gargantuan {
 		void InitializeTerrainRuntime(RuntimeMode Mode, bool AdmitNetworkTerrain = false,
 			bool ExperimentalVisualDensity = false, std::shared_ptr<const terrain::TerrainMaterialPalette> Palette = {});
 		void PollTerrainWork();
+		void RetireDomainTerrainRuntime();
+		[[nodiscard]] bool IsSpatiallyAvailable() const;
+		std::uint64_t SpatialActivation{1};
+		std::uint64_t TerrainTicketBase{};
+		std::uint64_t LastTerrainTicket{};
 		[[nodiscard]] std::expected<std::uint64_t, terrain::EditStatus>
 		SubmitTerrainEdit(const Terrain &Owner, const terrain::TerrainMutation &Edit);
 		[[nodiscard]] bool CancelTerrainEdit(const Terrain &Owner, std::uint64_t Ticket) noexcept;

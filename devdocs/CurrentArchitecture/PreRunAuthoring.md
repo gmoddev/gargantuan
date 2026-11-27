@@ -1,7 +1,7 @@
 ---
 status: implementation-under-qualification
 owner: editor-host-runtime-schema
-last_verified: 2026-10-29
+last_verified: 2026-11-27
 ---
 
 # Canonical PreRun source authoring
@@ -11,6 +11,16 @@ a Script Instance. The existing DefineSchema-only sandbox, source/VM/time/schema
 bounds and transactional registry validator remain authoritative. This extension
 adds no filesystem capability to Studio or gameplay, and no runtime schema swap.
 
+## Explorer service and ordered scripts
+
+In a local project, expand **PreRun** in Explorer. **Default** always runs first. Select **+** to add a child, enter its name in the editor and choose **Rename**. Select a child to edit its source. Use the arrows beside a custom child to move it. **Save source** commits the whole list, including drafts in other PreRun editors. **Validate** checks the current drafts together. Reopen the project to activate a saved change.
+
+Studio negotiates the optional `PreRunCollectionV1` capability. Collection-aware clients add `CollectionVersion: 1` to the three existing PreRun operations. An older Engine supports editing Default alone. An older client talking to an updated Engine receives `UnsupportedPreRunCollection` when it accesses an ordered collection. Team Create keeps its existing local-project restriction.
+
+A single Default normally retains its original plain Luau bytes. The ordered representation occupies the same atomic project resource. It begins with `!Gantria.PreRun/1\n`. Each record consists of an alphanumeric ID, a display name and a decimal UTF-8 byte length separated by tabs, a newline, then exactly that many source bytes. The first record must be `default` / `Default`. At most 64 scripts fit in the existing 256 KiB total. Names allow ASCII letters, digits, spaces, underscores and hyphens and are unique ignoring ASCII case. ID, order, names and contents participate in the existing project-scoped source revision. Save As, GAS place and supported open-runtime packages transport the resource intact.
+
+The Engine compiles each entry as a named chunk in its own disposable Luau VM. All entries contribute to one schema candidate and share one execution deadline and registration limits. At most one VM is live. A failing chunk aborts the candidate and identifies its script in the diagnostic. Engine execution and ordering live in `PreRunRegistration.cpp` and `PreRunCollection.hpp`. Studio's `PreRunTree` owns Explorer presentation, `PreRunCollection` edits ordered drafts, and `PreRunDocument` owns the per-child native text controls and existing revision-checked save/recovery transaction.
+
 ## Source boundary
 
 EditorHost advertises optional `PreRunSource` and `ValidatePreRun` capabilities.
@@ -18,7 +28,7 @@ All three operations require the process session token and explicit
 EditorCommands. Reads and validation require ReadDataModel; saving requires
 MutateDataModel. Only an established project is eligible.
 
-`GetPreRunSource` takes no parameters and returns:
+A legacy `GetPreRunSource` read takes no parameters and returns:
 
 - `ProjectRoot`: generation-safe open-project ObjectId.
 - `Path`: the constant `.gargantuan/prerun.luau`.
@@ -31,7 +41,7 @@ embedded nulls. Chunking preserves existing JSON string/request bounds, includin
 the full existing PreRun source limit. Empty source has one empty chunk; `Exists`
 distinguishes it from a missing resource. No file path is supplied by a caller.
 
-`SetPreRunSource` and `ValidatePreRun` take exactly `ProjectRoot`,
+`SetPreRunSource` and `ValidatePreRun` take `ProjectRoot`,
 `ExpectedSourceRevision` and `SourceBase64`. Root identity rejects a buffer from a
 replaced/reopened project. SourceRevision binds the exact saved bytes/existence
 and canonical project location, so external edits, stale buffers and Save As

@@ -29,15 +29,15 @@ return c({
 		},
 		GetPartsInSphere = {
 			description = "Returns collidable overlapping parts in stable identity order with explicit truncation; MaxResults is 1 through 256.", asLuau = true,
-			luauSignature = "(self: WorldRoot, Origin: Vector3, Radius: number, Params: RaycastParams?, MaxResults: number?) -> { Parts: {BasePart}, Truncated: boolean, Terrain: Terrain?, BlockGrids: {BlockGrid}? }",
+			luauSignature = "(self: WorldRoot, Origin: Vector3, Radius: number, Params: RaycastParams?, MaxResults: number?) -> { Parts: {BasePart}, Truncated: boolean, Terrain: Terrain?, BlockGrids: {BlockGrid}?, GridCells: {{ Grid: BlockGrid, Cell: Vector3, Revision: string }}? }",
 		},
 		GetPartsInCapsule = {
 			description = "Returns overlaps for a local-Y capsule; Height includes both caps.", asLuau = true,
-			luauSignature = "(self: WorldRoot, Transform: CFrame, Radius: number, Height: number, Params: RaycastParams?, MaxResults: number?) -> { Parts: {BasePart}, Truncated: boolean, Terrain: Terrain?, BlockGrids: {BlockGrid}? }",
+			luauSignature = "(self: WorldRoot, Transform: CFrame, Radius: number, Height: number, Params: RaycastParams?, MaxResults: number?) -> { Parts: {BasePart}, Truncated: boolean, Terrain: Terrain?, BlockGrids: {BlockGrid}?, GridCells: {{ Grid: BlockGrid, Cell: Vector3, Revision: string }}? }",
 		},
 		GetPartsInBox = {
 			description = "Returns overlaps for an oriented box, with bounded immutable results.", asLuau = true,
-			luauSignature = "(self: WorldRoot, Transform: CFrame, Size: Vector3, Params: RaycastParams?, MaxResults: number?) -> { Parts: {BasePart}, Truncated: boolean, Terrain: Terrain?, BlockGrids: {BlockGrid}? }",
+			luauSignature = "(self: WorldRoot, Transform: CFrame, Size: Vector3, Params: RaycastParams?, MaxResults: number?) -> { Parts: {BasePart}, Truncated: boolean, Terrain: Terrain?, BlockGrids: {BlockGrid}?, GridCells: {{ Grid: BlockGrid, Cell: Vector3, Revision: string }}? }",
 		},
 		GetDeformableInfo = {
 			description = "Returns bounded read-only counts and current simulation status for a descendant deformable body, or nil when unavailable.",

@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <map>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -156,6 +157,9 @@ namespace gargantuan {
 			RenderMeshCreate Resource;
 			RenderItem Item;
 			std::uint64_t Revision;
+			std::shared_ptr<const std::map<std::array<std::int32_t, 3>, std::uint32_t>> IsolatedCubeSlots;
+			std::size_t VacantSlots{};
+			bool Patched{};
 		};
 		using GridMeshes = std::unordered_map<ObjectId, PublishedGrid>;
 		GridMeshes PublishedGrids;

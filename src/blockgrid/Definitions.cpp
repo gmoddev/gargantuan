@@ -77,7 +77,7 @@ namespace gargantuan::blockgrid {
 		else if (GetDefinitionCount()>=MaximumDefinitions)
 			throw std::length_error("[BlockGrid:Limit] Custom definition capacity exhausted");
 		const auto Bytes=EncodedBytes+(Id?0:Spec.Key.size()+16+(Definitions?0:2));
-		if (Bytes>MaximumEncodedBytes || Revision==std::numeric_limits<std::uint64_t>::max())
+		if (Bytes+(State?State->MaxEncodedBytes():0)>MaximumEncodedBytes || Revision==std::numeric_limits<std::uint64_t>::max())
 			throw std::length_error("[BlockGrid:Limit] Grid capacity exhausted");
 		auto Updated=Definitions?std::make_shared<Catalog>(*Definitions):std::make_shared<Catalog>();
 		Directory Affected;
@@ -99,6 +99,8 @@ namespace gargantuan::blockgrid {
 		Definitions=std::move(Updated);
 		EncodedBytes=Bytes;
 		++Revision;
+		++GeometryRevision;
+		++PublicRevision;
 		return true;
 	}
 	void Field::UndoDefinitionInsertion(const Definition& Expected,const Admission& BeforeCommit) {
@@ -119,5 +121,7 @@ namespace gargantuan::blockgrid {
 		EncodedBytes-=Expected.Key.size()+16+(Next?0:2);
 		Definitions=std::move(Next);
 		++Revision;
+		++GeometryRevision;
+		++PublicRevision;
 	}
 }

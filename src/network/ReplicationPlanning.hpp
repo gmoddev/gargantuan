@@ -407,11 +407,12 @@ ReplicationScheduleResult ReplicationCoordinator::RegisterPeerPlanned(Connection
 	if (Peers.size() + DetachedPlanning.size() >= 1'024) return {"Structural planning peer limit exceeded"};
 	if (Peers.contains(Connection) || DetachedPlanning.contains(Connection)) return {"Replication peer identity is already registered or retiring"};
 	for (const auto &[Existing, State] : Peers) {
-		(void)State;
-		if (Existing.Slot == Connection.Slot) return {"A live replication peer already owns this connection slot"};
+		if (Existing.Slot == Connection.Slot || (Configuration.ScopeSpatialDomains && State.LocalPlayer == Selection->LocalPlayer))
+			return {"A live replication peer already owns this connection slot or spatial audience"};
 	}
 	std::string Error;
 	if (!RefreshCatalog(Error)) return {std::move(Error)};
+	if (!InstallSpatialGrant(Selection->LocalPlayer, Selection->AuthorizedSpatialRegion, Error)) return {std::move(Error)};
 	PeerState Peer{{Connection, Epoch}, CatalogCursor, ReliableReplicationSequence(1)};
 	Peer.LocalPlayer = Selection->LocalPlayer;
 	Peer.PolicyManaged = true;
@@ -429,6 +430,7 @@ ReplicationScheduleResult ReplicationCoordinator::RequestPlanning(ConnectionId C
 	if (Found == Peers.end() || !Found->second.Planned || !Selection) return {"Invalid structural planning peer"};
 	auto &Peer = Found->second;
 	if (Selection->LocalPlayer != Peer.LocalPlayer) return {"The local player of a replication peer is immutable"};
+	if (Selection->AuthorizedSpatialRegion != GetSpatialGrant(Peer.LocalPlayer)) return {"The spatial audience is immutable within a replication epoch"};
 	if (!Peer.PlanningError.empty()) return {Peer.PlanningError};
 	if (Peer.PreparedCommit) return {"A structural frame is awaiting scheduler acceptance"};
 	if (Selection->DesiredObjects.size() > MaximumPeerDesiredObjects || Selection->RequiredObjects.size() > MaximumPeerDesiredObjects)

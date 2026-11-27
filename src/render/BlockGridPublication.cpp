@@ -12,6 +12,14 @@ namespace gargantuan {
 		constexpr std::size_t FaceBytes = 4 * sizeof(RenderVertex) + 6 * sizeof(std::uint32_t);
 		constexpr std::size_t MeshRecordBytes = sizeof(RenderMeshCreate) + sizeof(RenderObjectCreate) +
 			sizeof(RenderMeshRemove) + sizeof(RenderObjectUpdate);
+		using CubeSlots = std::map<std::array<std::int32_t, 3>, std::uint32_t>;
+		constexpr std::size_t CubeVertices = 24;
+
+		std::array<std::uint8_t, 4> VertexTint(const blockgrid::Definition &Definition) {
+			std::array<std::uint8_t, 4> Tint{0, 0, 0, 255};
+			for (unsigned C = 0; C < 3; ++C) Tint[C] = static_cast<std::uint8_t>(std::lround(Definition.Color[C] * 255.0f));
+			return Tint;
+		}
 
 		glm::vec3 Vector(const blockgrid::Point &Point) {
 			return {Point[0], Point[1], Point[2]};
@@ -32,7 +40,11 @@ namespace gargantuan {
 			return Mesh.Vertices->size() * sizeof(RenderVertex) + Mesh.Indices->size() * sizeof(std::uint32_t);
 		}
 
-		std::optional<RenderMeshCreate> MakeGridMesh(const blockgrid::Field &Field, std::size_t Budget) {
+		std::optional<RenderMeshCreate> MakeGridMesh(const blockgrid::Field &Field, std::size_t Budget,
+			std::shared_ptr<CubeSlots> &Slots) {
+			// Keep retained vertex ranges only for sparse fields. Rebuilds of compact solids use the surface path.
+			if (Field.GetOccupiedCount() >= 64 && Field.GetOccupiedCount() <= Field.GetLeafCount() * blockgrid::LeafVolume / 8)
+				Slots = std::make_shared<CubeSlots>();
 			auto Vertices = std::make_shared<std::vector<RenderVertex>>();
 			auto Indices = std::make_shared<std::vector<std::uint32_t>>();
 			RenderBounds Bounds{glm::vec3(std::numeric_limits<float>::max()), glm::vec3(std::numeric_limits<float>::lowest())};
@@ -41,9 +53,7 @@ namespace gargantuan {
 				if (!WithinBudget) return;
 				const glm::ivec3 Position(Cell.X, Cell.Y, Cell.Z);
 				const auto &Definition = Field.GetDefinition(Value.Definition);
-				std::array<std::uint8_t, 4> Tint{0, 0, 0, 255};
-				for (unsigned C = 0; C < 3; ++C)
-					Tint[C] = static_cast<std::uint8_t>(std::lround(Definition.Color[C] * 255.0f));
+				const auto Tint = VertexTint(Definition);
 				if (Definition.Geometry != blockgrid::Shape::Cube) {
 					for (const auto &Face : blockgrid::GetGeometry(Definition.Geometry, Value.Orientation).Faces) {
 						if (Face.Boundary >= 0 && Covered(Field, Cell, static_cast<unsigned>(Face.Boundary))) continue;
@@ -72,6 +82,7 @@ namespace gargantuan {
 					}
 					return;
 				}
+				const auto Start = static_cast<std::uint32_t>(Vertices->size());
 				for (unsigned Axis = 0; Axis < 3; ++Axis) {
 					glm::ivec3 Normal(0), U(0), V(0);
 					U[(Axis + 1) % 3] = 1;
@@ -98,11 +109,26 @@ namespace gargantuan {
 						else Indices->insert(Indices->end(), {First, First+2, First+1, First, First+3, First+2});
 					}
 				}
+				if (Slots && Vertices->size() - Start == CubeVertices)
+					Slots->emplace(std::array{Cell.X, Cell.Y, Cell.Z}, Start);
 			});
+			if (Slots && Slots->size() < Field.GetOccupiedCount() / 2) Slots.reset();
 			if (!WithinBudget || Indices->empty()) return std::nullopt;
 			static std::atomic<std::uint64_t> NextMesh{1};
 			const RenderMeshIdentity Identity{NextMesh.fetch_add(1, std::memory_order_relaxed), 1, RenderMeshDomain::BlockGrid};
 			return RenderMeshCreate{Identity, 1, 1, std::move(Vertices), std::move(Indices), Bounds};
+		}
+
+		bool HasFaceNeighbor(const blockgrid::Field &Field, blockgrid::Cell Cell) {
+			for (unsigned Axis = 0; Axis < 3; ++Axis) {
+				for (int Sign : {-1, 1}) {
+					glm::ivec3 Position(Cell.X, Cell.Y, Cell.Z);
+					Position[Axis] += Sign;
+					const blockgrid::Cell Adjacent{Position.x, Position.y, Position.z};
+					if (blockgrid::ValidCell(Adjacent) && Field.Get(Adjacent).Definition != blockgrid::Air) return true;
+				}
+			}
+			return false;
 		}
 	}
 
@@ -120,10 +146,46 @@ namespace gargantuan {
 			Item.ModelMatrix = glm::mat4(Pose.Rotation * static_cast<float>(Grid.GetCellSize()));
 			Item.ModelMatrix[3] = glm::vec4(Pose.Position, 1);
 			Item.InverseModelMatrix = glm::inverse(Item.ModelMatrix);
-			const bool Build = Old == PublishedGrids.end() || Old->second.Revision != Field.GetRevision();
+			const auto GeometryRevision = Field.GetGeometryRevision();
+			const bool Changed = Old == PublishedGrids.end() || Old->second.Revision != GeometryRevision;
+			const auto &Edit = Grid.GetLastCellEdit();
+			constexpr auto PatchBytes = CubeVertices * sizeof(RenderVertex) + sizeof(RenderMeshVertexUpdate) + sizeof(RenderObjectUpdate);
+			if (Changed && !Result.FullResync && Old != PublishedGrids.end() && Old->second.IsolatedCubeSlots && Edit &&
+				GeometryRevision - Old->second.Revision == 1 && Budget >= PatchBytes &&
+				(Edit->After.Definition == blockgrid::Air || Field.GetDefinition(Edit->After.Definition).Geometry == blockgrid::Shape::Cube) &&
+				!HasFaceNeighbor(Field, Edit->Position)) {
+				auto GridState = Old->second;
+				const auto Slot = GridState.IsolatedCubeSlots->find({Edit->Position.X, Edit->Position.Y, Edit->Position.Z});
+				// Compact once more than one eighth of the retained cube ranges would be empty.
+				const bool Removing = Edit->After.Definition == blockgrid::Air;
+				if (Slot != GridState.IsolatedCubeSlots->end() &&
+					(!Removing || GridState.VacantSlots + 1 <= GridState.IsolatedCubeSlots->size() / 8)) {
+					const auto Start = GridState.Resource.Vertices->begin() + Slot->second;
+					auto Vertices = std::make_shared<std::vector<RenderVertex>>(Start, Start + CubeVertices);
+					if (Removing) {
+						for (auto &Vertex : *Vertices) Vertex.Position = Start->Position;
+						++GridState.VacantSlots;
+					} else {
+						const auto Tint = VertexTint(Field.GetDefinition(Edit->After.Definition));
+						for (auto &Vertex : *Vertices) Vertex.Tint = Tint;
+						if (Edit->Before.Definition == blockgrid::Air) --GridState.VacantSlots;
+					}
+					Result.MeshVertexUpdates.push_back({GridState.Resource.Mesh, ++GridState.Resource.VertexRevision,
+						Slot->second, std::move(Vertices), GridState.Resource.Bounds});
+					Result.Updates.push_back({Id, RenderUpdateDomain::Geometry | RenderUpdateDomain::Transform, Item, GridState.Resource.Mesh, {}});
+					GridState.Item = Item;
+					GridState.Patched = true;
+					GridState.Revision = GeometryRevision;
+					Next.emplace(Id, std::move(GridState));
+					Budget -= PatchBytes;
+					return;
+				}
+			}
+			const bool Build = Changed || (Result.FullResync && Old != PublishedGrids.end() && Old->second.Patched);
 			const bool Upload = Build || Result.FullResync;
 			std::optional<RenderMeshCreate> Mesh;
-			if (Build && Budget >= MeshRecordBytes) Mesh = MakeGridMesh(Field, Budget - MeshRecordBytes);
+			std::shared_ptr<CubeSlots> Slots;
+			if (Build && Budget >= MeshRecordBytes) Mesh = MakeGridMesh(Field, Budget - MeshRecordBytes, Slots);
 			else if (!Build) Mesh = Old->second.Resource;
 			if (!Mesh || (Upload && (Budget < MeshRecordBytes || UploadBytes(*Mesh) > Budget - MeshRecordBytes))) {
 				Result.Diagnostics.push_back({RenderExtractionIssue::PublicationOverflow, Id,
@@ -144,7 +206,12 @@ namespace gargantuan {
 				}
 				Result.Updates.push_back({Id, Domains, Item, Mesh->Mesh, {}});
 			}
-			Next.emplace(Id, PublishedGrid{std::move(*Mesh), Item, Field.GetRevision()});
+			if (Build) Next.emplace(Id, PublishedGrid{std::move(*Mesh), Item, GeometryRevision, std::move(Slots)});
+			else {
+				auto State = Old->second;
+				State.Item = Item;
+				Next.emplace(Id, std::move(State));
+			}
 		});
 		if (!Result.FullResync) {
 			for (const auto &[Id, Prior] : PublishedGrids) {

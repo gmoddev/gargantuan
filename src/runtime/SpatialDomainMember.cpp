@@ -59,6 +59,11 @@ namespace gargantuan {
 	}
 
 	void SpatialDomainMember::SetAssignedRegion(Instance &Owner, std::optional<std::shared_ptr<SpatialRegion>> Value) {
+		ChangeAssignedRegion(Owner, std::move(Value), nullptr);
+	}
+
+	void SpatialDomainMember::ChangeAssignedRegion(Instance &Owner, std::optional<std::shared_ptr<SpatialRegion>> Value,
+		const CFrame *DestinationPose) {
 		Owner.AssertCanMutate();
 		Owner.ValidatePropertyMutation("SpatialRegion", Value);
 		auto Region = Value.value_or(nullptr);
@@ -110,23 +115,27 @@ namespace gargantuan {
 		Binding = std::move(Next);
 		try {
 			const auto After = WorldRoot::GetEffectiveWorld(Owner);
-			WorldRoot::MoveSpatialMembers(Root, Before, After);
-			if (Before && Previous) Before->ExplicitSpatialRoots.erase(Root->GetObjectId());
-			if (Binding) {
-				Binding->Active = After;
-				if (After) After->ExplicitSpatialRoots.insert_or_assign(Root->GetObjectId(), Root);
+			const bool Inserted = Binding && After && After->ExplicitSpatialRoots.try_emplace(Root->GetObjectId(), Root).second;
+			try { WorldRoot::MoveSpatialMembers(Root, Before, After, DestinationPose); }
+			catch (...) {
+				if (Inserted) After->ExplicitSpatialRoots.erase(Root->GetObjectId());
+				throw;
 			}
+			if (Before && Previous && (!Binding || Before != After)) Before->ExplicitSpatialRoots.erase(Root->GetObjectId());
+			if (Binding) Binding->Active = After;
 		} catch (...) {
 			Binding = std::move(Previous);
 			throw;
 		}
 		Owner.NotifyPropertyCommitted("SpatialRegion");
+		if (DestinationPose) Owner.NotifyPropertyCommitted("CFrame");
 	}
 
 	void WorldRoot::MoveSpatialMembers(
 		const std::shared_ptr<Instance> &Root,
 		const std::shared_ptr<WorldRoot> &Before,
-		const std::shared_ptr<WorldRoot> &After
+		const std::shared_ptr<WorldRoot> &After,
+		const CFrame *DestinationPose
 	) {
 		if (Before == After) return;
 		if ((Before && Before->SteppingPhysics) || (After && After->SteppingPhysics))
@@ -153,6 +162,20 @@ namespace gargantuan {
 				Collect(Child);
 			}
 		}
+		if (Before && After && !Before->TrackedConstraints.empty()) {
+			std::unordered_set<ObjectId> Moving;
+			for (const auto &Entry : Items) Moving.insert(Entry.Owner->GetObjectId());
+			for (const auto &[Id, Weak] : Before->TrackedConstraints) {
+				const auto Joint = Weak.lock();
+				if (!Joint || !Joint->GetEnabled()) continue;
+				const auto [A, B] = Joint->GetActiveParts();
+				if (!A || !B || !Before->PartBodies.contains(A->GetObjectId()) || !Before->PartBodies.contains(B->GetObjectId()))
+					continue;
+				const bool MoveA = Moving.contains(A->GetObjectId()), MoveB = Moving.contains(B->GetObjectId());
+				if ((MoveA || MoveB || Moving.contains(Id)) && !(MoveA && MoveB && Moving.contains(Id)))
+					throw std::invalid_argument("[Spatial:Transfer] Transfer the entire constrained assembly together");
+			}
+		}
 		const auto Install = [&](const std::shared_ptr<WorldRoot> &W) {
 			if (!W || W->ShuttingDownPhysics) return;
 			for (const auto &Entry : Items) {
@@ -174,15 +197,25 @@ namespace gargantuan {
 		const auto Retire = [&](const std::shared_ptr<WorldRoot> &W) {
 			if (W && !W->ShuttingDownPhysics)
 				for (auto It = Items.rbegin(); It != Items.rend(); ++It)
-					W->RemoveSpatialMember(It->Owner);
+					W->RemoveSpatialMember(It->Owner, bool(Before && After));
 		};
-		Retire(Before);
-		try {
-			Install(After);
-		} catch (...) {
-			Retire(After);
-			Install(Before);
-			throw;
+		if (DestinationPose) {
+			const auto Member = std::dynamic_pointer_cast<BasePart>(Root);
+			const auto SourcePose = Member->GetCFrame();
+			const auto Published = Member->PublishedPhysicsState;
+			Member->CFrame = *DestinationPose;
+			try { Install(After); }
+			catch (...) {
+				Retire(After);
+				Member->CFrame = SourcePose;
+				Member->PublishedPhysicsState = Published;
+				throw;
+			}
+			Retire(Before);
+		} else {
+			Retire(Before);
+			try { Install(After); }
+			catch (...) { Retire(After); Install(Before); throw; }
 		}
 		const auto Scope = Root->GetReplicationScopeId();
 		if (Scope.IsValid())

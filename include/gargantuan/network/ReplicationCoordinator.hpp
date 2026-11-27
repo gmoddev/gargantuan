@@ -49,6 +49,8 @@ namespace gargantuan::network {
 		std::size_t MaximumJournalRecordsPerTick = 32'768;
 		std::size_t PlanningWorkPerTick = 65'536;
 		std::size_t PlanningPeerQuantum = 2'048;
+		// Enable separate spatial audiences on a domain-capable session.
+		bool ScopeSpatialDomains = false;
 
 		[[nodiscard]] bool IsValid() const;
 	};
@@ -354,6 +356,9 @@ namespace gargantuan::network {
 		};
 		std::shared_ptr<Instance> SourceRoot;
 		ObjectId SourceRootId;
+		std::map<ObjectId, ObjectId> SpatialGrants;
+		bool InstallSpatialGrant(ObjectId Player, ObjectId Region, std::string &Error);
+		[[nodiscard]] ObjectId GetSpatialGrant(ObjectId Player) const;
 		bool FrozenQuote = false;
 		std::shared_ptr<const RuntimeSchemaRegistry> FrozenSchema;
 		std::uint64_t FrozenJournalOldest = 0;

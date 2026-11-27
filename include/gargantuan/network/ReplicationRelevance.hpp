@@ -46,6 +46,7 @@ namespace gargantuan::network {
 		std::size_t MaximumDesiredObjectsPerPeer = MaximumPeerDesiredObjects;
 		std::size_t MaximumQueryRegions = MaximumReplicationQueryRegions;
 		std::size_t MaximumQueryMembershipVisits = MaximumReplicationQueryMembershipVisits;
+		bool ScopeSpatialDomains = false;
 
 		[[nodiscard]] bool IsValid() const;
 		[[nodiscard]] SpatialRegionIndexConfiguration SpatialConfiguration() const;
@@ -55,6 +56,8 @@ namespace gargantuan::network {
 		std::vector<ObjectId> RequiredObjects;
 		std::vector<ObjectId> DesiredObjects;
 		ObjectId LocalPlayer;
+		// Trusted server grant bound to one connection epoch. Zero selects Workspace.
+		ObjectId AuthorizedSpatialRegion;
 		bool operator==(const PeerRelevanceSelection &) const = default;
 	};
 
@@ -112,7 +115,7 @@ namespace gargantuan::network {
 		ReplicationRelevance(const ReplicationRelevance &) = delete;
 		ReplicationRelevance &operator=(const ReplicationRelevance &) = delete;
 
-		bool AddPeer(ConnectionId Connection, ObjectId LocalPlayer, ObjectId OwnerCharacter = {});
+		bool AddPeer(ConnectionId Connection, ObjectId LocalPlayer, ObjectId OwnerCharacter = {}, ObjectId AuthorizedSpatialRegion = {});
 		bool RemovePeer(ConnectionId Connection);
 		bool SetOwnerCharacter(ConnectionId Connection, ObjectId Character);
 		bool SetTrustedFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints);

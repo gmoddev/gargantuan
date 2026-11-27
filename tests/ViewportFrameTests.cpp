@@ -7,6 +7,9 @@
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/ScreenGui.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
+#include "gargantuan/classes/BlockGrid.hpp"
+#include "gargantuan/editor/EditorViewport.hpp"
+#include <thread>
 #include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/gui/GuiRuntime.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -205,6 +208,72 @@ namespace {
 		World->Destroy();
 	}
 
+	void TestDomainOffscreen() {
+		constexpr unsigned Width = 256, Height = 128, Half = 128;
+		SDL_SetHintWithPriority(SDL_HINT_GPU_DRIVER, "vulkan", SDL_HINT_OVERRIDE);
+		Check(SDL_Init(SDL_INIT_VIDEO), SDL_GetError());
+		auto Game = std::make_shared<DataModel>();
+		auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto A = std::make_shared<SpatialRegion>(), B = std::make_shared<SpatialRegion>();
+		A->SetParent(WorkspaceValue); B->SetParent(WorkspaceValue);
+		auto Screen = std::make_shared<ScreenGui>(); Screen->SetParent(Game);
+		const auto View = [&](int Left, const std::shared_ptr<SpatialRegion> &World) {
+			auto Object = std::make_shared<ViewportFrame>();
+			Object->SetPosition(UDim2::fromOffset(Left, 0)); Object->SetSize(UDim2::fromOffset(Half, Height));
+			Object->SetParent(Screen); Object->SetMaxUpdateRate(60.f);
+			auto Lens = std::make_shared<Camera>();
+			Lens->SetCFrame(CFrame(0,0,6)); Lens->SetFieldOfView(45.f); Lens->SetParent(Object);
+			Object->SetCurrentCamera(Lens); Object->SetSpatialRegion(World);
+			return Object;
+		};
+		const auto Left = View(0,A), Right = View(Half,B);
+		GuiRuntime Gui(Game, DefaultGuiFontPath); Gui.SetViewport({Width,Height,1.f});
+		EditorViewportRenderer Renderer(Width,Height);
+		RenderPublisher Main;
+		const auto Capture = [&] {
+			std::this_thread::sleep_for(std::chrono::milliseconds(22));
+			(void)Gui.Reconcile(); Gui.Publish(Main);
+			const auto Frame = Renderer.Capture(Main.Publish(*WorkspaceValue, RenderCameraInput{}, Width, Height));
+			Check(Frame.RgbPixels.size() == Width*Height*3, "incomplete domain view GPU readback");
+			return Frame.RgbPixels;
+		};
+		const auto Blank = Capture();
+		const auto Grid = [&](const std::shared_ptr<SpatialRegion> &World, blockgrid::Point Color) {
+			blockgrid::Field Cells;
+			Check(Cells.Define({.Key="Fixture",.Color=Color}), "domain GPU fixture definition");
+			const std::array<blockgrid::Write,1> Writes{{{{{-1,-1,-1},{1,1,1}}, {Cells.GetDefinitionId("Fixture"),0}}}};
+			Check(Cells.Apply(Writes), "domain GPU fixture fill");
+			auto Value = std::make_shared<BlockGrid>(); Value->RestoreField(std::move(Cells)); Value->SetParent(World);
+			return Value;
+		};
+		const auto Red = Grid(A,{1,.04f,.04f}), Blue = Grid(B,{.04f,.04f,1});
+		const auto Initial = Capture();
+		const auto Counts = [&](const auto &Pixels, unsigned Offset) {
+			std::array<unsigned,3> Result{};
+			for (unsigned Y=0; Y<Height; ++Y) for (unsigned X=Offset; X<Offset+Half; ++X) {
+				const auto I=(Y*Width+X)*3;
+				if (Pixels[I]==Blank[I] && Pixels[I+1]==Blank[I+1] && Pixels[I+2]==Blank[I+2]) continue;
+				++Result[0];
+				if (int(Pixels[I])>int(Pixels[I+2])+15) ++Result[1];
+				if (int(Pixels[I+2])>int(Pixels[I])+15) ++Result[2];
+			}
+			return Result;
+		};
+		const auto First=Counts(Initial,0), Second=Counts(Initial,Half);
+		Check(First[1]>64 && Second[2]>64 && First[2]==0 && Second[1]==0,
+			"coincident grids did not render exclusively in their own GUI view");
+		Left->SetSpatialRegion(B);
+		const auto Shared=Capture();
+		Check(Counts(Shared,0)[2]>64 && Counts(Shared,Half)[2]>64,
+			"two live views failed to share the same generated domain geometry");
+		B->Destroy();
+		const auto Removed=Capture();
+		Check(Counts(Removed,0)[0]==0 && Counts(Removed,Half)[0]==0,
+			"secondary GPU targets retained domain pixels after domain retirement");
+		std::cout << "[Spatial:ViewportGpu] red=" << First[1] << " blue=" << Second[2] << " retired=0\n";
+		Game->Destroy();
+	}
+
 	void TestOwnedHierarchyDepth() {
 		const auto World = std::make_shared<DataModel>();
 		const auto WorkspaceValue = World->GetService("Workspace");
@@ -300,9 +369,12 @@ namespace {
 	}
 }
 
-int main() {
+int main(int Count, char **Arguments) {
 	try {
 		BootstrapNativeRuntimeSchema();
+		if (Count == 2 && std::string_view(Arguments[1]) == "--domain-offscreen") {
+			TestDomainOffscreen(); SDL_Quit(); return 0;
+		}
 		TestViewportFrame();
 		TestOwnedHierarchyDepth();
 		RunHiddenViewportWorkload(0);

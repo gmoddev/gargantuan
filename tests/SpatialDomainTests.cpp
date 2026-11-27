@@ -4,9 +4,11 @@
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/classes/Camera.hpp"
+#include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/render/SpatialViewportCapture.hpp"
 #include "../src/terrain/ScenePersistence.hpp"
+#include "../src/terrain/TerrainMutation.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
@@ -18,6 +20,11 @@
 namespace gargantuan {
 	struct WorldRootTestAccess {
 		static void StartTerrain(WorldRoot &Owner) { Owner.InitializeTerrainRuntime(RuntimeMode::Offline); }
+		static std::uint64_t Submit(WorldRoot &World) {
+			return World.SubmitTerrainEdit(*World.GetOwnedTerrain(), {terrain::SphereBrush{
+				{8, 9, 8}, 2., terrain::BrushMode::Add, 4}}).value();
+		}
+		static bool HasTicket(WorldRoot &World, std::uint64_t Ticket) { return World.GetTerrainTicket(Ticket).has_value(); }
 	};
 }
 
@@ -117,7 +124,99 @@ namespace {
 				[&](const auto &Draw) { return Draw.Item.Object == Scope->GetTerrain()->GetObjectId(); }),
 				"a secondary domain camera needs its own terrain resources even when the main world is empty");
 		}
+		const auto OldTicket = WorldRootTestAccess::Submit(*High);
+		High->SetParent(nullptr);
+		Check(!High->IsTerrainCollisionReady() && !Cast(*High).Succeeded(), "detached domain rejects physical queries and retires terrain");
+		High->SetParent(Default); WorldRootTestAccess::StartTerrain(*High);
+		const auto NewTicket = WorldRootTestAccess::Submit(*High);
+		Check(NewTicket > OldTicket && !WorldRootTestAccess::HasTicket(*High, OldTicket) &&
+			WorldRootTestAccess::HasTicket(*High, NewTicket), "reattachment cannot reuse an expired terrain edit ticket");
 		Game->Destroy(); Reopened->Destroy();
+	}
+
+	void DestinationReadiness() {
+		const auto Game = std::make_shared<DataModel>();
+		const auto Default = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		const auto A = std::make_shared<SpatialRegion>(), B = std::make_shared<SpatialRegion>();
+		A->SetParent(Default); B->SetParent(Default);
+		const SpatialDestinationBounds Bounds{{-3,-3,-3}, {3,3,3}};
+		const auto Empty = A->PrepareSpatialDestination(Bounds).value();
+		Check(Empty.Providers.size() == 1 && Empty.Providers.front().AuthoritativeEmpty &&
+			A->ValidateSpatialDestination(Empty) && !B->ValidateSpatialDestination(Empty),
+			"a held empty destination belongs only to its attached world");
+		const auto Near = MakePart(A, {1,1,1}, {0,0,0});
+		const auto Far = MakePart(A, {1,1,1}, {80,50,60});
+		const auto Foreign = MakePart(B, {1,1,1}, {0,0,0});
+		const std::array Missing{Foreign->GetObjectId()};
+		Check(!A->ValidateSpatialDestination(Empty) && !A->PrepareSpatialDestination(Bounds, Missing),
+			"a newly participating body or a missing required provider prevents handoff");
+		const auto Held = A->PrepareSpatialDestination(Bounds).value();
+		Far->SetCFrame(CFrame(100,50,60));
+		Check(A->ValidateSpatialDestination(Held), "an unrelated ordinary body outside the footprint invalidated the transfer");
+		Near->SetCFrame(CFrame(0,1,0));
+		Check(!A->ValidateSpatialDestination(Held), "pose change inside the footprint must invalidate the transfer");
+		const auto Grid = std::make_shared<BlockGrid>();
+		blockgrid::Field Cells;
+		const std::array<blockgrid::Write,1> Writes{{{blockgrid::SingleCell({0,0,0}), {blockgrid::Stone,0}}}};
+		Check(Cells.Apply(Writes), "grid fixture did not change");
+		Grid->RestoreField(std::move(Cells)); Grid->SetParent(A);
+		const std::array Required{Grid->GetObjectId(), A->GetTerrain()->GetObjectId()};
+		const auto WithGrid = A->PrepareSpatialDestination(Bounds, Required).value();
+		const auto Provider = std::ranges::find(WithGrid.Providers, Grid->GetObjectId(), &SpatialProviderReceipt::Owner);
+		Check(Provider != WithGrid.Providers.end() && Provider->Provider == SpatialCollisionProvider::BlockGrid &&
+			!Provider->Installed.empty() && !Provider->AuthoritativeEmpty, "grid receipt must bind installed native bodies");
+		Grid->SetCFrame(CFrame(0,2,0));
+		Check(!A->ValidateSpatialDestination(WithGrid), "moving grid owner must invalidate a held destination");
+		const auto PartsGrid = std::make_shared<BlockGrid>();
+		blockgrid::Field Catalog;
+		Check(Catalog.Define({.Key="Low",.Geometry=blockgrid::Shape::Slab}) &&
+			Catalog.Define({.Key="Sensor",.CanCollide=false,.Queryable=true}), "shape catalog declarations");
+		const std::array<blockgrid::Write,2> Pieces{{
+			{blockgrid::SingleCell({0,0,0}), {Catalog.GetDefinitionId("Low"),0}},
+			{blockgrid::SingleCell({3,0,0}), {Catalog.GetDefinitionId("Sensor"),0}}}};
+		Check(Catalog.Apply(Pieces), "shape catalog membership");
+		PartsGrid->RestoreField(std::move(Catalog)); PartsGrid->SetCFrame(CFrame(31,0,0)); PartsGrid->SetParent(B);
+		const std::array CatalogOwner{PartsGrid->GetObjectId()};
+		const auto ProbePiece = [&](float X, float Y) {
+			const SpatialDestinationBounds At{{X,Y,.40f},{X+.05f,Y+.04f,.45f}};
+			const auto Receipt = B->PrepareSpatialDestination(At, CatalogOwner).value();
+			return std::ranges::find(Receipt.Providers, PartsGrid->GetObjectId(), &SpatialProviderReceipt::Owner)->Installed;
+		};
+		const auto LowPiece = ProbePiece(31.4f,.20f);
+		Check(LowPiece.size() == 1 && LowPiece.front().CatalogGeometry == std::uint8_t(blockgrid::Shape::Slab) &&
+			ProbePiece(31.4f,.80f).empty() && ProbePiece(34.4f,.20f).empty(),
+			"movement receipts require the real slab half and discard query-only catalog pieces");
+		const auto Actor = MakePart(Default, {1,1,1}, {20,0,0});
+		Actor->SetAnchored(false); Actor->SetSpatialRegion(A);
+		Actor->SetLinearVelocity({3,0,0}); Actor->ApplyImpulse({2,0,0});
+		const auto Identity = Actor->GetObjectId();
+		const SpatialMovementRequest Movement{Identity, A->GetObjectId(), A->GetSpatialActivation(),
+			Actor->GetCFrame(), CFrame(0,0,0)};
+		const auto Blocked = B->PrepareSpatialDestination(Bounds).value();
+		Check(!B->CommitSpatialTransfer(Actor, Movement, Blocked).Succeeded() &&
+			WorldRoot::GetEffectiveWorld(*Actor) == A && Actor->GetLinearVelocity().x == 3.f,
+			"occupied handoff cannot move or consume the source body");
+		Foreign->SetCFrame(CFrame(90,0,0));
+		Check(!B->CommitSpatialTransfer(Actor, Movement, Blocked).Succeeded(), "handoff accepted an expired destination receipt");
+		const auto Solid = std::make_shared<BlockGrid>();
+		blockgrid::Field CollisionOnly;
+		Check(CollisionOnly.Apply(Writes), "collision-only grid fixture");
+		Solid->RestoreField(std::move(CollisionOnly)); Solid->SetCanQuery(false); Solid->SetParent(B);
+		const auto CollisionReceipt = B->PrepareSpatialDestination(Bounds).value();
+		Check(!B->CommitSpatialTransfer(Actor, Movement, CollisionReceipt).Succeeded(), "non-queryable solid grid allowed a body overlap");
+		Solid->SetCFrame(CFrame(65,0,0));
+		const auto Clear = B->PrepareSpatialDestination(Bounds).value();
+		Check(B->CommitSpatialTransfer(Actor, Movement, Clear).Succeeded() && Actor->GetObjectId() == Identity &&
+			WorldRoot::GetEffectiveWorld(*Actor) == B && Actor->GetParent().value_or(nullptr) == Default &&
+			Actor->GetCFrame().Position == glm::vec3(0) && Actor->GetLinearVelocity().x == 3.f &&
+			!Ray(*A,20).HasHit() && Ray(*B,0).Instance == Actor,
+			"successful checked handoff preserves identity, parent and queued motion while changing coordinates");
+		B->StepPhysics(.02, std::nullopt);
+		Check(Actor->GetLinearVelocity().x > 3.f, "a pending impulse must reach the destination safe point exactly once");
+		const auto Previous = A->PrepareSpatialDestination(Bounds).value();
+		A->SetParent(nullptr); A->SetParent(Default);
+		Check(!A->ValidateSpatialDestination(Previous), "reactivation changed the semantic domain epoch");
+		Game->Destroy();
 	}
 
 	void Run() {
@@ -231,6 +330,7 @@ int main() try {
 	gargantuan::BootstrapNativeRuntimeSchema();
 	Run();
 	TerrainDomains();
+	DestinationReadiness();
 	std::cout << "[Spatial:Domains] Native physics, render, membership and teardown passed.\n";
 	return 0;
 } catch (const std::exception &Error) {

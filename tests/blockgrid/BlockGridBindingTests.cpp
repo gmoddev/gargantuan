@@ -83,6 +83,52 @@ int main() try {
 		assert(G.SpatialRegion==Room and G.Parent==game.Workspace and G:GetRevision()~=BeforeDomain)
 		G.SpatialRegion=nil
 		assert(G.SpatialRegion==nil and G:GetRevision()~=BeforeDomain)
+		local Shapes=Instance.new("BlockGrid")
+		Shapes.Parent=Room
+		Shapes:DefineBlock("project:ramp",{Shape="Wedge"})
+		Shapes:DefineBlock("project:stair",{Shape="Stairs"})
+		Shapes:DefineBlock("project:ghost",{Shape="Slab",Collision="None",Queryable=true})
+		Shapes:DefineBlock("project:solid",{Shape="Slab",Queryable=false})
+		Shapes:SetBlock(Vector3.zero,"project:ramp")
+		Shapes:SetBlock(Vector3.new(2,0,0),"project:stair")
+		Shapes:SetBlock(Vector3.new(3,0,0),"project:ghost")
+		Shapes:SetBlock(Vector3.new(4,0,0),"project:solid")
+		local Params=RaycastParams.new()
+		Params.IncludeBlockGrids=true
+		local function Ray(X,Z) return Room:Raycast(Vector3.new(X,2,Z),Vector3.new(0,-3,0),Params) end
+		for _, Z in {0.25,0.75} do
+			local H=Ray(0.5,Z)
+			assert(H and H.GridHit.Cell==Vector3.zero and math.abs(H.Position.Y-Z)<0.03)
+			assert(H.Normal.Y>0.65 and H.Normal.Z < -0.65)
+		end
+		assert(math.abs(Ray(2.5,0.25).Position.Y-0.5)<0.03 and math.abs(Ray(2.5,0.75).Position.Y-1)<0.03)
+		assert(Ray(3.5,0.5).GridHit.Block.Definition=="project:ghost" and Ray(4.5,0.5)==nil)
+		Shapes:SetBlock(Vector3.zero,"project:ramp",{Up="+Y",Front="+X"})
+		local Rotated=Ray(0.25,0.5)
+		assert(Rotated and math.abs(Rotated.Position.Y-0.75)<0.03)
+		local Stair=Room:GetPartsInSphere(Vector3.new(2.5,0.5,0.75),0.2,Params,1)
+		assert(#Stair.GridCells==1 and not Stair.Truncated and Stair.GridCells[1].Cell==Vector3.new(2,0,0))
+		local Air=Room:GetPartsInSphere(Vector3.new(2.5,0.8,0.15),0.05,Params)
+		assert(Air.GridCells and #Air.GridCells==0)
+		Shapes:Fill(Vector3.new(8,0,0),Vector3.new(16,8,8),"Stone")
+		local Center=Vector3.new(10,2.5,2.5)
+		for _, R in {Room:GetPartsInSphere(Center,0.25,Params,2),
+			Room:GetPartsInBox(CFrame.new(Center),Vector3.new(0.5,0.25,0.25),Params,2),
+			Room:GetPartsInCapsule(CFrame.new(Center),0.125,0.5,Params,2)} do
+			assert(#R.GridCells==2 and not R.Truncated and R.GridCells[1].Cell==Vector3.new(9,2,2))
+			assert(R.GridCells[2].Cell==Vector3.new(10,2,2) and R.GridCells[2].Revision==Shapes:GetRevision())
+		end
+		assert(Room:GetPartsInSphere(Center,0.25,Params,1).Truncated)
+		assert(Room:GetPartsInSphere(Center,0.25).GridCells==nil)
+		local Legacy=Instance.new("Part")
+		Legacy.Size=Vector3.new(1,1,1)
+		Legacy.CFrame=CFrame.new(20.5,0.5,0.5)
+		Legacy.Anchored=true
+		Shapes:SetBlock(Vector3.new(20,0,0),"Stone")
+		Legacy.Parent=Room
+		assert(Ray(20.5,0.5).Instance==Legacy)
+		local Mixed=Room:GetPartsInSphere(Vector3.new(20.5,0.5,0.5),0.2,Params,1)
+		assert(Mixed.Parts[1]==Legacy and #Mixed.GridCells==0 and Mixed.Truncated)
 	)");
 	Run(World,RuntimeMode::NetworkClient,ScriptSecurityContext::ClientRuntime(),R"(
 		local G=game.Workspace:FindFirstChild("Construction")

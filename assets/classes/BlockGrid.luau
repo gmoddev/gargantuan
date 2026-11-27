@@ -13,7 +13,7 @@ return c({
 	properties = {
 		SpatialRegion = {type = t.Optional(t.Instance("SpatialRegion", true)), unmodified = "std::nullopt",
 			overrideRead = "GetSpatialRegion", overrideWrite = "SetSpatialRegion", serializable = true, replicated = true,
-			category = "World", description = "Optional independent spatial domain. Without an assignment the grid uses its enclosing world."},
+			materializationDependency = "Hard", category = "World", description = "Optional independent spatial domain. Without an assignment the grid uses its enclosing world."},
 		CellSize = {type = t.Float, unmodified = "1.0f", overrideRead = "GetCellSize", overrideWrite = "SetCellSize",
 			serializable = true, category = "Grid", description = "Uniform world units per cell. Choose 0.5, 1, or 2 while empty."},
 		CFrame = {type = t.CFrame, unmodified = "gargantuan::CFrame()", overrideRead = "GetCFrame", overrideWrite = "SetCFrame",

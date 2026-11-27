@@ -3,6 +3,7 @@
 #include <optional>
 
 namespace gargantuan {
+	class CFrame;
 	class Instance;
 	class SpatialRegion;
 	class WorldRoot;
@@ -22,6 +23,9 @@ namespace gargantuan {
 		[[nodiscard]] static const Instance *GetAssignmentRoot(const Instance &Value);
 
 	  private:
+		friend class WorldRoot;
+		void ChangeAssignedRegion(Instance &Root, std::optional<std::shared_ptr<SpatialRegion>> Value,
+			const CFrame *DestinationPose);
 		struct State;
 		std::unique_ptr<State> Binding;
 		void Refresh(const std::shared_ptr<Instance> &Root);

@@ -8,6 +8,7 @@
 #include "gargantuan/classes/LocalLight.hpp"
 #include "gargantuan/classes/ReflectionProbe.hpp"
 #include "gargantuan/classes/Terrain.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Workspace.hpp"
@@ -599,7 +600,7 @@ namespace gargantuan {
 		}
 	}
 
-	void WorldRoot::RemovePart(const std::shared_ptr<BasePart> &Part) {
+	void WorldRoot::RemovePart(const std::shared_ptr<BasePart> &Part, bool PreserveMotion) {
 		if (!Part) return;
 		const auto Object = Part->GetObjectId();
 		erase(Parts, Part);
@@ -624,15 +625,17 @@ namespace gargantuan {
 			}
 			PartBodies.erase(Found);
 		}
-		Part->PublishedPhysicsState = {};
-		Part->AccumulatedImpulse = {};
-		Part->AccumulatedAngularImpulse = {};
-		Part->AccumulatedForce = {};
-		Part->AccumulatedTorque = {};
-		Part->AccumulatedPointImpulses.clear();
-		Part->PendingLinearVelocity.reset();
-		Part->PendingAngularVelocity.reset();
-		Part->PendingAwake.reset();
+		if (!PreserveMotion) {
+			Part->PublishedPhysicsState = {};
+			Part->AccumulatedImpulse = {};
+			Part->AccumulatedAngularImpulse = {};
+			Part->AccumulatedForce = {};
+			Part->AccumulatedTorque = {};
+			Part->AccumulatedPointImpulses.clear();
+			Part->PendingLinearVelocity.reset();
+			Part->PendingAngularVelocity.reset();
+			Part->PendingAwake.reset();
+		}
 		RemoveInvalidConstraintMappings();
 		for (const auto &[Id, _] : TrackedConstraints) DirtyConstraints.insert(Id);
 	}
@@ -1108,10 +1111,10 @@ namespace gargantuan {
 		}
 	}
 
-	void WorldRoot::RemoveSpatialMember(const std::shared_ptr<Instance> &Instance) {
+	void WorldRoot::RemoveSpatialMember(const std::shared_ptr<Instance> &Instance, bool PreserveMotion) {
 			RemoveBlockGrid(Instance);
 		if (auto Part = std::dynamic_pointer_cast<BasePart>(Instance)) {
-			if (TrackedParts.contains(Part->GetObjectId())) RemovePart(Part);
+			if (TrackedParts.contains(Part->GetObjectId())) RemovePart(Part, PreserveMotion);
 		} else if (auto Body = std::dynamic_pointer_cast<DeformableBody>(Instance))
 			RemoveDeformable(Body);
 		else if (auto Attachment = std::dynamic_pointer_cast<SoftBodyAttachment>(Instance))
@@ -1156,7 +1159,7 @@ namespace gargantuan {
 
 	void WorldRoot::InitializeTerrainRuntime(RuntimeMode Mode, bool AdmitNetworkTerrain, bool ExperimentalVisualDensity,
 		std::shared_ptr<const terrain::TerrainMaterialPalette> Palette) {
-		if (TerrainRuntimeValue || ShuttingDownPhysics) return;
+		if (TerrainRuntimeValue || ShuttingDownPhysics || !IsSpatiallyAvailable()) return;
 		auto Owner = GetOwnedTerrain();
 		if (!Owner || !Owner->Field) return;
 		const bool Materialized = Owner->Field->GetStats().MaterializedPages != 0;
@@ -1198,6 +1201,16 @@ namespace gargantuan {
 		return TerrainRuntimeValue ? &TerrainRuntimeValue->GetPhysicsStage() : nullptr;
 	}
 
+	bool WorldRoot::IsSpatiallyAvailable() const {
+		return !dynamic_cast<const SpatialRegion *>(this) || bool(SpatialRegion::FindAttachedWorld(*this));
+	}
+
+	void WorldRoot::RetireDomainTerrainRuntime() {
+		TerrainRuntimeValue.reset();
+		TerrainEditTickets.reset();
+		TerrainTicketBase = LastTerrainTicket;
+	}
+
 	bool WorldRoot::HasTerrainRuntime() const noexcept {
 		const auto *TerrainPhysics = GetTerrainPhysics();
 		return TerrainPhysics && TerrainPhysics->IsHealthy() && !ShuttingDownPhysics;
@@ -1209,8 +1222,11 @@ namespace gargantuan {
 			return std::unexpected(terrain::EditStatus::Unavailable);
 		if (Edit.ExpectedRevision && *Edit.ExpectedRevision != Owner.GetField().GetRevision())
 			return std::unexpected(terrain::EditStatus::Stale);
+		if (LastTerrainTicket == std::numeric_limits<std::uint64_t>::max()) return std::unexpected(terrain::EditStatus::LimitExceeded);
 		auto Ticket = TerrainRuntimeValue->Submit(Edit.Request, Edit.ExpectedRevision);
 		if (Ticket) {
+			*Ticket += TerrainTicketBase;
+			LastTerrainTicket = *Ticket;
 			auto &Records = TerrainEditTickets->Records;
 			Records[*Ticket % Records.size()] = {*Ticket, std::nullopt};
 		}
@@ -1218,7 +1234,8 @@ namespace gargantuan {
 	}
 
 	bool WorldRoot::CancelTerrainEdit(const Terrain &Owner, std::uint64_t Ticket) noexcept {
-		return HasTerrainRuntime() && GetTerrainQueryOwner().get() == &Owner && TerrainRuntimeValue->Cancel(Ticket);
+		return Ticket > TerrainTicketBase && Ticket <= LastTerrainTicket && HasTerrainRuntime() &&
+			GetTerrainQueryOwner().get() == &Owner && TerrainRuntimeValue->Cancel(Ticket - TerrainTicketBase);
 	}
 
 	std::optional<WorldRoot::TerrainTicketInfo> WorldRoot::GetTerrainTicket(std::uint64_t Ticket) const noexcept {
@@ -1238,7 +1255,8 @@ namespace gargantuan {
 		if (!TerrainRuntimeValue || !TerrainEditTickets) return;
 		const auto *TerrainPhysics = GetTerrainPhysics();
 		auto &Records = TerrainEditTickets->Records;
-		for (const auto &Completion : TerrainRuntimeValue->Poll()) {
+		for (auto &Completion : TerrainRuntimeValue->Poll()) {
+			Completion.Ticket += TerrainTicketBase;
 			auto &Record = Records[Completion.Ticket % Records.size()];
 			if (Record.Ticket == Completion.Ticket) Record.Completion = Completion;
 		}
@@ -1253,6 +1271,8 @@ namespace gargantuan {
 	}
 
 	PhysicsKinematicMotionResult WorldRoot::ResolveKinematicMotion(const PhysicsKinematicMotionRequest &Request) {
+		if (!IsSpatiallyAvailable()) return {.Status = PhysicsOperationStatus::InvalidDescription,
+			.Message = "[Spatial:Motion] The destination domain is detached"};
 		const auto *TerrainPhysics = GetTerrainPhysics();
 		if (TerrainPhysics && (TerrainPhysics->IsStaging() || !TerrainPhysics->IsHealthy()))
 			return {.Status = PhysicsOperationStatus::BackendFailure, .Message = "[Terrain:Query] Terrain collision is unavailable"};
@@ -1264,6 +1284,8 @@ namespace gargantuan {
 
 	PhysicsOperationResult
 	WorldRoot::BuildRaycastFilter(const RaycastParams &Params, PhysicsQueryFilter &Filter) {
+		if (!IsSpatiallyAvailable())
+			return {PhysicsOperationStatus::InvalidDescription, "[Spatial:Query] The requested domain is detached"};
 		const auto *TerrainPhysics = GetTerrainPhysics();
 		if (TerrainPhysics && (TerrainPhysics->IsStaging() || !TerrainPhysics->IsHealthy()))
 			return {PhysicsOperationStatus::BackendFailure, "[Terrain:Query] Terrain collision is unavailable"};
@@ -1420,10 +1442,11 @@ namespace gargantuan {
 			}
 			if (!CandidateObject.IsValid())
 				return Fail(PhysicsOperationStatus::BackendFailure, "Physics raycast hit has no live semantic owner");
-			if (!SelectedHit || CandidateObject < SelectedObject ||
+			const bool SameClass=bool(CandidateGrid)==bool(SelectedGrid);
+			if (!SelectedHit || (!CandidateGrid && SelectedGrid && Candidate.Distance==NearestDistance) || (SameClass && (CandidateObject < SelectedObject ||
 				(CandidateObject == SelectedObject && (CandidateChunk < SelectedChunk ||
 					(Cell && SelectedCell && std::tie(Cell->x, Cell->y, Cell->z) <
-						std::tie(SelectedCell->x, SelectedCell->y, SelectedCell->z))))) {
+						std::tie(SelectedCell->x, SelectedCell->y, SelectedCell->z))))))) {
 				SelectedHit = &Candidate;
 				SelectedPart = std::move(CandidatePart);
 				SelectedGrid = std::move(CandidateGrid);
@@ -1485,7 +1508,7 @@ namespace gargantuan {
 			? std::dynamic_pointer_cast<DeformableBody>(StackValue<std::shared_ptr<Instance>>::From(L, 2))
 			: nullptr;
 		if (!World || World->GetDestroyed() || World->IsDestroying() || !Body || Body->GetDestroyed() ||
-			Body->IsDestroying() || Body->FindFirstAncestorWhichIsA("WorldRoot").get() != World) {
+			Body->IsDestroying() || GetEffectiveWorld(*Body).get() != World) {
 			lua_pushnil(L);
 			return 1;
 		}
@@ -1522,7 +1545,7 @@ namespace gargantuan {
 		const auto Index = lua_isnumber(L, 3) ? lua_tonumber(L, 3) : -1.0;
 		if (!World || World->GetDestroyed() || World->IsDestroying() || !Body || Body->GetDestroyed() ||
 			Body->IsDestroying() || !std::isfinite(Index) || Index < 0 || Index >= MaximumSoftBodyVertices ||
-			std::trunc(Index) != Index || Body->FindFirstAncestorWhichIsA("WorldRoot").get() != World) {
+			std::trunc(Index) != Index || GetEffectiveWorld(*Body).get() != World) {
 			lua_pushnil(L);
 			return 1;
 		}
@@ -1607,6 +1630,7 @@ namespace gargantuan {
 		if (SteppingPhysics)
 			throw std::logic_error("[Physics:Step] Cannot advance a world already stepping");
 		(void)Instances;
+		if (!IsSpatiallyAvailable()) return;
 		PollTerrainWork();
 		const auto *TerrainPhysics = GetTerrainPhysics();
 		if (TerrainPhysics && (TerrainPhysics->IsStaging() || !TerrainPhysics->IsHealthy())) return;

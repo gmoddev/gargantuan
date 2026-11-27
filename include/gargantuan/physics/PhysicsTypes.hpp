@@ -207,6 +207,7 @@ namespace gargantuan {
 		std::uint16_t CollisionGroup = 0;
 		std::uint16_t CollisionMask = MaximumPhysicsCollisionMask;
 		bool IncludeBlockGrids = false;
+		bool RequireCollidable = false;
 	};
 
 	struct PhysicsRaycastRequest {

@@ -1,5 +1,6 @@
 #include "gargantuan/physics/PhysicsBackend.hpp"
 #include "physics/Box3DConversions.hpp"
+#include "Box3DShapeQuery.hpp"
 #include "Box3DMeshChunks.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 

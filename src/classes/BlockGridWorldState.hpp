@@ -10,7 +10,13 @@
 
 namespace gargantuan {
 	// Integer bounds stay in grid coordinates across rigid motion and world-index changes.
-	using BlockGridBox = std::array<std::int32_t, 6>;
+	struct BlockGridBox {
+		std::array<std::int32_t,6> Cells; // inclusive minimum and exclusive maximum of semantic owners
+		std::uint8_t Participation{};
+		blockgrid::Shape Geometry{blockgrid::Shape::Cube};
+		std::uint8_t Orientation{}, Piece{};
+		auto operator<=>(const BlockGridBox&) const = default;
+	};
 	using BlockGridLeafBoxes = std::map<blockgrid::Cell, std::vector<BlockGridBox>, blockgrid::CellOrder>;
 
 	struct BlockGridCollider {
@@ -24,7 +30,7 @@ namespace gargantuan {
 		BlockGridLeafBoxes Desired;
 		std::size_t DesiredCount{};
 		bool TopologyCurrent{};
-		bool TopologyActive{};
+		std::uint8_t TopologyMask{};
 		std::optional<std::uint64_t> Revision;
 		CFrame Pose;
 		float CellSize{};

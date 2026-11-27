@@ -1,38 +1,12 @@
 // Included inside the private Box3D adapter; no native query storage escapes.
-            struct ShapeQueryProxy {
-                std::array<b3Vec3, 8> Points{};
-                b3ShapeProxy Proxy{};
-                b3Pos Origin{};
-            };
+            using ShapeQueryProxy = Box3DShapeQuery;
             bool BuildShapeQueryProxy(const PhysicsQueryShape &Shape, ShapeQueryProxy &Out) const {
-                if (!IsRigidRotation(Shape.Transform)) return false;
-                Out.Origin = {Shape.Transform.Position.x, Shape.Transform.Position.y, Shape.Transform.Position.z};
-                Out.Proxy.points = Out.Points.data();
-                auto Point = [&](int Index, glm::vec3 Local) {
-                    Out.Points[Index] = Box3DConversions::ToBox3(Shape.Transform.Rotation * Local);
-                };
-                if (Shape.Kind == PhysicsQueryShapeKind::Box) {
-                    if (!IsFinite(Shape.Size) || glm::any(glm::lessThanEqual(Shape.Size, glm::vec3(0))) ||
-                        glm::any(glm::greaterThan(Shape.Size, glm::vec3(MaximumPhysicsQueryExtent)))) return false;
-                    Out.Proxy.count = 8;
-                    for (int I = 0; I < 8; ++I)
-                        Point(I, Shape.Size * glm::vec3(I & 1 ? .5f : -.5f, I & 2 ? .5f : -.5f, I & 4 ? .5f : -.5f));
-                } else if (Shape.Kind == PhysicsQueryShapeKind::Sphere || Shape.Kind == PhysicsQueryShapeKind::Capsule) {
-                    if (!std::isfinite(Shape.Radius) || Shape.Radius <= 0 || Shape.Radius > MaximumPhysicsQueryExtent) return false;
-                    Out.Proxy.radius = Shape.Radius;
-                    Out.Proxy.count = Shape.Kind == PhysicsQueryShapeKind::Sphere ? 1 : 2;
-                    if (Out.Proxy.count == 1) Point(0, {});
-                    else {
-                        if (!std::isfinite(Shape.Height) || Shape.Height < 2 * Shape.Radius || Shape.Height > MaximumPhysicsQueryExtent) return false;
-                        const float Offset = Shape.Height * .5f - Shape.Radius;
-                        Point(0, {0, -Offset, 0}); Point(1, {0, Offset, 0});
-                    }
-                } else return false;
-                return true;
+                return IsRigidRotation(Shape.Transform) && Out.Set(Shape);
             }
             bool AcceptAdvancedQueryBody(PhysicsBodyId Body, const PhysicsQueryFilter &Filter) const {
                 const auto *Record = FindBody(Body);
-                if (!Record || !Record->Description.CanQuery.value_or(Record->Description.CanCollide)) return false;
+                if (!Record || !(Filter.RequireCollidable ? Record->Description.CanCollide :
+                    Record->Description.CanQuery.value_or(Record->Description.CanCollide))) return false;
                 if (Record->Description.RequiresBlockGridQuery && !Filter.IncludeBlockGrids) return false;
                 if (!PhysicsCanCollide(Filter.CollisionGroup, Filter.CollisionMask,
                     Record->Description.CollisionGroup, Record->Description.CollisionMask)) return false;

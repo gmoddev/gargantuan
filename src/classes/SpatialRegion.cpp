@@ -31,7 +31,11 @@ namespace gargantuan {
 		const auto Previous = RegisteredWorld.lock();
 		const auto Current = FindAttachedWorld(*this);
 		if (Previous == Current) return;
-		if (Previous) Previous->SpatialRegions.erase(GetObjectId());
+		if (Previous) {
+			Previous->SpatialRegions.erase(GetObjectId());
+			if (SpatialActivation) ++SpatialActivation;
+			RetireDomainTerrainRuntime();
+		}
 		if (Current) {
 			InitializeTerrain();
 			Current->SpatialRegions.insert_or_assign(

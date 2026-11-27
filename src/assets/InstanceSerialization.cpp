@@ -4,6 +4,7 @@
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
+#include "gargantuan/runtime/SpatialDomainMember.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/LuaSourceContainer.hpp"
 #include "gargantuan/classes/Sound.hpp"
@@ -173,6 +174,9 @@ namespace gargantuan::InstanceSerialization {
 				if (!Node || Depth > MaximumProtocolJsonDepth || Ids.size() >= MaximumPersistenceObjects)
 					throw std::length_error("Instance persistence hierarchy exceeds its depth or object limit");
 				const auto Id = static_cast<std::uint32_t>(Ids.size() + 1);
+				if (const auto *Member = dynamic_cast<const SpatialDomainMember *>(Node.get());
+					Member && Member->HasAssignedRegion() && !Member->GetAssignedRegion())
+					throw std::invalid_argument("[Spatial:Persistence] Clear or replace the destroyed domain assignment before saving");
 				if (!GatheringDomains) {
 					auto *Region = dynamic_cast<SpatialRegion *>(Node.get());
 					const auto Owner = Region ? Region->GetTerrain() : nullptr;
@@ -197,6 +201,16 @@ namespace gargantuan::InstanceSerialization {
 			}
 			if (Domains && !Domains->empty() && Domains->rbegin()->first > Ids.size())
 				throw std::invalid_argument("Domain terrain owner is outside the document");
+			if (!GatheringDomains && Roots.size() == 1 && dynamic_cast<DataModel *>(Roots.front().get())) {
+				const auto *World = static_cast<DataModel *>(Roots.front().get());
+				if (!World->GetSpatialRegions().empty())
+					for (const auto &[Node, Id] : Ids) {
+						const auto *Member = dynamic_cast<const SpatialDomainMember *>(Node);
+						const auto Target = Member ? Member->GetAssignedRegion() : std::nullopt;
+						if (Target && !Ids.contains(Target->get()))
+							throw std::invalid_argument("[Spatial:Persistence] An assigned domain is outside the saved hierarchy");
+					}
+			}
 		}
 
 		bool IsNativeSavedProperty(std::string_view Name, const InstanceProperty &Property) {
@@ -242,6 +256,7 @@ namespace gargantuan::InstanceSerialization {
 		// - Int32 and Int64 are merged into Int as those are irrelevant to Gargantuan
 
 		struct SerializationState {
+			bool Cloning{};
 			std::unordered_map<std::shared_ptr<Instance>, json> InstanceMap;
 			DocumentNodeIds NodeIds;
 			std::unordered_set<std::string> SourceIds;
@@ -354,7 +369,8 @@ namespace gargantuan::InstanceSerialization {
 			serialized["NodeId"] = state.NodeIds.at(instance.get());
 			serialized["Properties"] = properties;
 			if (auto Grid = dynamic_cast<const BlockGrid *>(instance.get()))
-				serialized[BlockCellsKey] = ProjectCellBytes(blockgrid::Encode(Grid->GetField()));
+				serialized[BlockCellsKey] = ProjectCellBytes(blockgrid::Encode(Grid->GetField(), state.Cloning ?
+					blockgrid::DataProfile::Clone : blockgrid::DataProfile::Authored));
 			serialized["Attributes"] = json::object();
 			for (const auto &[name, value] : instance->GetAttributeValues(ScriptSecurityContext::CoreTrusted()))
 				serialized["Attributes"][name] = JsonCodec::EncodeWireValue(value);
@@ -409,15 +425,16 @@ namespace gargantuan::InstanceSerialization {
 		}, true, nullptr, true);
 	}
 
-	std::string Serialize(InstanceFormat format, std::shared_ptr<Instance> &instance,
-		std::optional<AssetContentId> TerrainManifest, const terrain::DomainTerrainBindings &Domains) {
+	static std::string SerializeTree(InstanceFormat format, std::shared_ptr<Instance> &instance,
+		std::optional<AssetContentId> TerrainManifest, const terrain::DomainTerrainBindings &Domains, bool Cloning) {
 		switch (format) {
 		case InstanceFormat::Json: {
 			if (TerrainManifest && (!TerrainManifest->IsValid() || !dynamic_cast<DataModel *>(instance.get())))
 				throw std::invalid_argument("[Terrain:Persistence] The manifest requires a DataModel scene root");
 			Json::SerializationState state;
+			state.Cloning = Cloning;
 			CollectDocumentNodes(std::span(&instance, 1), state.NodeIds, [](Instance &, std::uint32_t) {},
-				TerrainManifest.has_value(), &Domains);
+				TerrainManifest.has_value(), &Domains, Cloning);
 			auto serialized = Json::SerializeInstance(instance, state);
 			serialized["Version"] = TerrainManifest ? TerrainSceneVersion : 5;
 			if (!Domains.empty()) {
@@ -438,6 +455,15 @@ namespace gargantuan::InstanceSerialization {
 		}
 		}
 	};
+
+	std::string Serialize(InstanceFormat Format, std::shared_ptr<Instance> &Root, std::optional<AssetContentId> Manifest,
+		const terrain::DomainTerrainBindings &Domains) {
+		return SerializeTree(Format, Root, Manifest, Domains, false);
+	}
+
+	std::string SerializeClone(std::shared_ptr<Instance> Root) {
+		return SerializeTree(InstanceFormat::Json, Root, {}, {}, true);
+	}
 
 	std::string SerializeEmptyProject(InstanceFormat Format, std::string_view ProjectName) {
 		if (Format != InstanceFormat::Json)

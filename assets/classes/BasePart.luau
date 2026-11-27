@@ -13,6 +13,7 @@ return c({
 			unmodified = "std::nullopt",
 			overrideRead = "GetSpatialRegion",
 			overrideWrite = "SetSpatialRegion",
+			materializationDependency = "Hard",
 			serializable = true,
 			replicated = true,
 			category = "World",
