@@ -19,6 +19,8 @@
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "../terrain/TerrainMutation.hpp"
+#include "gargantuan/blockgrid/Edit.hpp"
+#include "gargantuan/classes/BlockGrid.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -184,6 +186,10 @@ namespace gargantuan {
 	std::shared_ptr<MutationCompletion>
 	MutationGateway::Submit(MutationCommand command, MutationAuthorityContext Authority) {
 		auto completion = std::make_shared<MutationCompletion>();
+		if (std::holds_alternative<SubmitBlockGridEditCommand>(command)) {
+			completion->Complete({MutationStatus::Rejected, {}, "[BlockGrid:Admission] Grid edits require synchronous Main admission"});
+			return completion;
+		}
 		if (std::holds_alternative<SubmitTerrainEditCommand>(command) ||
 			std::holds_alternative<CancelTerrainEditCommand>(command)) {
 			completion->Complete({MutationStatus::Rejected, {}, "Terrain work must enter through Main admission"});
@@ -304,7 +310,29 @@ namespace gargantuan {
 			return std::visit(
 				[&](auto &CommandValue) -> MutationResult {
 					using Command = std::decay_t<decltype(CommandValue)>;
-					if constexpr (std::is_same_v<Command, SubmitTerrainEditCommand> ||
+					if constexpr (std::is_same_v<Command, SubmitBlockGridEditCommand>) {
+						const bool Gameplay = Authority.GetOrigin() == MutationCommandOrigin::LocalInternal &&
+							(securityContext.Domain == ScriptExecutionDomain::Server || securityContext.Domain == ScriptExecutionDomain::Core);
+						const bool Editor = Authority.GetOrigin() == MutationCommandOrigin::Studio &&
+							securityContext.Domain == ScriptExecutionDomain::Studio &&
+							securityContext.HasCapability(ScriptCapability::EditorCommands);
+						if (!Gameplay && !Editor)
+							return {MutationStatus::Unauthorized, {}, "[BlockGrid:Access] Grid editing authority is required"};
+						const auto Grid = std::dynamic_pointer_cast<BlockGrid>(ObjectRegistry::Get().Lookup(CommandValue.Object));
+						if (!Grid || Grid->GetDestroyed() || Grid->IsDestroying())
+							return {MutationStatus::StaleObject, {}, "[BlockGrid:Edit] Stale grid identity"};
+						const auto World = Grid->GetDataModel();
+						if (!World || !CommandValue.ExpectedScope.IsValid() || World->GetObjectId() != CommandValue.ExpectedScope ||
+							(Editor && Authority.GetScope() != CommandValue.ExpectedScope))
+							return {MutationStatus::Unauthorized, {}, "[BlockGrid:Access] Grid belongs to another world"};
+						if (!CommandValue.Edit)
+							return {MutationStatus::ValidationFailed, {}, "[BlockGrid:Edit] Missing edit"};
+						try {
+							auto Revision = Grid->ApplyWrites(CommandValue.Edit->Writes, CommandValue.Edit->ExpectedRevision);
+							return {.Status=MutationStatus::Success, .Object=CommandValue.Object, .BlockRevision=std::move(Revision)};
+						} catch (const std::domain_error& E) { return {MutationStatus::Conflict,{},E.what()}; }
+						  catch (const std::length_error& E) { return {MutationStatus::ResourceLimit,{},E.what()}; }
+					} else if constexpr (std::is_same_v<Command, SubmitTerrainEditCommand> ||
 						std::is_same_v<Command, CancelTerrainEditCommand>) {
 						const bool Gameplay = Authority.GetOrigin() == MutationCommandOrigin::LocalInternal &&
 							securityContext.Domain == ScriptExecutionDomain::Server;

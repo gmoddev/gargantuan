@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Team Fireworks
 // SPDX-License-Identifier: MPL-2.0
 #include "gargantuan/blockgrid/Field.hpp"
+#include "gargantuan/blockgrid/Picking.hpp"
 #include <algorithm>
 #include <array>
 #include <iostream>
@@ -73,5 +74,20 @@ int main() try {
 	Corrupt=Original; Corrupt.push_back(0); Reject([&]{ (void)Decode(Corrupt); });
 	Corrupt=Original; Corrupt.insert(Corrupt.end(),Original.begin()+9,Original.end()); Corrupt[5]=2;
 	Reject([&]{ (void)Decode(Corrupt); });
+	Field Pick;
+	Check(Fill(Pick,SingleCell({-2,0,0}),{Stone,0}));
+	auto Face=Cast(Pick,{-1,.25,.25},{-2,0,0});
+	Check(Face && Face->Position==Cell{-2,0,0} && Face->Fraction==0 && Face->Normal==std::array<double,3>{1,0,0});
+	auto Inside=Cast(Pick,{-1.75,.25,.25},{2,0,0});
+	Check(Inside && Inside->Fraction==.375 && Inside->Normal==std::array<double,3>{1,0,0});
+	auto Corner=Cast(Pick,{-3,-1,-1},{2,2,2});
+	Check(Corner && Corner->Fraction==.5 && Corner->Normal==std::array<double,3>{-1,0,0});
+	Check(!Cast(Pick,{-3,1,.5},{2,0,0}));
+	Reject([&]{ (void)Cast(Pick,{.5,3,.5},{32,0,0},2); });
+	Check(Fill(Pick,SingleCell({-3,0,0}),{Brick,2}));
+	auto Tie=Cast(Pick,{-1.5,.5,.5},{-2,0,0});
+	Check(Tie && Tie->Position==Cell{-3,0,0} && Tie->Fraction==.25 && Tie->Normal==std::array<double,3>{1,0,0});
+	Check(Fill(Pick,SingleCell({CoordinateLimit-1,0,0}),{Stone,0}));
+	Check(Cast(Pick,{CoordinateLimit+2.,.5,.5},{-4,0,0})->Position==Cell{CoordinateLimit-1,0,0});
 	std::cout << "[BlockGrid:FieldTest] Storage, admission, codec and oracle passed\n";
 } catch (const std::exception& Error) { std::cerr<<Error.what()<<'\n'; return 1; }
