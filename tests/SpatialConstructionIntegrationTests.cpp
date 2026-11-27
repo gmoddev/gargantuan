@@ -287,6 +287,27 @@ namespace {
 			NewOther->GetField().Get(Target) == Other->GetField().Get(Target), "project reopen lost independent native fields");
 		CheckQueries(*WorkspaceOf(Reopened),NewGrid,NewGrid);
 		CheckQueries(*NewRegion,NewOther,NewOther);
+
+		auto RegionClone = std::dynamic_pointer_cast<SpatialRegion>(NewRegion->Clone());
+		Require(RegionClone && !RegionClone->GetParent() && RegionClone->GetTerrain() != NewRegion->GetTerrain() &&
+			RegionClone->GetTerrain()->GetField().GetLifetime() != NewRegion->GetTerrain()->GetField().GetLifetime() &&
+			RegionClone->GetTerrain()->GetField().Read({2,2,2}).value() == terrain::Sample{-240,3},
+			"cloning an edited project region shared or lost its native field");
+		RegionClone->SetName("ClonedRegion");
+		RegionClone->SetParent(WorkspaceOf(Reopened));
+		terrain::DomainTerrainCaptures ClonedDomains;
+		auto ClonedPlace = ProjectValue.CaptureGasPlace(Reopened,&DefaultCapture,&ClonedDomains);
+		Require(ClonedPlace && ClonedDomains.size() == 3 && ClonedPlace->Place->Domains.size() == 3,
+			"project did not address the cloned field separately");
+		for (const auto &[Node,Capture] : ClonedDomains) ProjectValue.PersistTerrainArtifacts(Capture,Node);
+		auto ReopenedClone = ProjectValue.LoadGasPlace(*ClonedPlace);
+		const auto SavedClone = std::dynamic_pointer_cast<SpatialRegion>(ReopenedClone->FindFirstDescendant("ClonedRegion"));
+		Require(SavedClone && SavedClone->GetTerrain()->GetField().Read({2,2,2}).value() == terrain::Sample{-240,3} &&
+			SavedClone->GetTerrain()->GetField().GetLifetime() != RegionClone->GetTerrain()->GetField().GetLifetime(),
+			"reopening the cloned terrain did not reconstruct its own bound field");
+		ReopenedClone->Destroy();
+		RegionClone->Destroy();
+		CheckTerrainOwners(Reopened);
 		const std::array<std::shared_ptr<Instance>,1> Roots{Grid};
 		const auto Captured = InstanceSerialization::CaptureGasDocument(Roots,Gas::DocumentKind::Model);
 		Require(Captured.has_value(), "GASM capture failed");
