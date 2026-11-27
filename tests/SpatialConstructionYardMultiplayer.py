@@ -250,6 +250,7 @@ def RunYard(Options, Root):
         with ExitStack() as Processes:
             Host = Processes.enter_context(Launch(ServerArgs,Root,Env,f"server-{Round}"))
             Await(Host,"[Runtime:Server] StartupWallMilliseconds=")
+            Await(Host,"[Spatial:ConstructionYard] ready edits=")
             First = Processes.enter_context(Launch(ClientArgs,Root,Env,f"first-{Round}"))
             if Round == 2:
                 Await(First,"[Spatial:YardProcess] Fresh Server replayed both constructions",(Host,))
