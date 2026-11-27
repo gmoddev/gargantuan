@@ -159,6 +159,8 @@ namespace {
 		const auto Trusted=PackageBuilder::Capture(ProjectValue,Game,Current,Current);
 		Require(Trusted.GridSegments==Snapshot.GridSegments,"Trusted package capture lost field bytes");
 		Files.WriteStringToFile(Origin/".gargantuan"/"package-audience.json",R"({"Version":1,"SharedAssets":[]})");
+		Files.WriteStringToFile(Origin/".gargantuan"/"runtime-distribution.json",
+			std::string(R"({"Version":1,"SessionIdentity":")")+ProjectId::New().ToString()+R"("})");
 		const auto Client=PackageBuilder::Capture(ProjectValue,Game,Current,Current,PackageAudience::DistributedPlayer,
 			RuntimeDistributionRequest{.Target=RuntimeDistributionTarget::DistributedPlayer});
 		Require(Client.GridSegments.empty() && Client.ProjectJson.empty() && Client.DistributedPlayer,"Distributed Player received private grid data");
