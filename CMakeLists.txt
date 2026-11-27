@@ -971,7 +971,7 @@ if(BUILD_TESTING)
 	endif()
 	add_executable(gargantuan_foundation_tests "tests/FoundationTests.cpp")
 	add_executable(gargantuan_blockgrid_field_tests "tests/blockgrid/BlockGridFieldTests.cpp"
-		"src/blockgrid/Field.cpp" "src/blockgrid/Codec.cpp" "src/blockgrid/Picking.cpp")
+		"src/blockgrid/Field.cpp" "src/blockgrid/Codec.cpp" "src/blockgrid/Picking.cpp" "src/blockgrid/Edit.cpp")
 	target_include_directories(gargantuan_blockgrid_field_tests PRIVATE "include")
 	add_test(NAME gargantuan_blockgrid_field COMMAND gargantuan_blockgrid_field_tests)
 	set_tests_properties(gargantuan_blockgrid_field PROPERTIES LABELS "blockgrid;storage;persistence")

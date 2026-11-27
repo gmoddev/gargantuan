@@ -20,7 +20,7 @@ namespace gargantuan {
 	  private:
 		friend class MutationGateway;
 		[[nodiscard]] std::string ApplyWrites(std::span<const blockgrid::Write> Writes,
-			const std::optional<std::string>& Expected);
+			const std::optional<std::string>& Expected, bool ReplayingCells = false);
 		void CheckConfigurationWrite() const;
 		void NotifyConfiguration(std::string_view Name);
 		blockgrid::Field Cells;

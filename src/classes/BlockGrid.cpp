@@ -136,7 +136,8 @@ namespace gargantuan {
 		return std::format("{}.{}:{}.{}:{}:{}",Scope.Slot,Scope.Generation,Id.Slot,Id.Generation,
 			ConfigurationRevision,Cells.GetRevision());
 	}
-	std::string BlockGrid::ApplyWrites(std::span<const blockgrid::Write> Writes, const std::optional<std::string>& Expected) {
+	std::string BlockGrid::ApplyWrites(std::span<const blockgrid::Write> Writes, const std::optional<std::string>& Expected,
+		bool ReplayingCells) {
 		AssertCanMutate();
 		const auto World=GetDataModel();
 		if (!World || Editing) throw std::logic_error("[BlockGrid:Edit] Grid is unavailable for admission");
@@ -146,7 +147,7 @@ namespace gargantuan {
 		{
 			struct Guard { bool& Flag; ~Guard(){ Flag=false; } } Reset{Editing};
 			Editing=true;
-			Changed=Cells.Apply(Writes,{},Admission);
+			Changed=ReplayingCells ? Cells.ApplyCellPatch(Writes,Admission) : Cells.Apply(Writes,{},Admission);
 		}
 		const auto Revision=GetBlockRevision();
 		if (Changed) {

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "gargantuan/blockgrid/Field.hpp"
 #include "gargantuan/blockgrid/Picking.hpp"
+#include "gargantuan/blockgrid/Edit.hpp"
 #include <algorithm>
 #include <array>
 #include <iostream>
@@ -89,5 +90,18 @@ int main() try {
 	Check(Tie && Tie->Position==Cell{-3,0,0} && Tie->Fraction==.25 && Tie->Normal==std::array<double,3>{1,0,0});
 	Check(Fill(Pick,SingleCell({CoordinateLimit-1,0,0}),{Stone,0}));
 	Check(Cast(Pick,{CoordinateLimit+2.,.5,.5},{-4,0,0})->Position==Cell{CoordinateLimit-1,0,0});
+	Field Recorded;
+	const Write Whole{{{-16,0,-16},{16,2,16}},{Brick,3}};
+	const auto Delta=CapturePatch(Recorded,std::span(&Whole,1));
+	Check(Delta->Cells.size()==2048 && Recorded.Apply(std::span(&Whole,1)));
+	const auto Saved=Encode(Recorded);
+	const auto Undo=ReplayWrites(Recorded,*Delta,false);
+	Check(Recorded.ApplyCellPatch(Undo) && !Recorded.GetOccupiedCount());
+	const auto Redo=ReplayWrites(Recorded,*Delta,true);
+	Check(Recorded.ApplyCellPatch(Redo) && Encode(Recorded)==Saved);
+	Check(Fill(Recorded,SingleCell({0,0,0}),{Stone,0}));
+	const auto Diverged=Encode(Recorded);
+	Reject([&]{ (void)ReplayWrites(Recorded,*Delta,false); });
+	Check(Encode(Recorded)==Diverged);
 	std::cout << "[BlockGrid:FieldTest] Storage, admission, codec and oracle passed\n";
 } catch (const std::exception& Error) { std::cerr<<Error.what()<<'\n'; return 1; }

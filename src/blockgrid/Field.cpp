@@ -170,6 +170,16 @@ namespace gargantuan::blockgrid {
 	bool Field::Apply(std::span<const Write> Writes, std::optional<std::uint64_t> Expected, const Admission& BeforeCommit) {
 		if (Expected && *Expected != Revision) throw std::domain_error("[BlockGrid:Conflict] Grid revision changed");
 		if (Writes.size() > MaximumCommands) throw std::length_error("[BlockGrid:Limit] Too many edit commands");
+		return ApplyChecked(Writes,BeforeCommit);
+	}
+	bool Field::ApplyCellPatch(std::span<const Write> Writes,const Admission& BeforeCommit) {
+		if (Writes.size()>MaximumEditVisits) throw std::length_error("[BlockGrid:Limit] Cell patch limit exceeded");
+		for (const auto& W : Writes)
+			if (!(SingleCell(W.Bounds.Min).MaxExclusive==W.Bounds.MaxExclusive))
+				throw std::invalid_argument("[BlockGrid:History] Expected individual cell writes");
+		return ApplyChecked(Writes,BeforeCommit);
+	}
+	bool Field::ApplyChecked(std::span<const Write> Writes,const Admission& BeforeCommit) {
 		std::size_t Visits = 0;
 		for (const auto& W : Writes) {
 			if (!ValidBlock(W.Value)) throw std::invalid_argument("[BlockGrid:Definition] Invalid definition or orientation");

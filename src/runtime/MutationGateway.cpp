@@ -316,7 +316,10 @@ namespace gargantuan {
 						const bool Editor = Authority.GetOrigin() == MutationCommandOrigin::Studio &&
 							securityContext.Domain == ScriptExecutionDomain::Studio &&
 							securityContext.HasCapability(ScriptCapability::EditorCommands);
-						if (!Gameplay && !Editor)
+						const bool Replay = CommandValue.Edit && CommandValue.Edit->Replay && Authority.GetOrigin()==MutationCommandOrigin::LocalInternal &&
+							(securityContext.Domain==ScriptExecutionDomain::Studio || securityContext.Domain==ScriptExecutionDomain::Core) &&
+							securityContext.HasCapability(ScriptCapability::EditorCommands);
+						if ((!Gameplay && !Editor && !Replay) || (CommandValue.Edit && CommandValue.Edit->Replay && !Replay))
 							return {MutationStatus::Unauthorized, {}, "[BlockGrid:Access] Grid editing authority is required"};
 						const auto Grid = std::dynamic_pointer_cast<BlockGrid>(ObjectRegistry::Get().Lookup(CommandValue.Object));
 						if (!Grid || Grid->GetDestroyed() || Grid->IsDestroying())
@@ -328,8 +331,25 @@ namespace gargantuan {
 						if (!CommandValue.Edit)
 							return {MutationStatus::ValidationFailed, {}, "[BlockGrid:Edit] Missing edit"};
 						try {
-							auto Revision = Grid->ApplyWrites(CommandValue.Edit->Writes, CommandValue.Edit->ExpectedRevision);
-							return {.Status=MutationStatus::Success, .Object=CommandValue.Object, .BlockRevision=std::move(Revision)};
+							const auto& Edit = *CommandValue.Edit;
+							if (Replay) {
+								if (!Edit.Writes.empty() || Edit.ExpectedRevision)
+									return {MutationStatus::ValidationFailed,{}, "[BlockGrid:History] Mixed replay command"};
+								auto Writes = blockgrid::ReplayWrites(Grid->GetField(),*Edit.Replay,Edit.Forward);
+								return {.Status=MutationStatus::Success, .Object=CommandValue.Object,
+									.BlockRevision=Grid->ApplyWrites(Writes,{},true)};
+							}
+							const auto ApplyEdit = [&]() -> MutationResult {
+								return {.Status=MutationStatus::Success, .Object=CommandValue.Object,
+									.BlockRevision=Grid->ApplyWrites(Edit.Writes,Edit.ExpectedRevision)};
+							};
+							if (!Editor) return ApplyEdit();
+							if (Edit.ExpectedRevision && Grid->GetBlockRevision()!=*Edit.ExpectedRevision)
+								return {MutationStatus::Conflict,{}, "[BlockGrid:Conflict] Revision changed"};
+							BlockGridTransactionChange History{CommandValue.Object,blockgrid::CapturePatch(Grid->GetField(),Edit.Writes)};
+							// Match ordinary authoring owner/transaction checks, including a no-op.
+							return ApplyAuthoringTransaction(World,"Edit BlockGrid",History,ApplyEdit,
+								[History](const MutationResult&) -> TransactionChange { return History; });
 						} catch (const std::domain_error& E) { return {MutationStatus::Conflict,{},E.what()}; }
 						  catch (const std::length_error& E) { return {MutationStatus::ResourceLimit,{},E.what()}; }
 					} else if constexpr (std::is_same_v<Command, SubmitTerrainEditCommand> ||
@@ -1312,6 +1332,14 @@ namespace gargantuan {
 							return {MutationStatus::ValidationFailed, {}, "History property state has diverged"};
 						auto Value = ResolveWireReferences(Forward ? Typed.After : Typed.Before, History);
 						return Gateway.Apply(UpdateWirePropertyCommand{Object, Typed.PropertyName, std::move(Value)},
+							MutationAuthorityContext::Local(SecurityContext));
+					} else if constexpr (std::is_same_v<ChangeType, BlockGridTransactionChange>) {
+						const auto Object = History.ResolveIdentity(Typed.Object);
+						if (!Typed.Delta) return {MutationStatus::ValidationFailed,{},"Missing BlockGrid history"};
+						auto Input = std::make_shared<blockgrid::EditRequest>();
+						Input->Replay = Typed.Delta;
+						Input->Forward = Forward;
+						return Gateway.Apply(SubmitBlockGridEditCommand{Object,World.GetObjectId(),std::move(Input)},
 							MutationAuthorityContext::Local(SecurityContext));
 					} else if constexpr (std::is_same_v<ChangeType, ScriptSourceTransactionChange>) {
 						auto Object = History.ResolveIdentity(Typed.Object);

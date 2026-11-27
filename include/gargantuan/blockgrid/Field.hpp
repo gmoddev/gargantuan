@@ -98,10 +98,12 @@ namespace gargantuan::blockgrid {
 		using Admission = std::function<bool(const Candidate&, std::span<const Write>)>;
 		[[nodiscard]] bool Apply(std::span<const Write> Writes, std::optional<std::uint64_t> Expected = {},
 			const Admission& BeforeCommit = {});
+		[[nodiscard]] bool ApplyCellPatch(std::span<const Write> Cells, const Admission& BeforeCommit = {});
 
 	  private:
 		friend std::vector<std::uint8_t> Encode(const Field&);
 		friend Field Decode(std::span<const std::uint8_t>);
+		[[nodiscard]] bool ApplyChecked(std::span<const Write> Writes, const Admission& BeforeCommit);
 		Directory Leaves;
 		std::size_t Occupied{};
 		std::size_t EncodedBytes{9};
