@@ -18,6 +18,7 @@ namespace gargantuan::network {
 	struct GridStreamScope {
 		std::uint64_t Epoch{};
 		ObjectId Grid{}, Domain{};
+		std::uint64_t GrantGeneration{};
 		bool operator==(const GridStreamScope &) const = default;
 	};
 	struct GridStreamMessage {

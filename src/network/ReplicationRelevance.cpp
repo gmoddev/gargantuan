@@ -202,6 +202,7 @@ namespace gargantuan::network {
 			ObjectId LocalPlayer;
 			ObjectId OwnerCharacter;
 			ObjectId AuthorizedSpatialRegion;
+			std::shared_ptr<const SpatialStagingGrant> Staging;
 			std::vector<glm::vec3> TrustedFocus;
 			std::vector<glm::vec3> ResolvedFocus;
 			std::set<ObjectId> RelevantSpatialRoots;
@@ -671,11 +672,12 @@ namespace gargantuan::network {
 							  : std::vector<glm::vec3>{};
 		}
 
-		bool BuildSelection(PeerState &Peer) {
+		bool BuildSelection(PeerState &Peer, bool ChangingGrant = false) {
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::RelevanceSelection);
 			std::set<ObjectId> Required = ReplicatedServiceRoots;
 			runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::RelevanceSelection, Required.size());
 			std::set<ObjectId> Desired = GlobalObjects;
+			if (Peer.Staging) Desired.insert(Peer.Staging->Objects.begin(), Peer.Staging->Objects.end());
 			runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::RelevanceSelection, GlobalObjects.size());
 			if (Peer.LocalPlayer.IsValid()) Required.insert(Peer.LocalPlayer);
 			if (const auto Gui = PlayerGuiObjects.find(Peer.LocalPlayer); Gui != PlayerGuiObjects.end()) {
@@ -707,10 +709,11 @@ namespace gargantuan::network {
 			runtime_detail::RecordWorkDisposition(runtime_detail::WorkPhase::RelevanceSelection, true, Desired.size());
 			if (Desired.size() > Configuration.MaximumDesiredObjectsPerPeer ||
 				Required.size() > Configuration.MaximumDesiredObjectsPerPeer) {
-				Fail("Peer relevance selection exceeds its object limit");
+				if (!ChangingGrant) Fail("Peer relevance selection exceeds its object limit");
 				return false;
 			}
 			if (Peer.Selection->LocalPlayer != Peer.LocalPlayer || Peer.Selection->AuthorizedSpatialRegion != Peer.AuthorizedSpatialRegion ||
+				Peer.Selection->Staging != Peer.Staging ||
 				!std::ranges::equal(Required, Peer.Selection->RequiredObjects) ||
 				!std::ranges::equal(Desired, Peer.Selection->DesiredObjects)) {
 				runtime_detail::WorkScope CommitWork(runtime_detail::WorkPhase::RelevanceCommit);
@@ -719,6 +722,7 @@ namespace gargantuan::network {
 				Selection.DesiredObjects.assign(Desired.begin(), Desired.end());
 				Selection.LocalPlayer = Peer.LocalPlayer;
 				Selection.AuthorizedSpatialRegion = Peer.AuthorizedSpatialRegion;
+				Selection.Staging = Peer.Staging;
 				Peer.Selection = std::make_shared<const PeerRelevanceSelection>(std::move(Selection));
 			}
 			return true;
@@ -900,6 +904,37 @@ namespace gargantuan::network {
 		}
 		State->RefreshDesiredObjectGauge();
 		State->NextWorkTick = 0;
+		return true;
+	}
+
+	bool ReplicationRelevance::SetSpatialAudience(ConnectionId Connection, ObjectId Region,
+		std::shared_ptr<const SpatialStagingGrant> Staging) {
+		const auto It = State->Peers.find(Connection);
+		if (!State->Healthy || !State->Configuration.ScopeSpatialDomains || It == State->Peers.end()) return false;
+		const auto LiveRegion = [&](ObjectId Id) {
+			if (Id == ObjectId{}) return true;
+			const auto Live = std::dynamic_pointer_cast<SpatialRegion>(ObjectRegistry::Get().Lookup(Id));
+			return Live && SpatialRegion::FindAttachedWorld(*Live).get() == State->SourceRoot.get();
+		};
+		if (!LiveRegion(Region)) return false;
+		if (Staging && (!Staging->Serial || Staging->Region == Region || !LiveRegion(Staging->Region) ||
+			Staging->Objects.empty() || Staging->Objects.size() > MaximumSpatialStagingObjects ||
+			!std::ranges::is_sorted(Staging->Objects) ||
+			std::adjacent_find(Staging->Objects.begin(), Staging->Objects.end()) != Staging->Objects.end())) return false;
+		auto &Peer = It->second;
+		const auto PreviousRegion = Peer.AuthorizedSpatialRegion;
+		auto PreviousStage = std::exchange(Peer.Staging, std::move(Staging));
+		auto PreviousCandidates = std::move(Peer.RuntimeCharacterCandidates);
+		Peer.AuthorizedSpatialRegion = Region;
+		if (!State->BuildSelection(Peer, true)) {
+			Peer.AuthorizedSpatialRegion = PreviousRegion;
+			Peer.Staging = std::move(PreviousStage);
+			Peer.RuntimeCharacterCandidates = std::move(PreviousCandidates);
+			return false;
+		}
+		Peer.Dirty = Peer.CriticalDirty = true;
+		State->NextWorkTick = 0;
+		State->RefreshDesiredObjectGauge();
 		return true;
 	}
 

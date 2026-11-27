@@ -435,7 +435,7 @@ ReplicationScheduleResult ReplicationCoordinator::RequestPlanning(ConnectionId C
 	if (Found == Peers.end() || !Found->second.Planned || !Selection) return {"Invalid structural planning peer"};
 	auto &Peer = Found->second;
 	if (Selection->LocalPlayer != Peer.LocalPlayer) return {"The local player of a replication peer is immutable"};
-	if (Selection->AuthorizedSpatialRegion != GetSpatialGrant(Peer.LocalPlayer)) return {"The spatial audience is immutable within a replication epoch"};
+	if (!MatchesSpatialAudience(*Selection,Peer.LocalPlayer)) return {"The selection does not match the trusted spatial audience"};
 	if (!Peer.PlanningError.empty()) return {Peer.PlanningError};
 	if (Peer.PreparedCommit) return {"A structural frame is awaiting scheduler acceptance"};
 	if (Selection->DesiredObjects.size() > MaximumPeerDesiredObjects || Selection->RequiredObjects.size() > MaximumPeerDesiredObjects)

@@ -3,6 +3,7 @@
 #pragma once
 #include "gargantuan/blockgrid/AssetAudience.hpp"
 #include "gargantuan/network/BlockGridStream.hpp"
+#include "gargantuan/network/SpatialTransfer.hpp"
 
 #include <functional>
 #include <map>
@@ -18,13 +19,14 @@ namespace gargantuan::network {
 		using Resolve = std::function<std::shared_ptr<BlockGrid>(ObjectId)>;
 		using Send = std::function<bool(const GridStreamMessage &)>;
 		BlockGridPeer(bool Server, std::uint64_t Epoch, ObjectId Domain,
-			std::shared_ptr<const blockgrid::SharedAssetPins> SharedAssets = {});
+			std::shared_ptr<const blockgrid::SharedAssetPins> SharedAssets = {}, std::uint64_t GrantGeneration = 0);
 		void Track(ObjectId Grid);
 		void Forget(ObjectId Grid);
 		void Retire();
 		void Receive(const GridStreamMessage &Message, const Resolve &Find, std::uint64_t Tick);
 		void Pump(const Resolve &Find, const Send &Queue, std::uint64_t Tick);
 		[[nodiscard]] bool IsInstalled(ObjectId Source, const BlockGrid &Grid) const;
+		[[nodiscard]] std::optional<SpatialAppliedBinding> GetBinding(ObjectId Source, const BlockGrid &Grid, bool Empty) const;
 
 	  private:
 		struct Entry {
@@ -47,6 +49,7 @@ namespace gargantuan::network {
 		bool Server;
 		std::uint64_t Epoch{}, NextToken{1};
 		ObjectId Domain, LastServed;
+		std::uint64_t GrantGeneration{};
 		std::shared_ptr<const blockgrid::SharedAssetPins> SharedAssets;
 		std::map<ObjectId, Entry> Grids;
 		std::optional<Transfer> Active;

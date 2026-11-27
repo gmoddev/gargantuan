@@ -10,6 +10,7 @@
 
 #include "GameSessionTestAccess.hpp"
 #include "BlockGridPeer.hpp"
+#include "SpatialAudience.hpp"
 #include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
@@ -226,6 +227,13 @@ namespace gargantuan::network {
 		};
 
 		struct Peer {
+			struct TransferDomain {
+				SpatialAudienceFrame Frame;
+				std::shared_ptr<const SpatialStagingGrant> Grant;
+				std::unique_ptr<BlockGridPeer> Grids;
+				SpatialTransferClock::time_point Expires;
+				AssetContentId EmptyTerrainPin;
+			};
 			struct PoseBinding {
 				std::uint64_t Epoch = 0;
 				std::uint64_t LastSentTick = 0;
@@ -240,6 +248,8 @@ namespace gargantuan::network {
 			ObjectId PlayerObject;
 			ObjectId AuthorizedSpatialRegion;
 			std::unique_ptr<BlockGridPeer> Grids;
+			std::unique_ptr<TransferDomain> Staging;
+			std::uint64_t CurrentGrantGeneration{}, LastStagingSerial{};
 			std::uint32_t PlayerId = 0;
 			std::optional<TerrainSessionWindow> TerrainWindow;
 			TerrainWindowIdentity TerrainIdentity;
@@ -933,23 +943,41 @@ namespace gargantuan::network {
 			});
 		}
 
-		std::shared_ptr<BlockGrid> ResolveGrid(ConnectionId Connection, const Peer &Value, ObjectId Id) const {
+#include "SpatialSessionContent.inl"
+
+		std::shared_ptr<BlockGrid> ResolveGrid(ConnectionId Connection, const Peer &Value, ObjectId Id, bool Staged) const {
+			if (Staged && (!Value.Staging || SpatialTransferClock::now() >= Value.Staging->Expires ||
+				!std::ranges::binary_search(Value.Staging->Grant->Objects, Id))) return {};
+			const auto Region = Staged ? Value.Staging->Grant->Region : Value.AuthorizedSpatialRegion;
 			const bool Server = Configuration.Role == GameSessionRole::Server;
 			if (Server && (!Replication || !Replication->CanDeliverSpatialContent(Connection,Id))) return {};
 			auto Grid = std::dynamic_pointer_cast<BlockGrid>(Server ? ObjectRegistry::Get().Lookup(Id) : Replica.Resolve(Id));
 			if (!Grid || !Runtime || Grid->GetDataModel() != Runtime->DataModel || Grid->IsDestroying() || Grid->GetDestroyed()) return {};
 			auto Owner = WorldRoot::GetEffectiveWorld(*Grid);
-			if (Owner == Runtime->Workspace) return Value.AuthorizedSpatialRegion == ObjectId{} ? Grid : nullptr;
+			if (Owner == Runtime->Workspace) return Region == ObjectId{} ? Grid : nullptr;
 			if (!Owner || !std::dynamic_pointer_cast<SpatialRegion>(Owner)) return {};
 			const auto Source = Server ? std::optional(Owner->GetObjectId()) : Replica.GetSourceObject(*Owner);
-			return Source && *Source == Value.AuthorizedSpatialRegion ? Grid : nullptr;
+			return Source && *Source == Region ? Grid : nullptr;
 		}
 
 		void PumpGrids(ConnectionId Connection, Peer &Value) {
 			if (!Value.Grids || Value.Phase != PeerPhase::Ready || PendingPeerFailures.contains(Connection)) return;
 			try {
-				Value.Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection,Value,Id); },
-					[&](const GridStreamMessage &M) { return QueueTerrainFrame(Connection,Value,EncodeGridStream(M)); },CurrentTick);
+				const auto Send = [&](const GridStreamMessage &Frame) {
+					return QueueTerrainFrame(Connection, Value, EncodeGridStream(Frame));
+				};
+				Value.Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, false); }, Send, CurrentTick);
+				if (Value.Staging) {
+					const auto Now = SpatialTransferClock::now();
+					if (Now < Value.Staging->Expires) {
+						Value.Staging->Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, true); }, Send, CurrentTick);
+					} else if (Configuration.Role == GameSessionRole::Server) {
+						if (!ReleaseTransferDomain(Connection, Value.Staging->Frame.Serial))
+							throw std::runtime_error("[Spatial:Network] Expired audience could not be released");
+					} else if (Now >= Value.Staging->Expires + std::chrono::seconds(2)) {
+						throw std::runtime_error("[Spatial:Network] Expired audience awaiting disposition");
+					}
+				}
 			} catch (const std::exception &Error) {
 				PendingPeerFailures.try_emplace(Connection,DisconnectInfo{DisconnectReason::ResourceExhaustion,Error.what()});
 			}
@@ -963,8 +991,16 @@ namespace gargantuan::network {
 			}
 			try {
 				const auto Parsed = DecodeGridStream(Message.Payload);
-				if (!Parsed) throw std::invalid_argument("[BlockGrid:Network] Malformed grid frame");
-				Value.Grids->Receive(*Parsed,[&](ObjectId Id) { return ResolveGrid(Message.Connection,Value,Id); },CurrentTick);
+				if (!Parsed || Parsed->Scope.Epoch != Value.SessionEpoch)
+					throw std::invalid_argument("[BlockGrid:Network] Malformed or foreign grid frame");
+				const auto Generation = Parsed->Scope.GrantGeneration;
+				const bool Staged = Value.Staging && Generation == Value.Staging->Frame.Serial;
+				if (!Staged && Generation != Value.CurrentGrantGeneration) {
+					if (Generation <= Value.LastStagingSerial) return;
+					throw std::invalid_argument("[BlockGrid:Network] Unissued audience generation");
+				}
+				auto &Lane = Staged ? Value.Staging->Grids : Value.Grids;
+				Lane->Receive(*Parsed, [&](ObjectId Id) { return ResolveGrid(Message.Connection, Value, Id, Staged); }, CurrentTick);
 			} catch (const std::exception &Error) {
 				Reject(Message.Connection,DisconnectReason::ProtocolViolation,Error.what());
 			}
@@ -1612,7 +1648,7 @@ namespace gargantuan::network {
 					auto ReplicaObject = Replica.Resolve(Object);
 					if (ClientRuntimeAttached && LocalPeer != Peers.end() && LocalPeer->second.Grids &&
 						std::dynamic_pointer_cast<BlockGrid>(ReplicaObject)) {
-						try { LocalPeer->second.Grids->Track(Object); }
+						try { TrackGrid(Message.Connection, LocalPeer->second, Object); }
 						catch (const std::exception &Error) { FailSession({DisconnectReason::ResourceExhaustion,Error.what()}); return; }
 					}
 					if (std::dynamic_pointer_cast<KinematicCharacter>(ReplicaObject))
@@ -1633,7 +1669,10 @@ namespace gargantuan::network {
 					// can destroy a subtree before its later bounded Leave frames arrive.
 					// The post-apply sweep already retires those local registrations.
 					const bool WasKnown = ClientKnownObjects.erase(Object) != 0;
-					if (LocalPeer != Peers.end() && LocalPeer->second.Grids) LocalPeer->second.Grids->Forget(Object);
+					if (LocalPeer != Peers.end() && LocalPeer->second.Grids) {
+						LocalPeer->second.Grids->Forget(Object);
+						if (LocalPeer->second.Staging) LocalPeer->second.Staging->Grids->Forget(Object);
+					}
 					ClientCharacterObjects.erase(Object);
 					ClientRemoteObjects.erase(Object);
 					PendingClientGuiCode.erase(Object);
@@ -1889,6 +1928,10 @@ namespace gargantuan::network {
 			const auto Magic = FrameMagic(Received.Payload);
 			if (Magic == 0x53455347) {
 				HandleSessionMessage(Received.Connection, Received);
+				return;
+			}
+			if (Magic == SpatialAudienceMagic) {
+				ReceiveSpatialAudience(Received, PeerIterator->second);
 				return;
 			}
 			if (IsGridStream(Received.Payload)) {
@@ -2615,6 +2658,7 @@ namespace gargantuan::network {
 			if (Iterator == Peers.end()) return;
 			auto PeerValue = std::move(Iterator->second);
 			Peers.erase(Iterator);
+			if (PeerValue.Staging) PeerValue.Staging->Grids->Retire();
 			if (PeerValue.Grids) PeerValue.Grids->Retire();
 			if (PeerValue.TerrainPending && PeerValue.TerrainPending->Sending)
 				PeerValue.TerrainPending->Sending->Stop.request_stop();
@@ -3532,7 +3576,7 @@ namespace gargantuan::network {
 					NetworkSpatialProfile = Runtime->DataModel->AcquireDefaultNetworkSpatialProfile(true);
 					AttachSpatialProtection();
 					for (const auto Id : ClientKnownObjects)
-						if (std::dynamic_pointer_cast<BlockGrid>(Replica.Resolve(Id))) PeerValue.Grids->Track(Id);
+						if (std::dynamic_pointer_cast<BlockGrid>(Replica.Resolve(Id))) TrackGrid(*PrimaryConnection, PeerValue, Id);
 				}
 				InitializeClientManagers();
 				if (Configuration.TerrainBootstrap &&

@@ -6,6 +6,7 @@
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/network/SpatialTransfer.hpp"
+#include "../src/network/SpatialAudience.hpp"
 #include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/services/Workspace.hpp"
@@ -25,6 +26,33 @@ namespace {
 
 	void Check(bool Value, const char *Reason) {
 		if (!Value) throw std::runtime_error(Reason);
+	}
+
+	void CheckAudienceFrames() {
+		const ObjectId Domain{13,1}, Wall{14,1};
+		SpatialAudienceFrame Stage{SpatialAudienceAction::Stage, 3, 9, Domain, Bounds, true, {Domain,Wall}};
+		const auto Bytes = EncodeSpatialAudience(Stage);
+		const auto Copy = DecodeSpatialAudience(Bytes);
+		Check(Copy && Copy->Destination == Domain && Copy->Serial == 9 && Copy->Objects == Stage.Objects &&
+			Copy->Bounds == Bounds && Copy->EmptyTerrain, "bounded audience manifest round trip");
+		for (std::size_t N = 0; N < Bytes.size(); ++N)
+			Check(!DecodeSpatialAudience(std::span(Bytes).first(N)), "truncated staging manifest");
+		auto Bad = Bytes;
+		Bad.push_back(std::byte{0});
+		Check(!DecodeSpatialAudience(Bad), "trailing staging payload");
+		Stage.Objects = {Wall, Domain};
+		Check(!ValidSpatialAudience(Stage), "unsorted staging grants");
+		Stage.Objects = {Wall};
+		Check(!ValidSpatialAudience(Stage), "destination absent from grant");
+		Stage.Objects = {Domain, Domain};
+		Check(!ValidSpatialAudience(Stage), "repeated identities");
+		Stage.Objects = {Domain};
+		Stage.Bounds.Maximum.x = Stage.Bounds.Minimum.x + 513;
+		Check(!ValidSpatialAudience(Stage), "oversize landing volume");
+		Stage.Action = SpatialAudienceAction::Release;
+		Check(!ValidSpatialAudience(Stage), "release cannot add members");
+		Stage.Objects.clear();
+		Check(DecodeSpatialAudience(EncodeSpatialAudience(Stage)).has_value(), "release round trip");
 	}
 
 	struct Realm {
@@ -529,6 +557,7 @@ namespace {
 }
 int main() try {
 	BootstrapNativeRuntimeSchema();
+	CheckAudienceFrames();
 	CheckedHandoff();
 	PreventBypasses();
 	CharacterAdmission();

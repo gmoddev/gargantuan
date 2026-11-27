@@ -227,6 +227,7 @@ namespace gargantuan::network {
 		void ProcessCatalogRetirement(std::uint64_t SimulationTick);
 		[[nodiscard]] const ReplicationView *GetView(ConnectionId Connection) const;
 		[[nodiscard]] bool CanDeliverSpatialContent(ConnectionId Connection, ObjectId Object) const;
+		bool ApplySpatialAudience(ConnectionId Connection, std::shared_ptr<const PeerRelevanceSelection> Selection, std::uint64_t Tick);
 		[[nodiscard]] bool HasPendingRelevance(ConnectionId Connection) const;
 		[[nodiscard]] std::size_t GetPendingCriticalTransitionCount(ConnectionId Connection) const;
 		[[nodiscard]] bool HasPendingStructuralWork() const;
@@ -358,6 +359,8 @@ namespace gargantuan::network {
 		std::shared_ptr<Instance> SourceRoot;
 		ObjectId SourceRootId;
 		std::map<ObjectId, ObjectId> SpatialGrants;
+		std::map<ObjectId, std::shared_ptr<const SpatialStagingGrant>> SpatialStages;
+		[[nodiscard]] bool MatchesSpatialAudience(const PeerRelevanceSelection &Selection, ObjectId Player) const;
 		bool InstallSpatialGrant(ObjectId Player, ObjectId Region, std::string &Error);
 		[[nodiscard]] ObjectId GetSpatialGrant(ObjectId Player) const;
 		bool FrozenQuote = false;
