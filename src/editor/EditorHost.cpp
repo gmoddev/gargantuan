@@ -1651,6 +1651,19 @@ namespace gargantuan {
 		TerrainAuthoring->Pending.reset();
 	}
 
+	bool EditorHost::HasNodeDevelopmentPersistence() const {
+		return NodeDevelopment && NodeDevelopment->Admit &&
+			StudioSecurity.HasCapability(ScriptCapability::EditorCommands) &&
+			StudioSecurity.HasCapability(ScriptCapability::ReadDataModel);
+	}
+
+	bool EditorHost::MatchesNodeDevelopmentProject(const std::optional<Project> &Candidate) const {
+		if (!HasNodeDevelopmentPersistence() || !Candidate || NodeDevelopment->Project != Candidate->Identity)
+			return false;
+		std::error_code Error;
+		return std::filesystem::equivalent(Candidate->Root, NodeDevelopment->ProjectRoot, Error) && !Error;
+	}
+
 	void EditorHost::ResetAuthoringCursors() {
 		Cursor.reset();
 		TeamCursors.fill(std::nullopt);
@@ -1712,6 +1725,13 @@ namespace gargantuan {
 				if (World && World->Transactions.GetOpenCount() != 0)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "TransactionOpen", "A local authoring transaction is open"));
 			}
+			const auto EncodeActiveProjectState = [&](const std::shared_ptr<DataModel> &Document,
+				std::uint64_t SavedRevision, const std::optional<Project> &Project) {
+				auto State = EncodeProjectState(Document, SavedRevision, Project, TeamAuthor);
+				if (TeamAuthor == 0 && HasNodeDevelopmentPersistence())
+					State["PlayNodeDevelopmentAvailable"] = MatchesNodeDevelopmentProject(Project);
+				return State;
+			};
 			auto &RequestCursor = TeamAuthor == 0 ? Cursor : TeamCursors[TeamAuthor - 1];
 			// Batch failures and diagnostic operations cannot commit an unrelated
 			// expired legacy group. These diagnostics do not edit document state.
@@ -1820,9 +1840,7 @@ namespace gargantuan {
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport",
 					"ViewportLatestFrame", "ViewportPresentationDiagnostics", "GuiPreview", "GuiPreviewLayout"
 				};
-				const bool PrivateNode = TeamAuthor == 0 && NodeDevelopment && NodeDevelopment->Admit &&
-					StudioSecurity.HasCapability(ScriptCapability::EditorCommands) &&
-					StudioSecurity.HasCapability(ScriptCapability::ReadDataModel);
+				const bool PrivateNode = HasNodeDevelopmentPersistence();
 				if (PrivateNode) capabilities.push_back("PlayNodeDevelopmentPersistence");
 				const auto ExecutableDirectory = Paths::GetExecutableDirectory();
 				if (std::filesystem::is_regular_file(ExecutableDirectory / "RuntimeDistribution" /
@@ -2224,9 +2242,7 @@ namespace gargantuan {
 				}
 				std::shared_ptr<IPersistenceProvider> Persistence;
 				if (NodeMode) {
-					std::error_code Error;
-					if (!NodeDevelopment || !NodeDevelopment->Admit || NodeDevelopment->Project != CurrentProject->Identity ||
-						!std::filesystem::equivalent(CurrentProject->Root, NodeDevelopment->ProjectRoot, Error) || Error)
+					if (!MatchesNodeDevelopmentProject(CurrentProject))
 						return SerializeBoundedResponse(ErrorResponse(requestId, "PlayNodeDevelopmentUnavailable",
 							"The opened project has no approved private Node development binding"));
 					try {
@@ -2816,7 +2832,7 @@ namespace gargantuan {
 					TerrainOwner = Space->GetTerrain()->GetObjectId();
 					auto Encoded = JsonCodec::Encode(SuccessResponse(requestId, {
 						{"Root", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Document->GetObjectId()))},
-						{"ProjectState", EncodeProjectState(Document, Document->GetAuthoritativeRevision(), CandidateProject)},
+						{"ProjectState", EncodeActiveProjectState(Document, Document->GetAuthoritativeRevision(), CandidateProject)},
 					}), "EditorHost OpenProject response");
 					if (!Encoded || Encoded->size() > EditorHostMaximumResponseBytes) {
 						Response = SerializeBoundedResponse(ErrorResponse(requestId, "ResponseTooLarge",
@@ -3011,7 +3027,7 @@ namespace gargantuan {
 				}
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"Root", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(World->GetObjectId()))},
-					{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
+					{"ProjectState", EncodeActiveProjectState(World, PersistedRevision, CurrentProject)},
 				}));
 			}
 
@@ -3021,7 +3037,7 @@ namespace gargantuan {
 				if (!World || !CurrentProject)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded"));
 				return SerializeBoundedResponse(SuccessResponse(
-					requestId, EncodeProjectState(World, PersistedRevision, CurrentProject, TeamAuthor)
+					requestId, EncodeActiveProjectState(World, PersistedRevision, CurrentProject)
 				));
 			}
 
@@ -3512,7 +3528,7 @@ namespace gargantuan {
 						World->Root = CurrentProject->Root;
 						World->Filesystem = Filesystem.get();
 					}
-					Json result = EncodeProjectState(World, PersistedRevision, CurrentProject, TeamAuthor);
+					Json result = EncodeActiveProjectState(World, PersistedRevision, CurrentProject);
 					result["PersistedRevision"] = snapshot.Revision;
 					return SerializeBoundedResponse(SuccessResponse(requestId, std::move(result)));
 				} catch (const std::filesystem::filesystem_error &) {
@@ -4078,7 +4094,7 @@ namespace gargantuan {
 					Candidate->InitializeLoadedProjectRevision();
 					Response = SerializeBoundedResponse(SuccessResponse(requestId, {
 						{"Root", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Candidate->GetObjectId()))},
-						{"ProjectState", EncodeProjectState(Candidate, 0, CurrentProject)},
+						{"ProjectState", EncodeActiveProjectState(Candidate, 0, CurrentProject)},
 					}));
 				} catch (const std::exception &) {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "GasImportFailed", "GASP place could not be opened with the current project inputs"));
@@ -4434,7 +4450,7 @@ namespace gargantuan {
 					requestId,
 					{
 						{"Snapshot", std::move(EncodedSnapshot)},
-						{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject, TeamAuthor)},
+						{"ProjectState", EncodeActiveProjectState(World, PersistedRevision, CurrentProject)},
 					}
 				), &Encoded);
 				if (TeamAuthor != 0 && Encoded) RequestCursor = snapshot.Cursor;

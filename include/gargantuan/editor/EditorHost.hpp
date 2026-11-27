@@ -139,6 +139,8 @@ namespace gargantuan {
 		std::uint64_t NextPackageJobId = 1;
 
 		void AdvanceViewportGeneration();
+		bool HasNodeDevelopmentPersistence() const;
+		bool MatchesNodeDevelopmentProject(const std::optional<Project> &Candidate) const;
 		void ResetAuthoringCursors();
 		void ResetViewportSpatial();
 		void ResetEditorViewportDocument();
