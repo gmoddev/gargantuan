@@ -19,6 +19,7 @@
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
 #endif
 #include "gargantuan/packaging/PackageBuilder.hpp"
+#include "gargantuan/persistence/LocalPersistenceProvider.hpp"
 #include "gargantuan/platform/HostEvent.hpp"
 #include "gargantuan/reflection/PreRunRegistration.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -221,7 +222,7 @@ namespace {
 	}
 
 	void RunRelayRescue(bool UseGns, bool RenderGpu, bool EnableAudio, const std::filesystem::path &ProjectRoot,
-		const std::optional<std::filesystem::path> &GasPlacePath, bool CustomCharacter) {
+		const std::optional<std::filesystem::path> &GasPlacePath, bool CustomCharacter, bool RequireProgression) {
 		auto Network = UseGns ? nullptr : SimulatedNetwork::Create({.BaseLatency = 6ms});
 		const auto CreateTransport = [&]() -> std::shared_ptr<IGameTransport> {
 			if (Network) return Network->CreateTransport();
@@ -256,8 +257,10 @@ namespace {
 			std::cerr << "[Gameplay:Relay] " << Message << '\n';
 		};
 		HeadlessRenderer ServerRenderer(Vector2(320, 240));
+		auto Progression = RequireProgression ? MakeMemoryPersistenceProvider() : nullptr;
+		if (RequireProgression) Require(Progression != nullptr, "Relay test selects an owned development provider");
 		Engine ServerRuntime(ServerWorld, &ServerRenderer, ReportError,
-			{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer});
+			{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer, .Persistence = Progression});
 		if (CustomPolicy) {
 			ServerRuntime.Script->RunBootstrapScript(CustomPolicy);
 			Require(CustomPolicy->Status == ScriptStatus::Finished, "custom Character policy starts before peers join");
@@ -555,6 +558,26 @@ namespace {
 			const auto Replica = World->FindFirstChild("RelayCourse", std::nullopt);
 			return Replica && NumberEquals(*Replica, "RelayCharges", 3);
 		});
+		if (Progression) {
+			Until(180, "the third real peer charge commits the Relay completion document", [&] {
+				const auto Result = Progression->Execute({
+					.Kind = PersistenceStoreKind::Document, .Operation = PersistenceOperation::Get,
+					.Store = "RelayDevelopment", .Key = "relay-campaign",
+					.Deadline = PersistenceClock::now() + 20ms,
+				}, {});
+				if (Result.Status != PersistenceStatus::Ok || !Result.Record || Result.Record->Revision != 2) return false;
+				const auto *Payload = std::get_if<PersistenceDocumentValue>(&Result.Record->Payload);
+				const auto *Fields = Payload ? std::get_if<PersistenceDocumentValue::Object>(&Payload->Data) : nullptr;
+				if (!Fields) return false;
+				const auto NumberIsOne = [&](std::string_view Name) {
+					const auto Field = std::ranges::find_if(*Fields, [&](const auto &Value) { return Value.Name == Name; });
+					const auto *Number = Field == Fields->end() ? nullptr : std::get_if<double>(&Field->Value.Data);
+					return Number && *Number == 1.0;
+				};
+				return NumberIsOne("Runs") && NumberIsOne("Completed");
+			});
+			std::cout << "[Gameplay:Relay] progression Runs=1 Completed=1 Revision=2\n";
+		}
 		if (EnableAudio) {
 			for (const auto &Peer : Clients) {
 				const auto Audio = Peer.Runtime->Audio->GetMetrics();
@@ -652,6 +675,7 @@ int main(int ArgumentCount, char **Arguments) {
 		bool RenderGpu = false;
 		bool EnableAudio = false;
 		bool CustomCharacter = false;
+		bool RequireProgression = false;
 		std::filesystem::path ProjectRoot = GARGANTUAN_GAMEPLAY_SAMPLE_ROOT;
 		std::optional<std::filesystem::path> GasPlacePath;
 		for (int Index = 1; Index < ArgumentCount; ++Index) {
@@ -663,11 +687,13 @@ int main(int ArgumentCount, char **Arguments) {
 				EnableAudio = true;
 			else if (Argument == "--custom-character")
 				CustomCharacter = true;
+			else if (Argument == "--require-relay-progression")
+				RequireProgression = true;
 			else if (Argument == "--project" && Index + 1 < ArgumentCount)
 				ProjectRoot = std::filesystem::absolute(Arguments[++Index]);
 			else if (Argument == "--gasp" && Index + 1 < ArgumentCount)
 				GasPlacePath = std::filesystem::absolute(Arguments[++Index]);
-			else throw std::invalid_argument("Use --gns, --gns-gpu, --audio, --custom-character, --project <root>, or --gasp <file>");
+			else throw std::invalid_argument("Use --gns, --gns-gpu, --audio, --custom-character, --require-relay-progression, --project <root>, or --gasp <file>");
 		}
 		struct SdlLifetime {
 			bool Active;
@@ -679,7 +705,7 @@ int main(int ArgumentCount, char **Arguments) {
 			gargantuan::BootstrapPackagedRuntimeSchema(gargantuan::ReadProjectPreRunSource(ProjectRoot));
 		else
 			gargantuan::BootstrapNativeRuntimeSchema();
-		RunRelayRescue(UseGns, RenderGpu, EnableAudio, ProjectRoot, GasPlacePath, CustomCharacter);
+		RunRelayRescue(UseGns, RenderGpu, EnableAudio, ProjectRoot, GasPlacePath, CustomCharacter, RequireProgression);
 		std::cout << "[Gameplay:Relay] Saved two-player mission passed\n";
 		return 0;
 	} catch (const std::exception &Error) {

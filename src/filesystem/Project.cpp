@@ -289,7 +289,7 @@ namespace gargantuan {
 		BaseFilesystem *fs, std::string projectName, std::shared_ptr<Instance> instance, InstanceFormat format
 	) {
 		Project self(fs);
-		if (!SDL_CreateDirectory(self.RootConfiguration.string().c_str())) {
+		if (!SDL_CreateDirectory(Paths::ToUtf8(self.RootConfiguration).c_str())) {
 			throw std::runtime_error(std::format("Failed to create .gargantuan directory: {}", SDL_GetError()));
 		}
 		self.Identity = ProjectId::New();

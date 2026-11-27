@@ -4,6 +4,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/filesystem/Paths.hpp"
 #include "gargantuan/reflection/PreRunRegistration.hpp"
 
 #include <algorithm>
@@ -287,7 +288,7 @@ namespace gargantuan {
 					lifecycle.RegisterNative(authority, seed.NativeType, std::move(seed.Definition));
 				lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::CoreRegistration);
 				lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::PreRunRegistration);
-				ExecutePreRunRegistration(lifecycle, authority, *Source, GetProjectPreRunPath(projectRoot).string());
+				ExecutePreRunRegistration(lifecycle, authority, *Source, Paths::ToUtf8(GetProjectPreRunPath(projectRoot)));
 				lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::Validation);
 				lifecycle.ValidateCandidate(authority);
 				lifecycle.FreezeCandidate(authority);

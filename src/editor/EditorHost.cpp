@@ -176,6 +176,7 @@ namespace gargantuan {
 		}
 
 		Json ErrorResponse(const Json &requestId, std::string code, std::string message) {
+			if (!IsValidProtocolUtf8(message)) message = "EditorHost could not report the failure in UTF-8";
 			return Json{
 				{"Version", EditorHostProtocolVersion},
 				{"RequestId", requestId},
@@ -637,6 +638,11 @@ namespace gargantuan {
 			return Result;
 		}
 
+		std::string EncodeProjectPath(const std::filesystem::path &Path) {
+			const auto Utf8 = Path.generic_u8string();
+			return std::string(reinterpret_cast<const char *>(Utf8.data()), Utf8.size());
+		}
+
 		Json EncodeProjectState(
 			const std::shared_ptr<DataModel> &world,
 			std::uint64_t persistedRevision,
@@ -654,7 +660,7 @@ namespace gargantuan {
 				{"AuthoritativeRevision", authoritativeRevision},
 				{"PersistedRevision", persistedRevision},
 				{"Dirty", authoritativeRevision != persistedRevision},
-				{"CurrentDestination", project->Root.generic_string()},
+				{"CurrentDestination", EncodeProjectPath(project->Root)},
 				{"History", {
 					{"CanUndo", History.CanUndo}, {"CanRedo", History.CanRedo},
 					{"UndoLabel", History.UndoLabel ? Json(*History.UndoLabel) : Json(nullptr)},
@@ -901,7 +907,7 @@ namespace gargantuan {
 			if (encoded.empty() || encoded.size() > 32768 || encoded.find('\0') != std::string::npos ||
 				encoded.find("://") != std::string::npos)
 				return std::nullopt;
-			std::filesystem::path candidate(encoded);
+			const auto candidate = std::filesystem::u8path(encoded);
 			if (!candidate.is_absolute() || candidate.filename().empty()) return std::nullopt;
 			std::error_code error;
 			auto normalized = std::filesystem::weakly_canonical(candidate, error);
@@ -928,7 +934,7 @@ namespace gargantuan {
 			static std::atomic_uint64_t Counter = 1;
 			for (std::size_t Attempt = 0; Attempt < 32; ++Attempt) {
 				const auto Candidate = Destination.parent_path() / std::format(
-					".{}.creating-{}-{}", Destination.filename().string(),
+					".garg-creating-{}-{}",
 					std::chrono::steady_clock::now().time_since_epoch().count(),
 					Counter.fetch_add(1, std::memory_order_relaxed)
 				);
@@ -1827,7 +1833,7 @@ namespace gargantuan {
 				if (ActivePreRunSchemaGeneration != GetRuntimeSchemaLifecycle().GetActiveGeneration())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleSchema", "Reopen the project after schema replacement"));
 				const auto Saved = ReadProjectPreRunSource(CurrentProject->Root);
-				const auto Location = CurrentProject->Root.generic_string();
+				const auto Location = EncodeProjectPath(CurrentProject->Root);
 				const auto LocationRevision = AssetContentId::Hash(std::span(reinterpret_cast<const std::uint8_t *>(Location.data()), Location.size())).ToString();
 				const auto Revision = PreRunRevision(Saved) + "@" + LocationRevision;
 				auto State = [&] {
@@ -2636,11 +2642,13 @@ namespace gargantuan {
 
 			if (method == "OpenProject") {
 				if (!HasOnlyFields(parameters, {"Root"}) || !parameters.contains("Root") ||
-					!parameters["Root"].is_string() || parameters["Root"].get_ref<const std::string &>().empty() ||
-					parameters["Root"].get_ref<const std::string &>().size() > 32768)
+					!parameters["Root"].is_string())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "OpenProject requires a bounded Root"));
 
-				const auto Root = std::filesystem::weakly_canonical(std::filesystem::path(parameters["Root"].get<std::string>()));
+				const auto &EncodedRoot = parameters["Root"].get_ref<const std::string &>();
+				if (EncodedRoot.empty() || EncodedRoot.size() > 32768 || EncodedRoot.find('\0') != std::string::npos)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "OpenProject requires a bounded Root"));
+				const auto Root = std::filesystem::weakly_canonical(std::filesystem::u8path(EncodedRoot));
 				if (!std::filesystem::is_directory(Root))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectNotFound", "Project root is not a directory"));
 

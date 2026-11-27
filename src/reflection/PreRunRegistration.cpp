@@ -5,6 +5,7 @@
 
 #include "gargantuan/reflection/PreRunRegistration.hpp"
 
+#include "gargantuan/filesystem/Paths.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 
 #include <Luau/Compiler.h>
@@ -544,39 +545,39 @@ namespace gargantuan {
 			const auto CanonicalRoot = std::filesystem::weakly_canonical(projectRoot);
 			if (!std::filesystem::is_directory(CanonicalRoot))
 				throw PreRunRegistrationError({
-					PreRunDiagnosticCode::RuntimeError, RequestedPath.string(), {}, "project root is not a directory"
+					PreRunDiagnosticCode::RuntimeError, Paths::ToUtf8(RequestedPath), {}, "project root is not a directory"
 				});
 			if (!std::filesystem::exists(RequestedPath)) return std::nullopt;
 			const auto CanonicalPath = std::filesystem::canonical(RequestedPath);
 			if (!IsPathWithin(CanonicalRoot, CanonicalPath))
 				throw PreRunRegistrationError({
-					PreRunDiagnosticCode::RuntimeError, RequestedPath.string(), {}, "source resolves outside the project root"
+					PreRunDiagnosticCode::RuntimeError, Paths::ToUtf8(RequestedPath), {}, "source resolves outside the project root"
 				});
 			if (!std::filesystem::is_regular_file(CanonicalPath))
 				throw PreRunRegistrationError({
-					PreRunDiagnosticCode::RuntimeError, RequestedPath.string(), {}, "source is not a regular file"
+					PreRunDiagnosticCode::RuntimeError, Paths::ToUtf8(RequestedPath), {}, "source is not a regular file"
 				});
 			const auto Size = std::filesystem::file_size(CanonicalPath);
 			if (Size > MaximumPreRunSourceBytes)
 				throw PreRunRegistrationError({
-					PreRunDiagnosticCode::SourceTooLarge, RequestedPath.string(), {}, "source exceeds its byte limit"
+					PreRunDiagnosticCode::SourceTooLarge, Paths::ToUtf8(RequestedPath), {}, "source exceeds its byte limit"
 				});
 
 			std::ifstream Stream(CanonicalPath, std::ios::binary);
 			if (!Stream)
 				throw PreRunRegistrationError({
-					PreRunDiagnosticCode::RuntimeError, RequestedPath.string(), {}, "source could not be opened"
+					PreRunDiagnosticCode::RuntimeError, Paths::ToUtf8(RequestedPath), {}, "source could not be opened"
 				});
 			std::string Contents(MaximumPreRunSourceBytes + 1, '\0');
 			Stream.read(Contents.data(), static_cast<std::streamsize>(Contents.size()));
 			const auto BytesRead = static_cast<std::size_t>(Stream.gcount());
 			if (BytesRead > MaximumPreRunSourceBytes)
 				throw PreRunRegistrationError({
-					PreRunDiagnosticCode::SourceTooLarge, RequestedPath.string(), {}, "source exceeds its byte limit"
+					PreRunDiagnosticCode::SourceTooLarge, Paths::ToUtf8(RequestedPath), {}, "source exceeds its byte limit"
 				});
 			if (Stream.bad())
 				throw PreRunRegistrationError({
-					PreRunDiagnosticCode::RuntimeError, RequestedPath.string(), {}, "source could not be read"
+					PreRunDiagnosticCode::RuntimeError, Paths::ToUtf8(RequestedPath), {}, "source could not be read"
 				});
 			Contents.resize(BytesRead);
 			return Contents;
@@ -584,11 +585,11 @@ namespace gargantuan {
 			throw;
 		} catch (const std::filesystem::filesystem_error &Error) {
 			throw PreRunRegistrationError({
-				PreRunDiagnosticCode::RuntimeError, RequestedPath.string(), {},
-				"source path could not be resolved: " + std::string(Error.what())
+				PreRunDiagnosticCode::RuntimeError, Paths::ToUtf8(RequestedPath), {},
+				"source path could not be resolved (error " + std::to_string(Error.code().value()) + ")"
 			});
 		} catch (const std::exception &Error) {
-			throw PreRunRegistrationError({PreRunDiagnosticCode::RuntimeError, RequestedPath.string(), {}, Error.what()});
+			throw PreRunRegistrationError({PreRunDiagnosticCode::RuntimeError, Paths::ToUtf8(RequestedPath), {}, Error.what()});
 		}
 	}
 

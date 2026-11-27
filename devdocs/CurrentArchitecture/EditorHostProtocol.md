@@ -205,6 +205,12 @@ does not receive `DefineSchema`, the PreRun facade, candidate registry access,
 or mutable native metadata. The top-level EditorHost protocol remains version
 1; schema discovery is independently versioned.
 
+Project roots and destinations are bounded UTF-8 strings. EditorHost decodes
+them to native filesystem paths before canonicalization and rejects embedded
+NUL. `CurrentDestination` returns canonical UTF-8 with forward separators.
+The disk backend passes UTF-8 to SDL without converting through the Windows
+ANSI code page.
+
 `OpenProject` stages a replacement that uses the active frozen schema
 generation and identical PreRun source, including a pair of absent sources.
 The candidate must load and validate before the host retires the open

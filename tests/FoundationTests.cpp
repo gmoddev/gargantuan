@@ -15,6 +15,7 @@
 #include "gargantuan/editor/PlaySession.hpp"
 #include "gargantuan/editor/EditorViewport.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
+#include "gargantuan/filesystem/Paths.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/network/ReplicaApplier.hpp"
@@ -5285,6 +5286,64 @@ namespace {
 		Reject(DelayedAtResetRevision, "StaleObject");
 	}
 
+	void TestEditorHostUnicodeProjectRoot() {
+		using namespace gargantuan;
+		using Json = nlohmann::ordered_json;
+		const auto Parent = std::filesystem::temp_directory_path() /
+			("gargantuan-unicode-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+		struct TemporaryProjectCleanup {
+			std::filesystem::path Root;
+			~TemporaryProjectCleanup() { std::error_code Error; std::filesystem::remove_all(Root, Error); }
+		} Cleanup{Parent};
+		std::filesystem::create_directories(Parent);
+		const auto Root = Parent / std::filesystem::path(u8"Cafe\u0301-\u6e2c\u8a66-\U0001f680");
+		const auto Copy = Parent / std::filesystem::path(u8"\u4fdd\u5b58-\U0001f680");
+		const auto EncodedRoot = Paths::ToUtf8(Root);
+		EditorHost Host("unicode-test");
+		std::size_t Number = 0;
+		auto Call = [&](std::string_view Method, Json Parameters) {
+			return Json::parse(Host.HandleRequest(Json{{"Version", EditorHostProtocolVersion},
+				{"RequestId", std::to_string(++Number)}, {"SessionToken", "unicode-test"},
+				{"Method", Method}, {"Params", std::move(Parameters)}}.dump()));
+		};
+		(void)Call("Handshake", Json::object());
+		const auto Created = Call("CreateProject", {{"Destination", EncodedRoot}, {"Name", "UnicodeProject"}});
+		Check(Created.value("Ok", false) && std::filesystem::is_regular_file(Root / ".gargantuan" / "project.json"),
+			"EditorHost creates the exact UTF-8 project root");
+		if (!Created.value("Ok", false)) return;
+
+		const auto PreRunPath = Root / ".gargantuan" / "prerun.luau";
+		std::ofstream(PreRunPath, std::ios::binary) << "-- UTF-8 root fixture\n";
+		const auto Opened = Call("OpenProject", {{"Root", EncodedRoot}});
+		const auto PreRun = Call("GetPreRunSource", Json::object());
+		const auto Saved = Call("SaveProject", Json::object());
+		Check(Opened.value("Ok", false) && PreRun.value("Ok", false) && Saved.value("Ok", false),
+			"Unicode project opens with PreRun and saves atomically");
+
+		const auto Copied = Call("SaveProjectAs", {{"Destination", Paths::ToUtf8(Copy)}});
+		Check(Copied.value("Ok", false) && std::filesystem::is_regular_file(Copy / ".gargantuan" / "prerun.luau"),
+			"Save As preserves PreRun at the exact Unicode destination");
+		const auto Reopened = Call("OpenProject", {{"Root", Paths::ToUtf8(Copy)}});
+		const auto State = Call("GetProjectState", Json::object());
+		Check(Reopened.value("Ok", false) && State.value("Ok", false) &&
+			std::filesystem::u8path(State["Result"]["CurrentDestination"].get<std::string>()) ==
+				std::filesystem::weakly_canonical(Copy),
+			"EditorHost round-trips the canonical UTF-8 destination");
+
+		const auto EmbeddedNull = Call("OpenProject", {{"Root", EncodedRoot + '\0' + "suffix"}});
+		Check(!EmbeddedNull.value("Ok", true) && EmbeddedNull["Error"]["Code"] == "MalformedRequest",
+			"OpenProject rejects embedded NUL without reopening a truncated path");
+		std::filesystem::remove(PreRunPath);
+		std::filesystem::create_directory(PreRunPath);
+		const auto BrokenSource = Call("OpenProject", {{"Root", EncodedRoot}});
+		Check(!BrokenSource.value("Ok", true) && BrokenSource["RequestId"] == std::to_string(Number) &&
+			BrokenSource["Error"]["Code"] == "RequestRejected",
+			"invalid PreRun source at a Unicode root keeps the rejection correlated");
+		const auto Preserved = Call("GetProjectState", Json::object());
+		Check(Preserved.value("Ok", false) && Preserved["Result"]["CurrentDestination"] == State["Result"]["CurrentDestination"],
+			"failed Unicode root staging preserves the open project");
+	}
+
 	void TestEditorHostProtocol() {
 		using Json = nlohmann::ordered_json;
 		using namespace gargantuan;
@@ -9187,6 +9246,7 @@ int main() {
 	TestProjectCreationJsonNames();
 	TestAuthoritativeTransactions();
 	TestProjectRevisionPersistence();
+	TestEditorHostUnicodeProjectRoot();
 	TestEditorHostProtocol();
 	TestEditorHostPropertyBatch();
 	TestLuauExceptionBoundary();
