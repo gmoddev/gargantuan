@@ -191,22 +191,25 @@ namespace {
 		};
 		Result["ColdRayUs"] = Microseconds([&] { (void)Ray(0, 0, Site.Tops[0], {}); });
 		if (MeasureMemory) RecordProcessMemory(Result, "Queried");
-		int Hits = 0;
-		const auto WarmQueries = [&] {
+		const auto WarmQueries = [&](bool IncludeGrids, const char *Timing) {
+			Params.IncludeBlockGrids = IncludeGrids;
+			int Hits = 0;
 			// The same odd permutation covers every coordinate in the original 256-cell checkerboard.
-			for (int I = 0; I < 512; ++I) {
-				const auto Index = (I * 173) % (Site.Width * Site.Depth);
-				Hits += Ray(Index % Site.Width, Index / Site.Width, Site.Tops[Index], {});
-			}
+			Result[Timing] = Microseconds([&] {
+				for (int I = 0; I < 512; ++I) {
+					const auto Index = (I * 173) % (Site.Width * Site.Depth);
+					Hits += Ray(Index % Site.Width, Index / Site.Width, Site.Tops[Index], {});
+				}
+			});
+			return Hits;
 		};
-		Result["Warm512RaysUs"] = Microseconds(WarmQueries);
+		std::optional<int> OptInHits;
+		if (!UseGrid && Trial % 2 == 0) OptInHits = WarmQueries(true, "OrdinaryGridOptIn512RaysUs");
+		const auto Hits = WarmQueries(UseGrid, "Warm512RaysUs");
 		Result["Hits"] = Hits;
 		if (!UseGrid) {
-			Params.IncludeBlockGrids = true;
-			Hits = 0;
-			Result["OrdinaryGridOptIn512RaysUs"] = Microseconds(WarmQueries);
-			if (Hits != Result["Hits"].get<int>())
-				throw std::runtime_error("ordinary world result changed with opt-in");
+			if (!OptInHits) OptInHits = WarmQueries(true, "OrdinaryGridOptIn512RaysUs");
+			if (*OptInHits != Hits) throw std::runtime_error("ordinary world result changed with opt-in");
 			Params.IncludeBlockGrids = false;
 		}
 
