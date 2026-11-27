@@ -61,6 +61,13 @@ int main() try {
 		local Other=Instance.new("BlockGrid")
 		Other.Parent=game.Workspace
 		assert(Other:GetRevision()~=G:GetRevision())
+		local Room=Instance.new("SpatialRegion")
+		Room.Parent=game.Workspace
+		local BeforeDomain=G:GetRevision()
+		G.SpatialRegion=Room
+		assert(G.SpatialRegion==Room and G.Parent==game.Workspace and G:GetRevision()~=BeforeDomain)
+		G.SpatialRegion=nil
+		assert(G.SpatialRegion==nil and G:GetRevision()~=BeforeDomain)
 	)");
 	Run(World,RuntimeMode::NetworkClient,ScriptSecurityContext::ClientRuntime(),R"(
 		local G=game.Workspace:FindFirstChild("Construction")

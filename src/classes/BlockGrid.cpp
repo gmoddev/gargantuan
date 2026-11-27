@@ -4,6 +4,7 @@
 #include "gargantuan/blockgrid/Edit.hpp"
 #include "gargantuan/blockgrid/Picking.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/datatypes/Vector3.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
@@ -115,6 +116,16 @@ namespace gargantuan {
 		}
 	}
 	BlockGrid::BlockGrid() { Name="BlockGrid"; }
+	std::optional<std::shared_ptr<SpatialRegion>> BlockGrid::GetSpatialRegion() const { return GetAssignedRegion(); }
+	void BlockGrid::SetSpatialRegion(std::optional<std::shared_ptr<SpatialRegion>> Value) {
+		CheckConfigurationWrite();
+		const auto Before=GetAssignedRegion();
+		SetAssignedRegion(*this,std::move(Value));
+		if (Before!=GetAssignedRegion()) {
+			++ConfigurationRevision;
+			NotifyPropertyCommitted("BlockRevision");
+		}
+	}
 	const blockgrid::Field& BlockGrid::GetField() const {
 		AssertAuthoritativeMutation("BlockGrid field access");
 		AssertIsAlive();
@@ -133,7 +144,9 @@ namespace gargantuan {
 	}
 	std::string BlockGrid::GetBlockRevision() const {
 		const auto Scope=GetReplicationScopeId(), Id=GetObjectId();
-		return std::format("{}.{}:{}.{}:{}:{}",Scope.Slot,Scope.Generation,Id.Slot,Id.Generation,
+		const auto World=WorldRoot::GetEffectiveWorld(*this);
+		const auto Domain=World?World->GetObjectId():ObjectId{};
+		return std::format("{}.{}:{}.{}:{}.{}:{}:{}",Scope.Slot,Scope.Generation,Id.Slot,Id.Generation,Domain.Slot,Domain.Generation,
 			ConfigurationRevision,Cells.GetRevision());
 	}
 	std::string BlockGrid::ApplyWrites(std::span<const blockgrid::Write> Writes, const std::optional<std::string>& Expected,
