@@ -2758,6 +2758,12 @@ namespace gargantuan::network {
 		return true;
 	}
 
+	bool ReplicationCoordinator::CanDeliverSpatialContent(ConnectionId Connection, ObjectId Object) const {
+		const auto Peer = Peers.find(Connection);
+		return Peer != Peers.end() && Peer->second.View.Knows(Object) &&
+			Peer->second.View.RelevantObjects.contains(Object) && IsVisibleToPeer(Object, Peer->second.LocalPlayer);
+	}
+
 	const ReplicationView *ReplicationCoordinator::GetView(ConnectionId Connection) const {
 		auto Peer = Peers.find(Connection);
 		return Peer == Peers.end() ? nullptr : &Peer->second.View;

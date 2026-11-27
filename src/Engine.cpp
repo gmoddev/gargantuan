@@ -94,6 +94,7 @@ namespace gargantuan {
 		} Construction{*this};
 		if (ProviderConfiguration.Mode != RuntimeMode::Offline)
 			NetworkSpatialProfile = DataModel->AcquireDefaultNetworkSpatialProfile(ProviderConfiguration.AdmitSpatialContent);
+		WorldRoot->RequiresSpatialMotionProof = NetworkSpatialProfile && NetworkSpatialProfile->SpatialContent;
 		std::shared_ptr<const terrain::TerrainMaterialPalette> TerrainPalette;
 		bool TerrainVisualDensity = ProviderConfiguration.ExperimentalTerrainVisualDensity;
 		if (ProviderConfiguration.Mode != RuntimeMode::NetworkServer) {
@@ -153,8 +154,10 @@ namespace gargantuan {
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::EngineActivation);
 			if (const auto Region = std::dynamic_pointer_cast<SpatialRegion>(inst);
 				Region && SpatialRegion::FindAttachedWorld(*Region) == DataModel) {
-				if (Mode != RuntimeMode::Offline)
+				if (Mode != RuntimeMode::Offline && !DataModel->SupportsNetworkSpatialContent())
 					throw std::runtime_error("[Spatial:Terrain] This network session cannot admit a spatial domain");
+				Region->RequiresSpatialMotionProof = WorldRoot->RequiresSpatialMotionProof;
+				Region->SpatialMotionAdmission = WorldRoot->SpatialMotionAdmission;
 				(void)Region->GetTerrain();
 				Region->InitializeTerrainRuntime(Mode, false, TerrainVisualDensity, TerrainPalette);
 			}

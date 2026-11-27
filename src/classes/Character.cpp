@@ -161,6 +161,13 @@ namespace gargantuan {
 		const auto Admission = World.TerrainMotionAdmission.lock();
 		const glm::vec3 Extents(Kinematic->GetCapsuleRadius(), Kinematic->GetCapsuleHeight() * 0.5f,
 			Kinematic->GetCapsuleRadius());
+		if (World.RequiresSpatialMotionProof) {
+			const auto Proof = World.SpatialMotionAdmission.lock();
+			if (!Proof || !(*Proof)(World,GetObjectId(),Transform.Position,Transform.Position + WorldTranslation,Extents)) {
+				Result.Status = PhysicsOperationStatus::ResourceLimit;
+				return Result;
+			}
+		}
 		if ((!Admission && World.TerrainReplicaCoverageRequired) ||
 			(Admission && (!(*Admission)(GetObjectId(), Transform.Position, Extents) ||
 				!(*Admission)(GetObjectId(), Transform.Position + WorldTranslation, Extents)))) {

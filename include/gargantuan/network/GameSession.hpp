@@ -70,6 +70,9 @@ namespace gargantuan::network {
 		// Trusted package admission binds both peers before replication starts.
 		std::string RuntimeDistributionIdentity;
 		std::function<void(ObjectId, const std::shared_ptr<LuaSourceContainer> &, bool)> HydratePackagedCode;
+		// Trusted native startup policy. Only the server chooses the initial coordinate domain.
+		bool SpatialContent{};
+		std::function<ObjectId(const Player &)> ResolveInitialSpatialAudience;
 
 		[[nodiscard]] bool IsValid() const;
 		[[nodiscard]] static NetworkLimits DefaultLimits();
