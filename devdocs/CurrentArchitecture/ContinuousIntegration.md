@@ -180,6 +180,8 @@ source, build or authoring project path fails the test with the file and byte
 offset. A source-relative diagnostic such as `./vendor/sdl/src/video/...` retains
 its provenance when the Engine checkout is mounted at `/src`. SDL and the
 qualified GNS target map compiler source and build prefixes privately.
+On Linux, Player and Server search beside the executable first and use
+origin-relative entries for build-tree libraries such as SDL.
 
 The Windows production contract runs the complete registered matrix. The Linux
 sanitizer configuration with `GARGANTUAN_WITH_GNS=OFF` and renderer benchmarks

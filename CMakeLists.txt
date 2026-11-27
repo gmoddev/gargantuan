@@ -504,7 +504,8 @@ set_target_properties(gargantuan_player PROPERTIES OUTPUT_NAME "GargantuanPlayer
 if(APPLE)
 	set_target_properties(gargantuan_player PROPERTIES BUILD_RPATH "@loader_path" INSTALL_RPATH "@loader_path")
 elseif(UNIX)
-	set_target_properties(gargantuan_player PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
+	# Prefer adjacent packaged libraries and keep CMake's extra build-tree lookup relative.
+	set_target_properties(gargantuan_player PROPERTIES BUILD_RPATH "$ORIGIN" BUILD_RPATH_USE_ORIGIN TRUE INSTALL_RPATH "$ORIGIN")
 endif()
 target_link_libraries(gargantuan_player PRIVATE gargantuan_player_host gargantuan_core ${CMAKE_DL_LIBS})
 add_library(gargantuan_server_host STATIC "src/host/server/ServerHost.cpp")
@@ -546,7 +547,7 @@ set_target_properties(gargantuan_server PROPERTIES OUTPUT_NAME "GargantuanServer
 if(APPLE)
 	set_target_properties(gargantuan_server PROPERTIES BUILD_RPATH "@loader_path" INSTALL_RPATH "@loader_path")
 elseif(UNIX)
-	set_target_properties(gargantuan_server PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
+	set_target_properties(gargantuan_server PROPERTIES BUILD_RPATH "$ORIGIN" BUILD_RPATH_USE_ORIGIN TRUE INSTALL_RPATH "$ORIGIN")
 endif()
 target_link_libraries(gargantuan_server PRIVATE gargantuan_server_host gargantuan_core ${CMAKE_DL_LIBS})
 add_executable(gargantuan_packager "tools/PackagerMain.cpp")
