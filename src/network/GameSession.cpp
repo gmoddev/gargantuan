@@ -1083,7 +1083,7 @@ namespace gargantuan::network {
 				std::holds_alternative<std::monostate>(Message.Order);
 		}
 
-		auto FindTerrainSendSlot() {
+		decltype(TerrainSendSlots)::iterator FindTerrainSendSlot() {
 			for (auto &Slot : TerrainSendSlots)
 				if (Slot && Slot->Completion->IsComplete()) Slot.reset();
 			return std::ranges::find_if(TerrainSendSlots, [](const auto &Slot) { return !Slot; });
