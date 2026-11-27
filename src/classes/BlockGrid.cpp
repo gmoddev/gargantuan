@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Team Fireworks
 // SPDX-License-Identifier: MPL-2.0
 #include "gargantuan/classes/BlockGrid.hpp"
+#include "BlockGridBinding.hpp"
 #include "gargantuan/blockgrid/Edit.hpp"
 #include "gargantuan/blockgrid/Picking.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -20,24 +21,25 @@
 #include <string_view>
 
 namespace gargantuan {
-	namespace {
+	namespace blockgrid::binding {
 		using namespace blockgrid;
 		constexpr std::array<std::string_view,6> Faces{"+X","-X","+Y","-Y","+Z","-Z"};
-		BlockGrid& ReadTarget(lua_State* L, Instance* Object, bool Edit = false) {
+		BlockGrid& ReadTarget(lua_State* L, Instance* Object, bool Edit) {
 			const auto* Script = ScriptEngine::Get(L);
 			const auto& Security = GetCurrentScriptSecurityContext();
 			if (!Script || Script->IsStopping() || !Script->DataModel || GetCurrentExecutionDomain()!=ExecutionDomain::Main ||
 				!Security.HasCapability(ScriptCapability::ReadDataModel) || Object->GetDestroyed() || Object->IsDestroying() ||
 				Object->GetDataModel()!=Script->DataModel)
 				throw std::runtime_error("[BlockGrid:Access] Grid must be live in the current DataModel");
-			if (Script->Mode==RuntimeMode::NetworkClient)
+			if (Script->Mode==RuntimeMode::NetworkClient && (Edit || !static_cast<BlockGrid&>(*Object).HasReplicaField()))
 				throw std::runtime_error("[BlockGrid:Unavailable] No verified BlockGrid replica data");
 			if (Edit && (Security.Domain!=ScriptExecutionDomain::Server || !Security.HasCapability(ScriptCapability::MutateDataModel)))
 				throw std::runtime_error("[BlockGrid:Access] Authoritative server gameplay context required");
 			return static_cast<BlockGrid&>(*Object);
 		}
-		Cell ReadCell(lua_State* L, int I, bool Exclusive = false) {
-			const auto V = CheckStackValue<glm::vec3>(L,I);
+		Cell ReadCell(lua_State* L, int I, bool Exclusive) {
+			if (!StackValue<glm::vec3>::Is(L,I)) throw std::invalid_argument("[BlockGrid:Bounds] Expected a cell Vector3");
+			const auto V = StackValue<glm::vec3>::From(L,I);
 			const auto Parse = [Exclusive](float N) {
 				if (!std::isfinite(N) || std::trunc(N)!=N || N < -CoordinateLimit ||
 					N > CoordinateLimit - static_cast<int>(!Exclusive))
@@ -150,6 +152,8 @@ namespace gargantuan {
 			return std::abs(glm::determinant(Frame.Rotation)-1.f)<=1e-4f;
 		}
 	}
+	using namespace blockgrid;
+	using namespace blockgrid::binding;
 	BlockGrid::BlockGrid() { Name="BlockGrid"; }
 	std::optional<std::shared_ptr<SpatialRegion>> BlockGrid::GetSpatialRegion() const { return GetAssignedRegion(); }
 	void BlockGrid::SetSpatialRegion(std::optional<std::shared_ptr<SpatialRegion>> Value) {
@@ -176,6 +180,14 @@ namespace gargantuan {
 		AssertCanMutate();
 		if (Editing) throw std::logic_error("[BlockGrid:Admission] Cannot replace an active admission hook");
 		Admission=std::move(BeforeCommit);
+	}
+	void BlockGrid::InstallReplicaField(blockgrid::Field Value) {
+		AssertCanMutate();
+		if (!GetDataModel() || Editing) throw std::logic_error("[BlockGrid:Replica] Shell is unavailable");
+		Cells.InstallReplica(std::move(Value), Admission);
+		LastCellEdit.reset();
+		ReplicaFieldAvailable = true;
+		NotifyPropertyCommitted("BlockRevision");
 	}
 	std::string BlockGrid::GetBlockRevision() const { return RevisionToken(Cells.GetRevision()); }
 	std::string BlockGrid::GetPublicBlockRevision() const { return RevisionToken(Cells.GetPublicRevision())+"/peers"; }
@@ -309,6 +321,7 @@ namespace gargantuan {
 		const auto& Grid=ReadTarget(L,Object);
 		const Region R{ReadCell(L,2),ReadCell(L,3,true)};
 		(void)Volume(R,MaximumReadCells);
+		const auto Select=ReadFilter(L,4,Grid.Cells);
 		lua_createtable(L,0,2);
 		PushText(L,Grid.GetBlockRevision()); lua_setfield(L,-2,"Revision");
 		lua_newtable(L);
@@ -316,7 +329,7 @@ namespace gargantuan {
 		for (int Z=R.Min.Z; Z<R.MaxExclusive.Z; ++Z) for (int Y=R.Min.Y; Y<R.MaxExclusive.Y; ++Y)
 			for (int X=R.Min.X; X<R.MaxExclusive.X; ++X) {
 				const auto B=Grid.Cells.Get({X,Y,Z});
-				if (B.Definition==Air) continue;
+				if (!Matches(Grid.Cells,Select,{X,Y,Z},B)) continue;
 				lua_createtable(L,0,2);
 				StackValue<glm::vec3>::Push(L,glm::vec3(X,Y,Z)); lua_setfield(L,-2,"Position");
 				PushBlock(L,Grid.Cells,B); lua_setfield(L,-2,"Block"); lua_rawseti(L,-2,++N);

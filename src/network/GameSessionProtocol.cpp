@@ -85,9 +85,10 @@ namespace gargantuan::network {
 		if (!RuntimeDistribution.empty() && !IsGameSessionDistributionIdentity(RuntimeDistribution))
 			return SerializationFailure(SerializationErrorCode::InvalidValue, "Game session distribution identity is invalid");
 		const bool Terrain = std::visit([](const auto &Value) { return Value.TerrainBinding.IsValid(); }, Message);
-		if (Terrain && !RuntimeDistribution.empty())
+		const bool Spatial = std::visit([](const auto &Value) { return Value.SpatialContent; }, Message);
+		if ((Spatial || Terrain) && !RuntimeDistribution.empty())
 			return SerializationFailure(SerializationErrorCode::InvalidValue, "Terrain cannot use a managed game session");
-		Output.Integer(Terrain ? GameSessionTerrainProtocolVersion : RuntimeDistribution.empty()
+		Output.Integer(Spatial ? GameSessionSpatialProtocolVersion : Terrain ? GameSessionTerrainProtocolVersion : RuntimeDistribution.empty()
 			? GameSessionProtocolVersion : GameSessionDistributionProtocolVersion);
 		const auto Kind = std::visit(
 			[](const auto &Value) {
@@ -109,7 +110,7 @@ namespace gargantuan::network {
 				if constexpr (std::is_same_v<ValueType, GameSessionClientHello>) {
 					Output.Integer(Value.Nonce);
 					const auto ValidLimits = WriteLimits(Output, Value.AdvertisedLimits);
-					if (Terrain) Output.Append(std::as_bytes(std::span(Value.TerrainBinding.Bytes)));
+					if (Terrain || Spatial) Output.Append(std::as_bytes(std::span(Value.TerrainBinding.Bytes)));
 					return Value.Nonce != 0 && ValidLimits;
 				} else if constexpr (std::is_same_v<ValueType, GameSessionServerAccepted>) {
 					Output.Integer(Value.Nonce);
@@ -121,7 +122,12 @@ namespace gargantuan::network {
 					Output.Integer<std::uint8_t>(0);
 					Output.Integer<std::uint16_t>(0);
 					const auto ValidLimits = WriteLimits(Output, Value.NegotiatedLimits);
-					if (Terrain) Output.Append(std::as_bytes(std::span(Value.TerrainBinding.Bytes)));
+					if (Terrain || Spatial) Output.Append(std::as_bytes(std::span(Value.TerrainBinding.Bytes)));
+					if (Spatial) {
+						if (Value.AuthorizedSpatialRegion != ObjectId{} && !Value.AuthorizedSpatialRegion.IsValid()) return false;
+						Output.Integer(Value.AuthorizedSpatialRegion.Slot);
+						Output.Integer(Value.AuthorizedSpatialRegion.Generation);
+					} else if (Value.AuthorizedSpatialRegion != ObjectId{}) return false;
 					return Value.Nonce != 0 && Value.SessionEpoch != 0 && Value.Replication.IsValid() &&
 						   Value.Player.IsValid() && Value.PlayerId != 0 &&
 						   Value.Identity == SessionIdentityKind::DevelopmentLocal &&
@@ -130,7 +136,7 @@ namespace gargantuan::network {
 					Output.Integer(Value.SessionEpoch);
 					Output.Integer(Value.Replication.Value());
 					WriteBinaryObjectId(Output, Value.Player);
-					if (Terrain) Output.Append(std::as_bytes(std::span(Value.TerrainBinding.Bytes)));
+					if (Terrain || Spatial) Output.Append(std::as_bytes(std::span(Value.TerrainBinding.Bytes)));
 					return Value.SessionEpoch != 0 && Value.Replication.IsValid() && Value.Player.IsValid();
 				}
 			},
@@ -156,7 +162,8 @@ namespace gargantuan::network {
 			return SerializationFailure(SerializationErrorCode::InvalidSyntax, "Game session magic is invalid");
 		const bool Distribution = Version == GameSessionDistributionProtocolVersion;
 		const bool Terrain = Version == GameSessionTerrainProtocolVersion;
-		if (Version != GameSessionProtocolVersion && !Distribution && !Terrain)
+		const bool Spatial = Version == GameSessionSpatialProtocolVersion;
+		if (Version != GameSessionProtocolVersion && !Distribution && !Terrain && !Spatial)
 			return SerializationFailure(
 				SerializationErrorCode::UnsupportedVersion, "Game session version is unsupported"
 			);
@@ -216,6 +223,16 @@ namespace gargantuan::network {
 			return ReadTerrainBinding(Input, Value.TerrainBinding) && Value.TerrainBinding.IsValid();
 		}, Result))
 			return SerializationFailure(SerializationErrorCode::InvalidValue, "Game session terrain binding is invalid");
+		if (Spatial && !std::visit([&](auto &Value) {
+			Value.SpatialContent = true;
+			if (!ReadTerrainBinding(Input, Value.TerrainBinding)) return false;
+			if constexpr (std::is_same_v<std::decay_t<decltype(Value)>, GameSessionServerAccepted>) {
+				if (!Input.Integer(Value.AuthorizedSpatialRegion.Slot) || !Input.Integer(Value.AuthorizedSpatialRegion.Generation))
+					return false;
+				return Value.AuthorizedSpatialRegion.IsValid() || Value.AuthorizedSpatialRegion == ObjectId{};
+			}
+			return true;
+		}, Result)) return SerializationFailure(SerializationErrorCode::InvalidValue, "Invalid spatial audience binding");
 		if (!Input.Complete())
 			return SerializationFailure(
 				SerializationErrorCode::InvalidValue, "Game session frame contains trailing bytes"

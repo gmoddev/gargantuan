@@ -1,4 +1,5 @@
 #include "gargantuan/classes/BlockGrid.hpp"
+#include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/runtime/SpatialDomainMember.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -57,17 +58,28 @@ namespace gargantuan {
 			throw std::overflow_error("Authoritative project revision is exhausted");
 	}
 
-	void DataModel::CheckDefaultNetworkSpatialParticipant(const Instance &Node) {
+	void DataModel::CheckDefaultNetworkSpatialParticipant(const Instance &Node, bool SpatialContent) {
+		if (SpatialContent) {
+			if (const auto *Region = dynamic_cast<const SpatialRegion *>(&Node)) {
+				const auto TerrainOwner = Region->GetOwnedTerrain();
+				if (TerrainOwner && (TerrainOwner->GetField().GetRevision() || TerrainOwner->GetField().GetGrid() != terrain::GridSpec{}))
+					throw std::invalid_argument("[Spatial:Network] Domain terrain needs a separately admitted content stream");
+			}
+			return;
+		}
 		const auto *Assigned = dynamic_cast<const SpatialDomainMember *>(&Node);
 		if (dynamic_cast<const SpatialRegion *>(&Node) || dynamic_cast<const BlockGrid *>(&Node) ||
 			(Assigned && Assigned->HasAssignedRegion()))
 			throw std::invalid_argument("[Spatial:Network] This session protocol cannot materialize independent domains or native BlockGrid cells");
 	}
 
-	std::shared_ptr<const DataModel::DefaultNetworkSpatialProfile> DataModel::AcquireDefaultNetworkSpatialProfile() {
-		if (auto Existing = NetworkSpatialProfile.lock()) return Existing;
-		for (const auto &Child : GetDescendants()) CheckDefaultNetworkSpatialParticipant(*Child);
-		auto Profile = std::make_shared<const DefaultNetworkSpatialProfile>();
+	std::shared_ptr<const DataModel::DefaultNetworkSpatialProfile> DataModel::AcquireDefaultNetworkSpatialProfile(bool SpatialContent) {
+		if (auto Existing = NetworkSpatialProfile.lock()) {
+			if (Existing->SpatialContent != SpatialContent) throw std::invalid_argument("[Spatial:Network] Runtime spatial profiles differ");
+			return Existing;
+		}
+		for (const auto &Child : GetDescendants()) CheckDefaultNetworkSpatialParticipant(*Child, SpatialContent);
+		auto Profile = std::make_shared<const DefaultNetworkSpatialProfile>(DefaultNetworkSpatialProfile{SpatialContent});
 		NetworkSpatialProfile = Profile;
 		return Profile;
 	}

@@ -26,5 +26,6 @@ namespace gargantuan {
 		bool AdmitNetworkTerrain = false;
 		// Native qualification hosts can select the renderer-only terrain detail trial.
 		bool ExperimentalTerrainVisualDensity = false;
+		bool AdmitSpatialContent = false;
 	};
 }

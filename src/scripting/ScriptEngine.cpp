@@ -1,4 +1,5 @@
 #include "gargantuan/scripting/ScriptEngine.hpp"
+#include "gargantuan/blockgrid/RuntimeHandles.hpp"
 #include "DiagnosticText.hpp"
 #include "gargantuan/runtime/ServicePolicy.hpp"
 #include "gargantuan/Log.hpp"
@@ -193,6 +194,7 @@ namespace gargantuan {
 	void ScriptEngine::ShutdownRuntime() {
 		if (Stopping) return;
 		Stopping = true;
+		BlockGridHandles.reset();
 		RootDebug.reset();
 		if (Persistence) Persistence->Shutdown();
 		Persistence.reset();
@@ -471,6 +473,10 @@ namespace gargantuan {
 		// Engine::Destroy may release its owner from a Lua callback. Keep the
 		// VM and this queue alive through the current step.
 		[[maybe_unused]] auto KeepAlive = weak_from_this().lock();
+		if (BlockGridHandles) {
+			BlockGridHandles->Prune();
+			if (BlockGridHandles->Handles.empty()) BlockGridHandles.reset();
+		}
 		if (Stopping || GetPausedRootLine()) return;
 		if (Persistence) Persistence->Pump();
 		Threads.Step();

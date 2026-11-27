@@ -3,6 +3,7 @@
 #include "gargantuan/blockgrid/Field.hpp"
 #include "gargantuan/blockgrid/Picking.hpp"
 #include "gargantuan/blockgrid/Edit.hpp"
+#include "gargantuan/blockgrid/Traversal.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -149,10 +150,50 @@ namespace {
 		Check(F.GetOverrideCount()==0);
 		Reject([&]{(void)F.GetValue(A,0);});
 	}
+	void TestTraversal() {
+		Field F;
+		Check(F.Define({"project:wire",Shape::Cube,{1,1,1},true,true,3}));
+		Check(F.DefineChannel({"running",ChannelKind::Bool,0,false,false,true}));
+		const Region Site{{-1,-1,-1},{9,3,3}};
+		Check(Fill(F,{{0,0,0},{4,1,1}},{3,0}) && Fill(F,SingleCell({4,0,0}),{Brick,0}));
+		const std::array<Operation,2> Values{ValueWrite{{1,0,0},0,1},ValueWrite{{3,0,0},0,1}};
+		Check(F.ApplyOperations(Values));
+		const std::array Seeds{Cell{0,0,0}};
+		TraversalOptions Options{Site}; Options.UsePorts=true; Options.StopAt={Brick}; Options.MaxVisited=5;
+		auto Pin=std::make_shared<const Field>(F);
+		Traversal Old(Pin,Seeds,Options);
+		Check(Fill(F,SingleCell({2,0,0}),{3,OrientationIndex(2,0)}));
+		const auto Drain=[](Traversal& C) {
+			std::set<Cell,CellOrder> Cells;
+			Page P;
+			do {
+				P=C.Step(2);Check(P.Cells.size()<=2);
+				for (auto V:P.Cells) Check(Cells.insert(V).second);
+			} while (P.Status==PageStatus::More);
+			Check(C.Step(1).Cells.empty());
+			return std::pair{P,std::move(Cells)};
+		};
+		const auto [Found,All]=Drain(Old);
+		Check(Found.Status==PageStatus::Found && Found.Match==Cell{4,0,0} && All.size()==5);
+		Traversal Gap(std::make_shared<const Field>(F),Seeds,Options);
+		const auto [Stopped,Two]=Drain(Gap);
+		Check(Stopped.Status==PageStatus::Complete && Two.size()==2);
+		Options.StopAt={};Options.MaxVisited=4;
+		Traversal Limited(Pin,Seeds,Options);Check(Drain(Limited).first.Status==PageStatus::Limit);
+		Options.MaxVisited=5;Traversal Exact(Pin,Seeds,Options);Check(Drain(Exact).first.Status==PageStatus::Complete);
+		Traversal Active(Pin,0,Site);
+		const auto [Completed,Members]=Drain(Active);
+		Check(Completed.Status==PageStatus::Complete && Members==std::set<Cell,CellOrder>{{1,0,0},{3,0,0}});
+		Options.UsePorts=false; Options.Select.Where=ValueTest{0,1};
+		Traversal Filtered(Pin,Seeds,Options);Check(Drain(Filtered).second.empty());
+		Options.UsePorts=true;Options.Neighbors=Adjacency::Edge;
+		Reject([&]{Traversal Invalid(Pin,Seeds,Options);});
+	}
 }
 int main() try {
 	TestDefinitions();
 	TestState();
+	TestTraversal();
 	Field Grid;
 	Check(!Grid.GetOccupiedCount() && !Grid.GetLeafCount() && Grid.Get({-1,-1,-1}) == Block{});
 	Check(Fill(Grid,{{-8,-8,-8},{0,0,0}},{Stone,0}) && Grid.GetOccupiedCount() == LeafVolume);

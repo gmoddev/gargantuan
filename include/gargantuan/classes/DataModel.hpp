@@ -49,10 +49,14 @@ namespace gargantuan {
 		void ReleaseInstance() noexcept;
 		[[nodiscard]] std::size_t GetOwnedInstanceCount() const { return OwnedInstanceCount; }
 		// The current game protocol admits a single coordinate domain and has no native cell stream.
-		struct DefaultNetworkSpatialProfile {};
-		[[nodiscard]] std::shared_ptr<const DefaultNetworkSpatialProfile> AcquireDefaultNetworkSpatialProfile();
+		struct DefaultNetworkSpatialProfile { bool SpatialContent{}; };
+		[[nodiscard]] std::shared_ptr<const DefaultNetworkSpatialProfile> AcquireDefaultNetworkSpatialProfile(bool SpatialContent = false);
+		[[nodiscard]] bool SupportsNetworkSpatialContent() const {
+			const auto Profile = NetworkSpatialProfile.lock();
+			return Profile && Profile->SpatialContent;
+		}
 		[[nodiscard]] bool HasDefaultNetworkSpatialProfile() const { return !NetworkSpatialProfile.expired(); }
-		static void CheckDefaultNetworkSpatialParticipant(const Instance &Node);
+		static void CheckDefaultNetworkSpatialParticipant(const Instance &Node, bool SpatialContent = false);
 		[[nodiscard]] std::string_view GetPackagedClientCodeIdentity() const { return PackagedClientCodeIdentity; }
 
 	  private:

@@ -1306,7 +1306,7 @@ namespace gargantuan {
 		}
 		const auto oldScope = oldDataModel ? oldDataModel->GetObjectId() : ObjectId{};
 		if (newParent && newDataModel && newDataModel->HasDefaultNetworkSpatialProfile())
-			for (const auto &Node : subtree) DataModel::CheckDefaultNetworkSpatialParticipant(*Node);
+			for (const auto &Node : subtree) DataModel::CheckDefaultNetworkSpatialParticipant(*Node, newDataModel->SupportsNetworkSpatialContent());
 		bool FirstAdoption = !oldDataModel && newDataModel;
 		if (newParent && newDataModel && ParentDepth + SubtreeDepth > MaximumProtocolJsonDepth)
 			throw std::length_error("Cannot set Parent: hierarchy depth limit would be exceeded");
