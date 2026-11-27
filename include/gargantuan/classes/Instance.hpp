@@ -39,6 +39,9 @@ namespace gargantuan {
 
 	  private:
 		friend class MutationGateway;
+		friend class SpatialDomainMember;
+		friend class WorldRoot;
+		void ValidateAdmittedSpatialProperty(std::string_view Name,const std::any &Value) const;
 		friend class network::ReplicaApplier;
 		void SetParentInternal(std::optional<std::shared_ptr<Instance>> Value,
 			std::vector<std::shared_ptr<Instance>> *DeferredNotifications);

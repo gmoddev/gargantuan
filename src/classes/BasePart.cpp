@@ -1,6 +1,8 @@
 #define GLM_ENABLE_EXPERIMENTAL
 
 #include "gargantuan/classes/BasePart.hpp"
+#include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/datatypes/CFrame.hpp"
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
@@ -23,7 +25,9 @@ namespace gargantuan {
 			return std::isfinite(Value.x) && std::isfinite(Value.y) && std::isfinite(Value.z) &&
 				glm::dot(Value, Value) <= 1.0e12f;
 		}
-		void RequirePhysicsWriteCapability() {
+		void RequirePhysicsWriteCapability(const BasePart &Part) {
+			if (const auto Realm=Part.GetDataModel()) if (const auto Guard=Realm->GetSpatialTransferProtection(); Guard &&
+				(Guard->Controls(Part) || !Guard->AllowsResource(Part))) throw std::runtime_error("[Physics:Authority] Body movement requires session admission");
 			if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::MutateDataModel))
 				throw std::runtime_error("[Physics:Authority] Body control requires MutateDataModel");
 		}
@@ -55,21 +59,21 @@ namespace gargantuan {
 
 	void BasePart::ApplyImpulse(glm::vec3 Impulse) {
 		AssertCanMutate();
-		RequirePhysicsWriteCapability();
+		RequirePhysicsWriteCapability(*this);
 		const auto Candidate = AccumulatedImpulse + Impulse;
 		if (ValidPhysicsVector(Impulse) && ValidPhysicsVector(Candidate)) AccumulatedImpulse = Candidate;
 	}
 
 	void BasePart::ApplyAngularImpulse(glm::vec3 Impulse) {
 		AssertCanMutate();
-		RequirePhysicsWriteCapability();
+		RequirePhysicsWriteCapability(*this);
 		const auto Candidate = AccumulatedAngularImpulse + Impulse;
 		if (ValidPhysicsVector(Impulse) && ValidPhysicsVector(Candidate)) AccumulatedAngularImpulse = Candidate;
 	}
 
 	void BasePart::ApplyImpulseAtPosition(glm::vec3 Impulse, glm::vec3 Position) {
 		AssertCanMutate();
-		RequirePhysicsWriteCapability();
+		RequirePhysicsWriteCapability(*this);
 		if (!ValidPhysicsVector(Impulse) || !ValidPhysicsVector(Position) ||
 			AccumulatedPointImpulses.size() >= MaximumPointImpulsesPerStep) return;
 		AccumulatedPointImpulses.emplace_back(Impulse, Position);
@@ -77,33 +81,33 @@ namespace gargantuan {
 
 	void BasePart::ApplyForce(glm::vec3 Force) {
 		AssertCanMutate();
-		RequirePhysicsWriteCapability();
+		RequirePhysicsWriteCapability(*this);
 		const auto Candidate = AccumulatedForce + Force;
 		if (ValidPhysicsVector(Force) && ValidPhysicsVector(Candidate)) AccumulatedForce = Candidate;
 	}
 
 	void BasePart::ApplyTorque(glm::vec3 Torque) {
 		AssertCanMutate();
-		RequirePhysicsWriteCapability();
+		RequirePhysicsWriteCapability(*this);
 		const auto Candidate = AccumulatedTorque + Torque;
 		if (ValidPhysicsVector(Torque) && ValidPhysicsVector(Candidate)) AccumulatedTorque = Candidate;
 	}
 
 	void BasePart::SetLinearVelocity(glm::vec3 Velocity) {
 		AssertCanMutate();
-		RequirePhysicsWriteCapability();
+		RequirePhysicsWriteCapability(*this);
 		if (ValidPhysicsVector(Velocity)) PendingLinearVelocity = Velocity;
 	}
 
 	void BasePart::SetAngularVelocity(glm::vec3 Velocity) {
 		AssertCanMutate();
-		RequirePhysicsWriteCapability();
+		RequirePhysicsWriteCapability(*this);
 		if (ValidPhysicsVector(Velocity)) PendingAngularVelocity = Velocity;
 	}
 
 	void BasePart::SetAwake(bool Awake) {
 		AssertCanMutate();
-		RequirePhysicsWriteCapability();
+		RequirePhysicsWriteCapability(*this);
 		PendingAwake = Awake;
 	}
 

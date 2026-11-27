@@ -4,6 +4,7 @@
 #include "gargantuan/blockgrid/Picking.hpp"
 #include "gargantuan/blockgrid/Edit.hpp"
 #include "gargantuan/blockgrid/Traversal.hpp"
+#include "gargantuan/blockgrid/Assets.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -26,6 +27,56 @@ namespace {
 		DVec Out{Pivot,Pivot,Pivot};
 		for (unsigned I=0;I<3;++I) for (unsigned J=0;J<3;++J) Out[I]+=Basis(R)[J][I]*(P[J]-Pivot);
 		return Out;
+	}
+	void TestAssetPins() {
+		using namespace gargantuan;
+		const std::string Id(32,'1'), Sum(64,'a');
+		auto Binding=std::make_shared<AssetBinding>();
+		Binding->Mesh=Id; Binding->Pins={{Id,Sum,static_cast<std::uint8_t>(AssetKind::Mesh)}};
+		auto Data=std::make_shared<ResolvedBlockAssets>();
+		auto Positions=std::make_shared<const std::vector<glm::vec3>>(std::vector<glm::vec3>{{-.5f,-.25f,-.5f},{-.5f,-.25f,.5f},{.5f,.25f,-.5f}});
+		auto Indices=std::make_shared<const std::vector<std::uint32_t>>(std::vector<std::uint32_t>{0,1,2});
+		Data->QueryMesh=std::make_shared<const PhysicsTriangleMesh>(PhysicsTriangleMesh{Id,1,Positions,Indices});
+		Binding->Resolved=Data;
+		Definition D{"project:surface",Shape::Mesh,{1,1,1},false,true,3,Binding};
+		Field F;
+		Check(F.Define(D) && F.HasAssetBindings());
+		for (std::uint8_t R=0;R<24;++R) {
+			Check(Fill(F,SingleCell({0,0,0}),{3,R}));
+			const auto Down=Rotate({0,-2,0},R,0);
+			const auto Hit=Cast(F,Rotate({.25,2,.25},R,.5),Down);
+			Check(Hit && std::abs(Hit->Fraction-.8125)<1e-12);
+			Check(!Cast(F,Rotate({.8,2,.8},R,.5),Down));
+			Check(!Cast(F,Rotate({.25,-1,.25},R,.5),Rotate({0,2,0},R,0)));
+		}
+		const auto Bytes=Encode(F);
+		auto Decoded=Decode(Bytes);
+		Check(Bytes[4]==4 && Encode(Decoded)==Bytes && !Decoded.GetDefinition(3).Assets->Resolved);
+		Reject([&]{(void)Cast(Decoded,Rotate({.25,2,.25},23,.5),Rotate({0,-2,0},23,0));});
+		auto Stale=std::make_shared<AssetBinding>(*Binding); Stale->Pins[0].Digest[0]='b';
+		Reject([&]{Decoded.HydrateAssets([&](const auto&){return Stale;});});
+		Check(!Decoded.GetDefinition(3).Assets->Resolved);
+		const auto Semantic=Decoded.GetRevision(),Public=Decoded.GetPublicRevision();
+		Decoded.HydrateAssets([&](const auto&){return Binding;});
+		Check(Encode(Decoded)==Bytes && Decoded.GetRevision()==Semantic && Decoded.GetPublicRevision()==Public);
+		auto Previous=D; Previous.Assets=Stale; Check(DefinitionDigest(D)!=DefinitionDigest(Previous));
+		auto Broken=Bytes; Broken[4]=2; Reject([&]{(void)Decode(Broken);});
+		Broken=Bytes; Broken.resize(30); Reject([&]{(void)Decode(Broken);});
+		auto Bad=std::make_shared<AssetBinding>(*Binding); Bad->Pins[0].Kind=0; Previous.Assets=Bad;
+		Reject([&]{(void)F.Define(Previous,true);}); Check(Encode(F)==Bytes);
+		auto Mat=std::make_shared<AssetBinding>();
+		Mat->Material=Id; Mat->Pins={{Id,Sum,static_cast<std::uint8_t>(AssetKind::Material)}};
+		Definition Alias{"material:"+Id}; Alias.Assets=Mat;
+		Field Site; const auto Before=Encode(Site);
+		StateChange Placement{{1,0,0},{},{{3,0}}};
+		std::span<const Definition> Materials(&Alias,1); std::span<StateChange> Changes(&Placement,1);
+		Reject([&]{(void)Site.ApplyMaterialChanges(Materials,Changes,false,[&](const auto& Candidate,auto) {
+			Check(Candidate.GetDefinition(3)==Alias && Candidate.Get(Placement.Position)==Block{3,0}); return false;
+		});});
+		Check(Encode(Site)==Before && Site.GetRevision()==1);
+		Check(Site.ApplyMaterialChanges(Materials,Changes,false) && Site.GetRevision()==2);
+		std::swap(Placement.Before,Placement.After);
+		Check(Site.ApplyMaterialChanges(Materials,Changes,true) && Site.GetRevision()==3 && Encode(Site)==Before);
 	}
 	void TestDefinitions() {
 		Field F;
@@ -192,6 +243,7 @@ namespace {
 }
 int main() try {
 	TestDefinitions();
+	TestAssetPins();
 	TestState();
 	TestTraversal();
 	Field Grid;

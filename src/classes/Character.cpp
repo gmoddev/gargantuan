@@ -2,6 +2,7 @@
 
 #include "gargantuan/classes/BasePart.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
@@ -99,6 +100,8 @@ namespace gargantuan {
 
 	void Character::CommitSimulationTransform(const CFrame &Value) {
 		if (Transform.FuzzyEq(Value)) return;
+		if (RootPartValue && !RootPartValue->GetCFrame().FuzzyEq(Value)) if (const auto Realm=GetDataModel())
+			if (const auto Guard=Realm->GetSpatialTransferProtection(); Guard && !Guard->AllowsSimulationPose(*RootPartValue,Value)) return;
 		Transform = Value;
 		if (auto Found = PropertyChangedSignals.find("CFrame");
 			Found != PropertyChangedSignals.end() && Found->second)
@@ -173,6 +176,13 @@ namespace gargantuan {
 				!(*Admission)(GetObjectId(), Transform.Position + WorldTranslation, Extents)))) {
 			Result.Status = PhysicsOperationStatus::ResourceLimit;
 			return Result;
+		}
+		if (const auto Realm=World.GetDataModel()) if (const auto Guard=Realm->GetSpatialTransferProtection()) {
+			const auto End=Transform.Position+WorldTranslation;
+			const SpatialDestinationBounds Swept{glm::min(Transform.Position,End)-Extents,glm::max(Transform.Position,End)+Extents};
+			if (!Guard->AllowsMotion(RootPartValue?static_cast<const Instance&>(*RootPartValue):*this,World,Swept)) {
+				Result.Status=PhysicsOperationStatus::ResourceLimit; return Result;
+			}
 		}
 		const auto PhysicsStarted = std::chrono::steady_clock::now();
 		auto PhysicsResult = World.ResolveKinematicMotion({

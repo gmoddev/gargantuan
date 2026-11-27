@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "BlockGridBinding.hpp"
+#include "gargantuan/blockgrid/Assets.hpp"
 #include "gargantuan/blockgrid/Edit.hpp"
 #include "gargantuan/blockgrid/Picking.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/datatypes/Color3.hpp"
 #include "gargantuan/datatypes/Vector3.hpp"
@@ -63,12 +65,15 @@ namespace gargantuan {
 			if (It==Faces.end()) throw std::invalid_argument("[BlockGrid:Orientation] Unknown face");
 			return static_cast<unsigned>(It-Faces.begin());
 		}
-		Block ReadBlock(lua_State* L, const Field& Source, int Key, int Orientation) {
-			Block B{Source.GetDefinitionId(StringAt(L,Key))};
+		Block WithOrientation(lua_State* L,std::uint16_t Id,int Orientation) {
+			Block B{Id};
 			if (lua_isnoneornil(L,Orientation)) return B;
 			if (!lua_istable(L,Orientation)) throw std::invalid_argument("[BlockGrid:Orientation] Expected an Up and Front table");
 			B.Orientation=OrientationIndex(ReadFace(L,Orientation,"Up"),ReadFace(L,Orientation,"Front"));
 			return B;
+		}
+		Block ReadBlock(lua_State* L, const Field& Source, int Key, int Orientation) {
+			return WithOrientation(L,Source.GetDefinitionId(StringAt(L,Key)),Orientation);
 		}
 		void PushText(lua_State* L, std::string_view S) { lua_pushlstring(L,S.data(),S.size()); }
 		void PushBlock(lua_State* L, const Field& Source, Block B) {
@@ -95,26 +100,45 @@ namespace gargantuan {
 			Edit->Writes.push_back(W);
 			return SubmitRequest(L,Grid,std::move(Edit));
 		}
+		int Place(lua_State* L,BlockGrid& Grid,Region Bounds,int Key,int Orientation) {
+			(void)Volume(Bounds);
+			const auto Name=StringAt(L,Key);
+			const auto& Source=Grid.GetField();
+			if (const auto Id=Source.FindDefinitionId(Name)) return Submit(L,Grid,{Bounds,WithOrientation(L,*Id,Orientation)});
+			auto Edit=std::make_shared<EditRequest>();
+			Edit->Materials.push_back(Grid.ResolveMaterialAlias(Name));
+			Edit->Writes.push_back({Bounds,WithOrientation(L,static_cast<std::uint16_t>(Brick+1+Source.GetDefinitionCount()),Orientation)});
+			Edit->ExpectedRevision=Grid.GetBlockRevision();
+			return SubmitRequest(L,Grid,std::move(Edit));
+		}
 		Definition ReadDefinition(lua_State* L) {
 			if (!lua_istable(L,3)) throw std::invalid_argument("[BlockGrid:Definition] Expected a definition table");
 			const auto Key=StringAt(L,2);
 			if (Key.size()>56) throw std::invalid_argument("[BlockGrid:Definition] Oversized definition key");
 			Definition D{std::string(Key)};
+			AssetBinding A;
+			std::string_view Collision;
 			lua_pushnil(L);
 			while (lua_next(L,3)) {
 				const auto Name=StringAt(L,-2);
 				if (Name=="Shape") {
-					constexpr std::array<std::string_view,4> Shapes{"Cube","Slab","Wedge","Stairs"};
+					constexpr std::array<std::string_view,5> Shapes{"Cube","Slab","Wedge","Stairs","Mesh"};
 					const auto It=std::ranges::find(Shapes,StringAt(L,-1));
 					if (It==Shapes.end()) throw std::invalid_argument("[BlockGrid:Unsupported] Unknown or unavailable shape");
 					D.Geometry=static_cast<Shape>(It-Shapes.begin());
 				} else if (Name=="Color") {
 					const auto C=CheckStackValue<Color3>(L,-1);
 					D.Color={C.R,C.G,C.B};
+				} else if (Name=="Material" || Name=="Mesh" || Name=="CollisionAsset") {
+					auto Value=StringAt(L,-1);
+					if (Value.starts_with("asset://")) Value.remove_prefix(8);
+					if (!AssetId::Parse(Value)) throw std::invalid_argument("[BlockGrid:Asset] Expected a project asset ID");
+					(Name=="Material"?A.Material:Name=="Mesh"?A.Mesh:A.Collision).assign(Value);
 				} else if (Name=="Collision") {
-					const auto Value=StringAt(L,-1);
-					if (Value!="Shape" && Value!="None") throw std::invalid_argument("[BlockGrid:Unsupported] Unknown collision representation");
-					D.CanCollide=Value=="Shape";
+					Collision=StringAt(L,-1);
+					if (Collision!="Shape" && Collision!="None" && Collision!="Asset")
+						throw std::invalid_argument("[BlockGrid:Unsupported] Unknown collision representation");
+					D.CanCollide=Collision!="None";
 				} else if (Name=="Queryable") {
 					if (lua_type(L,-1)!=LUA_TBOOLEAN) throw std::invalid_argument("[BlockGrid:Definition] Expected Queryable boolean");
 					D.Queryable=lua_toboolean(L,-1)!=0;
@@ -138,6 +162,12 @@ namespace gargantuan {
 					if (Seen!=Count) throw std::invalid_argument("[BlockGrid:Definition] Sparse face array");
 				} else throw std::invalid_argument("[BlockGrid:Unsupported] Unknown or unavailable definition property");
 				lua_pop(L,1);
+			}
+			if ((D.Geometry==Shape::Mesh && Collision!="Asset" && Collision!="None") ||
+				(Collision=="Asset")!=!A.Collision.empty())
+				throw std::invalid_argument("[BlockGrid:Definition] Mesh collision must explicitly use None or a companion Asset");
+			if (!A.Material.empty() || !A.Mesh.empty() || !A.Collision.empty()) {
+				D.Assets=std::make_shared<const AssetBinding>(std::move(A));
 			}
 			return D;
 		}
@@ -184,7 +214,11 @@ namespace gargantuan {
 	void BlockGrid::InstallReplicaField(blockgrid::Field Value) {
 		AssertCanMutate();
 		if (!GetDataModel() || Editing) throw std::logic_error("[BlockGrid:Replica] Shell is unavailable");
+		if (const auto Protection=GetDataModel()->GetSpatialTransferProtection(); Protection && !Protection->AllowsResource(*this))
+			throw std::runtime_error("[BlockGrid:Replica] Collision is reserved for an active transfer");
 		Cells.InstallReplica(std::move(Value), Admission);
+		AssetSequence = 0;
+		AssetsReady = false;
 		LastCellEdit.reset();
 		ReplicaFieldAvailable = true;
 		NotifyPropertyCommitted("BlockRevision");
@@ -198,11 +232,15 @@ namespace gargantuan {
 		return std::format("{}.{}:{}.{}:{}.{}:{}:{}",Scope.Slot,Scope.Generation,Id.Slot,Id.Generation,Domain.Slot,Domain.Generation,
 			ConfigurationRevision,SourceRevision);
 	}
-	std::string BlockGrid::ApplyEdit(const blockgrid::EditRequest& Edit) {
+	std::string BlockGrid::ApplyEdit(const blockgrid::EditRequest& Edit,const blockgrid::Patch* Prepared) {
 		AssertCanMutate();
 		const auto World=GetDataModel();
 		if (!World || Editing) throw std::logic_error("[BlockGrid:Edit] Grid is unavailable for admission");
+		if (const auto Protection=World->GetSpatialTransferProtection(); Protection && !Protection->AllowsResource(*this))
+			throw std::runtime_error("[BlockGrid:Edit] Collision is reserved for an active transfer");
 		if (Edit.ExpectedRevision && *Edit.ExpectedRevision!=GetBlockRevision()) throw std::domain_error("[BlockGrid:Conflict] Revision changed");
+		if (!Edit.Binding && !(Edit.Replay && (Edit.Replay->Binding || !Edit.Replay->Materials.empty())) && !EnsureAssetBindings())
+			throw std::runtime_error("[BlockGrid:Unavailable] Required block assets do not match this project");
 		World->EnsureAuthoritativeRevisionAvailable();
 		std::optional<blockgrid::CellDelta> PointEdit;
 		const auto PriorGeometry = Cells.GetGeometryRevision();
@@ -216,14 +254,28 @@ namespace gargantuan {
 		{
 			struct Guard { bool& Flag; ~Guard(){ Flag=false; } } Reset{Editing};
 			Editing=true;
-			if (Edit.Replay && Edit.Replay->Binding) {
+			if (Edit.Replay && !Edit.Replay->Materials.empty()) {
+				const auto& P=*Edit.Replay;
+				if (Edit.Forward) {
+					auto Materials=P.Materials;
+					for (auto& D:Materials) D=ResolveAssetDefinition(D);
+					Changed=Cells.ApplyMaterialChanges(Materials,P.StateCells,false,Admission);
+				} else {
+					auto Undo=P.StateCells; for (auto& D:Undo) std::swap(D.Before,D.After);
+					Changed=Cells.ApplyMaterialChanges(P.Materials,Undo,true,Admission);
+				}
+			} else if (!Edit.Materials.empty()) {
+				const auto Owned=Prepared?nullptr:PlanMaterialEdit(Edit);
+				const auto& P=Prepared?*Prepared:*Owned;
+				Changed=Cells.ApplyMaterialChanges(P.Materials,P.StateCells,false,Admission);
+			} else if (Edit.Replay && Edit.Replay->Binding) {
 				const auto& D=*Edit.Replay->Binding;
 				const bool Forward=Edit.Forward;
 				const auto Id=Cells.FindDefinitionId(D.After.Key);
 				const auto* Before=Forward?(D.Before?&*D.Before:nullptr):&D.After;
 				if (bool(Id)!=bool(Before) || (Id && Cells.GetDefinition(*Id)!=*Before))
 					throw std::domain_error("[BlockGrid:Conflict] Definition history has diverged");
-				if (Forward || D.Before) Changed=Cells.Define(Forward?D.After:*D.Before,bool(Id),Admission);
+				if (Forward || D.Before) Changed=Cells.Define(ResolveAssetDefinition(Forward?D.After:*D.Before),bool(Id),Admission);
 				else { Cells.UndoDefinitionInsertion(D.After,Admission); Changed=true; }
 			} else if (Edit.Replay && Edit.Replay->Channel) {
 				if (Edit.Forward) {
@@ -239,7 +291,7 @@ namespace gargantuan {
 					Changed=Cells.ApplyChanges(Undo,Admission);
 				}
 			} else if (Edit.Replay) Changed=Cells.ApplyCellPatch(blockgrid::ReplayWrites(Cells,*Edit.Replay,Edit.Forward),Admission);
-			else if (Edit.Binding) Changed=Cells.Define(Edit.Binding->Spec,Edit.Binding->Replace,Admission);
+			else if (Edit.Binding) Changed=Cells.Define(ResolveAssetDefinition(Edit.Binding->Spec),Edit.Binding->Replace,Admission);
 			else if (Edit.Channel) Changed=Cells.DefineChannel(*Edit.Channel);
 			else if (!Edit.Commands.empty()) Changed=Cells.ApplyOperations(Edit.Commands,Admission);
 			else Changed=Cells.Apply(Edit.Writes,{},Admission);
@@ -247,6 +299,7 @@ namespace gargantuan {
 		const auto Revision=GetBlockRevision();
 		if (Changed) {
 			if (PriorGeometry != Cells.GetGeometryRevision()) LastCellEdit = PointEdit;
+			if (Edit.Binding || !Edit.Materials.empty() || (Edit.Replay && (Edit.Replay->Binding || !Edit.Replay->Materials.empty()))) AssetSequence=0;
 			World->AdvanceAuthoritativeRevision();
 			NotifyPropertyCommitted("BlockRevision");
 		}
@@ -299,7 +352,7 @@ namespace gargantuan {
 	}
 	int BlockGrid::SetBlock(lua_State* L,Instance* Object) {
 		auto& Grid=ReadTarget(L,Object,true);
-		return Submit(L,Grid,{SingleCell(ReadCell(L,2)),ReadBlock(L,Grid.Cells,3,4)});
+		return Place(L,Grid,SingleCell(ReadCell(L,2)),3,4);
 	}
 	int BlockGrid::RemoveBlock(lua_State* L,Instance* Object) {
 		auto& Grid=ReadTarget(L,Object,true);
@@ -311,7 +364,7 @@ namespace gargantuan {
 	}
 	int BlockGrid::Fill(lua_State* L,Instance* Object) {
 		auto& Grid=ReadTarget(L,Object,true);
-		return Submit(L,Grid,{{ReadCell(L,2),ReadCell(L,3,true)},ReadBlock(L,Grid.Cells,4,5)});
+		return Place(L,Grid,{ReadCell(L,2),ReadCell(L,3,true)},4,5);
 	}
 	int BlockGrid::Clear(lua_State* L,Instance* Object) {
 		auto& Grid=ReadTarget(L,Object,true);
@@ -371,6 +424,7 @@ namespace gargantuan {
 			!std::isfinite(O.x) || !std::isfinite(O.y) || !std::isfinite(O.z))
 			throw std::invalid_argument("[BlockGrid:Raycast] Expected a finite segment of length 0.0001 through 100000");
 		if (!Grid.Queryable) { lua_pushnil(L); return 1; }
+		if (!Grid.EnsureAssetBindings()) throw std::runtime_error("[BlockGrid:Unavailable] Required block assets are unavailable");
 		const auto R=glm::dmat3(Grid.Transform.Rotation);
 		const auto Local=glm::transpose(R)*(O-glm::dvec3(Grid.Transform.Position))/static_cast<double>(Grid.Size);
 		const auto Delta=glm::transpose(R)*D/static_cast<double>(Grid.Size);

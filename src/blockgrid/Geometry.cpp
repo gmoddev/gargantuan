@@ -118,6 +118,8 @@ namespace gargantuan::blockgrid {
 		return static_cast<unsigned>(std::ranges::find(Axes,Direction)-Axes.begin());
 	}
 	const Geometry& GetGeometry(Shape Value,std::uint8_t Orientation) {
+		static const Geometry Mesh{};
+		if (Value==Shape::Mesh && Orientation<24) return Mesh;
 		static const GeometryTable Table;
 		return Table.Shapes.at(static_cast<unsigned>(Value)).at(Orientation).View;
 	}

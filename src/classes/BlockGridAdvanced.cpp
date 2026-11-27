@@ -193,7 +193,18 @@ namespace gargantuan::blockgrid::binding {
 		template<int (*Member)(lua_State*)> int Checked(lua_State* L) {return InvokeNativeCallback(L,[&]{return Member(L);});}
 		template<bool Edit> int Cancel(lua_State* L) {From(L,Edit).Close(PageStatus::Cancelled);return 0;}
 		enum class Action { Set,Remove,Fill,Clear,Value,Copy,Move,Packed };
-		PackedWrite ParsePacked(lua_State* L,Region R,const Field& F,std::size_t Limit) {
+		Block StagedBlock(lua_State* L,BlockGrid& Grid,Handle& H,int Key,int Orientation) {
+			const auto Name=StringAt(L,Key);
+			if (!H.Shadow->FindDefinitionId(Name)) {
+				if (H.Edit->Materials.size()>=MaximumNewMaterials) throw std::length_error("[BlockGrid:Limit] Too many new material bindings in one edit");
+				auto Spec=Grid.ResolveMaterialAlias(Name);
+				(void)H.Shadow->Define(Spec);
+				H.Edit->Materials.push_back(std::move(Spec));
+			}
+			return ReadBlock(L,*H.Shadow,Key,Orientation);
+		}
+		PackedWrite ParsePacked(lua_State* L,Region R,BlockGrid& Grid,Handle& H,std::size_t Limit) {
+			const auto& F=*H.Shadow;
 			const auto N=Volume(R,Limit);
 			Fields(L,4,{"Size","Bindings","Palette","Cells","Revision"});
 			lua_rawgetfield(L,4,"Size");
@@ -206,7 +217,7 @@ namespace gargantuan::blockgrid::binding {
 			for (unsigned I=1;I<=Count;++I) {
 				lua_rawgeti(L,PaletteIndex,I); const auto P=lua_gettop(L); Fields(L,P,{"Definition","Orientation"});
 				lua_rawgetfield(L,P,"Definition");const auto KeyIndex=lua_gettop(L); lua_rawgetfield(L,P,"Orientation");
-				const auto B=ReadBlock(L,F,KeyIndex,lua_gettop(L));
+				const auto B=StagedBlock(L,Grid,H,KeyIndex,lua_gettop(L));
 				if (!Used.emplace(B.Definition,B.Orientation).second) throw std::invalid_argument("[BlockGrid:Packed] Duplicate palette entry");
 				Keys.insert(B.Definition); Palette.push_back(B);lua_pop(L,3);
 			}
@@ -231,12 +242,12 @@ namespace gargantuan::blockgrid::binding {
 		template<Action A> int Enqueue(lua_State* L) {
 			auto& H=From(L,true);
 			try {
-				(void)Access(L,H);
+				const auto Grid=Access(L,H);
 				if (H.Edit->Commands.size()>=MaximumCommands) throw std::length_error("[BlockGrid:Limit] Command capacity exhausted");
 				const auto Remaining=MaximumEditVisits-H.Visits;
 				if (!Remaining) throw std::length_error("[BlockGrid:Limit] Edit visit capacity exhausted");
 				const auto P=ReadCell(L,2); Operation Op; std::size_t Cost=1;
-				if constexpr (A==Action::Set) Op=Write{SingleCell(P),ReadBlock(L,*H.Shadow,3,4)};
+				if constexpr (A==Action::Set) Op=Write{SingleCell(P),StagedBlock(L,*Grid,H,3,4)};
 				else if constexpr(A==Action::Remove) Op=Write{SingleCell(P),{}};
 				else if constexpr(A==Action::Value) {
 					const auto Id=H.Shadow->GetChannelId(StringAt(L,3));Op=ValueWrite{P,Id,Bits(L,4,H.Shadow->GetChannel(Id).Spec.Kind)};
@@ -246,8 +257,8 @@ namespace gargantuan::blockgrid::binding {
 						Cost=2*Volume(R,Remaining/2);Op=Transfer{R,ReadCell(L,4),A==Action::Move};
 					} else {
 						Cost=Volume(R,Remaining);
-						if constexpr(A==Action::Packed) Op=ParsePacked(L,R,*H.Shadow,Remaining);
-						else if constexpr(A==Action::Fill) Op=Write{R,ReadBlock(L,*H.Shadow,4,5)};
+						if constexpr(A==Action::Packed) Op=ParsePacked(L,R,*Grid,H,Remaining);
+						else if constexpr(A==Action::Fill) Op=Write{R,StagedBlock(L,*Grid,H,4,5)};
 						else Op=Write{R,{}};
 					}
 				}

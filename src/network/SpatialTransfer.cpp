@@ -1,8 +1,10 @@
 #include "gargantuan/network/SpatialTransfer.hpp"
 
 #include "gargantuan/classes/BasePart.hpp"
+#include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/network/BinaryCodec.hpp"
+#include "gargantuan/network/SpatialTransferProtection.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -264,12 +266,15 @@ namespace gargantuan::network {
 
 	struct SpatialTransferReservations::Table {
 		struct Record {
-			ObjectId Subject, Domain;
+			ObjectId Subject, Source, Domain;
+			SpatialTransferFrame Frame;
+			SpatialDestinationReceipt Receipt;
+			std::weak_ptr<const std::function<bool()>> Grant;
 			SpatialDestinationBounds Bounds;
 			std::vector<ObjectId> Owners;
 			std::vector<std::shared_ptr<const void>> Resources;
 			std::function<bool()> Authorized;
-			bool Active{true};
+			bool Active{true}, Armed{}, Consumed{};
 		};
 		std::vector<std::weak_ptr<Record>> Live;
 		template <class T> bool Contains(T Predicate) const {
@@ -288,8 +293,51 @@ namespace gargantuan::network {
 			if (const auto Hold = Entry.lock()) Hold->Active = false;
 		Records->Live.clear();
 	}
+	bool SpatialTransferReservations::HasHolds() const {
+		return Records->Contains([](const auto &) { return true; });
+	}
 	bool SpatialTransferReservations::HoldsMember(ObjectId Member) const {
 		return Records->Contains([&](const auto &Hold) { return Hold.Subject == Member; });
+	}
+	bool SpatialTransferReservations::HoldsDestination(ObjectId Domain) const {
+		return Records->Contains([&](const auto &Hold) { return Hold.Domain == Domain; });
+	}
+	bool SpatialTransferReservations::HoldsDomain(ObjectId Domain) const {
+		return Records->Contains([&](const auto &Hold) { return Hold.Source == Domain || Hold.Domain == Domain; });
+	}
+	bool SpatialTransferReservations::ApplyBilateral(
+		const SpatialTransferLease &Lease, const SpatialTransferFrame &Frame, const std::function<bool()> &Apply
+	) {
+		for (const auto &Weak : Records->Live) {
+			const auto Hold = Weak.lock();
+			if (!Hold || !Hold->Active || Hold->Armed || Hold->Consumed || Hold->Grant.lock() != Lease ||
+				!Same(Hold->Frame, Frame))
+				continue;
+			Hold->Armed = true;
+			struct Guard {
+				Table::Record &Hold;
+				~Guard() {
+					Hold.Armed = false;
+				}
+			} Clear{*Hold};
+			return Apply() && Hold->Consumed;
+		}
+		return false;
+	}
+	bool SpatialTransferReservations::Admits(
+		const SpatialTransferLease &Lease,
+		const SpatialMovementRequest &Movement,
+		const SpatialDestinationReceipt &Receipt
+	) const {
+		return Lease && Records->Contains([&](auto &Hold) {
+			if (!Hold.Armed || Hold.Consumed || Hold.Grant.lock() != Lease || Hold.Subject != Movement.Member ||
+				Hold.Source != Movement.SourceDomain || Hold.Receipt != Receipt ||
+				Hold.Frame.SourcePose != WirePose(Movement.SourcePose) ||
+				Hold.Frame.DestinationPose != WirePose(Movement.DestinationPose) || !(*Lease)())
+				return false;
+			Hold.Consumed = true;
+			return true;
+		});
 	}
 	bool SpatialTransferReservations::HoldsProvider(ObjectId Owner) const {
 		return Records->Contains([&](const auto &Hold) {
@@ -319,6 +367,25 @@ namespace gargantuan::network {
 			!Authorized() || HoldsMember(Subject) || HoldsBounds(Receipt.Domain, Receipt.Bounds))
 			return {};
 		auto Hold = std::make_shared<Table::Record>();
+		const auto Instance = ObjectRegistry::Get().Lookup(Subject);
+		const auto Source = Instance ? WorldRoot::GetEffectiveWorld(*Instance) : nullptr;
+		if (!Source || Source->GetReplicationScopeId() != Receipt.Realm) return {};
+		if (const auto Realm = Source->GetDataModel())
+			if (const auto Protection = Realm->GetSpatialTransferProtection()) {
+				const auto Destination = std::dynamic_pointer_cast<WorldRoot>(
+					ObjectRegistry::Get().Lookup(Receipt.Domain)
+				);
+				const auto Part = std::dynamic_pointer_cast<BasePart>(Instance);
+				if (&Protection->Reservations != this || !Destination || !Part ||
+					!Source->CanHoldSpatialSubject(Subject) || !Destination->CanHoldSpatialCollision(Subject) ||
+					(!Part->GetAnchored() &&
+					 (!Part->GetKinematic() || glm::dot(Part->GetLinearVelocity(), Part->GetLinearVelocity()) != 0.f ||
+					  glm::dot(Part->GetAngularVelocity(), Part->GetAngularVelocity()) != 0.f)))
+					return {};
+			}
+		Hold->Source = Source->GetObjectId();
+		Hold->Frame = Frame;
+		Hold->Receipt = Receipt;
 		Hold->Subject = Subject;
 		Hold->Domain = Receipt.Domain;
 		Hold->Bounds = Receipt.Bounds;
@@ -327,7 +394,11 @@ namespace gargantuan::network {
 		Hold->Resources = std::move(Resources);
 		Hold->Authorized = std::move(Authorized);
 		Records->Live.push_back(Hold);
-		return std::make_shared<const std::function<bool()>>([Hold] { return Hold->Active && Hold->Authorized(); });
+		auto Grant = std::make_shared<const std::function<bool()>>([Hold] {
+			return Hold->Active && Hold->Authorized();
+		});
+		Hold->Grant = Grant;
+		return Grant;
 	}
 
 	struct SpatialTransferServer::State : HeldState {
@@ -459,13 +530,19 @@ namespace gargantuan::network {
 		if (Frame.Phase == Held && State.Frame.Phase == Commit) return {SpatialTransferStatus::Progress, State.Frame};
 		if (Frame.Phase == Held && State.Frame.Phase == Reserve) {
 			State.Committing = true;
-			const auto Result = State.Destination->CommitSpatialTransfer(State.Subject, State.Movement, State.Receipt);
+			const auto Apply = [&] {
+				return State.Destination
+					->CommitSpatialTransfer(State.Subject, State.Movement, State.Receipt, State.Lease)
+					.Succeeded();
+			};
+			const auto Realm = State.Destination->GetDataModel();
+			const auto Protection = Realm ? Realm->GetSpatialTransferProtection() : nullptr;
+			const bool Moved = Protection ? Protection->Reservations.ApplyBilateral(State.Lease, Frame, Apply)
+										  : Apply();
 			State.Committing = false;
 			if (Keep != Current)
-				return {
-					Result.Succeeded() ? SpatialTransferStatus::CommittedUnconfirmed : SpatialTransferStatus::Stale, {}
-				};
-			if (!Result.Succeeded()) return this->Cancel();
+				return {Moved ? SpatialTransferStatus::CommittedUnconfirmed : SpatialTransferStatus::Stale, {}};
+			if (!Moved) return this->Cancel();
 			return Send(State, Commit);
 		}
 		if (Frame.Phase == Applied && State.Frame.Phase == Commit) {
@@ -579,7 +656,11 @@ namespace gargantuan::network {
 		if (Frame.Phase == Commit && Active->Frame.Phase == Held) {
 			const auto Before = Active;
 			Before->Committing = true;
-			const bool Moved = Apply && Apply(Frame, Before->Receipt);
+			const auto Move = [&] { return Apply && Apply(Frame, Before->Receipt, Before->Lease); };
+			const auto Realm = Before->Destination->GetDataModel();
+			const auto Protection = Realm ? Realm->GetSpatialTransferProtection() : nullptr;
+			const bool Moved = Protection ? Protection->Reservations.ApplyBilateral(Before->Lease, Frame, Move)
+										  : Move();
 			Before->Committing = false;
 			if (Before != Active) return {Moved ? SpatialTransferStatus::Applied : SpatialTransferStatus::Stale, {}};
 			if (!Moved) return this->Cancel();

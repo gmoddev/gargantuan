@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gargantuan/datatypes/CFrame.hpp"
+#include "gargantuan/physics/PhysicsTriangleMesh.hpp"
 
 #include <compare>
 #include <cstddef>
@@ -61,15 +62,6 @@ namespace gargantuan {
 		Wedge,
 		CornerWedge,
 		StaticTriangleMesh,
-	};
-
-	// Immutable, validated collision geometry. AssetService owns canonical content;
-	// a physics body retains these buffers while its backend shape is live.
-	struct PhysicsTriangleMesh {
-		std::string ResourceId;
-		std::uint64_t ContentRevision = 0;
-		std::shared_ptr<const std::vector<glm::vec3>> Positions;
-		std::shared_ptr<const std::vector<std::uint32_t>> Indices;
 	};
 
 	struct PhysicsShapeDesc {

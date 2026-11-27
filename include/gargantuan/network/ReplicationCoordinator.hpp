@@ -402,6 +402,7 @@ namespace gargantuan::network {
 
 		bool RefreshCatalog(std::string &Error);
 		bool IsVisibleToPeer(ObjectId Object, ObjectId LocalPlayer) const;
+		bool HidesPlayerCharacter(ObjectId Referrer, std::string_view Property, ObjectId Target, ObjectId Peer) const;
 		void BeginRetirementTick(std::uint64_t SimulationTick);
 		void ReclaimRetiredTemplates();
 		bool BuildDependencyClosure(

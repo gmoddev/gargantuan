@@ -3,11 +3,13 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace gargantuan::blockgrid {
-	enum class Shape : std::uint8_t { Cube, Slab, Wedge, Stairs };
+	enum class Shape : std::uint8_t { Cube, Slab, Wedge, Stairs, Mesh };
 	enum class PieceKind : std::uint8_t { Box, Wedge };
 	using Point = std::array<float,3>;
 	using RotationBasis = std::array<Point,3>;
@@ -36,12 +38,30 @@ namespace gargantuan::blockgrid {
 	// Immutable process-lifetime geometry in cell coordinates [0,1], rotated about its center.
 	// Box3D's local wedge rises toward -Z. Piece.Orientation already includes this conversion.
 	[[nodiscard]] const Geometry& GetGeometry(Shape Value,std::uint8_t Orientation);
+	struct ResolvedBlockAssets;
+	struct ResourcePin {
+		std::string Id, Digest;
+		std::uint8_t Kind{};
+		bool operator==(const ResourcePin&) const = default;
+	};
+	struct AssetBinding {
+		std::string Material, Mesh, Collision;
+		std::vector<ResourcePin> Pins;
+		std::shared_ptr<const ResolvedBlockAssets> Resolved;
+		[[nodiscard]] bool operator==(const AssetBinding& Other) const {
+			return Material==Other.Material && Mesh==Other.Mesh && Collision==Other.Collision && Pins==Other.Pins;
+		}
+	};
 	struct Definition {
 		std::string Key;
 		Shape Geometry{Shape::Cube};
 		Point Color{1,1,1};
 		bool CanCollide{true}, Queryable{true};
 		std::uint8_t Ports{63};
-		bool operator==(const Definition&) const = default;
+		std::shared_ptr<const AssetBinding> Assets;
+		[[nodiscard]] bool operator==(const Definition& Other) const {
+			return Key==Other.Key && Geometry==Other.Geometry && Color==Other.Color && CanCollide==Other.CanCollide &&
+				Queryable==Other.Queryable && Ports==Other.Ports && (Assets==Other.Assets || (Assets && Other.Assets && *Assets==*Other.Assets));
+		}
 	};
 }

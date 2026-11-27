@@ -76,7 +76,7 @@ namespace gargantuan::blockgrid {
 	std::size_t Field::GetSnapshotBytes() const noexcept {
 		// Conservative pin charge includes potential dense page padding, directory/index nodes and descriptor data.
 		return 4096+EncodedBytes*2+Leaves.size()*160+(Dependencies?Dependencies->size()*96:0)+
-			GetDefinitionCount()*256+(State?State->MaxEncodedBytes()*8:0);
+			GetDefinitionCount()*256+(Definitions?Definitions->AssetBytes:0)+(State?State->MaxEncodedBytes()*8:0);
 	}
 	const ChannelData& Field::GetChannel(std::uint8_t Id) const {
 		if (!State || Id>=State->Channels.size()) throw std::invalid_argument("[BlockGrid:Channel] Unknown channel");

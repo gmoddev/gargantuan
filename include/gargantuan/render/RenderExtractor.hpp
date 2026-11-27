@@ -160,6 +160,7 @@ namespace gargantuan {
 			std::shared_ptr<const std::map<std::array<std::int32_t, 3>, std::uint32_t>> IsolatedCubeSlots;
 			std::size_t VacantSlots{};
 			bool Patched{};
+			std::shared_ptr<const std::vector<RenderPrimitiveMaterialState>> Primitives;
 		};
 		using GridMeshes = std::unordered_map<ObjectId, PublishedGrid>;
 		GridMeshes PublishedGrids;

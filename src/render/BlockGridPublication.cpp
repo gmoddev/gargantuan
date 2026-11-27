@@ -1,3 +1,4 @@
+#include "gargantuan/blockgrid/Assets.hpp"
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
@@ -32,8 +33,12 @@ namespace gargantuan {
 			if (!blockgrid::ValidCell(Adjacent)) return false;
 			const auto Block = Field.Get(Adjacent);
 			if (Block.Definition <= blockgrid::Brick) return Block.Definition != blockgrid::Air;
-			const auto Shape = Field.GetDefinition(Block.Definition).Geometry;
-			return (blockgrid::GetGeometry(Shape, Block.Orientation).FullFaces & (1u << (Face ^ 1))) != 0;
+			const auto &Definition = Field.GetDefinition(Block.Definition);
+			if (Definition.Assets) {
+				const auto &View = Definition.Assets->Resolved;
+				if (!View || View->VisualMesh || !View->FullyOpaque) return false;
+			}
+			return (blockgrid::GetGeometry(Definition.Geometry, Block.Orientation).FullFaces & (1u << (Face ^ 1))) != 0;
 		}
 
 		std::size_t UploadBytes(const RenderMeshCreate &Mesh) {
@@ -41,19 +46,61 @@ namespace gargantuan {
 		}
 
 		std::optional<RenderMeshCreate> MakeGridMesh(const blockgrid::Field &Field, std::size_t Budget,
-			std::shared_ptr<CubeSlots> &Slots) {
+			std::shared_ptr<CubeSlots> &Slots, std::shared_ptr<const std::vector<RenderPrimitiveMaterialState>> &Primitives) {
 			// Keep retained vertex ranges only for sparse fields. Rebuilds of compact solids use the surface path.
-			if (Field.GetOccupiedCount() >= 64 && Field.GetOccupiedCount() <= Field.GetLeafCount() * blockgrid::LeafVolume / 8)
+			if (!Field.HasAssetBindings() && Field.GetOccupiedCount() >= 64 && Field.GetOccupiedCount() <= Field.GetLeafCount() * blockgrid::LeafVolume / 8)
 				Slots = std::make_shared<CubeSlots>();
 			auto Vertices = std::make_shared<std::vector<RenderVertex>>();
 			auto Indices = std::make_shared<std::vector<std::uint32_t>>();
 			RenderBounds Bounds{glm::vec3(std::numeric_limits<float>::max()), glm::vec3(std::numeric_limits<float>::lowest())};
 			bool WithinBudget = true;
+			std::vector<RenderPrimitiveMaterialState> Ranges;
+			const auto AddRange = [&](std::size_t First, std::size_t Count, const RenderMaterialState &Material) {
+				if (!Count || !WithinBudget) return;
+				if (!Ranges.empty() && Ranges.back().Material == Material &&
+					Ranges.back().FirstIndex + Ranges.back().IndexCount == First) {
+					Ranges.back().IndexCount += static_cast<std::uint32_t>(Count);
+					return;
+				}
+				if (Budget < sizeof(RenderPrimitiveMaterialState)) { WithinBudget = false; return; }
+				Budget -= sizeof(RenderPrimitiveMaterialState);
+				Ranges.push_back({static_cast<std::uint32_t>(First), static_cast<std::uint32_t>(Count), Material});
+			};
 			Field.ForEachOccupied([&](blockgrid::Cell Cell, blockgrid::Block Value) {
 				if (!WithinBudget) return;
 				const glm::ivec3 Position(Cell.X, Cell.Y, Cell.Z);
 				const auto &Definition = Field.GetDefinition(Value.Definition);
 				const auto Tint = VertexTint(Definition);
+				const auto *View = Definition.Assets ? Definition.Assets->Resolved.get() : nullptr;
+				const auto FirstIndex = Indices->size();
+				if (View && View->VisualMesh) {
+					const auto &Mesh = *View->VisualMesh;
+					const auto Bytes = Mesh.Vertices->size() * sizeof(RenderVertex) + Mesh.Indices->size() * sizeof(std::uint32_t);
+					if (Budget < Bytes || !View->Primitives) { WithinBudget = false; return; }
+					Budget -= Bytes;
+					const auto FirstVertex = static_cast<std::uint32_t>(Vertices->size());
+					const auto &Basis = blockgrid::Basis(Value.Orientation);
+					const glm::mat3 Rotation(Vector(Basis[0]), Vector(Basis[1]), Vector(Basis[2]));
+					const auto Center = glm::vec3(Position) + glm::vec3(0.5f);
+					for (auto Vertex : *Mesh.Vertices) {
+						Vertex.Position = Center + Rotation * Vertex.Position;
+						Vertex.Normal = Rotation * Vertex.Normal;
+						Vertex.Tangent = glm::vec4(Rotation * glm::vec3(Vertex.Tangent),Vertex.Tangent.w);
+						for (unsigned C=0; C<3; ++C)
+							Vertex.Tint[C] = static_cast<std::uint8_t>((unsigned(Vertex.Tint[C]) * Tint[C] + 127) / 255);
+						Bounds.Minimum = glm::min(Bounds.Minimum,Vertex.Position);
+						Bounds.Maximum = glm::max(Bounds.Maximum,Vertex.Position);
+						Vertices->push_back(Vertex);
+					}
+					for (const auto Index : *Mesh.Indices) Indices->push_back(FirstVertex + Index);
+					for (const auto &Range : *View->Primitives)
+						AddRange(FirstIndex + Range.FirstIndex,Range.IndexCount,Range.Material);
+					return;
+				}
+				const auto FinishMaterial = [&] {
+					if (Field.HasAssetBindings())
+						AddRange(FirstIndex,Indices->size()-FirstIndex,View && View->Material ? *View->Material : RenderMaterialState{});
+				};
 				if (Definition.Geometry != blockgrid::Shape::Cube) {
 					for (const auto &Face : blockgrid::GetGeometry(Definition.Geometry, Value.Orientation).Faces) {
 						if (Face.Boundary >= 0 && Covered(Field, Cell, static_cast<unsigned>(Face.Boundary))) continue;
@@ -80,6 +127,7 @@ namespace gargantuan {
 						Indices->insert(Indices->end(), {First, First + 1, First + 2});
 						if (Face.Count == 4) Indices->insert(Indices->end(), {First, First + 2, First + 3});
 					}
+					FinishMaterial();
 					return;
 				}
 				const auto Start = static_cast<std::uint32_t>(Vertices->size());
@@ -111,9 +159,12 @@ namespace gargantuan {
 				}
 				if (Slots && Vertices->size() - Start == CubeVertices)
 					Slots->emplace(std::array{Cell.X, Cell.Y, Cell.Z}, Start);
+				FinishMaterial();
 			});
 			if (Slots && Slots->size() < Field.GetOccupiedCount() / 2) Slots.reset();
 			if (!WithinBudget || Indices->empty()) return std::nullopt;
+			if (!Ranges.empty())
+				Primitives = std::make_shared<const std::vector<RenderPrimitiveMaterialState>>(std::move(Ranges));
 			static std::atomic<std::uint64_t> NextMesh{1};
 			const RenderMeshIdentity Identity{NextMesh.fetch_add(1, std::memory_order_relaxed), 1, RenderMeshDomain::BlockGrid};
 			return RenderMeshCreate{Identity, 1, 1, std::move(Vertices), std::move(Indices), Bounds};
@@ -139,6 +190,10 @@ namespace gargantuan {
 			const auto &Field = Grid.GetField();
 			if (!Grid.GetVisible() || !Field.GetOccupiedCount()) return;
 			const auto Id = Grid.GetObjectId();
+			if (Field.HasAssetBindings() && !Grid.EnsureAssetBindings()) {
+				Result.Diagnostics.push_back({RenderExtractionIssue::UnsupportedGeometry,Id,"[BlockGrid:Render] Required asset pins are unavailable"});
+				return;
+			}
 			const auto Old = PublishedGrids.find(Id);
 			const auto Pose = Grid.GetCFrame();
 			RenderItem Item;
@@ -150,7 +205,7 @@ namespace gargantuan {
 			const bool Changed = Old == PublishedGrids.end() || Old->second.Revision != GeometryRevision;
 			const auto &Edit = Grid.GetLastCellEdit();
 			constexpr auto PatchBytes = CubeVertices * sizeof(RenderVertex) + sizeof(RenderMeshVertexUpdate) + sizeof(RenderObjectUpdate);
-			if (Changed && !Result.FullResync && Old != PublishedGrids.end() && Old->second.IsolatedCubeSlots && Edit &&
+			if (Changed && !Field.HasAssetBindings() && !Result.FullResync && Old != PublishedGrids.end() && Old->second.IsolatedCubeSlots && Edit &&
 				GeometryRevision - Old->second.Revision == 1 && Budget >= PatchBytes &&
 				(Edit->After.Definition == blockgrid::Air || Field.GetDefinition(Edit->After.Definition).Geometry == blockgrid::Shape::Cube) &&
 				!HasFaceNeighbor(Field, Edit->Position)) {
@@ -185,28 +240,30 @@ namespace gargantuan {
 			const bool Upload = Build || Result.FullResync;
 			std::optional<RenderMeshCreate> Mesh;
 			std::shared_ptr<CubeSlots> Slots;
-			if (Build && Budget >= MeshRecordBytes) Mesh = MakeGridMesh(Field, Budget - MeshRecordBytes, Slots);
-			else if (!Build) Mesh = Old->second.Resource;
-			if (!Mesh || (Upload && (Budget < MeshRecordBytes || UploadBytes(*Mesh) > Budget - MeshRecordBytes))) {
+			std::shared_ptr<const std::vector<RenderPrimitiveMaterialState>> Ranges;
+			if (Build && Budget >= MeshRecordBytes) Mesh = MakeGridMesh(Field, Budget - MeshRecordBytes, Slots,Ranges);
+			else if (!Build) { Mesh = Old->second.Resource; Ranges = Old->second.Primitives; }
+			const auto RangeBytes = Ranges ? Ranges->size() * sizeof(RenderPrimitiveMaterialState) : 0;
+			if (!Mesh || (Upload && (Budget < MeshRecordBytes + RangeBytes || UploadBytes(*Mesh) > Budget - MeshRecordBytes - RangeBytes))) {
 				Result.Diagnostics.push_back({RenderExtractionIssue::PublicationOverflow, Id,
 					"[BlockGrid:Render] Grid surface exceeds the available publication budget"});
 				return;
 			}
 			if (Upload) {
-				Budget -= UploadBytes(*Mesh) + MeshRecordBytes;
+				Budget -= UploadBytes(*Mesh) + MeshRecordBytes + RangeBytes;
 				Result.MeshCreates.push_back(*Mesh);
 			}
 			if (Old == PublishedGrids.end() || Result.FullResync) {
-				Result.Creates.push_back({Item, Mesh->Mesh, {}});
+				Result.Creates.push_back({Item, Mesh->Mesh, {}, true, Ranges});
 			} else if (Build || Item != Old->second.Item) {
 				auto Domains = RenderUpdateDomain::Transform;
 				if (Build) {
-					Domains = Domains | RenderUpdateDomain::Geometry;
+					Domains = Domains | RenderUpdateDomain::Geometry | RenderUpdateDomain::Material;
 					Result.MeshRemoves.push_back({Old->second.Resource.Mesh});
 				}
-				Result.Updates.push_back({Id, Domains, Item, Mesh->Mesh, {}});
+				Result.Updates.push_back({Id, Domains, Item, Mesh->Mesh, {}, true, Ranges});
 			}
-			if (Build) Next.emplace(Id, PublishedGrid{std::move(*Mesh), Item, GeometryRevision, std::move(Slots)});
+			if (Build) Next.emplace(Id, PublishedGrid{std::move(*Mesh), Item, GeometryRevision, std::move(Slots),0,false,std::move(Ranges)});
 			else {
 				auto State = Old->second;
 				State.Item = Item;

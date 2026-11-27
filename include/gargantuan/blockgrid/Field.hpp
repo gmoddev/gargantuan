@@ -116,6 +116,7 @@ namespace gargantuan::blockgrid {
 		struct Catalog {
 			std::vector<Definition> Entries;
 			std::map<std::string, std::uint16_t, std::less<>> Names;
+			std::size_t AssetCount{}, PinCount{}, AssetBytes{};
 		};
 		struct Link { std::uint16_t Id; Cell Origin; };
 		struct LinkOrder {
@@ -151,6 +152,9 @@ namespace gargantuan::blockgrid {
 		[[nodiscard]] std::optional<std::uint16_t> FindDefinitionId(std::string_view Key) const;
 		[[nodiscard]] const Definition& GetDefinition(std::uint16_t Id) const;
 		[[nodiscard]] std::size_t GetDefinitionCount() const noexcept;
+		[[nodiscard]] bool HasAssetBindings() const noexcept { return Definitions && Definitions->AssetCount; }
+		// Atomically replaces only runtime resource views. Source pins and public revision stay stable.
+		void HydrateAssets(const std::function<std::shared_ptr<const AssetBinding>(const AssetBinding&)>& Resolve);
 		[[nodiscard]] bool IsValid(Block Value) const noexcept;
 		[[nodiscard]] std::uint64_t GetRevision() const noexcept { return Revision; }
 		[[nodiscard]] std::uint64_t GetGeometryRevision() const noexcept { return GeometryRevision; }
@@ -180,6 +184,8 @@ namespace gargantuan::blockgrid {
 		[[nodiscard]] bool ApplyOperations(std::span<const Operation> Commands,const Admission& BeforeCommit={});
 		[[nodiscard]] std::vector<StateChange> PlanOperations(std::span<const Operation> Commands,std::size_t CommandLimit=MaximumCommands) const;
 		[[nodiscard]] bool ApplyChanges(std::span<const StateChange> Changes,const Admission& BeforeCommit={});
+		[[nodiscard]] bool ApplyMaterialChanges(std::span<const Definition> Materials,std::span<const StateChange> Changes,
+			bool Remove,const Admission& BeforeCommit={});
 
 	  private:
 		friend std::vector<std::uint8_t> Encode(const Field&);
@@ -202,5 +208,7 @@ namespace gargantuan::blockgrid {
 	[[nodiscard]] std::vector<std::uint8_t> Encode(const Field& Value,DataProfile Profile);
 	[[nodiscard]] Field Decode(std::span<const std::uint8_t> Bytes);
 	void ValidateDefinition(const Definition& Value);
+	[[nodiscard]] std::size_t AssetBindingBytes(const AssetBinding& Value) noexcept;
+	[[nodiscard]] std::size_t AssetPinCharge(const Definition& Value) noexcept;
 	[[nodiscard]] std::string DefinitionDigest(const Definition& Value);
 }

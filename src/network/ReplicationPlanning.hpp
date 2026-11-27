@@ -171,7 +171,8 @@ struct ReplicationCoordinator::PlanningContinuation {
 						if (Index == Entry.ReferenceProperties.size()) break;
 						const auto &[Name, Value] = *Entry.ReferenceProperties[Index];
 						const auto *Reference = std::get_if<WireObjectReference>(&Value);
-						if (Reference && IsHardReference(Entry->Publication, Name)) {
+						if (Reference && IsHardReference(Entry->Publication, Name) &&
+							!Owner.HidesPlayerCharacter(Object,Name,Reference->Object.ToObjectId(),Peer.LocalPlayer)) {
 							Retain(Owner); Frontier.push_back({Reference->Object.ToObjectId(), Depth + 1});
 							runtime_detail::CountWork(runtime_detail::WorkCounter::DependencyEdges);
 						}
@@ -212,7 +213,8 @@ struct ReplicationCoordinator::PlanningContinuation {
 				const auto &Entry = Owner.Catalog.at(Object);
 				if (Index == Entry.ReferenceProperties.size()) break;
 				const auto &[Name, Value] = *Entry.ReferenceProperties[Index];
-				if (IsHardReference(Entry->Publication, Name)) AddReverse(std::get<WireObjectReference>(Value).Object.ToObjectId());
+				const auto Target = std::get<WireObjectReference>(Value).Object.ToObjectId();
+				if (IsHardReference(Entry->Publication, Name) && !Owner.HidesPlayerCharacter(Object,Name,Target,Peer.LocalPlayer)) AddReverse(Target);
 			}
 		}
 		if (!Baseline) {
@@ -282,7 +284,8 @@ struct ReplicationCoordinator::PlanningContinuation {
 						if (auto Found = RemovalReferences.find(Object); Found != RemovalReferences.end())
 							for (const auto &Reference : Found->second) {
 								co_yield 0;
-								if (!Reference.Property->Nullable || Reference.Property->MaterializationDependencyPolicy == InstanceProperty::MaterializationDependency::Hard)
+								if ((!Reference.Property->Nullable || Reference.Property->MaterializationDependencyPolicy == InstanceProperty::MaterializationDependency::Hard) &&
+									!Owner.HidesPlayerCharacter(Reference.Referrer,Reference.Property->Name,Object,Peer.LocalPlayer))
 									EnqueueGroup(Owner, Reference.Referrer, Kind);
 							}
 					} else {
@@ -294,7 +297,8 @@ struct ReplicationCoordinator::PlanningContinuation {
 							if (Index == Entry.ReferenceProperties.size()) break;
 							const auto &[Name, Value] = *Entry.ReferenceProperties[Index];
 							const auto Target = std::get<WireObjectReference>(Value).Object.ToObjectId();
-							if (IsHardReference(Entry->Publication, Name) && !Peer.View.Knows(Target)) EnqueueGroup(Owner, Target, Kind);
+							if (IsHardReference(Entry->Publication, Name) && !Peer.View.Knows(Target) &&
+								!Owner.HidesPlayerCharacter(Object,Name,Target,Peer.LocalPlayer)) EnqueueGroup(Owner, Target, Kind);
 						}
 					}
 				}
@@ -320,7 +324,8 @@ struct ReplicationCoordinator::PlanningContinuation {
 							++NewWork;
 							const auto ReferrerLeave = Working.PendingTransitions.find(Reference.Referrer);
 							if (ReferrerLeave != Working.PendingTransitions.end() && ReferrerLeave->second.Kind == PendingTransitionKind::Leave) ++Disappearing;
-							const bool Hard = !Reference.Property->Nullable || Reference.Property->MaterializationDependencyPolicy == InstanceProperty::MaterializationDependency::Hard;
+							const bool Hard = (!Reference.Property->Nullable || Reference.Property->MaterializationDependencyPolicy == InstanceProperty::MaterializationDependency::Hard) &&
+								!Owner.HidesPlayerCharacter(Reference.Referrer,Reference.Property->Name,Object,Peer.LocalPlayer);
 							if (Hard && Reference.CurrentTarget.IsValid() &&
 								((!Peer.View.Knows(Reference.CurrentTarget) && !Entering.contains(Reference.CurrentTarget)) || Leaving.contains(Reference.CurrentTarget) || Group.contains(Reference.CurrentTarget))) Blocked = true;
 						}

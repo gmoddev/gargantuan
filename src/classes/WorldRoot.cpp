@@ -2,6 +2,7 @@
 #include "BlockGridWorldState.hpp"
 #include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/JointConstraint.hpp"
 #include "gargantuan/classes/Attachment.hpp"
@@ -797,7 +798,12 @@ namespace gargantuan {
 		} else BodyUpdates = SortedIds(DirtyBodies);
 		DirtyBodies.clear();
 		FullPartScanNeeded = false;
+		const auto Realm=BodyUpdates.empty()?nullptr:GetDataModel();
+		const auto Transfer=Realm?Realm->GetSpatialTransferProtection():nullptr;
 		for (const auto Object : BodyUpdates) {
+			if (Transfer && (Transfer->Reservations.HoldsProvider(Object) || Transfer->Reservations.HoldsMember(Object))) {
+				DirtyBodies.insert(Object); continue;
+			}
 			auto Tracked = TrackedParts.find(Object);
 			auto Part = Tracked == TrackedParts.end() ? nullptr : Tracked->second.lock();
 			if (!Part || Part->GetDestroyed() || Part->IsDestroying() ||
@@ -882,7 +888,10 @@ namespace gargantuan {
 	}
 
 	void WorldRoot::ApplyPendingImpulses() {
+		const auto Realm=GetDataModel();
+		const auto Transfer=Realm?Realm->GetSpatialTransferProtection():nullptr;
 		for (const auto &Part : Parts) {
+			if (Transfer && Part && Transfer->Reservations.HoldsMember(Part->GetObjectId())) continue;
 			if (!Part || Part->GetDestroyed() || Part->IsDestroying()) continue;
 			if (!Part->PendingLinearVelocity && !Part->PendingAngularVelocity && !Part->PendingAwake &&
 				!HasImpulse(Part->AccumulatedImpulse) && !HasImpulse(Part->AccumulatedAngularImpulse) &&
@@ -1153,6 +1162,8 @@ namespace gargantuan {
 		if (!Restored || !Child || !Child->Field || TerrainRestored || TerrainRuntimeValue ||
 			Child->Field->GetRevision() != 0 || GetDestroyed() || IsDestroying())
 			throw std::runtime_error("[Terrain:Persistence] The world cannot admit a terrain field");
+		if (const auto Realm=GetDataModel()) if (const auto Guard=Realm->GetSpatialTransferProtection(); Guard && !Guard->AllowsResource(*Child))
+			throw std::runtime_error("[Terrain:Restore] Collision is reserved for an active transfer");
 		Child->Field = std::move(Restored);
 		TerrainRestored = true;
 	}
@@ -1192,6 +1203,7 @@ namespace gargantuan {
 		if (!Field || !HasTerrainRuntime() || SteppingPhysics) return false;
 		const auto Owner = GetTerrainQueryOwner();
 		if (!Owner || !Owner->Field || Owner->Field->GetGrid() != Field->GetGrid()) return false;
+		if (const auto Realm=GetDataModel()) if (const auto Guard=Realm->GetSpatialTransferProtection(); Guard && !Guard->AllowsResource(*Owner)) return false;
 		if (!TerrainRuntimeValue->InstallReplica(Field->GetGrid(), std::move(Chunks), Publication)) return false;
 		Owner->Field = std::move(Field);
 		return true;
@@ -1221,6 +1233,8 @@ namespace gargantuan {
 		if (dynamic_cast<SpatialRegion *>(this))
 			if (auto Realm = GetDataModel(); Realm && Realm->SupportsNetworkSpatialContent()) return std::unexpected(terrain::EditStatus::Unavailable);
 		if (!HasTerrainRuntime() || !TerrainEditTickets || GetTerrainQueryOwner().get() != &Owner || SteppingPhysics)
+			return std::unexpected(terrain::EditStatus::Unavailable);
+		if (const auto Realm=GetDataModel()) if (const auto Guard=Realm->GetSpatialTransferProtection(); Guard && !Guard->AllowsResource(Owner))
 			return std::unexpected(terrain::EditStatus::Unavailable);
 		if (Edit.ExpectedRevision && *Edit.ExpectedRevision != Owner.GetField().GetRevision())
 			return std::unexpected(terrain::EditStatus::Stale);
@@ -1255,6 +1269,7 @@ namespace gargantuan {
 
 	void WorldRoot::PollTerrainWork() {
 		if (!TerrainRuntimeValue || !TerrainEditTickets) return;
+		if (const auto Realm=GetDataModel()) if (const auto Guard=Realm->GetSpatialTransferProtection(); Guard && Guard->Reservations.HoldsDomain(GetObjectId())) return;
 		const auto *TerrainPhysics = GetTerrainPhysics();
 		auto &Records = TerrainEditTickets->Records;
 		for (auto &Completion : TerrainRuntimeValue->Poll()) {
@@ -1648,6 +1663,8 @@ namespace gargantuan {
 		constexpr auto MaximumAccumulatedTime = static_cast<double>(MAX_STEPS_PER_FRAME) * STEP_INTERVAL;
 		StepAccumulator = static_cast<float>(std::min(
 			static_cast<double>(StepAccumulator) + DeltaTime, MaximumAccumulatedTime));
+		const auto SessionRealm=GetDataModel();
+		const auto Protection=SessionRealm?SessionRealm->GetSpatialTransferProtection():nullptr;
 		int Steps = 0;
 		while (StepAccumulator >= STEP_INTERVAL && Steps < MAX_STEPS_PER_FRAME) {
 			ApplyPendingImpulses();
@@ -1669,7 +1686,15 @@ namespace gargantuan {
 				const auto PreviousPublishingPart = PublishingPhysicsPart;
 				PublishingPhysicsPart = Object;
 				try {
-					Part->SetCFrame(Motion.Transform);
+					if (Protection && Protection->Controls(*Part)) {
+						if (!Protection->AllowsSimulationPose(*Part,Motion.Transform)) {
+							auto Description=DescribePart(*Part);
+							(void)Physics.UpdateBody(Motion.Body,Description);
+						} else {
+							Part->ValidateAdmittedSpatialProperty("CFrame",Motion.Transform);
+							Part->CFrame=Motion.Transform; Part->NotifyPropertyCommitted("CFrame");
+						}
+					} else Part->SetCFrame(Motion.Transform);
 				} catch (...) {
 					PublishingPhysicsPart = PreviousPublishingPart;
 					if (!Part->GetDestroyed() && !Part->IsDestroying() && TrackedParts.contains(Object) &&

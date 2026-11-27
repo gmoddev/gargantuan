@@ -15,6 +15,7 @@ namespace gargantuan {
 		std::uint8_t Participation{};
 		blockgrid::Shape Geometry{blockgrid::Shape::Cube};
 		std::uint8_t Orientation{}, Piece{};
+		std::shared_ptr<const PhysicsTriangleMesh> Mesh;
 		auto operator<=>(const BlockGridBox&) const = default;
 	};
 	using BlockGridLeafBoxes = std::map<blockgrid::Cell, std::vector<BlockGridBox>, blockgrid::CellOrder>;
@@ -32,6 +33,7 @@ namespace gargantuan {
 		bool TopologyCurrent{};
 		std::uint8_t TopologyMask{};
 		std::optional<std::uint64_t> Revision;
+		std::uint64_t AssetRevision{};
 		CFrame Pose;
 		float CellSize{};
 		bool Collidable{};

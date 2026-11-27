@@ -1,4 +1,5 @@
 #include "BlockGridWorldState.hpp"
+#include "gargantuan/blockgrid/Assets.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "../physics/Box3DShapeQuery.hpp"
 
@@ -16,8 +17,24 @@ namespace gargantuan {
 		std::uint8_t Participation(bool Collide,bool Query) {
 			return static_cast<std::uint8_t>(unsigned(Collide)|(unsigned(Query)<<1));
 		}
+		glm::mat3 Rotation(std::uint8_t Orientation) {
+			const auto& R=blockgrid::Basis(Orientation);
+			const auto V=[](const blockgrid::Point& P){return glm::vec3(P[0],P[1],P[2]);};
+			return glm::mat3(V(R[0]),V(R[1]),V(R[2]));
+		}
+		bool MeshInRange(const BlockGrid& Grid,glm::vec3 Min,std::uint8_t Orientation,const PhysicsTriangleMesh& Mesh) {
+			const auto& Pose=Grid.GetCFrame();
+			const float Unit=Grid.GetCellSize();
+			const auto Center=Pose.PointToWorldSpace((Min+.5f)*Unit);
+			const float Length=glm::length(Center);
+			if (Length+.867f*Unit<100'000.f) return true;
+			if (!(Length<=100'000.f)) return false;
+			const auto R=Pose.Rotation*Rotation(Orientation);
+			return std::ranges::all_of(*Mesh.Positions,[&](auto P){return glm::length(Center+R*(P*Unit))<=100'000.f;});
+		}
 		template<class Snapshot>
-		std::vector<BlockGridBox> LeafBoxes(blockgrid::Cell Origin,const blockgrid::Leaf& Leaf,const Snapshot& Cells,std::uint8_t GridMask) {
+		std::vector<BlockGridBox> LeafBoxes(blockgrid::Cell Origin,const blockgrid::Leaf& Leaf,const Snapshot& Cells,
+			std::uint8_t GridMask,const BlockGrid& Grid,bool& Available) {
 				std::vector<BlockGridBox> Boxes;
 				const auto Uniform=Leaf.GetUniform();
 				if (Leaf.GetOccupiedCount()==blockgrid::LeafVolume && (!Leaf.HasCustomCells() ||
@@ -35,8 +52,14 @@ namespace gargantuan {
 					const auto Flags=static_cast<std::uint8_t>(GridMask&Participation(Spec.CanCollide,Spec.Queryable));
 					if (!Flags) return;
 					if (Spec.Geometry==blockgrid::Shape::Cube) { Filled[Index(X,Y,Z)]=Flags; return; }
-					const auto& Data=blockgrid::GetGeometry(Spec.Geometry,B.Orientation);
 					const int I=Origin.X+static_cast<int>(X), J=Origin.Y+static_cast<int>(Y), K=Origin.Z+static_cast<int>(Z);
+					if (Spec.Geometry==blockgrid::Shape::Mesh) {
+						const auto M=Spec.Assets && Spec.Assets->Resolved?Spec.Assets->Resolved->QueryMesh:nullptr;
+						if (!M || !MeshInRange(Grid,{I,J,K},B.Orientation,*M)) { Available=false; return; }
+						Boxes.push_back({{I,J,K,I+1,J+1,K+1},Flags,Spec.Geometry,B.Orientation,0,M});
+						return;
+					}
+					const auto& Data=blockgrid::GetGeometry(Spec.Geometry,B.Orientation);
 					for (std::uint8_t Piece=0;Piece<Data.Collision.size();++Piece)
 						Boxes.push_back({{I,J,K,I+1,J+1,K+1},Flags,Spec.Geometry,B.Orientation,Piece});
 				});
@@ -79,14 +102,15 @@ namespace gargantuan {
 			BlockGridLeafBoxes Changed;
 			std::vector<blockgrid::Cell> Replaced;
 			std::size_t OldCount = 0, NewCount = 0;
+			bool Available=true;
 			const auto Visit = [&](blockgrid::Cell Origin, const blockgrid::Leaf *Page) {
-				if (NewCount > MaximumGridBoxes) return;
+				if (!Available || NewCount > MaximumGridBoxes) return;
 				if (Patch) {
 					Replaced.push_back(Origin);
 					if (auto It = Member.Desired.find(Origin); It != Member.Desired.end()) OldCount += It->second.size();
 				}
 				if (!Page) return;
-				auto Boxes = LeafBoxes(Origin,*Page,Cells,Mask);
+				auto Boxes = LeafBoxes(Origin,*Page,Cells,Mask,*Member.Grid,Available);
 				NewCount += Boxes.size();
 				if (!Boxes.empty()) Changed.emplace(Origin,std::move(Boxes));
 			};
@@ -97,7 +121,7 @@ namespace gargantuan {
 				} else Cells.ForEachLeaf([&](auto Origin, const auto &Page) { Visit(Origin, &Page); });
 			}
 			const auto Count = (Patch ? Member.DesiredCount - OldCount : 0) + NewCount;
-			if (Count > MaximumGridBoxes || Count > MaximumWorldBoxes - (State.ReservedBoxes - Member.DesiredCount))
+			if (!Available || Count > MaximumGridBoxes || Count > MaximumWorldBoxes - (State.ReservedBoxes - Member.DesiredCount))
 				return false;
 			if (Patch) for (auto Origin : Replaced) Member.Desired.erase(Origin);
 			else Member.Desired.clear();
@@ -117,7 +141,10 @@ namespace gargantuan {
 			PhysicsBodyDesc Result;
 			Result.Transform = CFrame(Pose.PointToWorldSpace((Min + Max) * (Size * 0.5f)), Pose.Rotation);
 			Result.Shape = {PhysicsShapeKind::Box, (Max - Min) * Size};
-			if (Box.Geometry!=blockgrid::Shape::Cube) {
+			if (Box.Geometry==blockgrid::Shape::Mesh) {
+				Result.Transform.Rotation=Pose.Rotation*Rotation(Box.Orientation);
+				Result.Shape={PhysicsShapeKind::StaticTriangleMesh,glm::vec3(Size),Box.Mesh};
+			} else if (Box.Geometry!=blockgrid::Shape::Cube) {
 				const auto& Piece=blockgrid::GetGeometry(Box.Geometry,Box.Orientation).Collision[Box.Piece];
 				const auto V=[](const blockgrid::Point& P){return glm::vec3(P[0],P[1],P[2]);};
 				const auto& B=blockgrid::Basis(Piece.Orientation);
@@ -180,6 +207,8 @@ namespace gargantuan {
 		bool Ready = State.Retiring.empty();
 		for (auto &[Id, Member] : State.Members) {
 			const auto &Grid = *Member.Grid;
+			if (!Grid.EnsureAssetBindings()) { Member.Ready=false; Member.TopologyCurrent=false; Ready=false; continue; }
+			if (Member.AssetRevision!=Grid.GetAssetPublicationRevision()) Member.TopologyCurrent=false;
 			const auto &Field = Grid.GetField();
 			const auto Pose = Grid.GetCFrame();
 			const bool ConfigChanged = Member.Pose.Position != Pose.Position || Member.Pose.Rotation != Pose.Rotation ||
@@ -217,6 +246,7 @@ namespace gargantuan {
 				State.Owners.emplace(Body, BlockGridCollider{Id, Box});
 			}
 			if (!Member.Ready) { Ready = false; continue; }
+			Member.AssetRevision=Grid.GetAssetPublicationRevision();
 			Member.Revision = Field.GetGeometryRevision();
 			Member.Pose = Pose;
 			Member.CellSize = Grid.GetCellSize();

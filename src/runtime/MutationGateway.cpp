@@ -334,25 +334,31 @@ namespace gargantuan {
 							const auto& Edit = *CommandValue.Edit;
 							const auto Categories=unsigned(!Edit.Writes.empty())+unsigned(!Edit.Commands.empty())+
 								unsigned(Edit.Binding.has_value())+unsigned(Edit.Channel.has_value())+unsigned(bool(Edit.Replay));
-							if (Categories>1 || (Edit.Binding && Edit.Binding->Replace && !Edit.ExpectedRevision))
+							if (Categories>1 || (Edit.Binding && Edit.Binding->Replace && !Edit.ExpectedRevision) ||
+								(!Edit.Materials.empty() && (!Edit.ExpectedRevision || (Edit.Writes.empty() && Edit.Commands.empty()) ||
+									Edit.Materials.size()>blockgrid::MaximumNewMaterials)))
 								return {MutationStatus::ValidationFailed,{}, "[BlockGrid:Edit] Invalid mixed command or missing guard"};
 							if (Replay) {
 								const auto& P=*Edit.Replay;
 								if (Edit.ExpectedRevision || unsigned(!P.Cells.empty())+unsigned(!P.StateCells.empty())+
-									unsigned(P.Binding.has_value())+unsigned(P.Channel.has_value())>1)
+									unsigned(P.Binding.has_value())+unsigned(P.Channel.has_value())>1 ||
+									(!P.Materials.empty() && (P.StateCells.empty() || P.Materials.size()>blockgrid::MaximumNewMaterials)))
 									return {MutationStatus::ValidationFailed,{}, "[BlockGrid:History] Mixed replay command"};
 							}
+							std::shared_ptr<const blockgrid::Patch> Prepared;
 							const auto ApplyEdit = [&]() -> MutationResult {
 								return {.Status=MutationStatus::Success, .Object=CommandValue.Object,
-									.BlockRevision=Grid->ApplyEdit(Edit)};
+									.BlockRevision=Grid->ApplyEdit(Edit,Prepared.get())};
 							};
 							if (!Editor) return ApplyEdit();
 							if (Edit.ExpectedRevision && Grid->GetBlockRevision()!=*Edit.ExpectedRevision)
 								return {MutationStatus::Conflict,{}, "[BlockGrid:Conflict] Revision changed"};
 							BlockGridTransactionChange History{CommandValue.Object,{}};
-							if (Edit.Binding) {
-								const auto& Spec=Edit.Binding->Spec;
-								blockgrid::ValidateDefinition(Spec);
+							if (!Edit.Materials.empty()) {
+								Prepared=Grid->PlanMaterialEdit(Edit);
+								History.Delta=Prepared;
+							} else if (Edit.Binding) {
+								const auto Spec=Grid->ResolveAssetDefinition(Edit.Binding->Spec);
 								auto Patch=std::make_shared<blockgrid::Patch>();
 								const auto& F=Grid->GetField();
 								std::optional<blockgrid::Definition> Before;

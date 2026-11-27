@@ -7,11 +7,13 @@
 namespace gargantuan::blockgrid {
 	struct CellDelta { Cell Position; Block Before, After; };
 	struct BindingDelta { std::optional<Definition> Before; Definition After; };
+	inline constexpr std::size_t MaximumNewMaterials=16;
 	struct Patch {
 		std::vector<CellDelta> Cells;
 		std::optional<BindingDelta> Binding;
 		std::vector<StateChange> StateCells;
 		std::optional<ChannelSpec> Channel;
+		std::vector<Definition> Materials;
 	};
 	struct BindingEdit { Definition Spec; bool Replace{}; };
 	[[nodiscard]] std::shared_ptr<const Patch> CapturePatch(const Field& Source, std::span<const Write> Writes);
@@ -25,5 +27,6 @@ namespace gargantuan::blockgrid {
 		std::optional<BindingEdit> Binding;
 		std::optional<ChannelSpec> Channel;
 		std::vector<Operation> Commands;
+		std::vector<Definition> Materials;
 	};
 }

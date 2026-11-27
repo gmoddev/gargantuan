@@ -1,10 +1,14 @@
+#include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/network/SpatialTransfer.hpp"
+#include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "gargantuan/terrain/Field.hpp"
 
 #include <array>
 #include <iostream>
@@ -27,6 +31,8 @@ namespace {
 		std::shared_ptr<SpatialRegion> Destination = std::make_shared<SpatialRegion>();
 		std::shared_ptr<Part> Actor = std::make_shared<Part>(), Floor = std::make_shared<Part>();
 		SpatialTransferReservations Reservations;
+		std::shared_ptr<SpatialTransferProtection> Protection;
+		std::weak_ptr<const std::function<bool()>> LastReservation;
 		SpatialTransferAdapters Adapters;
 		bool Installed{true}, Permission{true}, MissingFloor{};
 		std::uint8_t FloorContent{19};
@@ -72,10 +78,20 @@ namespace {
 				};
 			};
 			Adapters.Reserve = [this](const SpatialTransferFrame &Frame, const SpatialDestinationReceipt &Receipt) {
-				return Reservations.Reserve(
+				auto &Book = Protection ? Protection->Reservations : Reservations;
+				auto Hold = Book.Reserve(
 					Actor->GetObjectId(), Frame, Receipt, [this] { return Permission; }, {Destination, Floor}
 				);
+				LastReservation = Hold;
+				return Hold;
 			};
+		}
+		void Protect() {
+			Actor->SetAnchored(true);
+			Actor->SetLinearVelocity({0, 0, 0});
+			Protection = Game->AcquireSpatialTransferProtection([this](ObjectId Id) {
+				return Id == Actor->GetObjectId();
+			});
 		}
 		~Realm() {
 			Game->Destroy();
@@ -89,9 +105,11 @@ namespace {
 				CFrame(0, 3, 0)
 			};
 		}
-		bool Apply(const SpatialTransferFrame &, const SpatialDestinationReceipt &Receipt) {
+		bool Apply(
+			const SpatialTransferFrame &, const SpatialDestinationReceipt &Receipt, const SpatialTransferLease &Lease
+		) {
 			++Applications;
-			return Destination->CommitSpatialTransfer(Actor, Movement(), Receipt).Succeeded();
+			return Destination->CommitSpatialTransfer(Actor, Movement(), Receipt, Lease).Succeeded();
 		}
 		bool AtDestination() const {
 			return WorldRoot::GetEffectiveWorld(*Actor) == Destination;
@@ -123,8 +141,12 @@ namespace {
 		}
 		SpatialTransferStep ClientReceive(const SpatialTransferFrame &Frame) {
 			return Client.Receive(
-				Scope, Frame, Replica.Destination, Replica.Adapters, [this](const auto &Message, const auto &Receipt) {
-					return Replica.Apply(Message, Receipt);
+				Scope,
+				Frame,
+				Replica.Destination,
+				Replica.Adapters,
+				[this](const auto &Message, const auto &Receipt, const auto &Lease) {
+					return Replica.Apply(Message, Receipt, Lease);
 				}
 			);
 		}
@@ -194,6 +216,95 @@ namespace {
 			P.ServerReceive(Ack).Status == SpatialTransferStatus::Applied &&
 				!P.Authority.Reservations.HoldsMember(ServerId),
 			"terminal acknowledgment releases the authority hold"
+		);
+	}
+
+	template <class F> bool Denied(F Action) {
+		try {
+			Action();
+			return false;
+		} catch (const std::exception &) {
+			return true;
+		}
+	}
+	void PreventBypasses() {
+		using enum SpatialTransferPhase;
+		Pair P;
+		auto Shell = std::make_shared<Folder>();
+		Shell->SetParent(P.Authority.Source);
+		P.Authority.Actor->SetParent(Shell);
+		auto Grid = std::make_shared<BlockGrid>();
+		Grid->SetCFrame(CFrame(45, 0, 0));
+		Grid->SetParent(P.Authority.Destination);
+		auto Far = std::make_shared<Part>();
+		Far->SetAnchored(true);
+		Far->SetCFrame(CFrame(30, 1, 0));
+		Far->SetParent(P.Authority.Destination);
+		P.Authority.Protect();
+		P.Replica.Protect();
+		const auto Native = P.Authority.Destination->PrepareSpatialDestination(Bounds).value();
+		const auto Fabricated = std::make_shared<const std::function<bool()>>([] { return true; });
+		Check(
+			!P.Authority.Destination
+				 ->CommitSpatialTransfer(P.Authority.Actor, P.Authority.Movement(), Native, Fabricated)
+				 .Succeeded(),
+			"a lookalike grant admitted a controlled subject"
+		);
+		Check(
+			Denied([&] { P.Authority.Actor->SetSpatialRegion(P.Authority.Destination); }) &&
+				Denied([&] { P.Authority.Actor->SetCFrame(CFrame(5, 1, 0)); }) &&
+				Denied([&] { P.Authority.Actor->ApplyImpulse({3, 0, 0}); }) &&
+				Denied([&] { Shell->SetParent(P.Authority.Destination); }),
+			"controlled root bypassed placement or ancestor admission"
+		);
+		const auto OfferPacket = Packet(P.Begin(), Offer);
+		Check(
+			!P.Authority.Destination
+				 ->CommitSpatialTransfer(
+					 P.Authority.Actor, P.Authority.Movement(), Native, P.Authority.LastReservation.lock()
+				 )
+				 .Succeeded(),
+			"an authentic resource hold authorized a transfer before the controlling replica was ready"
+		);
+		Check(
+			Denied([&] { P.Authority.Floor->SetSize({8, 8, 8}); }) && Denied([&] { P.Authority.Floor->Destroy(); }) &&
+				!P.Authority.Floor->GetDestroyed() && Denied([&] { P.Authority.Destination->SetParent(nullptr); }) &&
+				Denied([&] { Far->SetCFrame(CFrame(0, 3, 0)); }),
+			"reserved provider, domain or incoming geometry bypassed admission"
+		);
+		Far->SetCFrame(CFrame(35, 1, 0));
+		Check(
+			Denied([&] { Grid->SetCanCollide(false); }) &&
+				Denied([&] { P.Authority.Destination->RestoreTerrainField(std::make_unique<terrain::Field>()); }),
+			"native terrain or private grid publication replaced a reserved closure"
+		);
+		auto Detached = std::make_shared<Part>();
+		Detached->SetAnchored(true);
+		Detached->SetCFrame(CFrame(0, 3, 0));
+		Detached->SetSpatialRegion(P.Authority.Destination);
+		Check(
+			Denied([&] { Detached->SetParent(P.Authority.Source); }) && !Detached->GetParent(),
+			"detached explicit membership entered a held footprint via Workspace"
+		);
+		const auto ReadyPacket = Packet(P.ClientReceive(OfferPacket), Ready);
+		const auto Reserved = Packet(P.ServerReceive(ReadyPacket), Reserve);
+		const auto Hold = Packet(P.ClientReceive(Reserved), Held);
+		const auto Grant = Packet(P.ServerReceive(Hold), Commit);
+		const auto Ack = Packet(P.ClientReceive(Grant), Applied);
+		Check(
+			P.ServerReceive(Ack).Status == SpatialTransferStatus::Applied && P.Authority.AtDestination() &&
+				P.Replica.AtDestination(),
+			"authentic bilateral grant failed on a protected actor"
+		);
+		P.Authority.Floor->SetSize({2, 2, 2});
+		Pair Dynamic;
+		auto Outside = std::make_shared<Part>();
+		Outside->SetCFrame(CFrame(60, 0, 0));
+		Outside->SetParent(Dynamic.Authority.Destination);
+		Dynamic.Authority.Protect();
+		Check(
+			Dynamic.Begin().Status == SpatialTransferStatus::Denied && !Dynamic.Authority.AtDestination(),
+			"unsupported independent dynamics promised immutability"
 		);
 	}
 
@@ -315,9 +426,9 @@ namespace {
 				CommitPacket,
 				P.Replica.Destination,
 				P.Replica.Adapters,
-				[&](const auto &Frame, const auto &Receipt) {
+				[&](const auto &Frame, const auto &Receipt, const auto &Lease) {
 					P.Client.Reset();
-					return P.Replica.Apply(Frame, Receipt);
+					return P.Replica.Apply(Frame, Receipt, Lease);
 				}
 			);
 			Check(
@@ -330,6 +441,7 @@ namespace {
 int main() try {
 	BootstrapNativeRuntimeSchema();
 	CheckedHandoff();
+	PreventBypasses();
 	Failures();
 	std::cout << "[Network:SpatialTransfer] Independent native realms, portable proof, bilateral holds and revocation "
 				 "passed.\n";

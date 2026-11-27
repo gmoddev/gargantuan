@@ -85,10 +85,12 @@ namespace gargantuan {
 		[[nodiscard]] std::expected<SpatialDestinationReceipt, PhysicsOperationStatus> PrepareSpatialDestination(
 			const SpatialDestinationBounds &Bounds, std::span<const ObjectId> RequiredOwners = {});
 		[[nodiscard]] bool ValidateSpatialDestination(const SpatialDestinationReceipt &Receipt);
+		[[nodiscard]] bool CanHoldSpatialCollision(ObjectId Subject) const;
+		[[nodiscard]] bool CanHoldSpatialSubject(ObjectId Subject);
 		[[nodiscard]] std::uint64_t GetSpatialActivation() const noexcept { return SpatialActivation; }
 		// Main-only checked teleport for one ordinary rigid Part. Clearance uses its conservative oriented box.
 		[[nodiscard]] PhysicsOperationResult CommitSpatialTransfer(const std::shared_ptr<BasePart> &Member,
-			const SpatialMovementRequest &Movement, const SpatialDestinationReceipt &Receipt);
+			const SpatialMovementRequest &Movement, const SpatialDestinationReceipt &Receipt, const SpatialMovementLease &Admission = {});
 		[[nodiscard]] const std::map<ObjectId, std::weak_ptr<Instance>> &GetExplicitSpatialRoots() const { return ExplicitSpatialRoots; }
 
 		PhysicsWorld Physics;

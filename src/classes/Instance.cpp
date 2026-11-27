@@ -2,11 +2,13 @@
 #include "gargantuan/runtime/ServicePolicy.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/classes/LuaSourceContainer.hpp"
 #include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/PlayerGui.hpp"
 #include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
+#include "gargantuan/classes/ViewportFrame.hpp"
 #include "terrain/ScenePersistence.hpp"
 #include "gargantuan/gui/PlayerGuiScope.hpp"
 #include "gargantuan/services/Players.hpp"
@@ -405,6 +407,7 @@ namespace gargantuan {
 			throw std::runtime_error("[Storage:Authority] Replicated service state is server-authoritative");
 		if (!TerrainValue)
 			if (auto dataModel = GetDataModel()) dataModel->EnsureAuthoritativeRevisionAvailable();
+		if (const auto Realm=GetDataModel()) if (const auto Protection=Realm->GetSpatialTransferProtection()) Protection->CheckDestruction(*this);
 		DestroyingState = true;
 		Destroyed = true;
 		if (TerrainValue) TerrainValue->RetireField();
@@ -709,7 +712,14 @@ namespace gargantuan {
 			throw std::runtime_error("[Storage:Authority] Replicated service state is server-authoritative");
 	}
 
-	void Instance::ValidatePropertyMutation(std::string_view propertyName, const std::any &value) const {
+	void Instance::ValidatePropertyMutation(std::string_view propertyName,const std::any &value) const {
+		if (const auto Realm=OwningDataModel.lock())
+			if (const auto Protection=Realm->GetSpatialTransferProtection(); Protection && !Protection->AllowsProperty(*this,propertyName,value))
+				throw std::invalid_argument("[Spatial:Protection] A protected movement or collision edit requires admission");
+		ValidateAdmittedSpatialProperty(propertyName,value);
+	}
+
+	void Instance::ValidateAdmittedSpatialProperty(std::string_view propertyName, const std::any &value) const {
 		if (dynamic_cast<const Terrain *>(this))
 			throw std::runtime_error("[Terrain:Ownership] Terrain identity properties are engine-owned");
 		auto *property = const_cast<Instance *>(this)->FindProperty(std::string(propertyName));
@@ -1303,6 +1313,20 @@ namespace gargantuan {
 			if (Node->Children.size() > MaximumPersistenceObjects - subtree.size() - pending.size())
 				throw std::length_error("Cannot set Parent: Instance subtree object-count limit would be exceeded");
 			for (const auto &Child : Node->Children) pending.emplace_back(Child, Depth + 1);
+		}
+		if (!DestroyingState && newDataModel) if (const auto Protection=newDataModel->GetSpatialTransferProtection()) {
+			const auto Destination=newParent?WorldRoot::GetEffectiveWorld(*newParent):nullptr;
+			std::unordered_map<const Instance*,std::shared_ptr<WorldRoot>> Worlds;
+			for (const auto &Node:subtree) {
+				auto Next=Node==self?Destination:Worlds.at(Node->ParentReference.lock().get());
+				if (!newParent || dynamic_cast<ViewportFrame*>(Node.get())) Next.reset();
+				else if (auto Root=std::dynamic_pointer_cast<WorldRoot>(Node)) Next=std::move(Root);
+				else if (const auto *Member=dynamic_cast<const SpatialDomainMember*>(Node.get()); Member && Member->HasAssignedRegion())
+					Next=Member->GetAssignedRegion().value_or(nullptr);
+				if (!Protection->AllowsReparent(*Node,Next.get()))
+					throw std::invalid_argument("[Spatial:Protection] Reparenting would change a protected spatial participant");
+				Worlds.emplace(Node.get(),std::move(Next));
+			}
 		}
 		const auto oldScope = oldDataModel ? oldDataModel->GetObjectId() : ObjectId{};
 		if (newParent && newDataModel && newDataModel->HasDefaultNetworkSpatialProfile())

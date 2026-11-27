@@ -61,7 +61,7 @@ namespace gargantuan::network {
 
 	// The owner retains its reserved native/content resources until the last lease reference is released.
 	// The predicate also observes authorization, provider generation and coverage invalidation.
-	using SpatialTransferLease = std::shared_ptr<const std::function<bool()>>;
+	using SpatialTransferLease = SpatialMovementLease;
 	struct SpatialTransferAdapters {
 		std::function<
 			std::optional<SpatialAppliedBinding>(const SpatialProviderReceipt &, const SpatialDestinationBounds &)>
@@ -84,12 +84,25 @@ namespace gargantuan::network {
 			std::function<bool()> Authorized,
 			std::vector<std::shared_ptr<const void>> Resources = {}
 		);
+		[[nodiscard]] bool HasHolds() const;
 		[[nodiscard]] bool HoldsMember(ObjectId Member) const;
+		[[nodiscard]] bool HoldsDomain(ObjectId Domain) const;
+		[[nodiscard]] bool HoldsDestination(ObjectId Domain) const;
+		[[nodiscard]] bool Admits(
+			const SpatialTransferLease &Lease,
+			const SpatialMovementRequest &Movement,
+			const SpatialDestinationReceipt &Receipt
+		) const;
 		[[nodiscard]] bool HoldsProvider(ObjectId Owner) const;
 		[[nodiscard]] bool HoldsBounds(ObjectId Domain, const SpatialDestinationBounds &Bounds) const;
 		void Reset();
 
 	  private:
+		friend class SpatialTransferServer;
+		friend class SpatialTransferReplica;
+		bool ApplyBilateral(
+			const SpatialTransferLease &Lease, const SpatialTransferFrame &Frame, const std::function<bool()> &Apply
+		);
 		struct Table;
 		std::unique_ptr<Table> Records;
 	};
@@ -156,7 +169,8 @@ namespace gargantuan::network {
 		SpatialTransferReplica();
 		~SpatialTransferReplica();
 		// Apply is invoked only after the server commits, with the still-held local native receipt.
-		using ApplyMovement = std::function<bool(const SpatialTransferFrame &, const SpatialDestinationReceipt &)>;
+		using ApplyMovement = std::function<
+			bool(const SpatialTransferFrame &, const SpatialDestinationReceipt &, const SpatialTransferLease &)>;
 		[[nodiscard]] SpatialTransferStep Receive(
 			const SpatialTransferScope &Current,
 			const SpatialTransferFrame &Frame,

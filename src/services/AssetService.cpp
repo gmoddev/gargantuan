@@ -802,6 +802,7 @@ namespace gargantuan {
 			for (const auto &[Reference, Record] : Records) {
 				(void)Reference;
 				if (Record.Asset) QueueResidency(Record, false);
+				if (!Record.BuiltIn) PublishChange(Record,AssetChangeKind::Added);
 			}
 		}
 	};

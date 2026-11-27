@@ -1,6 +1,7 @@
 #include "PreparedPropertyCommit.hpp"
 
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
@@ -230,6 +231,10 @@ namespace gargantuan {
 			// may perform an independent mutation without deadlocking journal commit.
 			Stage(PreparedPropertyStage::FinalValidation);
 			Stage(PreparedPropertyStage::JournalReservation);
+			if (const auto Protection=World.GetSpatialTransferProtection()) for (const auto &Store:Stores)
+				if (!Protection->AllowsProperty(*Store.Target,Store.Request->PropertyName,Store.Native)) {
+					Result.Status=MutationStatus::Unauthorized; return Result;
+				}
 			ChangeJournal::PreparedJournalBatch Journal(ChangeJournal::Get(), Records);
 			if (World.GetAuthoritativeRevision() != ExpectedRevision || World.GetDestroyed() || World.IsDestroying() ||
 				ObjectRegistry::Get().Lookup(Scope).get() != &World ||
