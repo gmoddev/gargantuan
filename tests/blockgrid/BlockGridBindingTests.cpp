@@ -487,6 +487,7 @@ int main() try {
 		G.Parent=game.Workspace
 		local P=Vector3.new(-1,0,-1)
 		local Rev=G:GetRevision()
+		assert(G:IsRegionAvailable(P,Vector3.new(0,1,0)) and not pcall(function() G:IsRegionAvailable(P,P) end))
 		local Next=G:Fill(Vector3.new(-3,0,-3),Vector3.new(2,1,2),"Stone")
 		assert(Rev~=Next and G.BlockRevision==Next and G:GetBlock(P).Definition=="Stone")
 		assert(G:SetBlock(P,"Stone")==Next)
@@ -644,6 +645,7 @@ int main() try {
 	)");
 	Run(World,RuntimeMode::NetworkClient,ScriptSecurityContext::ClientRuntime(),R"(
 		local G=game.Workspace:FindFirstChild("Construction")
+		assert(not G:IsRegionAvailable(Vector3.zero,Vector3.new(1,1,1)))
 		assert(not pcall(function() G:SetBlock(Vector3.zero,"Stone") end))
 		assert(not pcall(function() G:GetBlock(Vector3.zero) end))
 		assert(not pcall(function() G.CellSize=1 end))

@@ -68,7 +68,7 @@ namespace gargantuan::network {
 		std::map<ObjectId, Entry> Grids;
 		std::optional<Transfer> Active;
 		GridStreamReceiver Receiver;
-		[[nodiscard]] bool FencesInstalled(ObjectId Source) const;
+		[[nodiscard]] bool FencesInstalled(ObjectId Source,const SpatialDestinationBounds* Bounds=nullptr) const;
 		[[nodiscard]] GridTransferFence CurrentFence(ObjectId Id,const BlockGrid& Grid,const Resolve& Find) const;
 		[[nodiscard]] std::optional<SpatialAppliedBinding> Binding(ObjectId Source,const BlockGrid& Grid,bool Empty,
 			const SpatialDestinationBounds* Bounds) const;

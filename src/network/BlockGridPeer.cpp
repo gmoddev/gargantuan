@@ -68,7 +68,7 @@ namespace gargantuan::network {
 		// A withheld participant never discloses its ID. The known grid may render, but cannot attest the paired landing.
 		return {Stamp->WorldRevision,Grids.contains(Other) && Find(Other)?Other:ObjectId{}};
 	}
-	bool BlockGridPeer::FencesInstalled(ObjectId Source) const {
+	bool BlockGridPeer::FencesInstalled(ObjectId Source,const SpatialDestinationBounds* Bounds) const {
 		std::array<ObjectId,MaximumGrids> Seen{};
 		std::size_t Count{};
 		auto Id=Source;
@@ -78,15 +78,22 @@ namespace gargantuan::network {
 			if (It==Grids.end() || !It->second.Known.Bytes || It->second.Unavailable || Count==Seen.size() ||
 				(Active && (Active->Offer.Scope.Grid==Id || Active->Offer.Fence.Other==Id))) return false;
 			const auto& E=It->second;
+			const auto Grid=Server?E.Owner.lock():E.Replica.lock();
+			if (!Grid || !E.Known.Coverage) return false;
+			if (Bounds && !E.Known.Coverage->Whole) {
+				const auto Local=GridLocalBounds(Grid->GetCFrame(),Grid->GetCellSize(),*Bounds);
+				if (!Local || !E.Known.Coverage->Contains(*Local)) return false;
+			}
 			if (Server) {
-				const auto Grid=E.Owner.lock();
-				if (!Grid || E.SourceRevision!=Grid->GetField().GetPublicRevision() || E.Configuration!=Grid->GetConfigurationRevision() ||
+				if (E.SourceRevision!=Grid->GetField().GetPublicRevision() || E.Configuration!=Grid->GetConfigurationRevision() ||
 					E.MotionRevision!=Grid->GetAssemblyRevision()) return false;
 				const auto Stamp=Grid->GetPublicationTransfer();
 				if ((Stamp?Stamp->WorldRevision:0)!=E.Fence.Generation) return false;
-			} else if (const auto Grid=E.Replica.lock(); !Grid || !Grid->HasReplicaField() ||
-				!Grid->GetAssemblyProjection() || Grid->GetAssemblyProjection()->Revision!=E.MotionRevision ||
-				PlacementDigest(*Grid,Grid->GetCFrame())!=E.Placement) return false;
+			} else {
+				const auto Projection=Grid->GetAssemblyProjection();
+				if (!Grid->HasReplicaField() || !Projection || Projection->Revision!=E.MotionRevision ||
+					PlacementDigest(*Grid,Grid->GetCFrame())!=E.Placement) return false;
+			}
 			for (const auto& [Other,Peer]:Grids)
 				if (Peer.Fence.Other==Id && Peer.Fence.Generation>E.Fence.Generation) return false;
 			Seen[Count++]=Id;
@@ -109,11 +116,8 @@ namespace gargantuan::network {
 		const auto Found = Grids.find(Source);
 		if (Found == Grids.end() || (Active && Active->Offer.Scope.Grid == Source)) return {};
 		const auto &Entry = Found->second;
-		if (!Entry.Known.Coverage || !FencesInstalled(Source) || !Grid.EnsureAssetBindings()) return {};
-		if (!Entry.Known.Coverage->Whole) {
-			const auto Local=Bounds?GridLocalBounds(Grid.GetCFrame(),Grid.GetCellSize(),*Bounds):std::nullopt;
-			if (!Local || !Entry.Known.Coverage->Contains(*Local)) return {};
-		}
+		if (!Entry.Known.Coverage || (!Bounds && !Entry.Known.Coverage->Whole) ||
+			!FencesInstalled(Source,Bounds) || !Grid.EnsureAssetBindings()) return {};
 		if (Server) {
 			if (Entry.Owner.lock().get()!=&Grid) return {};
 		} else {

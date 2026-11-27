@@ -447,8 +447,8 @@ namespace gargantuan {
 		const Region R{ReadCell(L,2),ReadCell(L,3,true)};
 		if (R.Min.X>=R.MaxExclusive.X || R.Min.Y>=R.MaxExclusive.Y || R.Min.Z>=R.MaxExclusive.Z)
 			throw std::invalid_argument("[BlockGrid:Bounds] Expected a nonempty half-open region");
-		const bool Available=!Grid.IsReplicaMaterialization() || (Grid.ReplicaFieldAvailable &&
-			(!Grid.InstalledCoverage || Grid.InstalledCoverage->Contains(R)));
+		const bool NeedsReplica=Grid.IsReplicaMaterialization() || ScriptEngine::Get(L)->Mode==RuntimeMode::NetworkClient;
+		const bool Available=!NeedsReplica || (Grid.ReplicaFieldAvailable && (!Grid.InstalledCoverage || Grid.InstalledCoverage->Contains(R)));
 		lua_pushboolean(L,Available);return 1;
 	}
 	int BlockGrid::CellToWorld(lua_State* L,Instance* Object) {
