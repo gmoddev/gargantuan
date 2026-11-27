@@ -7,6 +7,7 @@
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
+#include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/editor/EditorHost.hpp"
 #include "gargantuan/editor/EditorViewport.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
@@ -16,6 +17,7 @@
 #include "gargantuan/render/RenderProjection.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "gargantuan/terrain/Field.hpp"
 
 #include <SDL3/SDL.h>
 #include <array>
@@ -77,6 +79,53 @@ namespace {
 
 	glm::vec3 TargetCenter(const BlockGrid &Grid) {
 		return Grid.GetCFrame().PointToWorldSpace(glm::vec3(-1.5f, 0.5f, 3.5f) * Grid.GetCellSize());
+	}
+
+	void AddTerrainFixture(const std::shared_ptr<Workspace> &Space, const std::shared_ptr<SpatialRegion> &First) {
+		auto Second = std::make_shared<SpatialRegion>();
+		Second->SetName("TerrainSibling");
+		Second->SetParent(Space);
+		const auto SetSample = [](SpatialRegion &Region, terrain::MaterialId Material) {
+			auto Field = std::make_unique<terrain::Field>();
+			const std::array<terrain::SampleWrite,1> Writes{{{{2,2,2},{-240,Material}}}};
+			const std::array Keys{terrain::GetChunkKey(Writes.front().Point)};
+			auto Prepared = terrain::Field::Prepare(Field->Capture(Keys).value(),Writes).value();
+			(void)Field->Commit(std::move(Prepared)).value();
+			Region.RestoreTerrainField(std::move(Field));
+		};
+		SetSample(*First,3);
+		SetSample(*Second,5);
+		auto Proof = std::make_shared<Script>();
+		Proof->SetName("VerifyIndependentTerrain");
+		Proof->SetRunContext(Enums::RunContext::Server);
+		Proof->SetSource(R"(
+			local World = game.Workspace
+			local Lo, Hi = Vector3.new(2,2,2), Vector3.new(3,3,3)
+			local A = World.NestedRegion.Terrain:ReadRegion(Lo,Hi)
+			local B = World.TerrainSibling.Terrain:ReadRegion(Lo,Hi)
+			local Empty = World.Terrain:ReadRegion(Lo,Hi)
+			assert(buffer.readi16(A,0)==-240 and buffer.readu32(A,2)==3)
+			assert(buffer.readi16(B,0)==-240 and buffer.readu32(B,2)==5 and buffer.readu32(Empty,2)==0)
+			local Cell = Vector3.new(7,8,9)
+			local Grid = World.WestGrid
+			assert(Grid:GetBlock(Cell)==nil)
+			Grid:SetBlock(Cell,"Brick")
+			assert(Grid:GetBlock(Cell).Definition=="Brick")
+			print("[Spatial:PlayTerrain] Independent fields and runtime-only cell verified")
+		)");
+		Proof->SetParent(Space);
+	}
+
+	void CheckTerrainOwners(const std::shared_ptr<DataModel> &Game) {
+		auto First = std::dynamic_pointer_cast<SpatialRegion>(Game->FindFirstDescendant("NestedRegion"));
+		auto Second = std::dynamic_pointer_cast<SpatialRegion>(Game->FindFirstDescendant("TerrainSibling"));
+		Require(First && Second && First->GetTerrain() != Second->GetTerrain(), "reopen did not preserve terrain owners");
+		const auto &A = First->GetTerrain()->GetField();
+		const auto &B = Second->GetTerrain()->GetField();
+		Require(A.GetLifetime() != B.GetLifetime() && A.Read({2,2,2}).value() == terrain::Sample{-240,3} &&
+			B.Read({2,2,2}).value() == terrain::Sample{-240,5} &&
+			WorkspaceOf(Game)->GetTerrain()->GetField().Read({2,2,2}).value() == terrain::AirSample,
+			"wrong terrain field published at coincident sample coordinates");
 	}
 
 	void CheckQueries(WorldRoot &World, const std::shared_ptr<BlockGrid> &Grid,
@@ -185,6 +234,25 @@ namespace {
 		ProjectValue.PersistGameAtomically(ProjectValue.CaptureGame(Game,Game->GetAuthoritativeRevision()));
 		auto Reopened = ProjectValue.DeserializeGame();
 		Reopened->InitializeLoadedProjectRevision();
+		CheckTerrainOwners(Reopened);
+		std::optional<terrain::TerrainCapture> DefaultCapture;
+		terrain::DomainTerrainCaptures Captures;
+		auto Place = ProjectValue.CaptureGasPlace(Game,&DefaultCapture,&Captures);
+		Require(Place && Place->Place && !DefaultCapture && Captures.size() == 2 && Place->Place->Domains.size() == 2 &&
+			Gas::GetFormatVersion(*Place) == Gas::DomainTerrainPlaceFormatVersion, "GASP omitted bound terrain artifacts");
+		auto Bytes = Gas::Encode(*Place).value();
+		auto Document = Gas::Decode(Bytes).value();
+		auto RestoredPlace = ProjectValue.LoadGasPlace(Document);
+		CheckTerrainOwners(RestoredPlace);
+		RestoredPlace->Destroy();
+		auto FirstBinding = Document.Place->Domains.begin();
+		auto SecondBinding = std::next(FirstBinding);
+		std::swap(FirstBinding->second,SecondBinding->second);
+		bool SwappedRejected = false;
+		try { auto Wrong = ProjectValue.LoadGasPlace(Document); Wrong->Destroy(); }
+		catch (const std::exception &) { SwappedRejected = true; }
+		Require(SwappedRejected, "GASP accepted another terrain owner's manifest digest");
+		CheckTerrainOwners(Game);
 		auto NewGrid = std::dynamic_pointer_cast<BlockGrid>(Reopened->FindFirstDescendant("WestGrid"));
 		auto NewOther = std::dynamic_pointer_cast<BlockGrid>(Reopened->FindFirstDescendant("EastGrid"));
 		auto NewRegion = std::dynamic_pointer_cast<SpatialRegion>(Reopened->FindFirstDescendant("NestedRegion"));
@@ -315,12 +383,27 @@ namespace {
 		Require(Read.at("Definition") == "Brick" && Read.at("Orientation") == 7, "EditorHost redo lost the oriented cell");
 		Ok("SaveProject",Empty);
 		const auto Play = Ok("StartPlaySession",Empty);
+		Host.PumpPlaySessionForTesting();
+		const Json PlayId{{"PlaySessionId",Play.at("PlaySessionId")}};
+		const auto Polled = Ok("PollPlayDiagnostics",PlayId);
 		Edit["Revision"] = Read.at("Revision");
 		Edit["Definition"] = "Air";
 		auto Denied = Call("EditBlockGridRegion",Edit);
 		Require(!Denied.at("Ok").get<bool>() && Denied.at("Error").at("Code") == "PlaySessionActive",
 			"EditorHost allowed an edit during Play");
-		Ok("StopPlaySession",{{"PlaySessionId",Play.at("PlaySessionId")}});
+		const auto Stopped = Ok("StopPlaySession",PlayId);
+		bool TerrainProof = false;
+		for (const auto *Packet : {&Play,&Polled,&Stopped}) {
+			for (const auto &Entry : Packet->at("Diagnostics")) {
+				if (Entry.value("Severity","") == "Error") throw std::runtime_error("Play failed: " + Entry.dump());
+				if (Entry.value("Message","").find("[Spatial:PlayTerrain] Independent") != std::string::npos)
+					TerrainProof = true;
+			}
+		}
+		Require(TerrainProof, "Play did not verify its private terrain fields and runtime mutation");
+		auto RuntimeAddress = InitialAddress;
+		RuntimeAddress["Cell"] = {7,8,9};
+		Require(Ok("ReadBlockGridCell",RuntimeAddress).at("Definition") == "Air", "Play cell leaked into authoring state");
 		Require(Ok("ReadBlockGridCell",InitialAddress).at("Definition") == "Brick", "Play changed authoring state");
 		Ok("OpenProject",Open);
 		const auto NewAddress = Address();
@@ -344,6 +427,7 @@ namespace {
 		Pose.Position = {8,4,-6};
 		MakeGrid(Space,"WestGrid",{blockgrid::Stone,0},Pose);
 		MakeGrid(Region,"EastGrid",{blockgrid::Brick,1},Pose);
+		AddTerrainFixture(Space,Region);
 		auto Proof = std::make_shared<Script>();
 		Proof->SetName("VerifyPackagedGrids");
 		Proof->SetRunContext(Enums::RunContext::Server);
@@ -400,6 +484,17 @@ int main(int Count, char **Arguments) {
 		auto East = MakeGrid(Inside,"EastGrid",{blockgrid::Brick,1},Pose);
 		CheckQueries(*Space,West,West);
 		CheckQueries(*Region,East,Inside);
+		auto SeparatePose = Pose;
+		SeparatePose.Position.x += 32;
+		West->SetCFrame(SeparatePose);
+		West->SetSpatialRegion(Region);
+		CheckQueries(*Region,West,West);
+		const auto ExplicitCenter = TargetCenter(*West);
+		const auto Absent = Space->ResolveRaycast(ExplicitCenter+glm::vec3(0,3,0), {0,-6,0}, GridQueries());
+		Require(Absent.Succeeded() && !Absent.HasHit(), "explicitly assigned grid leaked into its parent's chart");
+		West->SetSpatialRegion(std::nullopt);
+		West->SetCFrame(Pose);
+		AddTerrainFixture(Space,Region);
 		CheckCollisionFlags(*Region,East);
 		CheckPublication(Space,Region,West,East);
 		const auto Independent = std::make_shared<DataModel>();
