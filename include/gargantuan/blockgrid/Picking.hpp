@@ -11,4 +11,7 @@ namespace gargantuan::blockgrid {
 	// Local coordinates in cell units. Direction is the entire bounded segment.
 	[[nodiscard]] std::optional<CellHit> Cast(const Field& Grid, std::array<double,3> Origin,
 		std::array<double,3> Direction, unsigned Budget = MaximumRayVisits,const ReplicaCoverage* Coverage=nullptr);
+	// A front-facing triangle on either camera clip plane belongs to the visible segment.
+	[[nodiscard]] std::optional<CellHit> CastVisibleSegment(const Field& Grid, std::array<double,3> Origin,
+		std::array<double,3> Direction);
 }

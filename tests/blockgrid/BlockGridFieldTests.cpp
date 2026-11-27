@@ -129,6 +129,11 @@ namespace {
 			Check(Hit && std::abs(Hit->Fraction-.8125)<1e-12);
 			Check(!Cast(F,Rotate({.8,2,.8},R,.5),Down));
 			Check(!Cast(F,Rotate({.25,-1,.25},R,.5),Rotate({0,2,0},R,0)));
+			const auto OnSurface=Rotate({.25,.375,.25},R,.5), Above=Rotate({.25,.875,.25},R,.5);
+			const auto ToSurface=Rotate({0,-.5,0},R,0);
+			const auto AtNear=CastVisibleSegment(F,OnSurface,ToSurface), AtFar=CastVisibleSegment(F,Above,ToSurface);
+			Check(AtNear && AtNear->Fraction==0 && AtFar && AtFar->Fraction==1);
+			Check(!Cast(F,OnSurface,ToSurface) && !Cast(F,Above,ToSurface));
 		}
 		const auto Bytes=Encode(F);
 		auto Decoded=Decode(Bytes);
