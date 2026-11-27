@@ -1,4 +1,5 @@
 #include "gargantuan/classes/Character.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
@@ -1029,6 +1030,53 @@ namespace {
 	}
 }
 
+namespace {
+	void TestSpatialDomainAudience() {
+		auto Game = std::make_shared<DataModel>();
+		auto Space = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto Private = std::make_shared<SpatialRegion>();
+		Private->SetParent(Space);
+		auto Outside = std::make_shared<Part>();
+		Outside->SetParent(Space);
+		auto Assigned = std::make_shared<Part>();
+		Assigned->SetParent(Space);
+		Assigned->SetSpatialRegion(Private);
+		auto Inside = std::make_shared<Part>();
+		Inside->SetParent(Private);
+		auto PrivateEvent = std::make_shared<RemoteEvent>();
+		PrivateEvent->SetParent(Private);
+		auto PlayerA = std::make_shared<Player>(), PlayerB = std::make_shared<Player>();
+		PlayerA->SetParent(Game->GetService("Players"));
+		PlayerB->SetParent(Game->GetService("Players"));
+		const std::vector<ObjectId> All{Outside->GetObjectId(), Inside->GetObjectId(), Assigned->GetObjectId(),
+			PrivateEvent->GetObjectId(), Private->GetObjectId()};
+		StructuralReplicationConfiguration Options;
+		Options.ScopeSpatialDomains = true;
+		ReplicationCoordinator Coordinator(Game, {}, true, Options);
+		PeerRelevanceSelection Selection;
+		Selection.DesiredObjects = All;
+		Selection.LocalPlayer = PlayerA->GetObjectId();
+		auto Exterior = Coordinator.AddPeer({701,2},ReplicationEpoch(2),Selection);
+		auto ExteriorView = Coordinator.GetView({701,2});
+		Check(Exterior.Succeeded() && ExteriorView && ExteriorView->Knows(Outside->GetObjectId()) &&
+			!ExteriorView->Knows(Private->GetObjectId()) && !ExteriorView->Knows(Inside->GetObjectId()) &&
+			!ExteriorView->Knows(Assigned->GetObjectId()) && !ExteriorView->Knows(PrivateEvent->GetObjectId()),
+			"Workspace grant excludes coincident interior geometry, explicit members and a private Remote");
+		Selection.LocalPlayer = PlayerB->GetObjectId();
+		Selection.AuthorizedSpatialRegion = Private->GetObjectId();
+		auto Interior = Coordinator.AddPeer({702,2},ReplicationEpoch(2),Selection);
+		auto InteriorView = Coordinator.GetView({702,2});
+		Check(Interior.Succeeded() && InteriorView && InteriorView->Knows(Private->GetObjectId()) &&
+			InteriorView->Knows(Inside->GetObjectId()) && InteriorView->Knows(Assigned->GetObjectId()) &&
+			InteriorView->Knows(PrivateEvent->GetObjectId()) && !InteriorView->Knows(Outside->GetObjectId()),
+			"server grant publishes interior hierarchy and explicit members through final structural selection");
+		Check(!Coordinator.AddPeer({703,2},ReplicationEpoch(3),Selection).Succeeded(), "a second connection cannot borrow the player's grant");
+		Selection.AuthorizedSpatialRegion = {};
+		Check(!Coordinator.RecordDesiredState({702,2},Selection,3).Succeeded(), "an active audience cannot be changed by a new focus");
+		Game->Destroy();
+	}
+}
+
 int main() {
 	using namespace gargantuan;
 	using namespace gargantuan::network;
@@ -1039,6 +1087,7 @@ int main() {
 		return 1;
 	}
 	TestMixedSimulatorComposition();
+	TestSpatialDomainAudience();
 	Check(test::RunProtocolUtf8ParityTests(), "UTF-8 scalar parity and exact GRPL encoding pass");
 	Check(test::RunBoundedReplicationEncodingTests(), "bounded GRPL encoding preserves bytes, bounds and error precedence");
 	Check(test::RunFarmRecoveryObservationTests(), "farm recovery stage comes from the replicated DataModel");

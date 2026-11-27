@@ -1,3 +1,4 @@
+#include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/network/ReplicationRelevance.hpp"
 #include "gargantuan/runtime/ServicePolicy.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
@@ -200,6 +201,7 @@ namespace gargantuan::network {
 		struct PeerState {
 			ObjectId LocalPlayer;
 			ObjectId OwnerCharacter;
+			ObjectId AuthorizedSpatialRegion;
 			std::vector<glm::vec3> TrustedFocus;
 			std::vector<glm::vec3> ResolvedFocus;
 			std::set<ObjectId> RelevantSpatialRoots;
@@ -421,6 +423,13 @@ namespace gargantuan::network {
 				Found->second.SpatialChanged.push_back(Object->GetPropertyChangedSignal("CFrame")->Connect(
 					[this, Id](std::monostate) { MarkSpatialDirty(Id); }
 				));
+				if (Configuration.ScopeSpatialDomains) {
+					const auto AudienceChanged = [this](std::monostate) { WorldDirty = true; NextWorkTick = 0; };
+					if (std::dynamic_pointer_cast<BasePart>(Object))
+						Found->second.SpatialChanged.push_back(Object->GetPropertyChangedSignal("SpatialRegion")->Connect(AudienceChanged));
+					if (Found->second.CharacterRoot)
+						Found->second.SpatialChanged.push_back(Object->GetPropertyChangedSignal("RootPart")->Connect(AudienceChanged));
+				}
 				if (std::dynamic_pointer_cast<BasePart>(Object))
 					Found->second.SpatialChanged.push_back(Object->GetPropertyChangedSignal("Size")->Connect(
 						[this, Id](std::monostate) { MarkSpatialDirty(Id); }
@@ -678,6 +687,14 @@ namespace gargantuan::network {
 				runtime_detail::CountWork(runtime_detail::WorkCounter::RelevanceRoots);
 				auto Root = SpatialObjects.find(RootId);
 				if (Root == SpatialObjects.end()) continue;
+				if (Configuration.ScopeSpatialDomains) {
+					auto Member = Root->second.Object.lock();
+					if (!Member) continue;
+					if (const auto Actor = std::dynamic_pointer_cast<Character>(Member))
+						if (auto Body = Actor->GetRootPart()) Member = *Body;
+					const auto Region = std::dynamic_pointer_cast<SpatialRegion>(WorldRoot::GetEffectiveWorld(*Member));
+					if ((Region ? Region->GetObjectId() : ObjectId{}) != Peer.AuthorizedSpatialRegion) continue;
+				}
 				if (Root->second.CharacterRoot) Peer.RuntimeCharacterCandidates.push_back(RootId);
 				runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::RelevanceSelection, Root->second.Members.size());
 				Desired.insert(Root->second.Members.begin(), Root->second.Members.end());
@@ -693,13 +710,15 @@ namespace gargantuan::network {
 				Fail("Peer relevance selection exceeds its object limit");
 				return false;
 			}
-			if (Peer.Selection->LocalPlayer != Peer.LocalPlayer || !std::ranges::equal(Required, Peer.Selection->RequiredObjects) ||
+			if (Peer.Selection->LocalPlayer != Peer.LocalPlayer || Peer.Selection->AuthorizedSpatialRegion != Peer.AuthorizedSpatialRegion ||
+				!std::ranges::equal(Required, Peer.Selection->RequiredObjects) ||
 				!std::ranges::equal(Desired, Peer.Selection->DesiredObjects)) {
 				runtime_detail::WorkScope CommitWork(runtime_detail::WorkPhase::RelevanceCommit);
 				PeerRelevanceSelection Selection;
 				Selection.RequiredObjects.assign(Required.begin(), Required.end());
 				Selection.DesiredObjects.assign(Desired.begin(), Desired.end());
 				Selection.LocalPlayer = Peer.LocalPlayer;
+				Selection.AuthorizedSpatialRegion = Peer.AuthorizedSpatialRegion;
 				Peer.Selection = std::make_shared<const PeerRelevanceSelection>(std::move(Selection));
 			}
 			return true;
@@ -854,7 +873,12 @@ namespace gargantuan::network {
 
 	ReplicationRelevance::~ReplicationRelevance() = default;
 
-	bool ReplicationRelevance::AddPeer(ConnectionId Connection, ObjectId LocalPlayer, ObjectId OwnerCharacter) {
+	bool ReplicationRelevance::AddPeer(ConnectionId Connection, ObjectId LocalPlayer, ObjectId OwnerCharacter, ObjectId AuthorizedSpatialRegion) {
+		if (AuthorizedSpatialRegion.IsValid()) {
+			const auto Region = std::dynamic_pointer_cast<SpatialRegion>(ObjectRegistry::Get().Lookup(AuthorizedSpatialRegion));
+			if (!State->Configuration.ScopeSpatialDomains || !Region ||
+				SpatialRegion::FindAttachedWorld(*Region).get() != State->SourceRoot.get()) return false;
+		}
 		if (!State->Healthy || !Connection.IsValid() || !LocalPlayer.IsValid() ||
 			State->Peers.size() >= MaximumReplicationRelevancePeers || State->Peers.contains(Connection))
 			return false;
@@ -867,7 +891,8 @@ namespace gargantuan::network {
 			if (Existing.Slot == Connection.Slot) return false;
 		}
 		auto [Iterator, Added] = State->Peers.emplace(
-			Connection, Implementation::PeerState{.LocalPlayer = LocalPlayer, .OwnerCharacter = OwnerCharacter}
+			Connection, Implementation::PeerState{.LocalPlayer = LocalPlayer, .OwnerCharacter = OwnerCharacter,
+				.AuthorizedSpatialRegion = AuthorizedSpatialRegion}
 		);
 		if (!Added || !State->UpdatePeer(Iterator->second, 0)) {
 			State->Peers.erase(Connection);

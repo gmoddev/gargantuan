@@ -30,6 +30,11 @@ namespace gargantuan::network {
 		constexpr auto AudioMixServiceId = SchemaId::FromNativeName("Engine", "AudioMixService");
 		constexpr auto PlayerGuiId = SchemaId::FromNativeName("Engine", "PlayerGui");
 		constexpr auto ViewportFrameId = SchemaId::FromNativeName("Engine", "ViewportFrame");
+		constexpr auto SpatialRegionId = SchemaId::FromNativeName("Engine", "SpatialRegion");
+		constexpr auto CharacterId = SchemaId::FromNativeName("Engine", "Character");
+		constexpr auto BasePartId = SchemaId::FromNativeName("Engine", "BasePart");
+		constexpr auto BlockGridId = SchemaId::FromNativeName("Engine", "BlockGrid");
+		constexpr auto SpatialPlayerId = SchemaId::FromNativeName("Engine", "Player");
 		constexpr std::size_t MaximumDependencyClosureDepth = 64;
 		constexpr std::size_t MaximumDependencyClosureObjects = MaximumPeerDesiredObjects;
 		constexpr std::size_t MaximumCatalogRefreshBatches = 16;
@@ -759,10 +764,51 @@ namespace gargantuan::network {
 		return false;
 	}
 
+	ObjectId ReplicationCoordinator::GetSpatialGrant(ObjectId Player) const {
+		if (SpatialGrants.empty()) return {};
+		const auto Grant = SpatialGrants.find(Player);
+		return Grant == SpatialGrants.end() ? ObjectId{} : Grant->second;
+	}
+
+	bool ReplicationCoordinator::InstallSpatialGrant(ObjectId Player, ObjectId Region, std::string &Error) {
+		if (!Configuration.ScopeSpatialDomains && !Region.IsValid()) return true;
+		if (!Configuration.ScopeSpatialDomains || !Player.IsValid()) {
+			Error = "A domain grant requires an authenticated spatial replication session";
+			return false;
+		}
+		const auto Recipient = Catalog.find(Player);
+		if (Recipient == Catalog.end() || RetiredObjects.contains(Player) || Recipient->second->Publication.ClassSchemaId != SpatialPlayerId) {
+			Error = "The spatial audience has no live Player in this world";
+			return false;
+		}
+		if (!Region.IsValid()) return true;
+		const auto It = Catalog.find(Region);
+		if (It == Catalog.end() || RetiredObjects.contains(Region) || It->second->Publication.ClassSchemaId != SpatialRegionId) {
+			Error = "The granted spatial region is unavailable in this world";
+			return false;
+		}
+		if (!SpatialGrants.emplace(Player, Region).second) {
+			Error = "A spatial grant is already bound to this player";
+			return false;
+		}
+		return true;
+	}
+
 	bool ReplicationCoordinator::IsVisibleToPeer(ObjectId Object, ObjectId LocalPlayer) const {
 		const auto &Schema = FrozenSchema ? *FrozenSchema : detail::GetReplicationSchemaRegistry();
 		bool ViewportScene = false;
 		bool OwnedGui = false;
+		const auto Granted = Configuration.ScopeSpatialDomains ? GetSpatialGrant(LocalPlayer) : ObjectId{};
+		bool SpatialParticipant = false, InsideGrant = false;
+		const auto CheckAssignment = [&](const PublishReplication &Node) {
+			const auto It = Node.Properties.find("SpatialRegion");
+			if (It == Node.Properties.end() || std::holds_alternative<std::monostate>(It->second)) return true;
+			const auto *Reference = std::get_if<WireObjectReference>(&It->second);
+			if (!Reference || !Granted.IsValid() || Reference->Object.ToObjectId() != Granted || RetiredObjects.contains(Granted))
+				return false;
+			InsideGrant = true;
+			return true;
+		};
 		for (std::size_t Depth = 0; Object.IsValid(); ++Depth) {
 			if (Depth > MaximumDependencyClosureDepth)
 				throw std::runtime_error("Replication service ancestry exceeds the existing closure limit");
@@ -773,6 +819,27 @@ namespace gargantuan::network {
 			if (!Definition) throw std::runtime_error("Replication service class definition is missing");
 			if (Definition->ServicePolicy == SchemaServicePolicy::ServerOnly ||
 				Publication.ClassSchemaId == AudioMixServiceId) return false;
+			if (Configuration.ScopeSpatialDomains) {
+				const bool Body = Definition->Id == BlockGridId || Definition->InheritedClassIds.contains(BasePartId) ||
+					Definition->Id == BasePartId;
+				if (Body) {
+					SpatialParticipant = true;
+					if (!CheckAssignment(Publication)) return false;
+				}
+				if (Definition->Id == CharacterId || Definition->InheritedClassIds.contains(CharacterId)) {
+					SpatialParticipant = true;
+					const auto Root = Publication.Properties.find("RootPart");
+					const auto *Ref = Root == Publication.Properties.end() ? nullptr : std::get_if<WireObjectReference>(&Root->second);
+					if (Ref) {
+						const auto Part = Catalog.find(Ref->Object.ToObjectId());
+						if (Part == Catalog.end() || !CheckAssignment(Part->second->Publication)) return false;
+					}
+				}
+				if (Publication.ClassSchemaId == SpatialRegionId) {
+					if (Object != Granted || RetiredObjects.contains(Object)) return false;
+					InsideGrant = true;
+				}
+			}
 			if (Publication.ClassSchemaId == PlayerGuiId) {
 				if (!LocalPlayer.IsValid() || Publication.Parent != LocalPlayer) return false;
 				OwnedGui = true;
@@ -781,7 +848,8 @@ namespace gargantuan::network {
 			if (!Publication.Parent) break;
 			Object = *Publication.Parent;
 		}
-		return !ViewportScene || OwnedGui;
+		if (ViewportScene) return OwnedGui;
+		return !SpatialParticipant || !Granted.IsValid() || InsideGrant;
 	}
 
 	bool ReplicationCoordinator::BuildDependencyClosure(
@@ -1122,6 +1190,10 @@ namespace gargantuan::network {
 		};
 		if (Peer.PreparedCommit) {
 			Error = "A structural frame is awaiting scheduler acceptance";
+			return false;
+		}
+		if (Selection.AuthorizedSpatialRegion != GetSpatialGrant(Peer.LocalPlayer)) {
+			Error = "The spatial audience is immutable within a replication epoch";
 			return false;
 		}
 		if (Selection.LocalPlayer != Peer.LocalPlayer) {
@@ -1948,8 +2020,9 @@ namespace gargantuan::network {
 		if (!SourceRootId.IsValid() || !Connection.IsValid() || !Epoch.IsValid()) return {"Invalid replication peer or source"};
 		if (Peers.contains(Connection)) return {"Replication peer is already registered"};
 		for (const auto &[Existing, State] : Peers)
-			if (Existing.Slot == Connection.Slot && State.View.Connection.IsValid())
-				return {"A live replication peer already owns this connection slot"};
+			if ((Existing.Slot == Connection.Slot && State.View.Connection.IsValid()) ||
+				(Configuration.ScopeSpatialDomains && State.LocalPlayer == Selection.LocalPlayer))
+				return {"A live replication peer already owns this connection slot or spatial audience"};
 		PeerState State{{Connection, Epoch}, CatalogCursor, ReliableReplicationSequence(1)};
 		State.LocalPlayer = Selection.LocalPlayer;
 		State.PolicyManaged = true;
@@ -1957,7 +2030,11 @@ namespace gargantuan::network {
 		auto [Peer, Added] = Peers.emplace(Connection, std::move(State));
 		if (!Added) return {"Replication peer is already registered"};
 		std::string Error;
-		if (!RefreshCatalog(Error) || !RecordDesiredState(Peer->second, Selection, 0, Error)) {
+		if (!RefreshCatalog(Error) || !InstallSpatialGrant(Selection.LocalPlayer, Selection.AuthorizedSpatialRegion, Error)) {
+			Peers.erase(Peer);
+			return {std::move(Error)};
+		}
+		if (!RecordDesiredState(Peer->second, Selection, 0, Error)) {
 			RemovePeer(Connection);
 			return {std::move(Error)};
 		}
@@ -2662,6 +2739,7 @@ namespace gargantuan::network {
 	bool ReplicationCoordinator::RemovePeer(ConnectionId Connection) {
 		auto Peer = Peers.find(Connection);
 		if (Peer == Peers.end()) return false;
+		if (!SpatialGrants.empty()) SpatialGrants.erase(Peer->second.LocalPlayer);
 		if (!FrozenQuote) detail::RecordStructuralCausal({.Kind = detail::StructuralCausalKind::PeerRemoved,
 			.Reason = detail::StructuralCausalReason::GenerationRemoved, .Connection = Connection, .SourceScope = SourceRootId});
 		PendingTransitionCount -= std::min(PendingTransitionCount, Peer->second.PendingTransitions.size());
