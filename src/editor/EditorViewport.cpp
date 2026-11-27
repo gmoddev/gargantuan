@@ -38,14 +38,35 @@ namespace gargantuan {
 		constexpr SDL_GPUShaderFormat ShaderFormats = static_cast<SDL_GPUShaderFormat>(
 			SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_METALLIB | SDL_GPU_SHADERFORMAT_MSL
 		);
-		constexpr SDL_GPUTextureFormat ColorFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 
-		std::optional<float> IntersectItem(const RenderItem &Item, const glm::vec3 &Origin, const glm::vec3 &Direction) {
-			const auto LocalOrigin = glm::vec3(Item.InverseModelMatrix * glm::vec4(Origin, 1.0f));
-			const auto LocalDirection = glm::vec3(Item.InverseModelMatrix * glm::vec4(Direction, 0.0f));
+		struct PickRay {
+			glm::vec3 Origin, Direction;
+			float Minimum, Maximum;
+		};
+
+		std::optional<PickRay> MakePickRay(const RenderCameraSnapshot &Camera, std::uint32_t Width,
+			std::uint32_t Height, float X, float Y) {
+			if (!Width || !Height || !std::isfinite(X) || !std::isfinite(Y) || X < 0.0f || Y < 0.0f ||
+				X >= Width || Y >= Height || !std::isfinite(Camera.NearPlane) || !std::isfinite(Camera.FarPlane) ||
+				Camera.NearPlane <= 0.0f || Camera.FarPlane <= Camera.NearPlane) return std::nullopt;
+			const float Tangent = std::tan(glm::radians(Camera.VerticalFieldOfView) * 0.5f);
+			const float NormalizedX = ((X + 0.5f) / static_cast<float>(Width)) * 2.0f - 1.0f;
+			const float NormalizedY = 1.0f - ((Y + 0.5f) / static_cast<float>(Height)) * 2.0f;
+			const auto Direction = glm::normalize(Camera.LookDirection +
+				Camera.RightDirection * (NormalizedX * Tangent * Width / Height) +
+				Camera.UpDirection * (NormalizedY * Tangent));
+			// Camera clipping is planar. At off-center pixels, eye depth is shorter than ray distance.
+			const float Forward = glm::dot(Direction, Camera.LookDirection);
+			if (!std::isfinite(Forward) || Forward <= 0.0f) return std::nullopt;
+			return PickRay{Camera.Position, Direction, Camera.NearPlane / Forward, Camera.FarPlane / Forward};
+		}
+
+		std::optional<float> IntersectItem(const RenderItem &Item, const PickRay &Ray) {
+			const auto LocalOrigin = glm::vec3(Item.InverseModelMatrix * glm::vec4(Ray.Origin, 1.0f));
+			const auto LocalDirection = glm::vec3(Item.InverseModelMatrix * glm::vec4(Ray.Direction, 0.0f));
 			constexpr glm::vec3 HalfSize(0.5f);
-			float Minimum = 0.0f;
-			float Maximum = std::numeric_limits<float>::infinity();
+			float Minimum = Ray.Minimum;
+			float Maximum = Ray.Maximum;
 			for (int Axis = 0; Axis < 3; ++Axis) {
 				if (std::abs(LocalDirection[Axis]) < 1e-6f) {
 					if (LocalOrigin[Axis] < -HalfSize[Axis] || LocalOrigin[Axis] > HalfSize[Axis]) return std::nullopt;
@@ -63,22 +84,13 @@ namespace gargantuan {
 	}
 
 	std::optional<EditorViewportPick> PickEditorViewport(const RenderSnapshot &Snapshot, float X, float Y) {
-		if (Snapshot.Id == InvalidRenderSnapshotId || Snapshot.ViewportWidth == 0 || Snapshot.ViewportHeight == 0 ||
-			!std::isfinite(X) || !std::isfinite(Y) || X < 0.0f || Y < 0.0f ||
-			X >= Snapshot.ViewportWidth || Y >= Snapshot.ViewportHeight) return std::nullopt;
-		const auto &Camera = Snapshot.Camera;
-		const float Tangent = std::tan(glm::radians(Camera.VerticalFieldOfView) * 0.5f);
-		const float NormalizedX = ((X + 0.5f) / static_cast<float>(Snapshot.ViewportWidth)) * 2.0f - 1.0f;
-		const float NormalizedY = 1.0f - ((Y + 0.5f) / static_cast<float>(Snapshot.ViewportHeight)) * 2.0f;
-		const float Aspect = static_cast<float>(Snapshot.ViewportWidth) / static_cast<float>(Snapshot.ViewportHeight);
-		const auto Direction = glm::normalize(
-			Camera.LookDirection + Camera.RightDirection * (NormalizedX * Tangent * Aspect) +
-			Camera.UpDirection * (NormalizedY * Tangent)
-		);
+		if (Snapshot.Id == InvalidRenderSnapshotId) return std::nullopt;
+		const auto Ray = MakePickRay(Snapshot.Camera, Snapshot.ViewportWidth, Snapshot.ViewportHeight, X, Y);
+		if (!Ray) return std::nullopt;
 
 		std::optional<EditorViewportPick> Closest;
 		for (const auto &Item : Snapshot.Items) {
-			auto Distance = IntersectItem(Item, Camera.Position, Direction);
+			auto Distance = IntersectItem(Item, *Ray);
 			if (!Distance || (Closest && *Distance >= Closest->Distance)) continue;
 			Closest = EditorViewportPick{Item.Object, *Distance};
 		}
@@ -88,63 +100,66 @@ namespace gargantuan {
 	std::optional<EditorViewportPick> PickEditorViewport(const RenderProjection &Projection, float X, float Y,
 		const WorldRoot *EditWorld) {
 		const auto &Frame = Projection.GetFrame();
-		if (Projection.GetLastPublicationId() == InvalidRenderPublicationId || Frame.ViewportWidth == 0 ||
-			Frame.ViewportHeight == 0 || !std::isfinite(X) || !std::isfinite(Y) || X < 0.0f || Y < 0.0f ||
-			X >= Frame.ViewportWidth || Y >= Frame.ViewportHeight) return std::nullopt;
-		const auto &Camera = Frame.Camera;
-		const float Tangent = std::tan(glm::radians(Camera.VerticalFieldOfView) * 0.5f);
-		const float NormalizedX = ((X + 0.5f) / static_cast<float>(Frame.ViewportWidth)) * 2.0f - 1.0f;
-		const float NormalizedY = 1.0f - ((Y + 0.5f) / static_cast<float>(Frame.ViewportHeight)) * 2.0f;
-		const float Aspect = static_cast<float>(Frame.ViewportWidth) / static_cast<float>(Frame.ViewportHeight);
-		const auto Direction = glm::normalize(
-			Camera.LookDirection + Camera.RightDirection * (NormalizedX * Tangent * Aspect) +
-			Camera.UpDirection * (NormalizedY * Tangent)
-		);
+		if (Projection.GetLastPublicationId() == InvalidRenderPublicationId) return std::nullopt;
+		const auto Ray = MakePickRay(Frame.Camera, Frame.ViewportWidth, Frame.ViewportHeight, X, Y);
+		if (!Ray) return std::nullopt;
 
 		std::optional<EditorViewportPick> Closest;
 		for (const auto &[Object, Projected] : Projection.GetObjects()) {
-			(void)Object;
 			if (!Projected.Visible) continue;
+			EditorViewportPick Candidate{Object, 0};
 			if (Projected.Mesh && Projected.Mesh->Domain == RenderMeshDomain::BlockGrid) {
 				if (!EditWorld) continue;
 				const auto Grid = std::dynamic_pointer_cast<BlockGrid>(ObjectRegistry::Get().Lookup(Object));
 				const auto *Bounds = Projection.GetMeshBounds(*Projected.Mesh);
 				if (!Grid || !Bounds || WorldRoot::GetEffectiveWorld(*Grid).get() != EditWorld) continue;
 				const auto Inverse = glm::dmat4(Projected.Item.InverseModelMatrix);
-				const auto Local = glm::dvec3(Inverse * glm::dvec4(Camera.Position, 1));
-				const auto Ray = glm::dvec3(Inverse * glm::dvec4(Direction, 0));
-				double Enter = 0, Exit = Closest ? Closest->Distance : Camera.FarPlane;
+				const auto Local = glm::dvec3(Inverse * glm::dvec4(Ray->Origin, 1));
+				const auto Direction = glm::dvec3(Inverse * glm::dvec4(Ray->Direction, 0));
+				double Enter = Ray->Minimum, Exit = Ray->Maximum;
+				if (Closest) Exit = std::min<double>(Exit, std::nextafter(Closest->Distance, std::numeric_limits<float>::infinity()));
 				for (unsigned Axis = 0; Axis < 3; ++Axis) {
-					if (Ray[Axis] == 0) {
+					if (Direction[Axis] == 0) {
 						if (Local[Axis] < Bounds->Minimum[Axis] || Local[Axis] > Bounds->Maximum[Axis]) Exit = -1;
 						continue;
 					}
-					const double A = (Bounds->Minimum[Axis] - Local[Axis]) / Ray[Axis];
-					const double B = (Bounds->Maximum[Axis] - Local[Axis]) / Ray[Axis];
+					const double A = (Bounds->Minimum[Axis] - Local[Axis]) / Direction[Axis];
+					const double B = (Bounds->Maximum[Axis] - Local[Axis]) / Direction[Axis];
 					Enter = std::max(Enter, std::min(A, B));
 					Exit = std::min(Exit, std::max(A, B));
 				}
-				if (Exit < Enter || Exit <= 0) continue;
-				Enter = std::max(0.0, Enter - 0.0001);
-				const auto Start = Local + Ray * Enter;
-				const auto Span = Ray * (Exit - Enter);
-				const auto Hit = blockgrid::Cast(Grid->GetField(), {Start.x,Start.y,Start.z}, {Span.x,Span.y,Span.z});
+				if (Exit < Enter) continue;
+				// Include the mesh bounds themselves while tracing only the visible camera segment.
+				Enter = std::max<double>(Ray->Minimum, Enter - 0.0001);
+				Exit = std::min<double>(Ray->Maximum, Exit + 0.0001);
+				if (Exit <= Enter) continue;
+				const auto Start = Local + Direction * Enter;
+				const auto Span = Direction * (Exit - Enter);
+				const auto Hit = blockgrid::CastVisibleSegment(Grid->GetField(), {Start.x,Start.y,Start.z}, {Span.x,Span.y,Span.z});
 				if (!Hit) continue;
-				const auto Distance = static_cast<float>(Enter + (Exit-Enter) * Hit->Fraction);
-				if (!Closest || Distance < Closest->Distance || (Distance == Closest->Distance && Object < Closest->Object))
-					Closest = EditorViewportPick{Object, Distance, glm::ivec3(Hit->Position.X,Hit->Position.Y,Hit->Position.Z),
-						glm::ivec3(Hit->Normal[0],Hit->Normal[1],Hit->Normal[2])};
-				continue;
+				Candidate.Distance = static_cast<float>(Enter + (Exit - Enter) * Hit->Fraction);
+				Candidate.Cell = glm::ivec3(Hit->Position.X, Hit->Position.Y, Hit->Position.Z);
+				// Adjacent placement needs one local cell step, including on a slope or authored mesh.
+				unsigned Face = 0;
+				for (unsigned Axis = 1; Axis < 3; ++Axis)
+					if (std::abs(Hit->Normal[Axis]) > std::abs(Hit->Normal[Face])) Face = Axis;
+				glm::ivec3 Normal(0);
+				Normal[Face] = Hit->Normal[Face] < 0 ? -1 : 1;
+				Candidate.LocalNormal = Normal;
+			} else {
+				const auto Distance = IntersectItem(Projected.Item, *Ray);
+				if (!Distance) continue;
+				Candidate.Distance = *Distance;
 			}
-			auto Distance = IntersectItem(Projected.Item, Camera.Position, Direction);
-			if (!Distance || (Closest && (*Distance > Closest->Distance ||
-				(*Distance == Closest->Distance && Object >= Closest->Object)))) continue;
-			Closest = EditorViewportPick{Object, *Distance};
+			if (!Closest || Candidate.Distance < Closest->Distance ||
+				(Candidate.Distance == Closest->Distance && Object < Closest->Object))
+				Closest = Candidate;
 		}
 		return Closest;
 	}
 
 	struct EditorViewportRenderer::Backend final {
+		SDL_GPUTextureFormat ColorFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 		bool OwnsVideoSubsystem = false;
 		std::uint32_t Width = 0;
 		std::uint32_t Height = 0;
@@ -277,11 +292,16 @@ namespace gargantuan {
 			throw std::runtime_error(std::format("Failed to create viewport GPU device: {}", SDL_GetError()));
 		}
 		State->HdrSceneEnabled = EnableHdrScene && SupportsSDLHdrScene(State->Gpu);
+		// Match the mailbox byte order at the final render target when the driver supports it.
+		const auto *ForceRgba = SDL_getenv("GARGANTUAN_VIEWPORT_FORCE_RGBA");
+		if (!(ForceRgba && std::strcmp(ForceRgba, "1") == 0) && SDL_GPUTextureSupportsFormat(State->Gpu,
+			SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET))
+			State->ColorFormat = SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM;
 		State->EnableInstancing = EnableInstancing;
 		State->EnableSceneEnvelope = EnableSceneEnvelope;
 		State->UseContiguousInstancing = UseContiguousInstancing;
 		if (EnableInstancing) {
-			const auto SceneFormat = State->HdrSceneEnabled ? SDLHdrSceneFormat : ColorFormat;
+			const auto SceneFormat = State->HdrSceneEnabled ? SDLHdrSceneFormat : State->ColorFormat;
 			const float OutputMode = SceneFormat == SDLHdrSceneFormat ? 2.0f :
 				SDLTargetEncodesSrgb(SceneFormat) ? 0.0f : 1.0f;
 			State->InstanceResources = std::make_unique<SDLInstanceGpuCache>(State->Gpu, OutputMode);
@@ -314,7 +334,7 @@ namespace gargantuan {
 			for (const auto &Definition : GetSDLRenderPassConstructors()) {
 				if (Definition.Target == SDLPassTarget::Resolve && !State->HdrSceneEnabled) continue;
 				const auto Format = State->HdrSceneEnabled && Definition.Target == SDLPassTarget::Scene
-					? SDLHdrSceneFormat : ColorFormat;
+					? SDLHdrSceneFormat : State->ColorFormat;
 				State->RenderPasses.push_back(Definition.Construct(State->Gpu, Format, nullptr));
 			}
 		} catch (...) {
@@ -326,6 +346,11 @@ namespace gargantuan {
 	EditorViewportRenderer::~EditorViewportRenderer() { if (State) State->Destroy(); }
 
 	bool EditorViewportRenderer::UsesHdrScene() const { return State && State->HdrSceneEnabled; }
+	bool EditorViewportRenderer::UsesNativeBgra() const { return State->ColorFormat == SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM; }
+	const char *EditorViewportRenderer::GetGpuBackend() const { return SDL_GetGPUDeviceDriver(State->Gpu); }
+	const char *EditorViewportRenderer::GetGpuAdapter() const {
+		return SDL_GetStringProperty(SDL_GetGPUDeviceProperties(State->Gpu), SDL_PROP_GPU_DEVICE_NAME_STRING, "Unknown");
+	}
 
 	void EditorViewportRenderer::Resize(std::uint32_t Width, std::uint32_t Height) {
 		if (!State || (Width == State->Width && Height == State->Height)) return;
@@ -476,7 +501,9 @@ namespace gargantuan {
 			SDL_ReleaseGPUFence(State->Gpu, Fence);
 			throw std::runtime_error(std::format("Failed to map viewport frame: {}", SDL_GetError()));
 		}
-		for (std::size_t Index = 0; Index < State->BgraPixels.size(); Index += 4) {
+		if (UsesNativeBgra()) {
+			std::memcpy(State->BgraPixels.data(), Rgba, State->BgraPixels.size());
+		} else for (std::size_t Index = 0; Index < State->BgraPixels.size(); Index += 4) {
 			State->BgraPixels[Index] = Rgba[Index + 2];
 			State->BgraPixels[Index + 1] = Rgba[Index + 1];
 			State->BgraPixels[Index + 2] = Rgba[Index];

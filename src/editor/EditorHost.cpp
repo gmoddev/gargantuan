@@ -1495,6 +1495,7 @@ namespace gargantuan {
 		LastViewportPublication = ViewportPublisher->Publish(
 			ViewWorld, Camera, ViewportWidth, ViewportHeight
 		);
+		LastEditViewportSource = {ViewWorld.GetObjectId(), ViewWorld.GetSpatialActivation(), World->GetAuthoritativeRevision()};
 	}
 
 	void EditorHost::RecordGuiPreviewFrame(std::uint64_t FrameNumber) {
@@ -1571,7 +1572,9 @@ namespace gargantuan {
 			ViewportWidth == 0 || ViewportHeight == 0) return;
 		const auto Now = std::chrono::steady_clock::now();
 		if (NextViewportFrame != std::chrono::steady_clock::time_point{} && Now < NextViewportFrame) return;
-		NextViewportFrame = Now + ViewportFrameInterval;
+		if (NextViewportFrame == std::chrono::steady_clock::time_point{}) NextViewportFrame = Now;
+		// Keep phase across ordinary late wakes and skip missed periods without rendering a backlog.
+		NextViewportFrame += ViewportFrameInterval * ((Now - NextViewportFrame) / ViewportFrameInterval + 1);
 		try {
 			if (ViewportPresentationCheckpointForTesting)
 				ViewportPresentationCheckpointForTesting("BeforeCapture");
@@ -1580,6 +1583,7 @@ namespace gargantuan {
 			if (!WorkspaceService) throw std::runtime_error("Project has no Workspace for viewport presentation");
 
 			LatestViewportFrameMetadata Metadata{.Generation = ViewportGeneration};
+			EditViewportSource EditSource;
 			if (ActivePlaySession && ActivePlaySession->GetState() == PlaySessionState::Running) {
 				ConsumePlayRenderPublications(ViewportCaptureForTesting ? nullptr : ViewportRenderer.get());
 				if (!LastViewportPublication) return;
@@ -1587,8 +1591,11 @@ namespace gargantuan {
 				Metadata.PlaySessionId = ActivePlaySession->GetId().Value;
 			} else {
 				PublishEditViewport(*WorkspaceService, *ViewportCamera);
+				EditSource = LastEditViewportSource;
 				Metadata.Mode = LatestFrameMailboxLayout::Mode::Edit;
 			}
+			Metadata.CameraRevision = ViewportCameraRevision;
+			Metadata.SourceRevision = LastViewportPublication->Id;
 			if (ViewportProjection.GetLastPublicationId() != LastViewportPublication->Id)
 				(void)ViewportProjection.Apply(*LastViewportPublication);
 			const auto Captured = ViewportCaptureForTesting
@@ -1596,8 +1603,6 @@ namespace gargantuan {
 				: ViewportRenderer->CaptureBgra(LastViewportPublication);
 			if (ViewportPresentationCheckpointForTesting)
 				ViewportPresentationCheckpointForTesting("AfterCapture");
-			Metadata.CameraRevision = ViewportCameraRevision;
-			Metadata.SourceRevision = LastViewportPublication->Id;
 			Metadata.RenderSubmission = Captured.RenderSubmission;
 			Metadata.GpuReadbackWait = Captured.GpuReadbackWait;
 			Metadata.CpuExtraction = Captured.CpuExtraction;
@@ -1606,7 +1611,12 @@ namespace gargantuan {
 			ViewportFrameNumber = ViewportLatestFrameMailbox->Publish(
 				Captured.Width, Captured.Height, Captured.BgraPixels, Metadata
 			);
-			if (Metadata.Mode == LatestFrameMailboxLayout::Mode::Edit) RecordGuiPreviewFrame(ViewportFrameNumber);
+			if (Metadata.Mode == LatestFrameMailboxLayout::Mode::Edit) {
+				RecordGuiPreviewFrame(ViewportFrameNumber);
+				PresentedEditFrames[ViewportFrameNumber % PresentedEditFrames.size()] = {
+					ViewportFrameNumber, Metadata.Generation, Metadata.CameraRevision, EditSource
+				};
+			}
 			++ViewportProducedFrames;
 			ViewportLastRenderSubmissionUs = static_cast<std::uint64_t>(Captured.RenderSubmission.count());
 			ViewportLastGpuReadbackUs = static_cast<std::uint64_t>(Captured.GpuReadbackWait.count());
@@ -1833,7 +1843,7 @@ namespace gargantuan {
 			const bool viewportMethod = method == "OpenViewportTransport" || method == "CloseViewportTransport" ||
 				method == "ConfigureViewport" || method == "SetViewportCamera" ||
 				method == "StartViewportPresentation" || method == "StopViewportPresentation" ||
-				method == "GetViewportPresentationState" || method == "CaptureViewport" || method == "PickViewport" ||
+				method == "GetViewportPresentationState" || method == "CaptureViewport" || method == "PickViewport" || method == "PickPresentedViewportV1" ||
 				method == "SetGuiPreview" || method == "GetGuiPreview" || method == "PickGuiPreview";
 			if (viewportMethod && !StudioSecurity.HasCapability(ScriptCapability::ViewportControl))
 				return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Viewport access requires ViewportControl"));
@@ -1899,6 +1909,7 @@ namespace gargantuan {
 				}
 				if (LatestFrameMailbox::IsSupported()) {
 					capabilities.push_back("SharedMemoryViewportV2");
+					capabilities.push_back("PickPresentedViewportV1");
 					viewportTransports.push_back({
 						{"Name", "LatestFrameMailbox"},
 						{"Version", LatestFrameMailboxLayout::Version},
@@ -2552,8 +2563,11 @@ namespace gargantuan {
 					return Fail("InvalidDomain", "Select Workspace or an independent SpatialRegion");
 				if (SetView) {
 					const auto Region = std::dynamic_pointer_cast<SpatialRegion>(Selected);
-					Default->SetCurrentSpatialRegion(Region ? std::optional(Region) : std::nullopt);
-					LastViewportPublication.reset();
+					if (Default->GetCurrentSpatialRegion().value_or(nullptr) != Region) {
+						Default->SetCurrentSpatialRegion(Region ? std::optional(Region) : std::nullopt);
+						PresentedEditFrames = {};
+						LastViewportPublication.reset();
+					}
 				}
 				const auto Viewed = Default->GetCurrentSpatialRegion();
 				const std::shared_ptr<WorldRoot> View = Viewed ? std::static_pointer_cast<WorldRoot>(*Viewed) : Default;
@@ -2878,6 +2892,9 @@ namespace gargantuan {
 					{"ProducedFrames", ViewportProducedFrames},
 					{"PresentationFailures", ViewportPresentationFailures},
 					{"ResizeCount", ViewportResizeCount},
+					{"GpuBackend", ViewportRenderer ? Json(ViewportRenderer->GetGpuBackend()) : Json(nullptr)},
+					{"GpuAdapter", ViewportRenderer ? Json(ViewportRenderer->GetGpuAdapter()) : Json(nullptr)},
+					{"ReadbackFormat", ViewportRenderer ? Json(ViewportRenderer->UsesNativeBgra() ? "BGRA8" : "RGBA8") : Json(nullptr)},
 					{"RenderSubmissionUs", ViewportLastRenderSubmissionUs},
 					{"GpuReadbackUs", ViewportLastGpuReadbackUs},
 					{"CpuExtractionUs", ViewportLastCpuExtractionUs},
@@ -4611,7 +4628,11 @@ namespace gargantuan {
 							requestId, "StaleCamera", "CameraRevision is older than the accepted editor camera state"
 						));
 				}
-				camera = MakeLookAtRenderCameraInput(*position, *target, {0.0f, 1.0f, 0.0f}, fieldOfView);
+				const auto NextCamera = MakeLookAtRenderCameraInput(*position, *target, {0.0f, 1.0f, 0.0f}, fieldOfView);
+				if (camera.Position != NextCamera.Position || camera.LookDirection != NextCamera.LookDirection ||
+					camera.UpDirection != NextCamera.UpDirection || camera.VerticalFieldOfView != NextCamera.VerticalFieldOfView)
+					PresentedEditFrames = {};
+				camera = NextCamera;
 				if (RequestedCameraRevision) ViewportCameraRevision = *RequestedCameraRevision;
 				else if (ViewportCameraRevision != std::numeric_limits<std::uint64_t>::max()) {
 					++ViewportCameraRevision;
@@ -4697,20 +4718,44 @@ namespace gargantuan {
 				}
 			}
 
-			if (method == "PickViewport") {
+			if (method == "PickViewport" || method == "PickPresentedViewportV1") {
 				if (ActivePlaySession)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionActive", "Runtime object selection is not available during Play"));
 				if (GuiPreview)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "GuiPreviewActive", "Use PickGuiPreview while editing the GUI preview"));
-				if (!HasOnlyFields(parameters, {"X", "Y"}) || !parameters.contains("X") ||
+				const bool Presented = method == "PickPresentedViewportV1";
+				const bool ValidFields = Presented
+					? HasOnlyFields(parameters, {"X", "Y", "Mailbox", "FrameNumber", "Generation", "CameraRevision"})
+					: HasOnlyFields(parameters, {"X", "Y"});
+				if (!ValidFields || !parameters.contains("X") ||
 					!parameters["X"].is_number() || !parameters.contains("Y") || !parameters["Y"].is_number())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PickViewport requires numeric X and Y"));
 				if (ViewportWidth == 0 || ViewportHeight == 0)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportRequired", "ConfigureViewport must succeed first"));
 				const auto SelectedDomain = workspace->GetCurrentSpatialRegion();
 				const WorldRoot &ViewWorld = SelectedDomain ? static_cast<const WorldRoot &>(**SelectedDomain) : *workspace;
-				if (!LastViewportPublication || ViewWorld.HasBlockGrids()) {
+				if (Presented) {
+					if (!parameters.contains("Mailbox") || !parameters["Mailbox"].is_string() ||
+						!parameters.contains("FrameNumber") || !parameters["FrameNumber"].is_number_unsigned() ||
+						!parameters.contains("Generation") || !parameters["Generation"].is_number_unsigned() ||
+						!parameters.contains("CameraRevision") || !parameters["CameraRevision"].is_number_unsigned())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Presented frame identity is required"));
+					const auto Sequence = parameters["FrameNumber"].get<std::uint64_t>();
+					const auto &Frame = PresentedEditFrames[Sequence % PresentedEditFrames.size()];
+					if (!ViewportPresentationActive || !ViewportLatestFrameMailbox ||
+						parameters["Mailbox"] != ViewportLatestFrameMailbox->GetName() ||
+						Sequence == 0 || Frame.Sequence != Sequence || Frame.Generation != ViewportGeneration ||
+						parameters["Generation"] != Frame.Generation || Frame.CameraRevision != ViewportCameraRevision ||
+						parameters["CameraRevision"] != Frame.CameraRevision || Frame.Source.WorldRevision != World->GetAuthoritativeRevision() ||
+						Frame.Source.Domain != ViewWorld.GetObjectId() || Frame.Source.Activation != ViewWorld.GetSpatialActivation())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "StaleFrame", "The displayed frame is no longer current"));
+				}
+				if (!LastViewportPublication || LastEditViewportSource.Domain != ViewWorld.GetObjectId() ||
+					LastEditViewportSource.Activation != ViewWorld.GetSpatialActivation() || (!Presented && ViewWorld.HasBlockGrids())) {
 					PublishEditViewport(*workspace, camera);
+					// This publication is consumed by the pick projection alone. The renderer's next
+					// capture must start from a full publication instead of a base it never applied.
+					ViewportPublisher->RequestFullResync();
 				}
 				if (ViewportProjection.GetLastPublicationId() != LastViewportPublication->Id)
 					(void)ViewportProjection.Apply(*LastViewportPublication);
@@ -5404,6 +5449,48 @@ namespace gargantuan {
 			std::deque<PendingLine> Lines;
 			bool End = false;
 			bool Stop = false;
+#if defined(_WIN32)
+			HANDLE InputEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+			HANDLE DeadlineTimer = nullptr;
+			bool TriedTimer = false;
+			~RequestQueue() {
+				if (DeadlineTimer) CloseHandle(DeadlineTimer);
+				if (InputEvent) CloseHandle(InputEvent);
+			}
+#endif
+			void Notify() {
+				Changed.notify_one();
+#if defined(_WIN32)
+				if (InputEvent) SetEvent(InputEvent);
+#endif
+			}
+			void Wait(std::unique_lock<std::mutex> &Lock, std::chrono::steady_clock::time_point Wake, bool Presenting) {
+				auto Ready = [&] { return End || !Lines.empty(); };
+				if (Ready()) return;
+#if defined(_WIN32)
+				if (Presenting && !TriedTimer) {
+					TriedTimer = true;
+					DeadlineTimer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+						TIMER_MODIFY_STATE | SYNCHRONIZE);
+				}
+				if (Presenting && DeadlineTimer && InputEvent) {
+					auto Remaining = std::chrono::duration_cast<std::chrono::nanoseconds>(Wake - std::chrono::steady_clock::now()).count();
+					if (Remaining <= 0) return;
+					LARGE_INTEGER Due{};
+					Due.QuadPart = -std::max<LONGLONG>(1, Remaining / 100);
+					if (SetWaitableTimer(DeadlineTimer, &Due, 0, nullptr, nullptr, FALSE)) {
+						HANDLE Handles[] = { InputEvent, DeadlineTimer };
+						Lock.unlock();
+						const auto Status = WaitForMultipleObjects(2, Handles, FALSE, INFINITE);
+						Lock.lock();
+						if (Status == WAIT_OBJECT_0 || Status == WAIT_OBJECT_0 + 1) return;
+					}
+				}
+#else
+				(void)Presenting;
+#endif
+				Changed.wait_until(Lock, Wake, Ready);
+			}
 		};
 		constexpr std::size_t MaximumQueuedRequests = 64;
 		auto Queue = std::make_shared<RequestQueue>();
@@ -5419,12 +5506,12 @@ namespace gargantuan {
 				if (Pending.Status == LineReadStatus::End) {
 					Queue->End = true;
 					Lock.unlock();
-					Queue->Changed.notify_one();
+					Queue->Notify();
 					return;
 				}
 				Queue->Lines.push_back(std::move(Pending));
 				Lock.unlock();
-				Queue->Changed.notify_one();
+				Queue->Notify();
 			}
 		});
 		auto NextObserver = std::chrono::steady_clock::now();
@@ -5439,7 +5526,7 @@ namespace gargantuan {
 					Wake = std::min(Wake, NextPlayStep);
 				if (TerrainAuthoring && TerrainAuthoring->Pending)
 					Wake = std::min(Wake, std::chrono::steady_clock::now() + std::chrono::milliseconds(16));
-				Queue->Changed.wait_until(Lock, Wake, [&] { return Queue->End || !Queue->Lines.empty(); });
+				Queue->Wait(Lock, Wake, ViewportPresentationActive);
 				if (!Queue->Lines.empty()) {
 					Pending = std::move(Queue->Lines.front());
 					Queue->Lines.pop_front();

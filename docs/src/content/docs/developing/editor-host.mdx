@@ -109,7 +109,9 @@ latest-frame path. Studio negotiates it explicitly; EditorHost owns the mapping
 and frame lifetime. `SharedMemoryRing` version 1 with RGB8 frames remains a
 compatibility transport with three fixed-capacity slots that overwrite older
 frames. Hosts without a shared-memory capability use the bounded Base64
-fallback. Clients must select an advertised transport, version, and pixel
+fallback. `PickPresentedViewportV1` is available with the latest-frame mailbox.
+It checks the mailbox identity, frame, generation, camera, authoritative world revision and the selected spatial domain's identity and activation. Switching the edit view retires earlier picks. A grid hit returns its cell within the camera's near and far clipping planes. For adjacent placement, `LocalNormal` is one signed cell step on the strongest local surface-normal axis. Ties prefer X, then Y, then Z.
+Clients must select an advertised transport, version, and pixel
 format rather than assuming either mapping is available.
 
 Opening a project does not initialize rendering, execute gameplay scripts, step
