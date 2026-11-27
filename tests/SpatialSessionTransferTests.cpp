@@ -321,6 +321,21 @@ namespace {
 					LocalAvatar->GetRootPart().value_or(nullptr) == ReplicaActor,
 				"character and physical root diverged"
 			);
+			bool Advanced = false;
+			const CharacterMotionRequest Step{.Translation={.25f,0,0}};
+			Wait([&] {
+				if (!Advanced) {
+					const auto Result=Avatar->AdmitMotion(*Room,Step);
+					Advanced=Result.Succeeded() && Result.AppliedTranslation.x>.2f;
+				}
+				return Advanced;
+			}, "ordinary movement never received matching collision coverage after the handoff");
+			const auto Before=Avatar->GetCFrame().Position;
+			auto NewWall=MakePart("ChangedCoverage",CFrame(2,30,1),Room);
+			Require(!Avatar->AdmitMotion(*Room,Step).Succeeded() && Avatar->GetCFrame().Position==Before,
+				"new authority geometry failed to invalidate the acknowledged movement area");
+			Require(!LocalAvatar->AdmitMotion(*ReplicaRoom,Step).Succeeded(),
+				"controlled spatial replica advanced predicted physics before authority");
 		}
 		Owner.Stop();
 		Spectator.Stop();

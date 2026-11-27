@@ -245,6 +245,12 @@ namespace gargantuan::network {
 
 	CFrame GetSpatialTransferPose(const WireCFrame &Pose) { return LocalPose(Pose); }
 
+	std::optional<AssetContentId> GetSpatialCollisionDigest(const SpatialDestinationReceipt &Receipt,
+		const SpatialTransferAdapters &Adapters) {
+		const auto Evidence = Project(Receipt, Adapters);
+		return Evidence ? std::optional(Evidence->Digest) : std::nullopt;
+	}
+
 	bool IsSpatialOfferInstalled(const SpatialTransferFrame &Offer, WorldRoot &Destination, const SpatialTransferAdapters &Adapters) {
 		if (Offer.Phase != SpatialTransferPhase::Offer || !Valid(Offer) || !Adapters.Resolve) return false;
 		std::vector<ObjectId> Required;

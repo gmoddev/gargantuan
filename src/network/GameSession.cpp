@@ -12,6 +12,7 @@
 #include "BlockGridPeer.hpp"
 #include "SpatialAudience.hpp"
 #include "DomainTerrainEnvelope.hpp"
+#include "SpatialMotionWindow.hpp"
 #include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
@@ -291,6 +292,8 @@ namespace gargantuan::network {
 			std::unique_ptr<TransferDomain> Staging;
 			std::shared_ptr<DomainTerrainDelivery> NamedTerrain;
 			std::uint64_t CurrentGrantGeneration{}, LastStagingSerial{};
+			std::optional<SpatialMotionWindow> MotionWindow;
+			std::uint64_t LastMotionSerial{}, NextMotionCheckTick{};
 			std::uint32_t PlayerId = 0;
 			std::optional<TerrainSessionWindow> TerrainWindow;
 			TerrainWindowIdentity TerrainIdentity;
@@ -339,6 +342,7 @@ namespace gargantuan::network {
 		std::shared_ptr<const WorldRoot::TerrainMotionGuard> TerrainMotionAdmission;
 		std::shared_ptr<const DataModel::DefaultNetworkSpatialProfile> NetworkSpatialProfile;
 		std::shared_ptr<SpatialTransferProtection> SpatialProtection;
+		std::shared_ptr<const WorldRoot::SpatialMotionGuard> SpatialMotionAdmission;
 		NetworkScheduler Scheduler;
 		GameplayInputServer ServerPossessionInput{Scheduler};
 		GameplayInputClient ClientPossessionInput{Scheduler};
@@ -657,6 +661,7 @@ namespace gargantuan::network {
 					return Runtime->CharacterControl->EvaluateMovement(Command, CharacterValue);
 				}
 			);
+			if (Configuration.SpatialContent) Prediction->SetPredictionEnabled(false);
 			Prediction->SetTerminalHandler([this](ConnectionId FailedConnection, const DisconnectInfo &Information) {
 				PendingPeerFailures.try_emplace(FailedConnection, Information);
 			});
@@ -687,7 +692,7 @@ namespace gargantuan::network {
 				[this](const CharacterActionDefinition &Definition, bool Predictable) {
 					return Prediction->RegisterAction(Definition, Predictable);
 				},
-				[this](bool Enabled) { Prediction->SetPredictionEnabled(Enabled); },
+				[this](bool Enabled) { Prediction->SetPredictionEnabled(Enabled && !Configuration.SpatialContent); },
 				[this, Connection](std::uint64_t Tick, glm::vec2 Move, float Facing, bool Jump) {
 					const auto PeerIterator = Peers.find(Connection);
 					const auto PlayerValue = Runtime->Players->GetLocalPlayer().value_or(nullptr);
@@ -791,6 +796,7 @@ namespace gargantuan::network {
 
 		void ReleaseSessionResources() {
 			if (SpatialProtection) SpatialProtection->Retire();
+			SpatialMotionAdmission.reset();
 			SpatialProtection.reset();
 			NetworkSpatialProfile.reset();
 			TerrainMotionAdmission.reset();
@@ -898,8 +904,7 @@ namespace gargantuan::network {
 			const auto PeerValue = Peers.find(Connection);
 			if (PeerValue != Peers.end() && HasTransfer(PeerValue->second)) return false;
 			if (!Configuration.TerrainBootstrap) return true;
-			const auto Found = Peers.find(Connection);
-			return Found != Peers.end() && HasTerrainMotionRelease(Found->second);
+			return PeerValue != Peers.end() && (PeerValue->second.AuthorizedSpatialRegion.IsValid() || HasTerrainMotionRelease(PeerValue->second));
 		}
 
 		static TerrainVersions GetTerrainVersions(const terrain::Field &Field, terrain::ChunkKey Center) {
@@ -975,6 +980,7 @@ namespace gargantuan::network {
 #include "SpatialSessionTransfer.inl"
 
 		void AttachSpatialProtection() {
+			AttachSpatialMotion();
 			SpatialProtection = Runtime->DataModel->AcquireSpatialTransferProtection([this](ObjectId Object) {
 				const auto Controls = [&](const std::shared_ptr<Player> &PlayerValue) {
 					if (!PlayerValue) return false;
@@ -993,6 +999,7 @@ namespace gargantuan::network {
 
 #include "SpatialSessionContent.inl"
 #include "SpatialSessionTerrain.inl"
+#include "SpatialSessionMotion.inl"
 
 		std::shared_ptr<BlockGrid> ResolveGrid(ConnectionId Connection, const Peer &Value, ObjectId Id, bool Staged) const {
 			if (Staged && (!Value.Staging || SpatialTransferClock::now() >= Value.Staging->Expires ||
@@ -1015,6 +1022,7 @@ namespace gargantuan::network {
 				const auto Send = [&](const GridStreamMessage &Frame) {
 					return QueueTerrainFrame(Connection, Value, EncodeGridStream(Frame));
 				};
+				PumpSpatialMotion(Connection,Value);
 				PumpDomainTerrain(Connection, Value, Value.NamedTerrain, Value.AuthorizedSpatialRegion, Value.CurrentGrantGeneration, nullptr);
 				Value.Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, false); }, Send, CurrentTick);
 				if (Value.Staging) {
@@ -1982,6 +1990,10 @@ namespace gargantuan::network {
 				HandleSessionMessage(Received.Connection, Received);
 				return;
 			}
+			if (Magic == SpatialMotionWindowMagic) {
+				ReceiveMotionWindow(Received, PeerIterator->second);
+				return;
+			}
 			if (Magic == DomainTerrainMagic) {
 				ReceiveDomainTerrain(Received, PeerIterator->second);
 				return;
@@ -2314,7 +2326,7 @@ namespace gargantuan::network {
 				const glm::vec3 Extents(glm::length(Part->GetSize()) * 0.5f);
 				if (!Proof || !(*Proof)(*Domain,Object,Part->GetCFrame().Position,Transform.Position,Extents)) return false;
 			}
-			if (Configuration.TerrainBootstrap) {
+			if (Configuration.TerrainBootstrap && !PeerValue.AuthorizedSpatialRegion.IsValid()) {
 				const glm::vec3 Extents(glm::length(Part->GetSize()) * 0.5f);
 				if (!TerrainMotionAllowed(PeerValue, Part->GetCFrame().Position, Extents) ||
 					!TerrainMotionAllowed(PeerValue, Transform.Position, Extents)) return false;

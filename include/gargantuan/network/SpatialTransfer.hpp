@@ -72,6 +72,10 @@ namespace gargantuan::network {
 		std::function<SpatialTransferLease(const SpatialTransferFrame &, const SpatialDestinationReceipt &)> Reserve;
 	};
 
+	// Portable collision evidence for an already authorized ordinary movement area.
+	[[nodiscard]] std::optional<AssetContentId> GetSpatialCollisionDigest(
+		const SpatialDestinationReceipt &Receipt, const SpatialTransferAdapters &Adapters);
+
 	// An early reliable offer can precede its structural/leaf installation. This read-only check
 	// never consumes its serial, grants a lease, or moves the subject.
 	[[nodiscard]] bool IsSpatialOfferInstalled(const SpatialTransferFrame &Offer, WorldRoot &Destination,
