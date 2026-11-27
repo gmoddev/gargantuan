@@ -495,6 +495,24 @@ namespace gargantuan {
 		return Ready;
 	}
 
+	bool WorldRoot::VerifyReplicaGridInstallation(const BlockGrid &Grid) {
+		if (!Grid.IsReplicaMaterialization() || !Grid.HasReplicaField() || !BlockGridState || !Physics.IsValid() ||
+			ShuttingDownPhysics || SteppingPhysics || GetEffectiveWorld(Grid).get() != this) return false;
+		(void)SyncBlockGridCollision();
+		const auto It = BlockGridState->Members.find(Grid.GetObjectId());
+		if (It == BlockGridState->Members.end() || !BlockGridState->Retiring.empty()) return false;
+		const auto &Member = It->second;
+		if (!Member.Ready || !Member.TopologyCurrent || Member.Assembly || Member.Grid.get() != &Grid ||
+			Member.Revision != Grid.GetField().GetGeometryRevision() || Member.AssetRevision != Grid.GetAssetPublicationRevision() ||
+			Member.DesiredCount != Member.Bodies.size()) return false;
+		for (const auto &[Piece, Body] : Member.Bodies) {
+			const auto Found = BlockGridState->Owners.find(Body);
+			if (!Physics.IsBodyValid(Body) || Found == BlockGridState->Owners.end() ||
+				Found->second.Grid != Grid.GetObjectId() || Found->second.Bounds != Piece) return false;
+		}
+		return true;
+	}
+
 	bool WorldRoot::AppendBlockGridFilter(ObjectId Object, std::vector<PhysicsBodyId> &Bodies) const {
 		if (!BlockGridState) return true;
 		const auto Member = BlockGridState->Members.find(Object);

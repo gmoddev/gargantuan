@@ -202,11 +202,7 @@ namespace gargantuan::network {
 				}
 				(void)Grid->ApplyReplicaAssemblyProjection(*Offer.Assembly);
 				const auto World = WorldRoot::GetEffectiveWorld(*Grid);
-				const std::array Required{Grid->GetObjectId()};
-				const auto Position = Grid->GetCFrame().Position;
-				if (!World || !Grid->EnsureAssetBindings() ||
-					!World->PrepareSpatialDestination({Position, Position}, Required))
-					return;
+				if (!World || !Grid->EnsureAssetBindings() || !World->VerifyReplicaGridInstallation(*Grid)) return;
 				Active->Installed = true;
 				auto Ack = Offer;
 				Ack.Kind = GridStreamKind::Installed;

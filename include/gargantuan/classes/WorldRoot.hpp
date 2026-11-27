@@ -173,6 +173,7 @@ namespace gargantuan {
 		std::map<ObjectId, std::weak_ptr<ReflectionProbe>> ReflectionProbes;
 		void ForEachBlockGrid(const std::function<void(const BlockGrid &)> &Visit) const;
 		[[nodiscard]] bool HasBlockGrids() const { return BlockGridState != nullptr; }
+		[[nodiscard]] bool VerifyReplicaGridInstallation(const BlockGrid &Grid);
 
 		void StepPhysics(double DeltaTime, std::optional<std::vector<std::shared_ptr<Instance>>> Instances);
 		[[nodiscard]] PhysicsKinematicMotionResult ResolveKinematicMotion(const PhysicsKinematicMotionRequest &Request);
