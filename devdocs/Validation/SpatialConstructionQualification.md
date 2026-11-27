@@ -62,3 +62,27 @@ At `9b9708424`, the same comparison covered 16 and 2,048 occupied cells, with se
 | 2,048 | Checkerboard | 298.8 / 58,331.0 | 3,865.4 / 2,303.4 | 3,347.0 / 303.8 | 768.1 / 1,060.7 | 15.2 / 33.2 | 1,248 |
 
 All values are observed medians. Every pose-only change uploaded zero mesh bytes. The 2,048-cell grid pose publication took 4.5 µs on the solid and 4.9 µs on the checkerboard. Moving 2,047 surviving individual Parts took 2,483.2 and 2,583.4 µs of publication after their property writes. The initial 2,048-cell checkerboard grid uploaded 2,850,816 bytes and took 3.35 ms to prepare for its first validated ray. Ordinary Parts shared their built-in mesh. At 16 occupied cells the sparse optimization did not engage, and editing either grid cost more CPU time than removing the corresponding Part.
+
+### Latency distributions and process memory
+
+The Windows Release executable at `af8b62c569` completed 105 matched 256-cell trials per layout and representation. Each row below gives the nearest-rank p50, p95, p99 and maximum in microseconds. These are empirical distribution points from 105 observations on this worker. Each trial built a fresh world with the same geometry. The benchmark alternated representation order and the order of the ordinary-Parts query opt-in. Run `gargantuan_spatial_construction_benchmark --tails` to generate the JSON records. [420 observations](SpatialConstructionBenchmarkTails.csv)
+
+| Case | First ray, µs | 512 warm rays, µs | One-cell edit publication, µs | Pose-only publication, µs | Destroy world tree, µs |
+| --- | --- | --- | --- | --- | --- |
+| Checkerboard grid | 368.1 / 582.8 / 730.2 / 898.9 | 484.2 / 815.8 / 995.7 / 1,032.0 | 11.0 / 20.5 / 28.4 / 29.4 | 3.8 / 8.0 / 11.0 / 11.9 | 74.6 / 133.7 / 147.5 / 226.9 |
+| Checkerboard Parts | 49.4 / 75.0 / 89.4 / 169.8 | 497.7 / 671.4 / 925.1 / 987.2 | 14.9 / 25.7 / 32.1 / 35.9 | 220.1 / 332.6 / 402.4 / 406.8 | 1,953.2 / 2,491.5 / 2,994.7 / 3,075.4 |
+| Solid grid | 23.4 / 39.8 / 81.2 / 151.7 | 425.5 / 604.2 / 919.9 / 923.8 | 72.5 / 115.7 / 140.1 / 167.2 | 3.9 / 7.8 / 10.6 / 10.8 | 15.9 / 28.0 / 34.7 / 47.7 |
+| Solid Parts | 51.0 / 78.4 / 134.3 / 233.5 | 786.0 / 1,036.7 / 1,382.8 / 1,461.3 | 16.4 / 28.4 / 32.3 / 39.1 | 224.9 / 303.4 / 328.3 / 357.4 | 1,952.6 / 2,594.3 / 2,812.7 / 3,604.3 |
+
+Enabling native-grid consideration in the Parts-only checkerboard retained the same 512 results and had a 497.9 µs median, compared with 497.7 µs under default parameters. In the solid scene these medians were 780.6 and 786.0 µs. This controls for the query option within the integrated executable. A historical pre-feature CPU comparison remains unmeasured.
+
+Each memory trial launched a fresh process, constructed a DataModel, Workspace and empty folder, then sampled Windows private commit and working set after authoring, renderer publication and the first validated physical query. The final sample followed tree destruction and release of local native owners. Each number below is the median of five paired deltas from the same process's empty-world reading, in MiB. OS page rounding and allocator retention affect these values. A zero increment can fit within committed pages. The grid snapshot admission estimate and encoded bytes are separate fields in the receipt. Run `gargantuan_spatial_construction_benchmark --profile large checkerboard grid` for one process. [60 isolated process observations](SpatialConstructionBenchmarkMemory.csv)
+
+| Occupied | Layout | Additional private commit after first query, grid / Parts | Working set increase at first query, grid / Parts | Private commit after resource release, grid / Parts |
+| ---: | --- | ---: | ---: | ---: |
+| 16 | Checkerboard | 0.004 / 0.242 | 0.598 / 0.711 | 0.062 / 0.168 |
+| 16 | Solid | 0.000 / 0.246 | 0.586 / 0.715 | 0.012 / 0.203 |
+| 256 | Checkerboard | 0.988 / 5.422 | 1.484 / 5.863 | 0.152 / 3.090 |
+| 256 | Solid | 0.094 / 5.414 | 0.680 / 5.855 | −0.020 / 3.293 |
+| 2,048 | Checkerboard | 6.719 / 34.961 | 6.684 / 34.762 | 0.699 / 9.176 |
+| 2,048 | Solid | 0.715 / 35.031 | 1.242 / 34.828 | 0.512 / 10.059 |
