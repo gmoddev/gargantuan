@@ -353,6 +353,7 @@ namespace gargantuan::network {
 	};
 
 	struct AuthoritativeCharacterNetwork::CharacterState {
+		bool SpatialTransferFenced{};
 		std::weak_ptr<KinematicCharacter> Character;
 		CharacterControlEpoch ControlEpoch;
 		std::optional<ConnectionId> Controller;
@@ -594,6 +595,18 @@ namespace gargantuan::network {
 			if (Peer.Published.contains(Character))
 				RefreshRelationshipSchedule(Peer, PeerConnection, Character, AuthoritativeTick);
 		return true;
+	}
+
+	void AuthoritativeCharacterNetwork::SetSpatialTransferFence(ObjectId Character, bool Enabled) {
+		const auto Found = Characters.find(Character);
+		if (Found == Characters.end() || Found->second.SpatialTransferFenced == Enabled) return;
+		Found->second.SpatialTransferFenced = Enabled;
+		Found->second.PreparedTick = 0;
+		for (auto &[Connection, Peer] : Peers) {
+			if (!Peer.Published.contains(Character)) continue;
+			Peer.Unlink(Character);
+			if (!Enabled) MakeRelationshipDue(Peer, Connection, Character, std::max(LastAuthoritativeTick, std::uint64_t{1}), true);
+		}
 	}
 
 	bool AuthoritativeCharacterNetwork::RegisterAction(CharacterActionDefinition Definition) {
@@ -892,6 +905,7 @@ namespace gargantuan::network {
 				continue;
 			}
 
+			if (State.SpatialTransferFenced) { ++Iterator; continue; }
 			for (std::size_t Index = 0; Index < State.PendingActionCount; ++Index) {
 				runtime_detail::WorkScope ActionWork(runtime_detail::WorkPhase::ActionService);
 				const auto &Request = State.PendingActions[Index];
@@ -1095,7 +1109,7 @@ namespace gargantuan::network {
 	std::optional<CharacterAuthoritativeState>
 	AuthoritativeCharacterNetwork::BuildState(ObjectId Character, std::uint64_t AuthoritativeTick, bool Teleport) {
 		auto Found = Characters.find(Character);
-		if (Found == Characters.end() || AuthoritativeTick == 0 || !Found->second.NextStateSequence.IsValid())
+		if (Found == Characters.end() || Found->second.SpatialTransferFenced || AuthoritativeTick == 0 || !Found->second.NextStateSequence.IsValid())
 			return std::nullopt;
 		auto CharacterValue = Found->second.Character.lock();
 		if (!CharacterValue || CharacterValue->GetDestroyed() || CharacterValue->IsDestroying()) return std::nullopt;
@@ -1678,7 +1692,7 @@ namespace gargantuan::network {
 				auto Publication = Peer.Published.find(Id);
 				auto Channel = Peer.Materialized.find(Id);
 				if (Runtime == Characters.end() || Publication == Peer.Published.end() ||
-					Channel == Peer.Materialized.end())
+					Channel == Peer.Materialized.end() || Runtime->second.SpatialTransferFenced)
 					continue;
 				const auto DetectionStarted = std::chrono::steady_clock::now();
 				const bool Refresh = !Publication->second.HasPublished ||
@@ -1952,6 +1966,7 @@ namespace gargantuan::network {
 	}
 
 	struct PredictedCharacterNetwork::ReplicaState {
+		bool SpatialTransferFenced{}, AwaitingTransferControl{};
 		struct PresentationSnapshot {
 			std::uint64_t Tick = 0;
 			CFrame Transform;
@@ -2076,6 +2091,24 @@ namespace gargantuan::network {
 		return true;
 	}
 
+	void PredictedCharacterNetwork::SetSpatialTransferFence(ObjectId Character, bool Enabled) {
+		const auto Found = Replicas.find(Character);
+		if (Found == Replicas.end()) return;
+		auto &Replica = Found->second;
+		Replica.SpatialTransferFenced = Enabled;
+		if (!Enabled) return;
+		Replica.AwaitingTransferControl = true;
+		Replica.PendingState.reset();
+		Replica.ActiveAction.reset();
+		Replica.PresentationSnapshotCount = 0;
+		Replica.PresentationSnapshotStart = 0;
+		Replica.LocalCorrectionStart.reset();
+		Replica.PresentationResetRequired = true;
+		if (const auto Actor = Replica.Character.lock()) Actor->ApplyRuntimePresentationOffset(std::nullopt);
+		for (auto &[Connection, Peer] : Peers)
+			if (Peer.Control && Peer.Control->Character == Character) HardReset(Peer);
+	}
+
 	bool PredictedCharacterNetwork::RegisterAction(CharacterActionDefinition Definition, bool Predictable) {
 		if (!Definition.IsValid() || Actions.size() >= MaximumNetworkCharacters) return false;
 		const auto Token = Definition.Token;
@@ -2192,6 +2225,10 @@ namespace gargantuan::network {
 			Peer.LastActionResult = {};
 			if (Replicas.contains(Transition->Character)) {
 				auto &Replica = Replicas.at(Transition->Character);
+				if (Replica.AwaitingTransferControl) {
+					Replica.Epoch = Transition->ControlEpoch;
+					Replica.AwaitingTransferControl = false;
+				}
 				Replica.LocalCorrectionStart.reset();
 				Replica.PresentationSnapshotStart = 0;
 				Replica.PresentationSnapshotCount = 0;
@@ -2281,7 +2318,7 @@ namespace gargantuan::network {
 		bool FramedState
 	) {
 		auto Replica = Replicas.find(State.Character);
-		if (Replica == Replicas.end()) return false;
+		if (Replica == Replicas.end() || Replica->second.SpatialTransferFenced || Replica->second.AwaitingTransferControl) return false;
 		if (!FramedState) {
 			StateChannelId Channel;
 			if (Peer.Control && Peer.Control->Character == State.Character) Channel = Peer.Control->Channel;

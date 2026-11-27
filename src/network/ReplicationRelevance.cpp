@@ -966,13 +966,15 @@ namespace gargantuan::network {
 			: ObjectId{};
 	}
 
-	bool ReplicationRelevance::SetTrustedFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints) {
+	bool ReplicationRelevance::SetTrustedFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints, bool *Changed) {
+		if (Changed) *Changed = false;
 		auto Peer = State->Peers.find(Connection);
 		if (Peer == State->Peers.end() || FocusPoints.size() > MaximumReplicationFocusPoints ||
 			std::ranges::any_of(FocusPoints, [](glm::vec3 Point) { return !Finite(Point); }))
 			return false;
 		if (std::ranges::equal(Peer->second.TrustedFocus, FocusPoints)) return true;
 		Peer->second.TrustedFocus.assign(FocusPoints.begin(), FocusPoints.end());
+		if (Changed) *Changed = true;
 		Peer->second.Dirty = true;
 		State->NextWorkTick = 0;
 		return true;

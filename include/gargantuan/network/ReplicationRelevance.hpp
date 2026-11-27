@@ -125,7 +125,7 @@ namespace gargantuan::network {
 		bool AddPeer(ConnectionId Connection, ObjectId LocalPlayer, ObjectId OwnerCharacter = {}, ObjectId AuthorizedSpatialRegion = {});
 		bool RemovePeer(ConnectionId Connection);
 		bool SetOwnerCharacter(ConnectionId Connection, ObjectId Character);
-		bool SetTrustedFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints);
+		bool SetTrustedFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints, bool *Changed = nullptr);
 		bool SetSpatialAudience(ConnectionId Connection, ObjectId Region, std::shared_ptr<const SpatialStagingGrant> Staging);
 		bool Update(std::uint64_t SimulationTick);
 

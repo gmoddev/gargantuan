@@ -275,6 +275,7 @@ namespace gargantuan::network {
 		[[nodiscard]] std::optional<CharacterControlEpoch>
 		BindControl(ConnectionId Connection, ObjectId Character, std::uint64_t AuthoritativeTick);
 		bool RevokeControl(ObjectId Character, std::uint64_t AuthoritativeTick);
+		void SetSpatialTransferFence(ObjectId Character, bool Enabled);
 		bool RegisterAction(CharacterActionDefinition Definition);
 		void SetTerminalHandler(CharacterTerminalHandler Handler);
 		bool StartServerAction(ObjectId Character, std::uint32_t ActionToken, std::uint64_t AuthoritativeTick);
@@ -346,6 +347,7 @@ namespace gargantuan::network {
 		bool RemovePeer(ConnectionId Connection);
 		bool MarkMaterialized(ObjectId Character, const std::shared_ptr<KinematicCharacter> &Replica);
 		bool MarkUnmaterialized(ObjectId Character);
+		void SetSpatialTransferFence(ObjectId Character, bool Enabled);
 		bool RegisterAction(CharacterActionDefinition Definition, bool Predictable = true);
 		void SetTerminalHandler(CharacterTerminalHandler Handler);
 		bool HandleTransportEvent(const TransportEvent &Event);

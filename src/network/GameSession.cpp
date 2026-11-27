@@ -226,6 +226,23 @@ namespace gargantuan::network {
 			bool Offered{};
 		};
 
+		struct SessionSpatialTransfer {
+			struct Request {
+				SpatialTransferScope Scope;
+				SpatialDestinationBounds Bounds;
+				std::uint64_t Serial{}, PossessionRevision{};
+				CFrame SourcePose, DestinationPose;
+				SpatialTransferClock::time_point Deadline;
+				std::optional<SpatialTransferFrame> WaitingOffer;
+				bool Started{}, Committed{};
+			};
+			std::uint64_t LastSerial{};
+			std::optional<Request> Pending;
+			std::optional<SpatialTransferStatus> Result;
+			SpatialTransferServer Server;
+			SpatialTransferReplica Replica;
+		};
+
 		struct Peer {
 			struct TransferDomain {
 				SpatialAudienceFrame Frame;
@@ -247,6 +264,7 @@ namespace gargantuan::network {
 			NetworkLimits Limits;
 			ObjectId PlayerObject;
 			ObjectId AuthorizedSpatialRegion;
+			std::unique_ptr<SessionSpatialTransfer> SpatialTransfer;
 			std::unique_ptr<BlockGridPeer> Grids;
 			std::unique_ptr<TransferDomain> Staging;
 			std::uint64_t CurrentGrantGeneration{}, LastStagingSerial{};
@@ -339,6 +357,7 @@ namespace gargantuan::network {
 		std::unique_ptr<AuthoritativeCharacterNetwork> Authority;
 		std::unique_ptr<PredictedCharacterNetwork> Prediction;
 		std::set<ObjectId> ServerCharacters;
+		std::set<ObjectId> TransferPoseSubjects;
 		std::set<ObjectId> ServerRemoteObjects;
 		std::set<ObjectId> ClientCharacterObjects;
 		std::set<ObjectId> ClientRemoteObjects;
@@ -851,6 +870,8 @@ namespace gargantuan::network {
 		}
 
 		bool IsTerrainMotionReleased(ConnectionId Connection) const {
+			const auto PeerValue = Peers.find(Connection);
+			if (PeerValue != Peers.end() && HasTransfer(PeerValue->second)) return false;
 			if (!Configuration.TerrainBootstrap) return true;
 			const auto Found = Peers.find(Connection);
 			return Found != Peers.end() && HasTerrainMotionRelease(Found->second);
@@ -925,6 +946,8 @@ namespace gargantuan::network {
 			if (Submitted.TerminalDisconnect) PendingPeerFailures.try_emplace(Connection, std::move(*Submitted.TerminalDisconnect));
 			return Submitted.Accepted();
 		}
+
+#include "SpatialSessionTransfer.inl"
 
 		void AttachSpatialProtection() {
 			SpatialProtection = Runtime->DataModel->AcquireSpatialTransferProtection([this](ObjectId Object) {
@@ -1974,6 +1997,10 @@ namespace gargantuan::network {
 				);
 				return;
 			}
+			if (IsSpatialTransfer(Received.Payload)) {
+				ReceiveSpatialTransfer(Received, PeerIterator->second);
+				return;
+			}
 			if (IsGameplayInputFrame(Received.Payload)) {
 				if (Configuration.Role == GameSessionRole::Server)
 					(void)ServerPossessionInput.HandleReceived(Received, std::max(CurrentTick, std::uint64_t{1}));
@@ -2130,7 +2157,7 @@ namespace gargantuan::network {
 				PeerValue.MaterializedCharacters = std::move(DesiredCharacters);
 
 				auto CharacterValue = LegacyCharacter(PeerValue.PlayerValue);
-				const auto Desired = CharacterValue ? CharacterValue->GetObjectId() : ObjectId{};
+				const auto Desired = CharacterValue && !HasTransfer(PeerValue) ? CharacterValue->GetObjectId() : ObjectId{};
 				if (Desired == PeerValue.ControlledCharacter) continue;
 				if (PeerValue.ControlledCharacter.IsValid()) {
 					if (!Authority->RevokeControl(
@@ -2195,7 +2222,7 @@ namespace gargantuan::network {
 					DisconnectReason::ResourceExhaustion, "[Gameplay:Possession] Control lease admission failed"});
 			};
 			const auto Target = [this](ConnectionId Connection, const Peer &PeerValue) -> ObjectId {
-				if (PeerValue.Phase != PeerPhase::Ready || !PeerValue.PlayerValue ||
+				if (PeerValue.Phase != PeerPhase::Ready || !PeerValue.PlayerValue || HasTransfer(PeerValue) ||
 					PendingPeerFailures.contains(Connection)) return {};
 				const auto Entity = GenericPossession(*PeerValue.PlayerValue);
 				const auto *View = Replication->GetView(Connection);
@@ -2328,13 +2355,13 @@ namespace gargantuan::network {
 				{
 					runtime_detail::WorkScope Selection(runtime_detail::WorkPhase::GameplayPoseRelevance);
 					std::size_t Visited = 0;
-					if (Owned.IsValid() && ActivePossessionPoses.contains(Owned) && CanUseReplica(Connection,*View,Owned))
+					if (Owned.IsValid() && !IsTransferSubject(Owned) && ActivePossessionPoses.contains(Owned) && CanUseReplica(Connection,*View,Owned))
 						Desired[Count++] = Owned;
 					for (const auto &[Object, Pose] : ActivePossessionPoses) {
 						(void)Pose;
 						if (Count == Desired.size()) break;
 						++Visited;
-						if (Object != Owned && CanUseReplica(Connection,*View,Object)) Desired[Count++] = Object;
+						if (Object != Owned && !IsTransferSubject(Object) && CanUseReplica(Connection,*View,Object)) Desired[Count++] = Object;
 					}
 					runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::GameplayPoseRelevance, Visited);
 				}
@@ -2383,7 +2410,7 @@ namespace gargantuan::network {
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::GameplayPoseReceive);
 			auto Message = runtime_detail::MeasureWork(runtime_detail::WorkPhase::GameplayPoseDecode,
 				[&] { return DecodeGameplayPose(Received); });
-			if (!Message) return;
+			if (!Message || IsTransferSubject(std::visit([](const auto &Value) { return Value.Part; }, *Message))) return;
 			if (const auto *Control = std::get_if<GameplayPoseControl>(&*Message)) {
 				if (!ClientPosePresentation.ApplyControl(*Control)) return;
 				if (auto Found = ClientPossessionPoses.find(Control->Part); Found != ClientPossessionPoses.end()) {
@@ -2656,6 +2683,7 @@ namespace gargantuan::network {
 				(void)detail::ReliableServiceFeedbackAccess::Release(*Transport, Connection);
 			}
 			if (Iterator == Peers.end()) return;
+			RetireSessionTransfer(Connection, Iterator->second);
 			auto PeerValue = std::move(Iterator->second);
 			Peers.erase(Iterator);
 			if (PeerValue.Staging) PeerValue.Staging->Grids->Retire();
@@ -2751,6 +2779,7 @@ namespace gargantuan::network {
 			if (Configuration.TerrainBootstrap)
 				SaturatingAdd(TerrainTick, SimulationTick > CurrentTick ? SimulationTick - CurrentTick : std::uint64_t{1});
 			CurrentTick = SimulationTick;
+			if (Configuration.SpatialContent) PumpSpatialTransfers();
 			// Residency consumes committed server Character facts, independently of
 			// 3E relevance and 3J accepted materialization. Full Player ObjectId
 			// generations scope focus lifetime across disconnect/session replacement.
@@ -2956,7 +2985,8 @@ namespace gargantuan::network {
 				if (StructuralConnections.capacity() < Peers.size()) StructuralConnections.reserve(Peers.size());
 				bool HasPendingBootstrap = false;
 				for (const auto &[Connection, PeerValue] : Peers) {
-					if (PeerValue.Phase != PeerPhase::TransportConnected) StructuralConnections.push_back(Connection);
+					if (PeerValue.Phase != PeerPhase::TransportConnected && !HasCommittedTransfer(PeerValue))
+						StructuralConnections.push_back(Connection);
 					if (PeerValue.Phase != PeerPhase::TransportConnected)
 						runtime_detail::MaximumWork(runtime_detail::WorkCounter::JournalLagBeforeServiceMaximum,
 							Replication->GetJournalLag(Connection));
@@ -3889,8 +3919,27 @@ namespace gargantuan::network {
 		return Result;
 	}
 	bool GameSession::SetTrustedReplicationFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints) {
-		return State->Configuration.Role == GameSessionRole::Server && State->Relevance &&
-			   State->Relevance->SetTrustedFocus(Connection, FocusPoints);
+		bool Changed{};
+		if (State->Configuration.Role != GameSessionRole::Server || !State->Relevance ||
+			!State->Relevance->SetTrustedFocus(Connection, FocusPoints, &Changed)) return false;
+		if (auto Found = State->Peers.find(Connection); Changed && Found != State->Peers.end() && State->HasTransfer(Found->second))
+			(void)State->CancelTransfer(Connection, Found->second);
+		return true;
+	}
+
+	SpatialTransferStatus GameSession::RequestSpatialTransfer(ConnectionId Connection, ObjectId Destination,
+		const CFrame &DestinationPose, const SpatialDestinationBounds &Bounds) {
+		return State->StartSpatialTransfer(Connection, Destination, DestinationPose, Bounds);
+	}
+	SpatialTransferStatus GameSession::CancelSpatialTransfer(ConnectionId Connection) {
+		const auto Found = State->Peers.find(Connection);
+		if (GetCurrentExecutionDomain() != ExecutionDomain::Main || State->Configuration.Role != GameSessionRole::Server ||
+			Found == State->Peers.end()) return SpatialTransferStatus::Denied;
+		return State->CancelTransfer(Connection, Found->second);
+	}
+	std::optional<SpatialTransferStatus> GameSession::GetSpatialTransferStatus(ConnectionId Connection) const {
+		const auto Found = State->Peers.find(Connection);
+		return Found != State->Peers.end() && Found->second.SpatialTransfer ? Found->second.SpatialTransfer->Result : std::nullopt;
 	}
 
 	bool detail::GameSessionTestAccess::VerifySpatialIndex(const GameSession &Session) {
