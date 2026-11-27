@@ -11,7 +11,7 @@ std::optional<SpatialAppliedBinding> ProjectMotionProvider(ConnectionId Connecti
 		const TerrainSessionWindow *Window{};
 		const TerrainWindowIdentity *Identity{};
 		const auto Server = Configuration.Role==GameSessionRole::Server;
-		if (&World==Runtime->Workspace.get()) {
+		if (&World==Runtime->Workspace.get() && (!Configuration.TerrainBootstrap || UsesBootstrapTerrain(Value))) {
 			if (!Configuration.TerrainBootstrap) {
 				if (!Native.AuthoritativeEmpty || !Native.Installed.empty()) return {};
 				static constexpr std::array<std::uint8_t,8> Tag{'E','m','p','t','y','W','S',1};

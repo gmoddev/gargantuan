@@ -107,6 +107,7 @@ bool StageTransferDomain(ConnectionId Connection, WireObjectId Destination, cons
 
 void FinishTransferDomain(Peer &Value,bool Promote) {
 	if (Promote) {
+		RetireBootstrapTerrain(Value);
 		RetireDomainTerrain(Value.NamedTerrain);
 		Value.NamedTerrain=std::move(Value.Staging->Terrain);
 		Value.Grids->Retire();
@@ -172,7 +173,8 @@ void ReceiveSpatialAudience(const ReceivedMessageEvent &Message,Peer &Value) {
 		return;
 	}
 	const bool Promote=Frame->Action==SpatialAudienceAction::Promote;
-	FinishTransferDomain(Value,Promote);
+	try { FinishTransferDomain(Value,Promote); }
+	catch (const std::exception &Error) { Reject(Message.Connection,DisconnectReason::ResourceExhaustion,Error.what()); }
 }
 
 std::optional<SpatialAppliedBinding> GetTransferGridBinding(ConnectionId Connection,

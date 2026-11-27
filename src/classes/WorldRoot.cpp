@@ -1200,12 +1200,12 @@ namespace gargantuan {
 	}
 
 	bool WorldRoot::InstallTerrainReplica(std::unique_ptr<terrain::Field> Field,
-		std::vector<terrain::ChunkPublicationCandidate> Chunks, std::uint64_t Publication) {
+		std::vector<terrain::ChunkPublicationCandidate> Chunks, std::uint64_t Publication, bool BindDatasetSpacing) {
 		if (!Field || !HasTerrainRuntime() || SteppingPhysics) return false;
 		const auto Owner = GetTerrainQueryOwner();
 		if (!Owner || !Owner->Field) return false;
 		if (Owner->Field->GetGrid() != Field->GetGrid() &&
-			!(TerrainReplicaCoverageRequired && dynamic_cast<SpatialRegion *>(this))) return false;
+			!(TerrainReplicaCoverageRequired && (BindDatasetSpacing || dynamic_cast<SpatialRegion *>(this)))) return false;
 		if (const auto Realm=GetDataModel()) if (const auto Guard=Realm->GetSpatialTransferProtection(); Guard && !Guard->AllowsResource(*Owner)) return false;
 		if (!TerrainRuntimeValue->InstallReplica(Field->GetGrid(), std::move(Chunks), Publication)) return false;
 		Owner->Field = std::move(Field);

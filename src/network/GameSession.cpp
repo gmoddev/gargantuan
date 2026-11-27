@@ -304,6 +304,7 @@ namespace gargantuan::network {
 			terrain::Revision CheckedTerrainRevision{};
 			std::optional<TerrainTransfer> TerrainPending;
 			bool TerrainAdmitted = false;
+			std::uint64_t RetiredBootstrapSerial{};
 			std::optional<TerrainMotionRegion> ReleasedTerrain;
 			std::optional<std::uint64_t> TerrainReleaseStartedTick;
 			std::shared_ptr<Player> PlayerValue;
@@ -907,7 +908,7 @@ namespace gargantuan::network {
 			const auto PeerValue = Peers.find(Connection);
 			if (PeerValue != Peers.end() && HasTransfer(PeerValue->second)) return false;
 			if (!Configuration.TerrainBootstrap) return true;
-			return PeerValue != Peers.end() && (PeerValue->second.AuthorizedSpatialRegion.IsValid() || HasTerrainMotionRelease(PeerValue->second));
+			return PeerValue != Peers.end() && (!UsesBootstrapTerrain(PeerValue->second) || HasTerrainMotionRelease(PeerValue->second));
 		}
 
 		static TerrainVersions GetTerrainVersions(const terrain::Field &Field, terrain::ChunkKey Center) {
@@ -923,7 +924,7 @@ namespace gargantuan::network {
 		}
 
 		bool TerrainMotionAllowed(const Peer &Value, glm::vec3 Position, glm::vec3 Extents) const {
-			if (!Configuration.TerrainBootstrap) return true;
+			if (!UsesBootstrapTerrain(Value)) return true;
 			if (Value.Phase != PeerPhase::Ready || !Value.TerrainWindow ||
 				!HasTerrainMotionRelease(Value) || !Runtime->Workspace->IsTerrainCollisionReady())
 				return false;
@@ -1071,7 +1072,7 @@ namespace gargantuan::network {
 		}
 
 		bool CanReceiveTerrain(const ReceivedMessageEvent &Message, const Peer &Value) const {
-			return Configuration.TerrainBootstrap &&
+			return UsesBootstrapTerrain(Value) &&
 				(Value.Phase == PeerPhase::Accepted || Value.Phase == PeerPhase::Ready) &&
 				Message.Delivery == DeliveryMode::ReliableOrdered && Message.Traffic == TrafficClass::Control &&
 				std::holds_alternative<std::monostate>(Message.Order);
@@ -1117,7 +1118,8 @@ namespace gargantuan::network {
 				Transfer.Offer.ManifestByteCount = static_cast<std::uint32_t>(Transfer.Window->ManifestBytes.size());
 				try {
 					const auto Pinned = SelectTerrainSessionWindow(*Configuration.TerrainBootstrap, Transfer.Offer.Center);
-					if (Pinned.ManifestDigest == Transfer.Window->ManifestDigest) Transfer.Offer.ManifestByteCount = 0;
+					if (!Configuration.SpatialContent && Pinned.ManifestDigest == Transfer.Window->ManifestDigest)
+						Transfer.Offer.ManifestByteCount = 0;
 				} catch (const std::length_error &) {
 					// The edit may make the live window fit when the original package window cannot fit.
 				}
@@ -1174,7 +1176,7 @@ namespace gargantuan::network {
 			}
 			const auto &Field = Owner->GetField();
 			for (auto &[Connection, Value] : Peers) {
-				if (Value.Phase != PeerPhase::Ready || !Value.TerrainReleaseStartedTick) continue;
+				if (!UsesBootstrapTerrain(Value) || Value.Phase != PeerPhase::Ready || !Value.TerrainReleaseStartedTick) continue;
 				if (TerrainReleaseTimedOut(Value)) {
 					PendingPeerFailures.try_emplace(Connection,
 						DisconnectInfo{DisconnectReason::Timeout, "Terrain motion release timed out"});
@@ -1191,7 +1193,7 @@ namespace gargantuan::network {
 			for (std::size_t Visited = 0; Visited < Peers.size() && InFlight < Limit; ++Visited) {
 				if (Next == Peers.end()) Next = Peers.begin();
 				auto &[Connection, Value] = *Next++;
-				if (Value.Phase != PeerPhase::Ready || Value.TerrainPending || !Value.TerrainWindow ||
+				if (!UsesBootstrapTerrain(Value) || Value.Phase != PeerPhase::Ready || Value.TerrainPending || !Value.TerrainWindow ||
 					PendingPeerFailures.contains(Connection)) continue;
 				const bool Current = IsCurrentTerrainWindow(Field, Value);
 				if (Current) Value.CheckedTerrainRevision = Field.GetRevision();
@@ -1210,7 +1212,7 @@ namespace gargantuan::network {
 				}
 			}
 			for (auto &[Connection, Value] : Peers) {
-				if (Value.Phase != PeerPhase::Accepted && Value.Phase != PeerPhase::Ready) continue;
+				if (!UsesBootstrapTerrain(Value) || (Value.Phase != PeerPhase::Accepted && Value.Phase != PeerPhase::Ready)) continue;
 				try {
 					if (!Value.TerrainPending || PendingPeerFailures.contains(Connection)) continue;
 					if (TerrainTick - Value.TerrainPending->StartedTick >= Configuration.HandshakeTimeoutTicks) {
@@ -1229,6 +1231,10 @@ namespace gargantuan::network {
 
 		void ReceiveTerrainWindowReady(const ReceivedMessageEvent &Message, Peer &Value) {
 			const auto Ready = DecodeTerrainWindowReady(Message.Payload);
+			if (Configuration.Role==GameSessionRole::Server && !UsesBootstrapTerrain(Value) &&
+				Ready && Ready->SessionEpoch==Value.SessionEpoch && Ready->Serial<=Value.RetiredBootstrapSerial &&
+				Message.Delivery==DeliveryMode::ReliableOrdered && Message.Traffic==TrafficClass::Control &&
+				std::holds_alternative<std::monostate>(Message.Order)) return;
 			if (Configuration.Role == GameSessionRole::Client) {
 				if (!CanReceiveTerrain(Message, Value) || !ClientRuntimeAttached || !Value.TerrainReleaseStartedTick ||
 					Value.TerrainPending || !Value.TerrainWindow || !Ready || *Ready != Value.TerrainIdentity) {
@@ -1521,8 +1527,7 @@ namespace gargantuan::network {
 				if (Configuration.SpatialContent) {
 					if (Configuration.ResolveInitialSpatialAudience)
 						PeerValue.AuthorizedSpatialRegion = Configuration.ResolveInitialSpatialAudience(*PeerValue.PlayerValue);
-					if (Configuration.TerrainBootstrap && PeerValue.AuthorizedSpatialRegion.IsValid())
-						throw std::invalid_argument("[Spatial:Network] Workspace terrain window requires a Workspace grant");
+
 					PeerValue.Grids = std::make_unique<BlockGridPeer>(true,PeerValue.SessionEpoch,PeerValue.AuthorizedSpatialRegion,Configuration.SharedGridAssets);
 				}
 			} catch (const std::exception &) {
@@ -1538,7 +1543,8 @@ namespace gargantuan::network {
 			);
 			PeerValue.PlayerId = static_cast<std::uint32_t>(PeerValue.PlayerValue->GetPlayerId());
 			++Metrics.PlayersCreated;
-			if (const auto &Terrain = Configuration.TerrainBootstrap) {
+			if (UsesBootstrapTerrain(PeerValue)) {
+				const auto &Terrain = Configuration.TerrainBootstrap;
 				try {
 					const auto Position = GetTerrainFocusBounds(TerrainFocusActor(PeerValue.PlayerValue)).Position;
 					const auto Center = GetTerrainSessionCenter(Terrain->Directory.Grid, {Position.x, Position.y, Position.z});
@@ -1852,7 +1858,7 @@ namespace gargantuan::network {
 			if (!PlayerValue) return;
 			const auto Gui = PlayerValue->GetPlayerGui().value_or(nullptr);
 			if (!Gui) return;
-			if (Configuration.TerrainBootstrap && !PeerIterator->second.TerrainAdmitted) {
+			if (UsesBootstrapTerrain(PeerIterator->second) && !PeerIterator->second.TerrainAdmitted) {
 				if (!ReceivedTerrain || !Root) return;
 				try {
 					const auto Space = std::dynamic_pointer_cast<Workspace>(Root->GetService("Workspace"));
@@ -1894,7 +1900,7 @@ namespace gargantuan::network {
 				Ready.SessionEpoch != Iterator->second.SessionEpoch ||
 				Ready.Replication != Iterator->second.Replication || Ready.Player != Iterator->second.PlayerObject ||
 				Ready.TerrainBinding != GetTerrainBinding() || Ready.SpatialContent != Configuration.SpatialContent ||
-				(Configuration.TerrainBootstrap && (!Iterator->second.TerrainWindow || Iterator->second.TerrainPending ||
+				(UsesBootstrapTerrain(Iterator->second) && (!Iterator->second.TerrainWindow || Iterator->second.TerrainPending ||
 					!Runtime->Workspace->IsTerrainCollisionReady()))) {
 				Reject(
 					Connection,
@@ -1929,7 +1935,8 @@ namespace gargantuan::network {
 					}
 			}
 			++Metrics.ReadyPeers;
-			if (Configuration.TerrainBootstrap) {
+			if (UsesBootstrapTerrain(PeerValue)) {
+				PeerValue.TerrainAdmitted = true;
 				PeerValue.TerrainReleaseStartedTick = TerrainTick;
 				LOG_INFO(App, "[Terrain:Network] Server admitted gameplay after verified terrain readiness");
 			}
@@ -3647,7 +3654,7 @@ namespace gargantuan::network {
 				RuntimeValue.DataModel != GetClientDataModel())
 				return false;
 			auto &PeerValue = Peers.at(*PrimaryConnection);
-			if (Configuration.TerrainBootstrap &&
+			if (UsesBootstrapTerrain(PeerValue) &&
 				(!TerrainMotionAdmission || !PeerValue.TerrainAdmitted || !PeerValue.TerrainPending || !PeerValue.TerrainPending->Window ||
 					!RuntimeValue.Workspace->IsTerrainCollisionReady())) {
 				FailSession({DisconnectReason::ResourceExhaustion, "Terrain collision is unavailable on the client"});
@@ -3662,7 +3669,7 @@ namespace gargantuan::network {
 						if (std::dynamic_pointer_cast<BlockGrid>(Replica.Resolve(Id))) TrackGrid(*PrimaryConnection, PeerValue, Id);
 				}
 				InitializeClientManagers();
-				if (Configuration.TerrainBootstrap &&
+				if (UsesBootstrapTerrain(PeerValue) &&
 					!QueueTerrainReady(*PrimaryConnection, PeerValue, std::move(*PeerValue.TerrainPending->Window)))
 					throw std::runtime_error("[Terrain:Network] Initial collision acknowledgment could not be queued");
 			} catch (...) {
@@ -3711,7 +3718,7 @@ namespace gargantuan::network {
 				return false;
 			}
 			Status = GameSessionStatus::Ready;
-			if (Configuration.TerrainBootstrap) {
+			if (UsesBootstrapTerrain(PeerValue)) {
 				PeerValue.TerrainReleaseStartedTick = TerrainTick;
 				LOG_INFO(App, "[Terrain:Network] Client installed verified terrain collision before gameplay readiness");
 			}

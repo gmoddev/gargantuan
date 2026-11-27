@@ -1,4 +1,39 @@
 // Main-thread GameSession ownership. Encoding and contour preparation only borrow immutable snapshots.
+bool UsesBootstrapTerrain(const Peer &Value) const {
+	return Configuration.TerrainBootstrap && (!Configuration.SpatialContent ||
+		(!Value.AuthorizedSpatialRegion.IsValid() && Value.CurrentGrantGeneration==0));
+}
+
+ObjectId TerrainStreamOwner(ObjectId Region,std::uint64_t Grant) const {
+	if (Region.IsValid() || !Grant || !Configuration.TerrainBootstrap || !Runtime) return Region;
+	return TransferIdentity(Runtime->Workspace).ToObjectId();
+}
+
+void RetireBootstrapTerrain(Peer &Value) {
+	if (!UsesBootstrapTerrain(Value)) return;
+	Value.RetiredBootstrapSerial=Value.TerrainIdentity.Serial;
+	if (Value.TerrainPending) Value.RetiredBootstrapSerial=std::max(Value.RetiredBootstrapSerial,Value.TerrainPending->Offer.Identity.Serial);
+	if (Value.TerrainPending && Value.TerrainPending->Sending) Value.TerrainPending->Sending->Stop.request_stop();
+	if (Configuration.Role==GameSessionRole::Client) {
+		if (ClientTerrainWork) ClientTerrainWork->Stop.request_stop();
+		ClientTerrainWork.reset();
+		TerrainReceiveBuffer.clear();
+		ReceivedTerrain.reset();
+		const auto World=Runtime->Workspace;
+		World->TerrainMotionAdmission.reset();
+		NamedTerrainPublication=std::max(NamedTerrainPublication,Value.TerrainIdentity.Serial);
+		if (Value.TerrainPending) NamedTerrainPublication=std::max(NamedTerrainPublication,Value.TerrainPending->Offer.Identity.Serial);
+		auto Empty=std::make_unique<terrain::Field>(Configuration.TerrainBootstrap->Directory.Grid);
+		if (!World->InstallTerrainReplica(std::move(Empty),{},NextDomainTerrainPublication()))
+			throw std::runtime_error("[Terrain:Domain] Workspace collision retirement failed");
+	}
+	Value.TerrainWindow.reset();
+	Value.TerrainPending.reset();
+	Value.ReleasedTerrain.reset();
+	Value.TerrainReleaseStartedTick.reset();
+	Value.TerrainAdmitted=false;
+}
+
 std::shared_ptr<DomainTerrainDelivery> MakeDomainTerrain(ObjectId Region, std::uint64_t Grant) const {
 	auto State = std::make_shared<DomainTerrainDelivery>();
 	State->Region = Region;
@@ -133,12 +168,13 @@ std::uint64_t NextDomainTerrainPublication() {
 
 void PumpDomainTerrain(ConnectionId Connection, Peer &Value, std::shared_ptr<DomainTerrainDelivery> &State,
 	ObjectId Region, std::uint64_t Grant, const SpatialDestinationBounds *Bounds) {
+	Region=TerrainStreamOwner(Region,Grant);
 	if (!Region.IsValid()) return;
 	if (!State) State = MakeDomainTerrain(Region,Grant);
 	if (State->Pending && CurrentTick-State->Pending->StartedTick >= Configuration.HandshakeTimeoutTicks)
 		throw std::runtime_error("[Terrain:Domain] Terrain receipt timed out");
 	const auto Domain = TransferWorld(Region);
-	if (!Domain || !std::dynamic_pointer_cast<SpatialRegion>(Domain)) return;
+	if (!Domain) return;
 	if (Configuration.Role==GameSessionRole::Server) {
 		SendDomainTerrain(Connection,Value,*State,*Domain,Bounds);
 		return;
@@ -151,7 +187,7 @@ void PumpDomainTerrain(ConnectionId Connection, Peer &Value, std::shared_ptr<Dom
 	if (!Work || !Work->Completion->IsComplete()) return;
 	if (Work->Completion->GetFirstException()) throw std::runtime_error("[Terrain:Domain] Invalid terrain closure");
 	if (!Work->Installed) {
-		if (!Domain->InstallTerrainReplica(std::move(Work->Field),std::move(Work->Chunks),NextDomainTerrainPublication()))
+		if (!Domain->InstallTerrainReplica(std::move(Work->Field),std::move(Work->Chunks),NextDomainTerrainPublication(),true))
 			throw std::runtime_error("[Terrain:Domain] Native collision cutover failed");
 		State->InstalledLifetime = Domain->GetOwnedTerrain()->GetField().GetLifetime();
 		Work->Installed = true;
@@ -189,8 +225,10 @@ void ReceiveDomainTerrain(const ReceivedMessageEvent &Message, Peer &Value) {
 			if (Frame->Grant<=Value.LastStagingSerial) return;
 			throw std::invalid_argument("[Terrain:Domain] Unknown grant");
 		}
-		const auto Region = Staged ? Value.Staging->Grant->Region : Value.AuthorizedSpatialRegion;
-		if (!Region.IsValid() || Region!=Frame->Region)
+		const auto GrantRegion = Staged ? Value.Staging->Grant->Region : Value.AuthorizedSpatialRegion;
+		const auto Region = TerrainStreamOwner(GrantRegion,Frame->Grant);
+		if (!Region.IsValid() || Region!=Frame->Region || (!GrantRegion.IsValid() &&
+			(!Configuration.TerrainBootstrap || Frame->Grid!=Configuration.TerrainBootstrap->Directory.Grid)))
 			throw std::invalid_argument("[Terrain:Domain] Wrong terrain owner");
 		auto &Lane = Staged ? Value.Staging->Terrain : Value.NamedTerrain;
 		if (!Lane) Lane = MakeDomainTerrain(Region,Frame->Grant);

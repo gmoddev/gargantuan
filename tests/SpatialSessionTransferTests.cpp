@@ -10,6 +10,8 @@
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/terrain/Field.hpp"
+#include "gargantuan/network/TerrainSession.hpp"
+#include "../src/terrain/ScenePersistence.hpp"
 #include "gargantuan/network/GameSession.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -69,6 +71,19 @@ namespace {
 		};
 		const auto World = std::make_shared<DataModel>();
 		const auto Space = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
+		std::shared_ptr<const TerrainSessionData> ServerTerrain, ReceiverTerrain;
+		if (CharacterProfile) {
+			auto Field=std::make_unique<terrain::Field>();
+			const terrain::SphereBrush Brush{{7,3,7},2.75,terrain::BrushMode::Add,5};
+			const auto Keys=terrain::GetRegionChunks(terrain::GetBrushBounds(Field->GetGrid(),Brush).value()).value();
+			auto Edit=terrain::Field::Prepare(Field->Capture(Keys).value(),Brush).value();
+			(void)Field->Commit(std::move(Edit)).value();
+			Space->RestoreTerrainField(std::move(Field));
+			const auto Project=ProjectId::New();
+			const auto Content=terrain::CaptureSceneTerrain(*World,Project).value();
+			ServerTerrain=MakeWorkspaceTerrainSender(Project,1,Content.Artifacts,Content.ManifestDigest);
+			ReceiverTerrain=MakeTerrainReceiver(Project,1,Content.ManifestDigest,Content.Index.Grid);
+		}
 		const auto Room = std::make_shared<SpatialRegion>(), Gallery = std::make_shared<SpatialRegion>();
 		Room->SetName("LandingRoom");
 		Room->SetParent(Space);
@@ -105,7 +120,7 @@ namespace {
 		const auto Parent = Actor->GetParent();
 		HeadlessRenderer HostView(Vector2(64, 64)), OwnerView(Vector2(64, 64)), SpectatorView(Vector2(64, 64));
 		Engine ServerRuntime(
-			World, &HostView, nullptr, {.Mode = RuntimeMode::NetworkServer, .AdmitSpatialContent = true}
+			World, &HostView, nullptr, {.Mode = RuntimeMode::NetworkServer, .AdmitNetworkTerrain=bool(ServerTerrain), .AdmitSpatialContent = true}
 		);
 		ServerRuntime.ProcessService->Alive = true;
 		ServerRuntime.Players->SetCharacterAutoLoads(false);
@@ -117,13 +132,14 @@ namespace {
 			{.Role = GameSessionRole::Server,
 			 .Endpoint = Endpoint,
 			 .Limits = Limits,
+			 .TerrainBootstrap=ServerTerrain,
 			 .SpatialContent = true,
 			 .ResolveInitialSpatialAudience =
 				 [&](const Player &) { return SpectatorStarted ? Gallery->GetObjectId() : ObjectId{}; }},
 			&ServerRuntime
 		);
 		const GameSessionConfiguration Client{
-			.Role = GameSessionRole::Client, .Endpoint = Endpoint, .Limits = Limits, .SpatialContent = true
+			.Role = GameSessionRole::Client, .Endpoint = Endpoint, .Limits = Limits, .TerrainBootstrap=ReceiverTerrain, .SpatialContent = true
 		};
 		GameSession Owner(Transport(), Client), Spectator(Transport(), Client);
 		std::unique_ptr<Engine> OwnerRuntime, SpectatorRuntime;
@@ -183,7 +199,7 @@ namespace {
 				Session.GetClientDataModel(),
 				&View,
 				nullptr,
-				EngineProviderConfiguration{.Mode = RuntimeMode::NetworkClient, .AdmitSpatialContent = true}
+				EngineProviderConfiguration{.Mode = RuntimeMode::NetworkClient, .AdmitNetworkTerrain=bool(ReceiverTerrain), .AdmitSpatialContent = true}
 			);
 			Runtime->ProcessService->Alive = true;
 			Require(Session.AttachClientRuntime(*Runtime), "client runtime attachment failed");
@@ -212,6 +228,11 @@ namespace {
 			[&] { return Server.GetMetrics().ReadyPeers == 2 && Find(*SpectatorRuntime, "GalleryWall"); },
 			"spectator not independently ready"
 		);
+		if (CharacterProfile) {
+			Require(OwnerRuntime->Workspace->GetTerrain()->GetField().GetStats().MaterializedPages>0 &&
+				SpectatorRuntime->Workspace->GetTerrain()->GetField().GetStats().MaterializedPages==0,
+				"Workspace bootstrap samples crossed the spectator's chart boundary");
+		}
 		const auto PlayerValue = Server.GetAcceptedPlayer(*Connection);
 		Require(bool(PlayerValue), "authoritative player missing");
 		if (Avatar)
@@ -388,8 +409,21 @@ script:SetAttribute("Isolated", true)
 			auto NewWall=MakePart("ChangedCoverage",CFrame(2,30,1),Room);
 			Require(!Avatar->AdmitMotion(*Room,Step).Succeeded() && Avatar->GetCFrame().Position==Before,
 				"new authority geometry failed to invalidate the acknowledged movement area");
+			Require(OwnerRuntime->Workspace->GetTerrain()->GetField().GetStats().MaterializedPages==0,
+				"leaving Workspace retained formerly authorized samples");
 			Require(!LocalAvatar->AdmitMotion(*ReplicaRoom,Step).Succeeded(),
 				"controlled spatial replica advanced predicted physics before authority");
+			NewWall->Destroy();
+			const SpatialDestinationBounds ReturnArea{{-8,2,-8},{8,14,8}};
+			Require(Server.RequestSpatialTransfer(*Connection,Space->GetObjectId(),SourcePose,ReturnArea)==SpatialTransferStatus::Progress,
+				"return could not stage Workspace");
+			Wait([&] { return Server.GetSpatialTransferStatus(*Connection)==SpatialTransferStatus::Applied &&
+				WorldRoot::GetEffectiveWorld(*ReplicaActor)==OwnerRuntime->Workspace; }, "return to streamed Workspace failed");
+			RaycastParams TerrainFilter;
+			TerrainFilter.IncludeTerrain=true;
+			Require(OwnerRuntime->Workspace->ResolveRaycast({7,8,7},{0,-9,0},TerrainFilter).TerrainInstance==OwnerRuntime->Workspace->GetTerrain() &&
+				SpectatorRuntime->Workspace->GetTerrain()->GetField().GetStats().MaterializedPages==0,
+				"returning controller failed to reacquire Workspace terrain exclusively");
 		}
 		Owner.Stop();
 		Spectator.Stop();

@@ -79,20 +79,8 @@ std::optional<SpatialAppliedBinding> ProjectTransferProvider(ConnectionId Connec
 		const auto Owner = Destination->GetOwnedTerrain();
 		if (!Owner || Owner->GetObjectId() != Native.Owner) return {};
 		const SpatialWireProvider Key{Request.Scope.Destination, Native.Provider};
-		if (Destination == Runtime->Workspace && Configuration.TerrainBootstrap) {
-			const auto &Identity = Value.TerrainIdentity;
-			if (!Value.TerrainWindow || Value.TerrainPending || !Value.TerrainAdmitted ||
-				Identity.SessionEpoch != Value.SessionEpoch || !Identity.Serial ||
-				!Identity.ManifestDigest.IsValid() || Identity.ManifestDigest != Value.TerrainWindow->ManifestDigest ||
-				!Destination->IsTerrainCollisionReady() ||
-				(Configuration.Role == GameSessionRole::Server && !IsCurrentTerrainWindow(Owner->GetField(), Value))) return {};
-			const auto Center = glm::vec3((glm::dvec3(Bounds.Minimum) + glm::dvec3(Bounds.Maximum)) * .5);
-			const auto Extents = glm::vec3((glm::dvec3(Bounds.Maximum) - glm::dvec3(Bounds.Minimum)) * .5);
-			if (!ContainsTerrainBounds(Value.TerrainWindow->Grid, Value.TerrainWindow->Center, Center, Extents)) return {};
-			return SpatialAppliedBinding{Key, Identity.ManifestDigest, Identity.FieldRevision, Identity.Serial, true,
-				Native.Installed.empty()};
-		}
-		if (Destination != Runtime->Workspace) return GetTransferTerrainBinding(Connection, Native, Bounds);
+		if (Destination != Runtime->Workspace || Configuration.TerrainBootstrap)
+			return GetTransferTerrainBinding(Connection, Native, Bounds);
 		const auto Empty = GetTransferEmptyTerrainBinding(Connection, Request.Scope.Destination, Bounds, Request.Serial);
 		if (!Empty || !Empty->IsValid() || !Native.AuthoritativeEmpty || !Native.Installed.empty()) return {};
 		return SpatialAppliedBinding{Key, *Empty, 0, Request.Serial, true, true};
