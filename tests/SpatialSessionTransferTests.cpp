@@ -206,9 +206,15 @@ namespace {
 				);
 			if (ObserveStage && OwnerRuntime && Connection &&
 				Server.GetSpatialTransferStatus(*Connection) == SpatialTransferStatus::Progress) {
-				Require(!Find(*OwnerRuntime, "DistantGrid") && !Find(*OwnerRuntime,"DistantMeshScene") &&
-					!Find(*OwnerRuntime,"FarBoxMesh") && !Find(*OwnerRuntime,"OffsetMesh"),
-					"staging exposed a nonintersecting grid, mesh or scene ancestor");
+				for (const std::string_view Name : {"DistantGrid","DistantMeshScene","FarBoxMesh","OffsetMesh"}) {
+					if (const auto Unexpected = Find(*OwnerRuntime,Name)) {
+						const auto LocalActor = Find(*OwnerRuntime,"TransferBody");
+						const auto ReplicaWorld = LocalActor ? WorldRoot::GetEffectiveWorld(*LocalActor) : nullptr;
+						throw std::runtime_error("staging exposed "+Unexpected->GetFullName()+" tick="+std::to_string(Tick)+
+							" character="+std::to_string(CharacterProfile)+" authorityWorld="+WorldRoot::GetEffectiveWorld(*Actor)->GetName()+
+							" replicaWorld="+(ReplicaWorld ? ReplicaWorld->GetName() : "unresolved"));
+					}
+				}
 				const auto Grid = std::dynamic_pointer_cast<BlockGrid>(Find(*OwnerRuntime, "LandingGrid"));
 				SawScopedGrid |= Grid && Grid->HasReplicaField();
 			}
@@ -321,6 +327,9 @@ namespace {
 		);
 		if (!CharacterProfile) {
 			const auto Visual=MakeOffsetMesh(*World);
+			// The subsequent ordinary chart grant may legitimately publish this MeshPart after the staged interval.
+			OwnerRuntime->Assets->LoadRuntimeAssetSnapshot(ServerRuntime.Assets->CaptureRuntimeAssets());
+			Require(OwnerRuntime->Assets->ResolveCollisionForMesh(Visual).has_value(),"ordinary authorized mesh companion missing");
 			auto Scene=std::make_shared<Folder>();
 			Scene->SetName("DistantMeshScene");Scene->SetParent(Room);
 			const auto Mesh=[&](std::string Name,CFrame Pose,Enums::MeshCollisionMode Mode,const std::shared_ptr<Instance>& ParentValue) {
@@ -430,6 +439,7 @@ script:SetAttribute("Isolated", true)
 			},
 			"bilateral movement did not converge"
 		);
+		ObserveStage = false;
 		if (Creator) {
 			ServerRuntime.Script->Step();
 			Require(
