@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
+#include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/blockgrid/Edit.hpp"
 #include "gargantuan/blockgrid/Assets.hpp"
 #include "../../src/network/BlockGridPeer.hpp"
@@ -253,7 +256,7 @@ namespace {
 			S:SetMotionMode("Static",Token)
 		)");
 
-		const auto Parent=World->GetService("Workspace");
+		const auto Parent=std::make_shared<SpatialRegion>(); Parent->SetParent(World->GetService("Workspace"));
 		auto Source=std::make_shared<BlockGrid>(); Source->SetParent(Parent);
 		MutationGateway Gateway;
 		const auto Studio=ScriptSecurityContext::StudioCoreUi();
@@ -264,6 +267,30 @@ namespace {
 		Check(Gateway.Apply(Command(Fill),Server).Succeeded(),"prepare extraction source");
 		auto Extract=std::make_shared<blockgrid::EditRequest>();
 		Extract->Bilateral=blockgrid::GridTransferEdit{blockgrid::SingleCell({1,0,0})}; Extract->ExpectedRevision=Source->GetBlockRevision();
+		auto Actor=std::make_shared<Part>(); Actor->SetAnchored(true); Actor->SetParent(World->GetService("Workspace"));
+		auto Protection=World->AcquireSpatialTransferProtection([Actor](ObjectId Id){return Actor->GetObjectId()==Id;});
+		const auto Reserve=[&] {
+			const SpatialDestinationBounds Bounds{{0,0,0},{2,1,1}};
+			const std::array Required{Source->GetObjectId()};
+			const auto Receipt=Parent->PrepareSpatialDestination(Bounds,Required);
+			Check(Receipt.has_value(),"reserve the native landing grid coverage");
+			network::SpatialTransferFrame Frame;
+			Frame.Phase=network::SpatialTransferPhase::Reserve; Frame.Serial=1; Frame.Bounds=Bounds;
+			Frame.SourcePose=Frame.DestinationPose=WireCFrame{{0,0,0,1,0,0,0,1,0,0,0,1}};
+			Frame.Scope={1,1,1,1,{11,1},{12,1},{13,1},{}};
+			Frame.Collision=Frame.SubjectGeometry=AssetContentId::Hash(std::array<std::uint8_t,1>{3});
+			for (const auto& P:Receipt->Providers) Frame.Owners.push_back({{P.Owner.Slot,P.Owner.Generation},P.Provider});
+			std::ranges::sort(Frame.Owners);
+			auto Lease=Protection->Reservations.Reserve(Actor->GetObjectId(),Frame,*Receipt,[]{return true;});
+			Check(Lease && (*Lease)(),"landing lease must exist before bilateral checks");
+			return Lease;
+		};
+		{
+			auto Lease=Reserve();
+			Check(!Gateway.Apply(Command(Extract),Auth).Succeeded() && Source->GetField().GetOccupiedCount()==2 &&
+				Source->GetBlockRevision()==*Extract->ExpectedRevision && !World->Transactions.GetStatus().CanUndo,
+				"held landing provider changed during extraction");
+		}
 		const auto Children=Parent->Children.size(),Owned=World->GetOwnedInstanceCount(),Start=World->GetAuthoritativeRevision();
 		unsigned Added=0;
 		auto Watch=Parent->ChildAdded->Connect([&](const auto& Child) {
@@ -297,6 +324,12 @@ namespace {
 			Added==2 && Source->GetBlockRevision()!=After && D->GetBlockRevision()!=Other,"Redo preserves identity and advances both revisions");
 		auto Merge=std::make_shared<blockgrid::EditRequest>();
 		Merge->ExpectedRevision=Source->GetBlockRevision(); Merge->Bilateral=blockgrid::GridTransferEdit{{},D->GetObjectId(),D->GetBlockRevision()};
+		{
+			auto Lease=Reserve();
+			Check(!Gateway.Apply(Command(Merge),Auth).Succeeded() && !Gateway.Undo(*World,Studio).Succeeded() &&
+				D->GetField().GetOccupiedCount()==1 && Source->GetField().GetOccupiedCount()==1,
+				"held landing provider changed through merge or history replay");
+		}
 		Check(Gateway.Apply(Command(Merge),Auth).Succeeded() && !D->GetField().GetOccupiedCount(),"Studio merge");
 		Check(Gateway.Undo(*World,Studio).Succeeded() && D->GetField().GetOccupiedCount()==1 && Source->GetField().GetOccupiedCount()==1,"undo merge");
 		Check(Gateway.Redo(*World,Studio).Succeeded() && D->GetField().GetOccupiedCount()==0 && Source->GetField().GetOccupiedCount()==2,"redo merge");

@@ -7,6 +7,7 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
 
 #include <algorithm>
@@ -65,6 +66,11 @@ namespace gargantuan {
 			if (Grid->IsDynamicAssembly()) throw std::domain_error("[BlockGrid:Motion] Freeze the assembly before transferring cells");
 			if (!Grid->EnsureAssetBindings()) throw std::domain_error("[BlockGrid:Unavailable] Project asset pins are unavailable");
 		}
+		void CheckLandingReservation(DataModel& World,const BlockGrid& Grid) {
+			const auto Hold=World.GetSpatialTransferProtection();
+			if (Hold && !Hold->AllowsResource(Grid))
+				throw std::domain_error("[BlockGrid:Admission] Collision is reserved for an active spatial transfer");
+		}
 	}
 	std::size_t GridTransferHistory::Charge() const noexcept {
 		return sizeof(*this)+Before.Source.GetSnapshotBytes()+Before.Destination.GetSnapshotBytes()+
@@ -90,6 +96,7 @@ namespace gargantuan {
 		const auto Domain=WorldRoot::GetEffectiveWorld(*Grid);
 		if (!Parent || !Domain || Parent->GetDestroyed() || Parent->IsDestroying())
 			throw std::domain_error("[BlockGrid:Admission] A live sibling parent and collision domain are required");
+		CheckLandingReservation(*World,*Grid);
 		CheckOwner(Grid,*World);
 		std::shared_ptr<BlockGrid> Source,Destination;
 		blockgrid::GridLattice Mapping;
@@ -111,11 +118,13 @@ namespace gargantuan {
 			if (Source==Destination || Source->GetParent().value_or(nullptr)!=Parent ||
 				WorldRoot::GetEffectiveWorld(*Source)!=Domain || Source->IsTransferParked())
 				throw std::domain_error("[BlockGrid:Admission] Merge requires distinct siblings in the same collision domain");
+			CheckLandingReservation(*World,*Source);
 			CheckOwner(Source,*World);
 			if (Source->GetBlockRevision()!=Op.SourceRevision) throw std::domain_error("[BlockGrid:Conflict] Source revision changed");
 			Mapping=Lattice(*Source,*Destination);
 		}
 		if (Source->Editing || Destination->Editing) throw std::domain_error("[BlockGrid:Admission] A transfer participant is busy");
+		CheckLandingReservation(*World,*Source); CheckLandingReservation(*World,*Destination);
 		auto Next=blockgrid::PlanGridTransfer(Source->GetField(),Destination->GetField(),Op.Extract,Mapping);
 		std::shared_ptr<GridTransferHistory> Receipt;
 		std::optional<AuthoritativeTransactionHistory> History;
@@ -145,6 +154,7 @@ namespace gargantuan {
 		blockgrid::TransferFields Next,Hierarchy Change,const std::shared_ptr<const GridTransferHistory>& Receipt,
 		std::optional<AuthoritativeTransactionHistory> History) {
 		World.EnsureAuthoritativeRevisionAvailable();
+		CheckLandingReservation(World,*Source); CheckLandingReservation(World,*Destination);
 		const auto Starting=World.GetAuthoritativeRevision();
 		const auto OldParent=Destination->GetParent().value_or(nullptr);
 		const bool FirstAdoption=!Destination->GetDataModel();
@@ -179,6 +189,7 @@ namespace gargantuan {
 				Result={.Status=MutationStatus::Success,.Object=Destination->GetObjectId(),.BlockRevision=std::move(D)};
 				if (World.GetAuthoritativeRevision()!=Starting || World.Transactions.GetOpenCount())
 					throw std::domain_error("[BlockGrid:Conflict] World changed during transfer preparation");
+				CheckLandingReservation(World,*Source); CheckLandingReservation(World,*Destination);
 				ChangeJournal::PreparedJournalBatch Journal(ChangeJournal::Get(),Records);
 				static_assert(std::is_nothrow_move_assignable_v<blockgrid::Field>);
 				Source->Cells=std::move(Next.Source); Destination->Cells=std::move(Next.Destination);
@@ -232,6 +243,7 @@ namespace gargantuan {
 			const auto Parent=ObjectRegistry::Get().Lookup(History.ResolveIdentity(R->Parent));
 			const auto Domain=std::dynamic_pointer_cast<WorldRoot>(ObjectRegistry::Get().Lookup(History.ResolveIdentity(R->Domain)));
 			const auto Change=!R->Extract?Hierarchy::Keep:Redo?Hierarchy::Attach:Hierarchy::Detach;
+			CheckLandingReservation(World,*Source); CheckLandingReservation(World,*Destination);
 			CheckOwner(Source,World); CheckOwner(Destination,World);
 			if (!Parent || !Domain || Source->GetParent().value_or(nullptr)!=Parent || WorldRoot::GetEffectiveWorld(*Source)!=Domain ||
 				Source==Destination || Source->Editing || Destination->Editing || Source->IsTransferParked() ||
