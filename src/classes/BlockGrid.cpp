@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "BlockGridBinding.hpp"
+#include "gargantuan/blockgrid/Assets.hpp"
 #include "gargantuan/blockgrid/Edit.hpp"
 #include "gargantuan/blockgrid/Picking.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -100,21 +101,29 @@ namespace gargantuan {
 			const auto Key=StringAt(L,2);
 			if (Key.size()>56) throw std::invalid_argument("[BlockGrid:Definition] Oversized definition key");
 			Definition D{std::string(Key)};
+			AssetBinding A;
+			std::string_view Collision;
 			lua_pushnil(L);
 			while (lua_next(L,3)) {
 				const auto Name=StringAt(L,-2);
 				if (Name=="Shape") {
-					constexpr std::array<std::string_view,4> Shapes{"Cube","Slab","Wedge","Stairs"};
+					constexpr std::array<std::string_view,5> Shapes{"Cube","Slab","Wedge","Stairs","Mesh"};
 					const auto It=std::ranges::find(Shapes,StringAt(L,-1));
 					if (It==Shapes.end()) throw std::invalid_argument("[BlockGrid:Unsupported] Unknown or unavailable shape");
 					D.Geometry=static_cast<Shape>(It-Shapes.begin());
 				} else if (Name=="Color") {
 					const auto C=CheckStackValue<Color3>(L,-1);
 					D.Color={C.R,C.G,C.B};
+				} else if (Name=="Material" || Name=="Mesh" || Name=="CollisionAsset") {
+					auto Value=StringAt(L,-1);
+					if (Value.starts_with("asset://")) Value.remove_prefix(8);
+					if (!AssetId::Parse(Value)) throw std::invalid_argument("[BlockGrid:Asset] Expected a project asset ID");
+					(Name=="Material"?A.Material:Name=="Mesh"?A.Mesh:A.Collision).assign(Value);
 				} else if (Name=="Collision") {
-					const auto Value=StringAt(L,-1);
-					if (Value!="Shape" && Value!="None") throw std::invalid_argument("[BlockGrid:Unsupported] Unknown collision representation");
-					D.CanCollide=Value=="Shape";
+					Collision=StringAt(L,-1);
+					if (Collision!="Shape" && Collision!="None" && Collision!="Asset")
+						throw std::invalid_argument("[BlockGrid:Unsupported] Unknown collision representation");
+					D.CanCollide=Collision!="None";
 				} else if (Name=="Queryable") {
 					if (lua_type(L,-1)!=LUA_TBOOLEAN) throw std::invalid_argument("[BlockGrid:Definition] Expected Queryable boolean");
 					D.Queryable=lua_toboolean(L,-1)!=0;
@@ -138,6 +147,12 @@ namespace gargantuan {
 					if (Seen!=Count) throw std::invalid_argument("[BlockGrid:Definition] Sparse face array");
 				} else throw std::invalid_argument("[BlockGrid:Unsupported] Unknown or unavailable definition property");
 				lua_pop(L,1);
+			}
+			if ((D.Geometry==Shape::Mesh && Collision!="Asset" && Collision!="None") ||
+				(Collision=="Asset")!=!A.Collision.empty())
+				throw std::invalid_argument("[BlockGrid:Definition] Mesh collision must explicitly use None or a companion Asset");
+			if (!A.Material.empty() || !A.Mesh.empty() || !A.Collision.empty()) {
+				D.Assets=std::make_shared<const AssetBinding>(std::move(A));
 			}
 			return D;
 		}
@@ -203,6 +218,8 @@ namespace gargantuan {
 		const auto World=GetDataModel();
 		if (!World || Editing) throw std::logic_error("[BlockGrid:Edit] Grid is unavailable for admission");
 		if (Edit.ExpectedRevision && *Edit.ExpectedRevision!=GetBlockRevision()) throw std::domain_error("[BlockGrid:Conflict] Revision changed");
+		if (!Edit.Binding && !(Edit.Replay && Edit.Replay->Binding) && !EnsureAssetBindings())
+			throw std::runtime_error("[BlockGrid:Unavailable] Required block assets do not match this project");
 		World->EnsureAuthoritativeRevisionAvailable();
 		std::optional<blockgrid::CellDelta> PointEdit;
 		const auto PriorGeometry = Cells.GetGeometryRevision();
@@ -223,7 +240,7 @@ namespace gargantuan {
 				const auto* Before=Forward?(D.Before?&*D.Before:nullptr):&D.After;
 				if (bool(Id)!=bool(Before) || (Id && Cells.GetDefinition(*Id)!=*Before))
 					throw std::domain_error("[BlockGrid:Conflict] Definition history has diverged");
-				if (Forward || D.Before) Changed=Cells.Define(Forward?D.After:*D.Before,bool(Id),Admission);
+				if (Forward || D.Before) Changed=Cells.Define(ResolveAssetDefinition(Forward?D.After:*D.Before),bool(Id),Admission);
 				else { Cells.UndoDefinitionInsertion(D.After,Admission); Changed=true; }
 			} else if (Edit.Replay && Edit.Replay->Channel) {
 				if (Edit.Forward) {
@@ -239,7 +256,7 @@ namespace gargantuan {
 					Changed=Cells.ApplyChanges(Undo,Admission);
 				}
 			} else if (Edit.Replay) Changed=Cells.ApplyCellPatch(blockgrid::ReplayWrites(Cells,*Edit.Replay,Edit.Forward),Admission);
-			else if (Edit.Binding) Changed=Cells.Define(Edit.Binding->Spec,Edit.Binding->Replace,Admission);
+			else if (Edit.Binding) Changed=Cells.Define(ResolveAssetDefinition(Edit.Binding->Spec),Edit.Binding->Replace,Admission);
 			else if (Edit.Channel) Changed=Cells.DefineChannel(*Edit.Channel);
 			else if (!Edit.Commands.empty()) Changed=Cells.ApplyOperations(Edit.Commands,Admission);
 			else Changed=Cells.Apply(Edit.Writes,{},Admission);
@@ -247,6 +264,7 @@ namespace gargantuan {
 		const auto Revision=GetBlockRevision();
 		if (Changed) {
 			if (PriorGeometry != Cells.GetGeometryRevision()) LastCellEdit = PointEdit;
+			if (Edit.Binding || (Edit.Replay && Edit.Replay->Binding)) AssetSequence=0;
 			World->AdvanceAuthoritativeRevision();
 			NotifyPropertyCommitted("BlockRevision");
 		}
@@ -371,6 +389,7 @@ namespace gargantuan {
 			!std::isfinite(O.x) || !std::isfinite(O.y) || !std::isfinite(O.z))
 			throw std::invalid_argument("[BlockGrid:Raycast] Expected a finite segment of length 0.0001 through 100000");
 		if (!Grid.Queryable) { lua_pushnil(L); return 1; }
+		if (!Grid.EnsureAssetBindings()) throw std::runtime_error("[BlockGrid:Unavailable] Required block assets are unavailable");
 		const auto R=glm::dmat3(Grid.Transform.Rotation);
 		const auto Local=glm::transpose(R)*(O-glm::dvec3(Grid.Transform.Position))/static_cast<double>(Grid.Size);
 		const auto Delta=glm::transpose(R)*D/static_cast<double>(Grid.Size);

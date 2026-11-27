@@ -72,8 +72,8 @@ namespace gargantuan {
 						Bytes+=Typed.Delta->StateCells.capacity()*sizeof(blockgrid::StateChange);
 						if (Typed.Delta->Channel) Bytes+=Typed.Delta->Channel->Name.capacity();
 						if (const auto& D=Typed.Delta->Binding;D) {
-							Bytes+=D->After.Key.capacity();
-							if (D->Before) Bytes+=D->Before->Key.capacity();
+							Bytes+=D->After.Key.capacity()+blockgrid::AssetPinCharge(D->After);
+							if (D->Before) Bytes+=D->Before->Key.capacity()+blockgrid::AssetPinCharge(*D->Before);
 						}
 					}
 					return Bytes;

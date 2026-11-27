@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Team Fireworks
 // SPDX-License-Identifier: MPL-2.0
 #include "gargantuan/blockgrid/Picking.hpp"
+#include "gargantuan/blockgrid/Assets.hpp"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -33,7 +34,34 @@ namespace gargantuan::blockgrid {
 			return Span;
 		}
 		bool CellPrecedes(Cell A,Cell B) { return std::tie(A.X,A.Y,A.Z)<std::tie(B.X,B.Y,B.Z); }
-		std::optional<CellHit> HitShape(Cell P,const Definition& Spec,Block B,Vec Origin,Vec Direction) {
+		std::optional<CellHit> HitMesh(Cell P,const Definition& Spec,const RotationBasis& Axes,Vec O,Vec D,unsigned& Remaining) {
+			if (!Spec.Assets || !Spec.Assets->Resolved || !Spec.Assets->Resolved->QueryMesh)
+				throw std::runtime_error("[BlockGrid:Unavailable] Mesh query data is unavailable");
+			const auto& M=*Spec.Assets->Resolved->QueryMesh;
+			const auto Count=M.Indices->size()/3;
+			if (Count>Remaining) throw std::length_error("[BlockGrid:Raycast] Triangle visit budget exhausted");
+			Remaining-=static_cast<unsigned>(Count);
+			const glm::dvec3 Origin(O[0]-.5,O[1]-.5,O[2]-.5), Direction(D[0],D[1],D[2]);
+			std::optional<CellHit> Best;
+			for (std::size_t I=0;I<M.Indices->size();I+=3) {
+				const glm::dvec3 A=(*M.Positions)[(*M.Indices)[I]], B=(*M.Positions)[(*M.Indices)[I+1]], C=(*M.Positions)[(*M.Indices)[I+2]];
+				const auto AB=B-A, AC=C-A, Cross=glm::cross(Direction,AC);
+				const double Det=glm::dot(AB,Cross);
+				// Static triangle meshes use Box3D's front-facing surface and open segment endpoints.
+				if (Det<=0) continue;
+				const auto Offset=Origin-A, Q=glm::cross(Offset,AB);
+				const double U=glm::dot(Offset,Cross)/Det, V=glm::dot(Direction,Q)/Det;
+				if (U<0 || V<0 || U+V>1) continue;
+				const double T=glm::dot(AC,Q)/Det;
+				if (T<=0 || T>=1 || (Best && (T>Best->Fraction || Tied(T,Best->Fraction)))) continue;
+				const auto Local=glm::normalize(glm::cross(AB,AC));
+				Vec Normal{};
+				for (unsigned J=0;J<3;++J) for (unsigned K=0;K<3;++K) Normal[J]+=Axes[K][J]*Local[K];
+				Best=CellHit{P,T,Normal};
+			}
+			return Best;
+		}
+		std::optional<CellHit> HitShape(Cell P,const Definition& Spec,Block B,Vec Origin,Vec Direction,unsigned& Remaining) {
 			if (!Spec.Queryable) return {};
 			if (Spec.Geometry==Shape::Cube) {
 				const Vec Min{static_cast<double>(P.X),static_cast<double>(P.Y),static_cast<double>(P.Z)};
@@ -52,6 +80,7 @@ namespace gargantuan::blockgrid {
 				O[I]+=Axes[I][A]*Offset[A];
 				D[I]+=Axes[I][A]*Direction[A];
 			}
+			if (Spec.Geometry==Shape::Mesh) return HitMesh(P,Spec,Axes,O,D,Remaining);
 			const bool Low=Spec.Geometry==Shape::Slab || Spec.Geometry==Shape::Stairs;
 			auto A=Clip(O,D,{0,0,0},{1,Low?.5:1.,1});
 			if (A && Spec.Geometry==Shape::Wedge) {
@@ -109,11 +138,12 @@ namespace gargantuan::blockgrid {
 			Next[A]=Boundary(A);
 		}
 		std::optional<CellHit> Best;
+		unsigned Remaining=MaximumRayTriangles;
 		for (unsigned Visit=0; Visit<Budget; ++Visit) {
 			const Cell Here{P[0],P[1],P[2]};
 			if (!ValidCell(Here)) return Best;
 			if (const auto B=Grid.Get(Here);B.Definition!=Air) {
-				const auto Hit=HitShape(Here,Grid.GetDefinition(B.Definition),B,O,D);
+				const auto Hit=HitShape(Here,Grid.GetDefinition(B.Definition),B,O,D,Remaining);
 				if (Hit && (!Best || (Hit->Fraction<Best->Fraction && !Tied(Hit->Fraction,Best->Fraction)) ||
 					(Tied(Hit->Fraction,Best->Fraction) && CellPrecedes(Here,Best->Position)))) Best=Hit;
 			}

@@ -10,12 +10,17 @@
 
 namespace gargantuan {
 	class MutationGateway;
+	class AssetService;
 	class BlockGrid final : public Instance, public SpatialDomainMember {
 		I_BlockGrid;
 	  public:
 		BlockGrid();
 		[[nodiscard]] const blockgrid::Field& GetField() const;
 		[[nodiscard]] const std::optional<blockgrid::CellDelta>& GetLastCellEdit() const { return LastCellEdit; }
+		// Resolves decoded project pins after adoption. False means a required resource is unavailable.
+		[[nodiscard]] bool EnsureAssetBindings() const;
+		[[nodiscard]] blockgrid::Definition ResolveAssetDefinition(blockgrid::Definition Spec) const;
+		[[nodiscard]] std::uint64_t GetAssetPublicationRevision() const noexcept { return AssetPublicationRevision; }
 		[[nodiscard]] std::string GetPublicBlockRevision() const;
 		[[nodiscard]] std::uint64_t GetConfigurationRevision() const noexcept { return ConfigurationRevision; }
 		// Trusted asset materialization, before adoption or publication.
@@ -33,11 +38,15 @@ namespace gargantuan {
 		void NotifyConfiguration(std::string_view Name);
 		blockgrid::Field Cells;
 		std::optional<blockgrid::CellDelta> LastCellEdit;
+		mutable blockgrid::Field Cells;
 		blockgrid::Field::Admission Admission;
 		gargantuan::CFrame Transform;
 		float Size{1.0f};
 		bool IsVisible{true}, Collides{true}, Queryable{true}, Editing{};
 		bool ReplicaFieldAvailable{};
 		std::uint64_t ConfigurationRevision{1};
+		mutable std::weak_ptr<AssetService> LastAssetService;
+		mutable std::uint64_t AssetSequence{},AssetPublicationRevision{};
+		mutable bool AssetsReady{};
 	};
 }

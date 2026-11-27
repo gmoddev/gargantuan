@@ -351,8 +351,7 @@ namespace gargantuan {
 								return {MutationStatus::Conflict,{}, "[BlockGrid:Conflict] Revision changed"};
 							BlockGridTransactionChange History{CommandValue.Object,{}};
 							if (Edit.Binding) {
-								const auto& Spec=Edit.Binding->Spec;
-								blockgrid::ValidateDefinition(Spec);
+								const auto Spec=Grid->ResolveAssetDefinition(Edit.Binding->Spec);
 								auto Patch=std::make_shared<blockgrid::Patch>();
 								const auto& F=Grid->GetField();
 								std::optional<blockgrid::Definition> Before;

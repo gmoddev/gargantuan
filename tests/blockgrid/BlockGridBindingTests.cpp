@@ -3,11 +3,16 @@
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/blockgrid/Edit.hpp"
+#include "gargantuan/blockgrid/Assets.hpp"
+#include "gargantuan/filesystem/DiskFilesystem.hpp"
+#include "gargantuan/filesystem/SourceMount.hpp"
+#include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include <luacode.h>
 #include <fstream>
+#include <format>
 #include <iostream>
 #include <stdexcept>
 
@@ -25,10 +30,78 @@ namespace {
 		if (!Status) Status=lua_pcall(Engine.L,0,0,0);
 		if (Status) throw std::runtime_error(lua_tostring(Engine.L,-1));
 	}
+	void TestAssetDefinitions() {
+		const auto Root=std::filesystem::path(GARGANTUAN_BLOCKGRID_EXAMPLE).parent_path().parent_path()/"fixtures";
+		DiskFilesystem Files(Root);
+		SourceMount Mount(Files);
+		auto World=std::make_shared<DataModel>();
+		const auto Service=std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
+		const auto Tile=Service->ImportProjectAsset(Mount,"SlopedTile.gltf",AssetKind::Mesh);
+		if (!Tile.Ok || !Tile.Record) throw std::runtime_error("Sloped tile import: "+Tile.Diagnostic.Message);
+		const auto Oversized=Service->ImportProjectAsset(Mount,"OversizedTile.obj",AssetKind::Mesh);
+		Check(Oversized.Ok && Oversized.Record,"oversized fixture still must import as an ordinary Mesh");
+		const auto Visual=Service->ResolveMesh(Tile.Record->Reference.Value);
+		Check(Visual && Visual->CollisionAsset && Visual->Primitives && Visual->Primitives->size()==2 &&
+			Visual->Primitives->front().Material.has_value(),"fixture companion and two material slots");
+		const auto Material=*Visual->Primitives->front().Material;
+		const auto Script=std::format("local Mesh='{}'\nlocal Collider='{}'\nlocal Mat='{}'\nlocal Large='{}'\n",
+			Tile.Record->Id.ToString(),Visual->CollisionAsset->ToString(),Material.ToString(),Oversized.Record->Id.ToString())+R"(
+			local G=Instance.new("BlockGrid")
+			G.Name="AssetTiles"
+			G.Parent=game.Workspace
+			G:DefineBlock("project:tile",{Shape="Mesh",Mesh=Mesh,Collision="Asset",CollisionAsset=Collider})
+			G:DefineBlock("project:ghost",{Shape="Mesh",Mesh=Mesh,Collision="None"})
+			G:DefineBlock("project:tinted",{Shape="Slab",Material="asset://"..Mat})
+			local Rev=G:GetRevision()
+			for _, Bad in {{Shape="Mesh",Mesh=Mesh},{Shape="Mesh",Mesh=Large,Collision="None"},
+				{Shape="Mesh",Mesh=Mat,Collision="None"},{Shape="Mesh",Mesh=Mesh,Collision="Asset",CollisionAsset=Mat},
+				{Shape="Cube",Material=Collider}} do
+				assert(not pcall(function() G:DefineBlock("project:invalid",Bad) end) and G:GetRevision()==Rev)
+			end
+			G:SetBlock(Vector3.zero,"project:tile")
+			G:SetBlock(Vector3.new(2,0,0),"project:ghost")
+			local Params=RaycastParams.new()
+			Params.IncludeBlockGrids=true
+			local D=Vector3.new(0,-3,0)
+			for _,X in {0,2} do
+				local O=Vector3.new(X+.25,2,.25)
+				local H=G:Raycast(O,D)
+				local W=game.Workspace:Raycast(O,D,Params)
+				assert(H and W and W.GridHit and math.abs(H.Position.Y-.375)<.001)
+				assert(W.GridHit.Cell==H.Cell and math.abs(H.Position.Y-W.Position.Y)<.02)
+				local Gap=Vector3.new(X+.65,2,.65)
+				assert(G:Raycast(Gap,D)==nil and game.Workspace:Raycast(Gap,D,Params)==nil)
+			end
+		)";
+		Run(World,RuntimeMode::Offline,ScriptSecurityContext::ServerRuntime(),Script);
+		const auto Grid=std::dynamic_pointer_cast<BlockGrid>(World->GetService("Workspace")->FindFirstChild("AssetTiles",false));
+		Check(Grid && Grid->EnsureAssetBindings(),"asset grid bound to trusted catalog");
+		const auto& F=Grid->GetField();
+		const auto& Binding=*F.GetDefinition(F.GetDefinitionId("project:tile")).Assets;
+		const auto& D=*Binding.Resolved;
+		Check(Binding.Pins.size()>=5 && D.VisualMesh && D.QueryMesh && !D.FullyOpaque && D.Primitives && D.Primitives->size()==2,
+			"whole dependency closure and immutable material slots");
+		Check(D.Primitives->front().Material.BaseColorTexture.has_value() && D.Primitives->back().Material.OpacityMode==RenderOpacityMode::Transparent &&
+			D.Primitives->back().Material.EmissiveFactor.x>.7f,"material textures, transparency and emissive inputs");
+		const auto Bytes=blockgrid::Encode(F);
+		const auto SavedAssets=Service->CaptureProjectAssets();
+		auto Reload=std::make_shared<DataModel>();
+		const auto NewService=std::dynamic_pointer_cast<AssetService>(Reload->GetService("AssetService"));
+		auto Copy=std::make_shared<BlockGrid>();
+		Copy->RestoreField(blockgrid::Decode(Bytes));
+		Copy->SetParent(Reload->GetService("Workspace"));
+		Check(!Copy->EnsureAssetBindings(),"missing project assets block publication");
+		NewService->LoadProjectAssetSnapshot(SavedAssets);
+		Check(Copy->EnsureAssetBindings() && blockgrid::Encode(Copy->GetField())==Bytes,"project reload must verify every content pin");
+		const auto Before=Grid->GetBlockRevision();
+		Check(Service->DeleteProjectAsset(Tile.Record->Reference.Value).Ok && !Grid->EnsureAssetBindings() && Grid->GetBlockRevision()==Before,
+			"retired project resources invalidate publication without changing authored data");
+	}
 }
 int main() try {
 	using namespace gargantuan;
 	BootstrapNativeRuntimeSchema();
+	TestAssetDefinitions();
 	auto World=std::make_shared<DataModel>();
 	std::ifstream Example(GARGANTUAN_BLOCKGRID_EXAMPLE,std::ios::binary);
 	Check(Example.good(),"could not load PoweredGate creator example");

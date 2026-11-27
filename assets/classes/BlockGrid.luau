@@ -5,7 +5,7 @@ const function Native(Signature: string, Description: string, Edit: boolean?)
 end
 const Rotation = '{ Up: string, Front: string }'
 const Block = '{ Definition: string, Orientation: ' .. Rotation .. ' }'
-const Definition = '{ Shape: ("Cube" | "Slab" | "Wedge" | "Stairs")?, Color: Color3?, Collision: ("Shape" | "None")?, Queryable: boolean?, Ports: {string}? }'
+const Definition = '{ Shape: ("Cube" | "Slab" | "Wedge" | "Stairs" | "Mesh")?, Color: Color3?, Material: string?, Mesh: string?, Collision: ("Shape" | "None" | "Asset")?, CollisionAsset: string?, Queryable: boolean?, Ports: {string}? }'
 const Bounds = '{ Min: Vector3, MaxExclusive: Vector3 }'
 const Filter = '{ Definitions: {string}?, Where: { Channel: string, Equals: boolean | number }? }'
 const Packed = '{ Size: Vector3, Bindings: {[string]: string}, Palette: {' .. Block .. '}, Cells: buffer }'

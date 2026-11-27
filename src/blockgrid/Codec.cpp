@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Team Fireworks
 // SPDX-License-Identifier: MPL-2.0
 #include "gargantuan/blockgrid/Field.hpp"
+#include "gargantuan/blockgrid/Assets.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -32,12 +33,18 @@ namespace gargantuan::blockgrid {
 				if (Value.Definition>MaximumId || !ValidBlock(Value)) Invalid();
 				return Value;
 			}
+			std::string Text(std::size_t Length) {
+				if (Length>Bytes.size()-Offset) Invalid();
+				std::string Result(reinterpret_cast<const char*>(Bytes.data()+Offset),Length);
+				Offset+=Length;
+				return Result;
+			}
 		};
 	}
 	std::vector<std::uint8_t> EncodeBase(const Field& F) {
 		std::vector<std::uint8_t> Out(std::begin(Magic),std::end(Magic));
 		Out.reserve(F.EncodedBytes);
-		Out.push_back(F.Definitions?2:1);
+		Out.push_back(F.HasAssetBindings()?4:F.Definitions?2:1);
 		if (F.Definitions) {
 			Put(Out,static_cast<std::uint32_t>(F.Definitions->Entries.size()),2);
 			for (const auto& D:F.Definitions->Entries) {
@@ -45,8 +52,17 @@ namespace gargantuan::blockgrid {
 				Out.insert(Out.end(),D.Key.begin(),D.Key.end());
 				Put(Out,static_cast<unsigned>(D.Geometry),1);
 				for (const auto C:D.Color) Put(Out,std::bit_cast<std::uint32_t>(C),4);
-				Put(Out,unsigned(D.CanCollide)|(unsigned(D.Queryable)<<1),1);
+				Put(Out,unsigned(D.CanCollide)|(unsigned(D.Queryable)<<1)|(unsigned(bool(D.Assets))<<2),1);
 				Put(Out,D.Ports,1);
+				if (const auto& A=D.Assets) {
+					Put(Out,unsigned(!A->Material.empty())|(unsigned(!A->Mesh.empty())<<1)|(unsigned(!A->Collision.empty())<<2),1);
+					for (const auto* S:{&A->Material,&A->Mesh,&A->Collision}) Out.insert(Out.end(),S->begin(),S->end());
+					Put(Out,static_cast<unsigned>(A->Pins.size()),1);
+					for (const auto& Pin:A->Pins) {
+						Put(Out,Pin.Kind,1); Out.insert(Out.end(),Pin.Id.begin(),Pin.Id.end());
+						Out.insert(Out.end(),Pin.Digest.begin(),Pin.Digest.end());
+					}
+				}
 			}
 		}
 		Put(Out, static_cast<std::uint32_t>(F.Leaves.size()), 4);
@@ -73,7 +89,7 @@ namespace gargantuan::blockgrid {
 		Reader In{Bytes, sizeof(Magic)};
 		Field Result;
 		const auto Version=In.Take(1);
-		if (Version==2) {
+		if (Version==2 || Version==4) {
 			const auto N=In.Take(2);
 			if (!N || N>MaximumDefinitions || N>(Bytes.size()-In.Offset)/25) Invalid();
 			auto Bindings=std::make_shared<Field::Catalog>();
@@ -85,14 +101,34 @@ namespace gargantuan::blockgrid {
 				D.Geometry=static_cast<Shape>(In.Take(1));
 				for (auto& C:D.Color) C=std::bit_cast<float>(In.Take(4));
 				const auto Flags=In.Take(1);
-				if (Flags>3) Invalid();
+				if (Flags>(Version==4?7u:3u)) Invalid();
 				D.CanCollide=(Flags&1)!=0; D.Queryable=(Flags&2)!=0;
 				D.Ports=static_cast<std::uint8_t>(In.Take(1));
+				if (Flags&4) {
+					const auto Roles=In.Take(1);
+					if (!Roles || Roles>7) Invalid();
+					auto A=std::make_shared<AssetBinding>();
+					if (Roles&1) A->Material=In.Text(32);
+					if (Roles&2) A->Mesh=In.Text(32);
+					if (Roles&4) A->Collision=In.Text(32);
+					const auto Count=In.Take(1);
+					if (!Count || Count>MaximumAssetPins || Count>MaximumCatalogPins-Bindings->PinCount ||
+						Count>(Bytes.size()-In.Offset)/97) Invalid();
+					A->Pins.reserve(Count);
+					for (unsigned J=0;J<Count;++J) {
+						const auto Kind=static_cast<std::uint8_t>(In.Take(1));
+						A->Pins.push_back({In.Text(32),In.Text(64),Kind});
+					}
+					++Bindings->AssetCount; Bindings->PinCount+=Count;
+					D.Assets=std::move(A);
+				}
 				ValidateDefinition(D);
+				Bindings->AssetBytes+=AssetPinCharge(D);
 				const auto Id=static_cast<std::uint16_t>(Brick+1+I);
 				if (!Bindings->Names.emplace(D.Key,Id).second) Invalid();
 				Bindings->Entries.push_back(std::move(D));
 			}
+			if (Version==4 && !Bindings->AssetCount) Invalid();
 			Result.Definitions=std::move(Bindings);
 			In.MaximumId=static_cast<std::uint16_t>(Brick+N);
 		} else if (Version!=1) Invalid();
