@@ -56,6 +56,7 @@
 #include <limits>
 #include <map>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -1030,14 +1031,14 @@ namespace gargantuan::network {
 				};
 				PumpSpatialMotion(Connection,Value);
 				PumpDomainTerrain(Connection, Value, Value.NamedTerrain, Value.AuthorizedSpatialRegion, Value.CurrentGrantGeneration, nullptr);
-				Value.Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, false); }, Send, CurrentTick,
+				Value.Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, false); }, Send, TerrainTick,
 					GetGridInterest(Connection,Value,false));
 				if (Value.Staging) {
 					const auto Now = SpatialTransferClock::now();
 					if (Now < Value.Staging->Expires) {
 						PumpDomainTerrain(Connection, Value, Value.Staging->Terrain, Value.Staging->Grant->Region,
 							Value.Staging->Frame.Serial, &Value.Staging->Frame.Bounds);
-						Value.Staging->Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, true); }, Send, CurrentTick,
+						Value.Staging->Grids->Pump([&](ObjectId Id) { return ResolveGrid(Connection, Value, Id, true); }, Send, TerrainTick,
 							GetGridInterest(Connection,Value,true));
 					} else if (Configuration.Role == GameSessionRole::Server) {
 						if (!ReleaseTransferDomain(Connection, Value.Staging->Frame.Serial))
@@ -1068,7 +1069,7 @@ namespace gargantuan::network {
 					throw std::invalid_argument("[BlockGrid:Network] Unissued audience generation");
 				}
 				auto &Lane = Staged ? Value.Staging->Grids : Value.Grids;
-				Lane->Receive(*Parsed, [&](ObjectId Id) { return ResolveGrid(Message.Connection, Value, Id, Staged); }, CurrentTick);
+				Lane->Receive(*Parsed, [&](ObjectId Id) { return ResolveGrid(Message.Connection, Value, Id, Staged); }, TerrainTick);
 			} catch (const std::exception &Error) {
 				Reject(Message.Connection,DisconnectReason::ProtocolViolation,Error.what());
 			}
@@ -1702,10 +1703,14 @@ namespace gargantuan::network {
 			const auto LocalPeer = PrimaryConnection ? Peers.find(*PrimaryConnection) : Peers.end();
 			const auto TrustedOwner = LocalPeer != Peers.end() ? LocalPeer->second.PlayerObject : ObjectId{};
 			bool CharacterProjected = false;
+			const bool SpatialReplica = ClientRuntimeAttached && LocalPeer != Peers.end() && LocalPeer->second.Grids;
+			bool GridMembershipChanged = false;
 			for (const auto &Operation : Frame->Operations) {
 				const auto Object = ReplicationObject(Operation.Intent);
+				const auto *Property = std::get_if<PropertyReplicationUpdate>(&Operation.Intent);
+				if (SpatialReplica && (std::holds_alternative<ReparentReplication>(Operation.Intent) ||
+					(Property && Property->PropertyName == "SpatialRegion"))) GridMembershipChanged = true;
 				if (Object == TrustedOwner) {
-					const auto *Property = std::get_if<PropertyReplicationUpdate>(&Operation.Intent);
 					CharacterProjected = CharacterProjected || IsPublishReplication(Operation.Intent) ||
 						(Property && Property->PropertyName == "Character");
 				}
@@ -1719,11 +1724,7 @@ namespace gargantuan::network {
 						return;
 					}
 					auto ReplicaObject = Replica.Resolve(Object);
-					if (ClientRuntimeAttached && LocalPeer != Peers.end() && LocalPeer->second.Grids &&
-						std::dynamic_pointer_cast<BlockGrid>(ReplicaObject)) {
-						try { TrackGrid(Message.Connection, LocalPeer->second, Object); }
-						catch (const std::exception &Error) { FailSession({DisconnectReason::ResourceExhaustion,Error.what()}); return; }
-					}
+					if (SpatialReplica && std::dynamic_pointer_cast<BlockGrid>(ReplicaObject)) GridMembershipChanged = true;
 					if (std::dynamic_pointer_cast<KinematicCharacter>(ReplicaObject))
 						ClientCharacterObjects.insert(Object);
 					if (std::dynamic_pointer_cast<RemoteBase>(ReplicaObject)) ClientRemoteObjects.insert(Object);
@@ -1766,8 +1767,19 @@ namespace gargantuan::network {
 					}
 				}
 			}
+			// ApplyFrame has finished all reparenting and explicit assignments, including ancestor moves.
+			// Retire obsolete subscriptions first so their content cannot clear a new lane's installation.
+			if (GridMembershipChanged) {
+				auto &Value = LocalPeer->second;
+				Value.Grids->Prune([&](ObjectId Id) { return ResolveGrid(Message.Connection,Value,Id,false); });
+				if (Value.Staging) Value.Staging->Grids->Prune([&](ObjectId Id) { return ResolveGrid(Message.Connection,Value,Id,true); });
+			}
 			for (auto Iterator = ClientKnownObjects.begin(); Iterator != ClientKnownObjects.end();) {
-				if (Replica.Resolve(*Iterator)) {
+				if (const auto Known = Replica.Resolve(*Iterator)) {
+					if (GridMembershipChanged && std::dynamic_pointer_cast<BlockGrid>(Known)) {
+						try { TrackGrid(Message.Connection,LocalPeer->second,*Iterator); }
+						catch (const std::exception &Error) { FailSession({DisconnectReason::ResourceExhaustion,Error.what()}); return; }
+					}
 					++Iterator;
 					continue;
 				}
@@ -2745,9 +2757,11 @@ namespace gargantuan::network {
 			RetireSessionTransfer(Connection, Iterator->second);
 			auto PeerValue = std::move(Iterator->second);
 			Peers.erase(Iterator);
-			RetireDomainTerrain(PeerValue.NamedTerrain);
+			if (Configuration.SpatialContent && Configuration.Role==GameSessionRole::Client && Runtime && ClientRuntimeAttached)
+				RetireBootstrapTerrain(PeerValue,true);
+			RetireDomainTerrain(PeerValue.NamedTerrain,true);
 			if (PeerValue.Staging) {
-				RetireDomainTerrain(PeerValue.Staging->Terrain);
+				RetireDomainTerrain(PeerValue.Staging->Terrain,true);
 				PeerValue.Staging->Grids->Retire();
 			}
 			if (PeerValue.Grids) PeerValue.Grids->Retire();
@@ -2839,7 +2853,7 @@ namespace gargantuan::network {
 				return;
 			if (!DrainFailures()) return;
 			// PlayerHost switches from its bootstrap counter to Engine ticks at runtime attachment.
-			if (Configuration.TerrainBootstrap)
+			if (Configuration.TerrainBootstrap || Configuration.SpatialContent)
 				SaturatingAdd(TerrainTick, SimulationTick > CurrentTick ? SimulationTick - CurrentTick : std::uint64_t{1});
 			CurrentTick = SimulationTick;
 			if (Configuration.SpatialContent) PumpSpatialTransfers();
@@ -4161,6 +4175,40 @@ namespace gargantuan::network {
 		const GameSession &Session, ConnectionId Connection) {
 		return Session.State->Scheduler.GetStatistics(Connection);
 	}
+	std::string detail::GameSessionTestAccess::DescribeSpatialMotion(const GameSession &Session, ConnectionId Connection) {
+		const auto *State = Session.State.get();
+		if (!State || !State->Runtime) return "no runtime";
+		const auto It = State->Peers.find(Connection);
+		if (It == State->Peers.end()) return "no peer";
+		const auto &Peer = It->second;
+		const auto Player = State->TransferPlayer(Connection, Peer);
+		const auto Subject = Player ? GetSpatialTransferSubject(*Player) : nullptr;
+		const auto World = Subject ? WorldRoot::GetEffectiveWorld(*Subject) : nullptr;
+		std::ostringstream Out;
+		Out << "epoch=" << Peer.SessionEpoch << " grant=" << Peer.CurrentGrantGeneration
+			<< " stage=" << bool(Peer.Staging) << " transfer=" << State->HasTransfer(Peer)
+			<< " serial=" << Peer.LastMotionSerial;
+		if (!World) return Out.str() + " no controlled world";
+		const auto Bounds = Peer.MotionWindow ? Peer.MotionWindow->Bounds : State->ControlledMotionArea(Player);
+		if (const auto &Offer = Peer.MotionWindow) {
+			Out << " offer=" << Offer->Serial << " installed=" << Offer->Installed << " digest=" << Offer->Digest.ToString()
+				<< " current=" << State->CheckMotionWindow(Connection, Peer, *World, *Subject, *Offer);
+		}
+		const auto Receipt = World->PrepareSpatialDestination(Bounds);
+		if (!Receipt) return Out.str() + " nativeError=" + std::to_string(static_cast<int>(Receipt.error()));
+		const auto Digest = State->MotionDigest(Connection, Peer, *World, *Subject, Bounds);
+		Out << " local=" << (Digest ? Digest->ToString() : "unavailable");
+		for (const auto &Native : Receipt->Providers) {
+			if (Native.Provider == SpatialCollisionProvider::Rigid && Native.Owner == Subject->GetObjectId()) continue;
+			const auto Binding = State->ProjectMotionProvider(Connection, Peer, *World, Native, Bounds);
+			Out << " provider[" << static_cast<int>(Native.Provider) << "," << Native.Owner.Slot << "," << Native.Installed.size() << "]=";
+			if (!Binding) Out << "unavailable";
+			else Out << Binding->Owner.Owner.Slot << "," << Binding->LogicalRevision << "," << Binding->CoverageRevision << ","
+				<< Binding->Content.ToString() << ",resolved=" << (State->ResolveTransferOwner(Binding->Owner) == Native.Owner);
+		}
+		return Out.str();
+	}
+
 	detail::GameSessionTestAccess::GameplayClientCounters detail::GameSessionTestAccess::GetGameplayClientCounters(
 		const GameSession &Session) {
 		const auto &State = *Session.State;

@@ -8,6 +8,7 @@
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/ViewportFrame.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
@@ -34,11 +35,13 @@ namespace gargantuan {
 				glm::all(glm::greaterThanEqual(Maximum, glm::dvec3(Bounds.Minimum)));
 		}
 
-		bool OverlapsBody(const SpatialDestinationBounds &Bounds, const CFrame &Pose, glm::vec3 Size) {
-			const auto Half = glm::abs(glm::dvec3(Size)) * 0.5;
+		bool OverlapsBody(const SpatialDestinationBounds &Bounds, const CFrame &Pose, glm::dvec3 Size,
+			glm::dvec3 LocalCenter = glm::dvec3(0)) {
+			const auto Half = glm::abs(Size) * 0.5;
 			const auto Extents = glm::abs(glm::dvec3(Pose.Rotation[0])) * Half.x +
 				glm::abs(glm::dvec3(Pose.Rotation[1])) * Half.y + glm::abs(glm::dvec3(Pose.Rotation[2])) * Half.z;
-			return Intersects(Bounds, glm::dvec3(Pose.Position) - Extents, glm::dvec3(Pose.Position) + Extents);
+			const auto Center = glm::dvec3(Pose.Position) + glm::dmat3(Pose.Rotation) * LocalCenter;
+			return Intersects(Bounds, Center - Extents, Center + Extents);
 		}
 	}
 
@@ -67,14 +70,29 @@ namespace gargantuan {
 			if (!Part || Part->GetDestroyed() || Part->IsDestroying() || GetEffectiveWorld(*Part).get() != this)
 				return std::unexpected(InvalidId);
 			if (!Part->GetCanCollide() && !Required(Id)) continue;
-			// A custom mesh may extend beyond Size. Keep its owner conservatively until an exact provider bound is available.
-			const bool Custom = bool(std::dynamic_pointer_cast<MeshPart>(Part));
-			if (!Required(Id) && !Custom && !OverlapsBody(Bounds, Part->GetCFrame(), Part->GetSize())) continue;
+			const auto Mesh = std::dynamic_pointer_cast<MeshPart>(Part);
+			if (!Required(Id) && (!Mesh || Mesh->GetCollisionMode()==Enums::MeshCollisionMode::Box) &&
+				!OverlapsBody(Bounds, Part->GetCFrame(), Part->GetSize())) continue;
 			const auto Handle = PartBodies.find(Id);
 			if (Handle == PartBodies.end() || FailedMeshUpdatesLogged.contains(Id)) return std::unexpected(BackendFailure);
 			const auto State = Physics.GetBodyState(Handle->second);
 			if (!State || State->Description.CanCollide != Part->GetCanCollide()) return std::unexpected(BackendFailure);
 			const auto &Desc = State->Description;
+			if (!Required(Id)) {
+				glm::dvec3 Size(Desc.Shape.Size), Center(0);
+				if (Desc.Shape.Kind==PhysicsShapeKind::StaticTriangleMesh) {
+					const auto& Installed=Desc.Shape.Mesh;
+					const auto Assets=std::dynamic_pointer_cast<AssetService>(Realm->GetService("AssetService"));
+					const auto Collision=Assets && Installed ? Assets->ResolveCollision(Installed->ResourceId) : std::nullopt;
+					if (!Collision || Collision->ContentRevision!=Installed->ContentRevision ||
+						Collision->Value.Positions!=Installed->Positions || Collision->Value.Indices!=Installed->Indices)
+						return std::unexpected(BackendFailure);
+					const auto Lo=glm::dvec3(Collision->Value.Bounds.Minimum), Hi=glm::dvec3(Collision->Value.Bounds.Maximum);
+					Center=(Lo+Hi)*0.5*Size;
+					Size=(Hi-Lo)*Size;
+				}
+				if (!OverlapsBody(Bounds,State->Transform,Size,Center)) continue;
+			}
 			SpatialProviderReceipt Proof{.Owner = Id, .Provider = SpatialCollisionProvider::Rigid,
 				.Pose = State->Transform, .Size = Desc.Shape.Size, .Shape = Desc.Shape.Kind,
 				.CollisionGroup = Desc.CollisionGroup, .CollisionMask = Desc.CollisionMask,

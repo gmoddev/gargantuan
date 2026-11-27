@@ -5,6 +5,12 @@
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/ModuleScript.hpp"
+#include "gargantuan/classes/MeshPart.hpp"
+#include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/filesystem/DiskFilesystem.hpp"
+#include "gargantuan/filesystem/SourceMount.hpp"
+#include <fstream>
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
@@ -12,6 +18,7 @@
 #include "gargantuan/terrain/Field.hpp"
 #include "gargantuan/network/TerrainSession.hpp"
 #include "../src/terrain/ScenePersistence.hpp"
+#include "../src/network/GameSessionTestAccess.hpp"
 #include "gargantuan/network/GameSession.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -57,6 +64,26 @@ namespace {
 		Require(Field.Apply(Writes), "authoring grid cell failed");
 		Grid->RestoreField(std::move(Field));
 		Grid->SetParent(Parent);
+	}
+	std::string MakeOffsetMesh(DataModel &World) {
+		const auto Root=std::filesystem::temp_directory_path()/("GargantuanSpatialStage-"+AssetId::New().ToString());
+		std::filesystem::create_directories(Root/"assets");
+		struct FixtureFiles {
+			std::filesystem::path Root;
+			~FixtureFiles() {
+				std::error_code Error;
+				std::filesystem::remove(Root/"assets"/"offset.obj",Error);
+				std::filesystem::remove(Root/"assets",Error);
+				std::filesystem::remove(Root,Error);
+			}
+		} Cleanup{Root};
+		std::ofstream(Root/"assets"/"offset.obj")<<"v 10 0 -1\nv 12 0 -1\nv 10 2 1\nf 1 2 3\n";
+		DiskFilesystem Filesystem(Root);
+		SourceMount Mount(Filesystem);
+		const auto Assets=std::dynamic_pointer_cast<AssetService>(World.GetService("AssetService"));
+		const auto Imported=Assets->ImportProjectAsset(Mount,"assets/offset.obj",AssetKind::Mesh);
+		Require(Imported.Ok && Imported.Record.has_value(),"offset mesh import failed");
+		return Imported.Record->Reference.Value;
 	}
 	void Run(bool CharacterProfile, bool Socket) {
 		auto Sim = SimulatedNetwork::Create(
@@ -141,9 +168,21 @@ namespace {
 		const GameSessionConfiguration Client{
 			.Role = GameSessionRole::Client, .Endpoint = Endpoint, .Limits = Limits, .TerrainBootstrap=ReceiverTerrain, .SpatialContent = true
 		};
-		GameSession Owner(Transport(), Client), Spectator(Transport(), Client);
 		std::unique_ptr<Engine> OwnerRuntime, SpectatorRuntime;
+		GameSession Owner(Transport(), Client), Spectator(Transport(), Client);
+		struct Cleanup {
+			GameSession &Owner, &Spectator, &Server;
+			std::unique_ptr<Engine> &OwnerRuntime, &SpectatorRuntime;
+			Engine &ServerRuntime;
+			~Cleanup() {
+				Owner.Stop(); Spectator.Stop(); Server.Stop();
+				if (OwnerRuntime) OwnerRuntime->Destroy();
+				if (SpectatorRuntime) SpectatorRuntime->Destroy();
+				ServerRuntime.Destroy();
+			}
+		} End{Owner, Spectator, Server, OwnerRuntime, SpectatorRuntime, ServerRuntime};
 		std::uint64_t Tick{};
+		std::optional<CharacterMotionResult> LastMotion;
 		bool ObserveStage{}, SawScopedGrid{};
 		std::optional<ConnectionId> Connection;
 		auto Exchange = [&] {
@@ -167,7 +206,9 @@ namespace {
 				);
 			if (ObserveStage && OwnerRuntime && Connection &&
 				Server.GetSpatialTransferStatus(*Connection) == SpatialTransferStatus::Progress) {
-				Require(!Find(*OwnerRuntime, "DistantGrid"), "staging exposed a nonintersecting grid");
+				Require(!Find(*OwnerRuntime, "DistantGrid") && !Find(*OwnerRuntime,"DistantMeshScene") &&
+					!Find(*OwnerRuntime,"FarBoxMesh") && !Find(*OwnerRuntime,"OffsetMesh"),
+					"staging exposed a nonintersecting grid, mesh or scene ancestor");
 				const auto Grid = std::dynamic_pointer_cast<BlockGrid>(Find(*OwnerRuntime, "LandingGrid"));
 				SawScopedGrid |= Grid && Grid->HasReplicaField();
 			}
@@ -180,12 +221,24 @@ namespace {
 					break;
 			}
 			if (!Predicate()) {
-				std::cerr << "[Spatial:Session] tick=" << Tick << " character=" << CharacterProfile
+				std::cerr << "[Spatial:Session] " << Failure << " tick=" << Tick << " character=" << CharacterProfile
 						  << " owner=" << Owner.GetFailure() << " spectator=" << Spectator.GetFailure()
 						  << " server=" << Server.GetFailure();
+				if (LastMotion) {
+					std::cerr << " motionStatus=" << static_cast<int>(LastMotion->Status)
+						<< " appliedX=" << LastMotion->AppliedTranslation.x << " contact=" << LastMotion->Collided
+						<< " physicsNs=" << LastMotion->PhysicsCpuNanoseconds;
+					if (Connection) std::cerr << " serverMotion={" << detail::GameSessionTestAccess::DescribeSpatialMotion(Server, *Connection) << '}';
+					if (const auto Primary=Owner.GetPrimaryConnection())
+						std::cerr << " ownerMotion={" << detail::GameSessionTestAccess::DescribeSpatialMotion(Owner, *Primary) << '}';
+				}
 				if (Connection) {
 					const auto Status = Server.GetSpatialTransferStatus(*Connection);
 					if (Status) std::cerr << " transfer=" << static_cast<int>(*Status);
+				}
+				if (const auto Primary=Owner.GetPrimaryConnection()) {
+					const auto Status=Owner.GetSpatialTransferStatus(*Primary);
+					if (Status) std::cerr << " ownerTransfer=" << static_cast<int>(*Status);
 				}
 				std::cerr << '\n';
 				throw std::runtime_error(std::string(Failure));
@@ -266,6 +319,34 @@ namespace {
 				SpatialTransferStatus::Denied,
 			"undersized landing volume admitted"
 		);
+		if (!CharacterProfile) {
+			const auto Visual=MakeOffsetMesh(*World);
+			auto Scene=std::make_shared<Folder>();
+			Scene->SetName("DistantMeshScene");Scene->SetParent(Room);
+			const auto Mesh=[&](std::string Name,CFrame Pose,Enums::MeshCollisionMode Mode,const std::shared_ptr<Instance>& ParentValue) {
+				auto Value=std::make_shared<MeshPart>();
+				Value->SetName(std::move(Name));Value->SetMesh(Visual);Value->SetAnchored(true);Value->SetSize({2,1,1});
+				Value->SetCFrame(Pose);Value->SetCollisionMode(Mode);Value->SetParent(ParentValue);return Value;
+			};
+			const auto Quarter=CFrame::Angles(0,1.57079632679f,0);
+			const auto FarBox=Mesh("FarBoxMesh",CFrame(1200,30,0),Enums::MeshCollisionMode::Box,Scene);
+			const auto Offset=Mesh("OffsetMesh",CFrame(0,30,0)*Quarter,Enums::MeshCollisionMode::StaticMesh,Scene);
+			auto Private=std::make_shared<Folder>();
+			Private->SetName("PrivateMeshOwner");Private->SetParent(Room);
+			const auto Unsupported=Mesh("LocalPrivateMesh",CFrame(5,30,22)*Quarter,Enums::MeshCollisionMode::StaticMesh,Private);
+			const auto Native=Room->PrepareSpatialDestination(Bounds);
+			Require(Native && std::ranges::any_of(Native->Providers,[&](const auto& P){
+				return P.Owner==Unsupported->GetObjectId() && P.Shape==PhysicsShapeKind::StaticTriangleMesh;
+			}) && std::ranges::none_of(Native->Providers,[&](const auto& P){
+				return P.Owner==Offset->GetObjectId() || P.Owner==FarBox->GetObjectId();
+			}),"native receipt ignored scaled, rotated, offset collision geometry");
+			Require(Server.RequestSpatialTransfer(*Connection,Room->GetObjectId(),Target,Bounds)==SpatialTransferStatus::Denied,
+				"unsupported native collider received a staged audience");
+			for (int I=0;I<12;++I) Exchange();
+			Require(!Find(*OwnerRuntime,"PrivateMeshOwner") && !Find(*OwnerRuntime,"LocalPrivateMesh") &&
+				!Find(*OwnerRuntime,"DistantMeshScene"),"rejected stage published a destination identity");
+			Private->Destroy();
+		}
 		const auto PreviousBindings = Bindings();
 		Require(
 			Server.RequestSpatialTransfer(*Connection, Room->GetObjectId(), Target, Bounds) ==
@@ -400,8 +481,8 @@ script:SetAttribute("Isolated", true)
 			const CharacterMotionRequest Step{.Translation={.25f,0,0}};
 			Wait([&] {
 				if (!Advanced) {
-					const auto Result=Avatar->AdmitMotion(*Room,Step);
-					Advanced=Result.Succeeded() && Result.AppliedTranslation.x>.2f;
+					LastMotion=Avatar->AdmitMotion(*Room,Step);
+					Advanced=LastMotion->Succeeded() && LastMotion->AppliedTranslation.x>.2f;
 				}
 				return Advanced;
 			}, "ordinary movement never received matching collision coverage after the handoff");
@@ -424,13 +505,14 @@ script:SetAttribute("Isolated", true)
 			Require(OwnerRuntime->Workspace->ResolveRaycast({7,8,7},{0,-9,0},TerrainFilter).TerrainInstance==OwnerRuntime->Workspace->GetTerrain() &&
 				SpectatorRuntime->Workspace->GetTerrain()->GetField().GetStats().MaterializedPages==0,
 				"returning controller failed to reacquire Workspace terrain exclusively");
+			const auto FormerTerrain = OwnerRuntime->Workspace->GetTerrain();
+			Owner.Stop();
+			bool Readable = true;
+			try { (void)FormerTerrain->GetField(); } catch (const std::runtime_error &) { Readable = false; }
+			Require(!Readable && !OwnerRuntime->Workspace->IsTerrainCollisionReady(),
+				"a disconnected client retained its old terrain samples or collision");
 		}
-		Owner.Stop();
-		Spectator.Stop();
-		Server.Stop();
-		OwnerRuntime->Destroy();
-		SpectatorRuntime->Destroy();
-		ServerRuntime.Destroy();
+
 	}
 }
 int main(int Count, char **Args) {

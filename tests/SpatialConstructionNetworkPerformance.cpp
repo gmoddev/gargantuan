@@ -88,7 +88,7 @@ namespace {
 		const auto Adapter = Transport.GetStatistics(Connection);
 		Require(Adapter && Adapter->BytesSent && Adapter->MessagesSent, "missing GNS application counters");
 		Stamp Value{*Adapter->BytesSent, *Adapter->MessagesSent};
-		const auto Native = detail::ReliableServiceFeedbackAccess::Observe(Transport, Connection);
+		const auto Native = gargantuan::network::detail::ReliableServiceFeedbackAccess::Observe(Transport, Connection);
 		if (Native) {
 			Value.Packets = Native->NativePacketsSent;
 			Value.PacketBytes = Native->NativePacketBytesSent;
@@ -128,6 +128,8 @@ namespace {
 			for (const auto &Child : Collection->GetChildren()) {
 				const auto Piece = std::dynamic_pointer_cast<Part>(Child);
 				Require(Piece && Piece->GetAnchored() && Piece->GetSize() == glm::vec3(1), "invalid received Part");
+				const glm::vec3 ExpectedColor(139.f / 255.f, 144.f / 255.f, 151.f / 255.f);
+				Require(glm::length(glm::vec3(Piece->GetColor()) - ExpectedColor) < .001f, "received color differs");
 				const auto P = Piece->GetCFrame().Position - glm::vec3(.5f);
 				const glm::ivec3 Cell(P);
 				Require(
@@ -161,6 +163,7 @@ namespace {
 		auto In = std::make_shared<GameNetworkingSocketsTransport>();
 		const auto Limits = GameSessionConfiguration::DefaultLimits();
 		const TransportEndpoint Endpoint{"127.0.0.1", Port};
+		std::unique_ptr<Engine> RemoteRuntime;
 		GameSession Server(
 			Out,
 			{.Role = GameSessionRole::Server, .Endpoint = Endpoint, .Limits = Limits, .SpatialContent = true},
@@ -169,7 +172,6 @@ namespace {
 		GameSession Client(
 			In, {.Role = GameSessionRole::Client, .Endpoint = Endpoint, .Limits = Limits, .SpatialContent = true}
 		);
-		std::unique_ptr<Engine> RemoteRuntime;
 		std::uint64_t Tick{}, StartTick{};
 		double ServerUs{}, ClientUs{};
 		auto Start = Clock::now();
@@ -206,6 +208,12 @@ namespace {
 		);
 		RemoteRuntime->ProcessService->Alive = true;
 		Require(Client.AttachClientRuntime(*RemoteRuntime), "runtime attachment failed");
+		Wait([&] { return Server.GetMetrics().ReadyPeers == 1; });
+		const auto Accepted = Server.GetPeerIdentities();
+		const auto Connection = Client.GetPrimaryConnection();
+		Require(Accepted.size() == 1 && Connection, "missing single admitted peer");
+		const std::array Focus{glm::vec3(0, 4, 0)};
+		Require(Server.SetTrustedReplicationFocus(Accepted.front().Connection, Focus), "construction interest failed");
 		auto ReplicaSpace = std::dynamic_pointer_cast<Workspace>(RemoteRuntime->DataModel->GetService("Workspace"));
 		std::shared_ptr<Instance> Replica;
 		auto Ready = [&](bool Edited) {
@@ -219,9 +227,6 @@ namespace {
 				   Grid->GetField().Get(Removed).Definition == (Edited ? blockgrid::Air : blockgrid::Stone);
 		};
 		Wait([&] { return Ready(false); });
-		const auto Accepted = Server.GetPeerIdentities();
-		const auto Connection = Client.GetPrimaryConnection();
-		Require(Accepted.size() == 1 && Connection, "missing single admitted peer");
 		Stamp ServerStart, ClientStart;
 		ServerStart.HasPacketObservation = ClientStart.HasPacketObservation = true;
 		auto Finish = [&](std::string_view Phase) {

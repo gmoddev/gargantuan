@@ -242,7 +242,7 @@ namespace gargantuan {
 
 	void WorldRoot::AddBlockGrid(const std::shared_ptr<Instance> &Value) {
 		auto Grid = std::dynamic_pointer_cast<BlockGrid>(Value);
-		if (!Grid || ShuttingDownPhysics) return;
+		if (!Grid || ShuttingDownPhysics || !IsSpatiallyAvailable()) return;
 		if (!BlockGridState) BlockGridState = std::make_unique<BlockGridWorldState>();
 		const auto Id = Grid->GetObjectId();
 		const auto [It, Added] = BlockGridState->Members.try_emplace(Id, BlockGridParticipant{Grid});

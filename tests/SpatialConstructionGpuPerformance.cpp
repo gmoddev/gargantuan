@@ -17,6 +17,12 @@
 #include <iostream>
 #include <nlohmann/json.hpp>
 
+namespace gargantuan {
+	struct EditorViewportRendererTestAccess {
+		static SDLRendererMetrics GetMetrics(EditorViewportRenderer &Renderer) { return Renderer.GetMetricsForTesting(); }
+	};
+}
+
 namespace {
 	using namespace gargantuan;
 	using Json = nlohmann::ordered_json;
@@ -44,7 +50,7 @@ namespace {
 		std::vector<std::uint8_t> Blank, Pixels, Initial;
 		auto Stage = [&](const char *Name, unsigned Frames) {
 			auto Measurements = Json::array();
-			const auto Before = View.GetMetricsForTesting();
+			const auto Before = EditorViewportRendererTestAccess::GetMetrics(View);
 			for (unsigned I = 0; I < Frames; ++I) {
 				const auto Start = std::chrono::steady_clock::now();
 				auto Publication = Publisher.Publish(*World, Camera, Width, Height);
@@ -73,7 +79,7 @@ namespace {
 				Covered += Changes;
 				CoverageHash = (CoverageHash ^ static_cast<unsigned>(Changes)) * 1099511628211ull;
 			}
-			const auto After = View.GetMetricsForTesting();
+			const auto After = EditorViewportRendererTestAccess::GetMetrics(View);
 			Json Row{
 				{"Layout", Solid ? "Solid" : "Checkerboard"},
 				{"Representation", UseGrid ? "BlockGrid" : "Parts"},

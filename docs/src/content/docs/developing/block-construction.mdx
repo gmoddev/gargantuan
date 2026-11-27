@@ -29,7 +29,7 @@ The direction vector includes the length of the ray segment. A grid raycast retu
 
 ## Work in local coordinates
 
-`GetBlock(Cell)` returns the definition and orientation, or `nil` for air. `CellToWorld` returns a cell center and `WorldToCell` locates the containing cell. For an empty grid, set `CellSize` to 0.5, 1 or 2 before building. Moving `CFrame` moves existing cells together. The same local coordinate continues to identify the same block.
+`GetBlock(Cell)` returns the definition and orientation, or `nil` for verified air. On a network client check `IsRegionAvailable(Cell, Cell + Vector3.new(1, 1, 1))` first. A read outside the installed window raises an availability error. `CellToWorld` returns a cell center and `WorldToCell` locates the containing cell. For an empty grid, set `CellSize` to 0.5, 1 or 2 before building. Moving `CFrame` moves existing cells together. The same local coordinate continues to identify the same block.
 
 Use `Clear(Min, MaxExclusive)` to remove a box. `ReadRegion` returns occupied cells and the revision of the read. Point and box edits are atomic. Keep opaque revision strings with their issuing grid and current world. In this implementation a single fill or clear visits up to 32,768 cells and a region read covers up to 4,096 cells. A large build can use several bounded edits. Each edit may also reach a physics or storage budget, so arrange large batches around meaningful application changes.
 
@@ -107,4 +107,42 @@ Each region exposes its own `Terrain` alongside its Parts and block grids. Smoot
 
 Insert a BlockGrid under Workspace or a SpatialRegion. Select it to open its cell inspector. Enter an integer cell and a size to fill a box with Stone or Brick. Use the adjacent-cell control to build against a picked face. Removal, Undo and Redo operate on the native field. Save the project to keep edit-world changes. Play starts with independent native resources. Stop returns to the authored construction.
 
-The Construction Yard sample includes a project builder and a playable retaining wall and workshop. Its README explains how to open the project and exercise both domains. This production candidate currently admits native grids in trusted offline worlds. Network authorization and streaming require a separately qualified protocol.
+## Enter a room through a door
+
+In a running server Script, choose the room and a clear landing position after checking the player's permission and distance to the door. Pass the authenticated Player received from your interaction handler. The corners below are in the room's coordinates and enclose the arriving character.
+
+```luau
+local function EnterWorkshop(Player, Room)
+	local Landing = Vector3.new(0, 5, 0)
+	local HalfSize = Vector3.new(4, 4, 4)
+	local Request, Reason = Player:RequestSpatialTransfer(
+		Room, CFrame.new(Landing), Landing - HalfSize, Landing + HalfSize)
+	if not Request then return false, Reason end
+	local Status = Request:GetStatus()
+	while Status == "Pending" do
+		task.wait(0.05)
+		Status = Request:GetStatus()
+	end
+	return Status == "Applied", Status
+end
+```
+
+Use `workspace` as the destination for a return door. On `Applied`, tell the originating player's view to display its new room. A viewport selection by itself only changes the camera's world. On `CommittedUnconfirmed` the server has already moved the player and the connection needs resynchronization. Offering another teleport at this point can duplicate a gameplay action.
+
+## Build together
+
+An authoritative Script owns construction edits. In multiplayer, have the local input handler send a build action. On the server, resolve its authenticated sender, validate their reach, target, domain and permission, then edit the grid. A client can draw a preview or read an installed cell. The server chooses which construction and terrain data each connection receives. Waiting for the grid Instance only establishes its identity.
+
+```luau
+local function DescribeCell(Grid, Cell)
+	if not Grid:IsRegionAvailable(Cell, Cell + Vector3.new(1, 1, 1)) then
+		return "Waiting for construction"
+	end
+	local Block = Grid:GetBlock(Cell)
+	return if Block then Block.Definition else "Air"
+end
+```
+
+Build a matching Development Dedicated Server and Distributed Player from the same project for spatial multiplayer. Keep project mesh, collision and material assets used by shared definitions in the package's shared audience. The Construction Yard demonstrates a retaining wall, excavation, an interior door and durable edits. Its project builder and launch instructions are in the [Construction Yard README](../../../../../samples/ConstructionYard/README.md).
+
+The [BlockGrid and spatial domain API](../../api/block-grid-and-spatial-domains/) covers copying, channels, moving assemblies, demand handles, network coverage and resource limits.

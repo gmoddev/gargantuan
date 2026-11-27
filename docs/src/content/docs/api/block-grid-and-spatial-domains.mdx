@@ -1,0 +1,80 @@
+---
+title: BlockGrid and spatial domains
+description: Cell and assembly operations, state, multiplayer availability and moving players between independent spaces.
+---
+
+A `BlockGrid` gives a construction an Instance identity. A cell is identified by its grid and three integer coordinates. Coordinates belong to that grid throughout rigid motion. A `SpatialRegion` is a separate coordinate space with its own Terrain, Parts, grids and physics. Workspace is the default space. Region boundaries and native cell storage are managed by the Engine. For a first construction, follow [Build a wall](../developing/block-construction.mdx).
+
+## Place and query
+
+| Operation | Behavior |
+| --- | --- |
+| `SetBlock(Cell, Key, Rotation?)`, `RemoveBlock(Cell)` | Place or remove one cell. Stone and Brick are built in. |
+| `Fill(Min, MaxExclusive, Key, Rotation?)`, `Clear(Min, MaxExclusive)` | Edit a half-open rectangular box. Negative coordinates work the same as positive coordinates. |
+| `IsRegionAvailable(Min, MaxExclusive)` | Check that every cell in a nonempty box is known. On the authority a valid box is available. A replica can have known and unknown areas in the same grid. |
+| `GetBlock(Cell)` | Returns a table with Definition and Orientation for a block, or nil for verified air. Reading an unknown cell raises an availability error. |
+| `CellToWorld(Cell)`, `WorldToCell(Position)` | Convert between the cell center and a point in its owning world's coordinates. |
+| `Raycast(Origin, Direction)` | Cast a finite world-space segment. A hit carries Cell, Block, Position, Normal and Revision. A miss through known space returns nil. Reaching an unknown page before the first hit raises an availability error. |
+| `GetRevision()`, `BlockRevision` | Read the current opaque revision. Revisions are specific to this grid and world. |
+
+Choose `CellSize` of 0.5, 1 or 2 while empty. Set `CFrame` to place or rotate a construction. `Visible`, `CanQuery` and `CanCollide` control drawing, participation in world queries and physical collision. Set `RaycastParams.IncludeBlockGrids` to include grids in a world query. Use `Hit.GridHit.Cell` on a grid hit and `Hit.Instance` to identify its grid. Set `IncludeTerrain` to include smooth terrain. Query the intended WorldRoot when coordinates overlap.
+
+## Definitions, material and state
+
+Register `DefineBlock(Key, Spec)` once on the grid. Use keys such as `project:roof_tile`. The part after the prefix starts with a lowercase ASCII letter and can contain lowercase letters, digits, underscores and hyphens. `ReplaceDefinition(Key, Spec, ExpectedRevision)` updates all uses of a registered key. `GetDefinitionDigest(Key)` returns the content digest for comparing definitions between grids.
+
+A primitive definition accepts Shape (Cube, Slab, Wedge or Stairs), Color, Material, Collision, Queryable and Ports. For example, a slab fills its lower half. A wedge rises toward local +Z. Choose two perpendicular directions for the rotation's Up and Front. Ports use the six signed axes and rotate with the block. `Collision = "None"` retains picking when Queryable is true.
+
+For imported geometry, set `Shape = "Mesh"`, `Mesh = MeshId` and either `Collision = "None"` or `Collision = "Asset", CollisionAsset = CompanionId`. The companion must belong to the imported visual mesh. Supply project asset references for materials and meshes. A unit-cell mesh can retain separate material slots, including a material's transparency. A whole Material overrides those slots. For a cube that uses an existing material, place `"material:" .. MaterialId` directly. Resolve shared assets in the catalog before registering them.
+
+`DefineChannel(Name, Spec)` declares a Bool, UInt8, Int32 or finite Float32 channel with a shared Default. `GetValue(Cell, Name)` reads an occupied cell. Set overrides through an edit. `Persistent` includes the channel in authored saves. `Audience = "RelevantPeers"` shares it with admitted recipients. `Indexed` supports scanning nondefault entries. `OnCopy = "Value"` carries values through semantic copies. A value equal to the default releases its override. Changing a block's orientation preserves its state. Removing it or replacing its definition key resets cell state.
+
+## Transactions, selections and reuse
+
+`BeginEdit(ExpectedRevision?)` starts a guarded batch. The edit accepts SetBlock, RemoveBlock, Fill and Clear with the arguments above, plus `SetValue(Cell, Channel, Value)`, `CopyRegion(Min, MaxExclusive, DestinationMin)`, `MoveRegion(Min, MaxExclusive, DestinationMin)` and `WritePacked(DestinationMin, DestinationMaxExclusive, Image)`. `Commit()` returns the new revision. `Cancel()` discards the batch. A failed guarded edit publishes none of its commands. Re-read the grid before retrying a stale decision.
+
+`ReadRegion(Min, MaxExclusive, Filter?)` returns a revision and occupied cells. The filter can specify Definitions or `Where = {Channel = Name, Equals = Value}`. `ReadPacked(Min, MaxExclusive)` includes dimensions, a palette of oriented definitions, binding digests and an X-fastest buffer. Packed data carries cell geometry. To reuse it across grids, register identical custom definitions at the destination and pass a box of exactly the original dimensions to WritePacked. Air in the image clears existing destination cells. CopyRegion includes air and follows each channel's OnCopy rule. MoveRegion preserves the moved state. Overlapping boxes read the original selection.
+
+```luau
+local Min, Max = Vector3.new(-2, 0, 0), Vector3.new(0, 1, 1)
+local Origin = Vector3.new(4, 0, 0)
+local Stamp = Wall:ReadPacked(Min, Max)
+local Paste = OtherGrid:BeginEdit()
+Paste:WritePacked(Origin, Origin + Stamp.Size, Stamp)
+Paste:Commit()
+```
+
+To reuse a complete oriented construction with copy-enabled state, clone the grid and set its CFrame. To detach a static selection, call `ExtractRegion(Min, MaxExclusive, Expected)`. The extracted cells become a new static sibling at the same physical positions with their state. `MergeFrom(Source, Expected, ExpectedSource)` moves cells from a compatible lattice-aligned sibling. Use each grid's own revision. Occupied-cell conflicts, incompatible definitions and admission failures reject the operation atomically.
+
+## Connectivity and simulation
+
+`FindConnected(Starts, Options)` searches a bounded component. Supply Bounds, and optionally Filter, Adjacency (Face, Edge or Corner), UsePorts, StopAt (definition keys) and MaxVisited. `FindActive(IndexedChannel, Bounds)` locates nondefault entries. Both return a cursor. `Step(Budget)` yields Cells, Revision, Status and an optional Match. Keep stepping on More. Complete means the search exhausted its bounds. Found means StopAt matched. Limit, Unavailable, Expired and Cancelled end the traversal without a proof of exhaustion. Call `Cancel()` to release a search. The revision remains attached to the original view. Guard subsequent writes with that revision.
+
+For a moving primitive construction, call `SetMotionMode("Dynamic", Grid:GetRevision())`. `MotionMode` reports Static or Dynamic. `SetAssemblyVelocity(Linear, Angular, Expected)` uses world coordinates. `GetAssemblyState()` returns Mode, CFrame, linear and angular velocity, mass, world and local center of mass, and three columns of local inertia. `SplitRegion(Min, MaxExclusive, Expected)` divides a moving assembly into two nonempty moving siblings. Dynamic MergeFrom preserves momentum. Freeze with SetMotionMode before reparenting or reassigning a moving construction. An authored save reopens at the saved pose in Static mode.
+
+## Domain membership, demand and travel
+
+An object's enclosing WorldRoot supplies its spatial domain, or assign a supported object's `SpatialRegion` property explicitly. Each chart has its own Terrain. `workspace.CurrentSpatialRegion` selects the rendered view. Set it to nil for outdoors. Gameplay scripts continue under their normal execution lifecycle.
+
+From a running server Script, call `Domain:RequestCollisionArea(Min, Max, Seconds?, Priority?)` with increasing finite corners in that domain. It returns a handle or nil and a reason. Duration defaults to five seconds and can be up to 60. Priority accepts Background, Normal or Interactive. `GetStatus()` returns Life (Active, Released, Expired or Stale), Collision (Pending, Ready or Unavailable) and Revision. SetArea, SetPriority and Renew update your own handle. Release drops that observation. Concurrent consumers retain theirs. The issuing Script execution owns the handle and a restarted Script needs a new one.
+
+`Player:RequestSpatialTransfer(Destination, DestinationPose, Min, Max)` is a running server Script operation. Choose an attached Workspace or SpatialRegion, a clear rigid pose, and increasing destination-local bounds containing the entire root and character capsule. Each axis can span up to 512 units. Network transfers currently support a stationary controlled root or supported single-root kinematic character with anchored landing surroundings. A collision observation can help a door show its status. The transfer checks the source, control and actual destination independently on the server and controlling peer.
+
+The call returns a handle and nil, or nil and a reason. Poll GetStatus while Pending. Applied confirms admission. Canceled, Stale, Expired, Denied and Busy require a fresh gameplay decision. CommittedUnconfirmed means the authoritative move occurred and the connection needs reconciliation. Cancel returns the request's disposition. Handles belong to the issuing Script execution. See the [door example](../developing/block-construction.mdx#enter-a-room-through-a-door).
+
+## Network, storage and budget
+
+The same grid can be fully available on the server and partially available to a player. The Engine selects a bounded window from trusted interest origins. Unseen pages can become available later. To test this as a creator, use a matching spatial Development Server and Distributed Player, put an occupied cell near spawn and another well outside its neighborhood on the same grid, and call IsRegionAvailable around each from the local script. Check the near empty neighbor separately. A server Script alone sees the entire authoritative field.
+
+| Budget | Current limit |
+| --- | --- |
+| One point or box edit batch | 1,024 commands and 32,768 visited cells |
+| One region read, packed selection or extraction | 4,096 cells |
+| One authoritative grid | 1,048,576 occupied cells, 16,384 leaves, 16 MiB canonical dataset |
+| Custom definitions and state | 1,024 custom keys, 16 channels, 65,536 nondefault overrides per grid |
+| Native edit and traversal handles | Four of each per grid, 64 total per VM. Five idle seconds or 30 seconds total. |
+| Dynamic assemblies | 64 per world, 1–128 occupied cells and physical hulls per grid. Each cell must be within 64 cells of the origin on each axis. Mesh definitions require Static mode. |
+| Server collision observations | 64 per domain and eight per audience. Expiry and Release free capacity. |
+| Per-peer grid delivery | Eight grid subscriptions per lane. Up to four trusted focus origins. A staged landing can cover up to 108 native leaves. Oversized landings cannot establish readiness. |
+
+Use bounded Fill, native edits and cursor pages for bulk gameplay. A rigid transform reuses local geometry. Choose grids for meaningful identity or movement. Project Save and Save As persist authored data and asset references. Play-time edits use the game's persistence policy. The [Construction Yard example](../../../../../samples/ConstructionYard/README.md) demonstrates replaying a versioned edit document after a server restart.

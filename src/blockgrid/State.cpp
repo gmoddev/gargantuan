@@ -168,13 +168,27 @@ namespace gargantuan::blockgrid {
 						if (!GetChannel(I).Spec.CopyValue) Value.Values[I]=AirState.Values[I];
 					Read(Shifted(P))=Value;
 				});
-			} else {
-				const auto& Packed=std::get<PackedWrite>(Cmd);
-				const auto Cells=Volume(Packed.Destination,Work);
-				if (Packed.Values.size()!=Cells) throw std::invalid_argument("[BlockGrid:Packed] Incorrect packed cell count");
+			} else if (const auto* Packed=std::get_if<PackedWrite>(&Cmd)) {
+				const auto Cells=Volume(Packed->Destination,Work);
+				if (Packed->Values.size()!=Cells) throw std::invalid_argument("[BlockGrid:Packed] Incorrect packed cell count");
 				Work-=Cells;
 				std::size_t I=0;
-				Each(Packed.Destination,[&](Cell P){Place(P,Packed.Values[I++]);});
+				Each(Packed->Destination,[&](Cell P){Place(P,Packed->Values[I++]);});
+			} else {
+				const auto& PackedState=std::get<PackedStateWrite>(Cmd);
+				const auto Cells=Volume(PackedState.Destination,Work);
+				if (PackedState.Values.size()!=Cells) throw std::invalid_argument("[BlockGrid:Packed] Incorrect packed state count");
+				Work-=Cells;
+				std::size_t I=0;
+				Each(PackedState.Destination,[&](Cell P) {
+					const auto& Value=PackedState.Values[I++];
+					if (!IsValid(Value.Value) || (!Value.Value.Definition && Value.Values!=AirState.Values))
+						throw std::invalid_argument("[BlockGrid:Packed] Invalid packed cell state");
+					for (std::uint8_t Id=0;Id<GetChannelCount();++Id) (void)ScalarValue(GetChannel(Id).Spec.Kind,Value.Values[Id]);
+					for (auto Id=GetChannelCount();Id<MaximumChannels;++Id) if (Value.Values[Id])
+						throw std::invalid_argument("[BlockGrid:Packed] State has an undeclared channel");
+					Read(P)=Value;
+				});
 			}
 		}
 		std::vector<StateChange> Result;

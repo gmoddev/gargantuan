@@ -123,6 +123,7 @@ namespace gargantuan::network::detail {
 
 	class GameSessionTestAccess final {
 	  public:
+		[[nodiscard]] static std::string DescribeSpatialMotion(const GameSession &Session, ConnectionId Connection);
 		struct GameplayClientCounters {
 			std::uint64_t Produced, Applied, StructuralApplyNanoseconds;
 		};

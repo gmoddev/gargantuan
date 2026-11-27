@@ -123,15 +123,24 @@ local function Record(Event)
 	table.insert(History, Event)
 end
 
+local Queue = {}
 local function Change(Event)
-	if Busy or Faulted then return end
+	if Faulted or #Queue >= 16 then return end
+	table.insert(Queue, Event)
+	if Busy then return end
 	Busy = true
-	local Ok, Failure = pcall(Record, Event)
-	Busy = false
-	if not Ok then
-		Faulted = true
-		warn("[Spatial:ConstructionYard] Editing paused: " .. tostring(Failure))
+	while #Queue > 0 and not Faulted do
+		local Next = table.remove(Queue, 1)
+		local Grid = if Next.Kind == "wall" then Wall else Floor
+		if Next.Kind == "dig" or BlocksAdded[Grid] < Width * 4 then
+			local Ok, Failure = pcall(Record, Next)
+			if not Ok then
+				Faulted = true
+				warn("[Spatial:ConstructionYard] Editing paused: " .. tostring(Failure))
+			end
+		end
 	end
+	Busy = false
 end
 
 if Durable then
@@ -151,6 +160,8 @@ local function UseDoor(Player, Avatar, Inside)
 	local Params = RaycastParams.new()
 	Params.IncludeBlockGrids = true
 	Params.IncludeTerrain = true
+	Params.FilterType = Enum.RaycastFilterType.Include
+	Params.FilterDescendantsInstances = {if Inside then Space.Terrain else Floor}
 	local FloorHit = Destination:Raycast(V(0, 10, 2), V(0, -24, 0), Params)
 	if not FloorHit then return end
 	local Landing = FloorHit.Position + V(0, math.max(Avatar.CapsuleHeight, Avatar.RootPart.Size.Y) * 0.5 + 1, 0)
@@ -192,7 +203,14 @@ local function UseTool(Player, Name)
 		local Grid = if Inside then Floor else Wall
 		if BlocksAdded[Grid] < Width * 4 then Change({Kind = if Inside then "floor" else "wall"}) end
 	elseif Name == "YardDig" and not Inside then
-		local Point = Avatar.Position + Avatar.CFrame.LookVector * 2.5 - V(0, 1.5, 0)
+		local Params = RaycastParams.new()
+		Params.IncludeTerrain = true
+		Params.FilterType = Enum.RaycastFilterType.Include
+		Params.FilterDescendantsInstances = {Space.Terrain}
+		local Aim = Avatar.Position + Avatar.CFrame.LookVector * 2.5
+		local Hit = Space:Raycast(Aim + V(0, 2, 0), V(0, -12, 0), Params)
+		if not Hit then return end
+		local Point = Hit.Position - V(0, 0.35, 0)
 		Change({Kind = "dig", X = math.round(Point.X * 16), Y = math.round(Point.Y * 16), Z = math.round(Point.Z * 16)})
 	end
 end

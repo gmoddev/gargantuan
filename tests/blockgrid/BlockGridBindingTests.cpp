@@ -487,6 +487,7 @@ int main() try {
 		G.Parent=game.Workspace
 		local P=Vector3.new(-1,0,-1)
 		local Rev=G:GetRevision()
+		assert(G:IsRegionAvailable(P,Vector3.new(0,1,0)) and not pcall(function() G:IsRegionAvailable(P,P) end))
 		local Next=G:Fill(Vector3.new(-3,0,-3),Vector3.new(2,1,2),"Stone")
 		assert(Rev~=Next and G.BlockRevision==Next and G:GetBlock(P).Definition=="Stone")
 		assert(G:SetBlock(P,"Stone")==Next)
@@ -541,6 +542,21 @@ int main() try {
 		Shapes:DefineBlock("project:ghost",{Shape="Slab",Collision="None",Queryable=true})
 		Shapes:DefineBlock("project:solid",{Shape="Slab",Queryable=false})
 		Shapes:SetBlock(Vector3.zero,"project:ramp")
+		local Token = Shapes:GetRevision()
+		local Pending = Shapes:BeginEdit(Token)
+		Pending:SetBlock(Vector3.new(15,0,0),"Stone")
+		local Search = Shapes:FindConnected({Vector3.zero},{Bounds={Min=Vector3.zero,MaxExclusive=Vector3.one}})
+		local Moving = Instance.new("BlockGrid")
+		Moving.Parent=Room
+		Moving:SetBlock(Vector3.zero,"Stone")
+		Moving:SetMotionMode("Dynamic",Moving:GetRevision())
+		Moving:SetAssemblyVelocity(Vector3.new(4,0,0),Vector3.zero,Moving:GetRevision())
+		Room.Parent=nil
+		Room.Parent=workspace
+		assert(Shapes:GetRevision()~=Token and not pcall(function() Pending:Commit() end))
+		assert(Search:Step(1).Status=="Expired" and Shapes:GetBlock(Vector3.new(15,0,0))==nil)
+		assert(Moving.MotionMode=="Static" and Moving:GetAssemblyState().LinearVelocity==Vector3.zero)
+		Moving:Destroy()
 		Shapes:SetBlock(Vector3.new(2,0,0),"project:stair")
 		Shapes:SetBlock(Vector3.new(3,0,0),"project:ghost")
 		Shapes:SetBlock(Vector3.new(4,0,0),"project:solid")
@@ -644,6 +660,7 @@ int main() try {
 	)");
 	Run(World,RuntimeMode::NetworkClient,ScriptSecurityContext::ClientRuntime(),R"(
 		local G=game.Workspace:FindFirstChild("Construction")
+		assert(not G:IsRegionAvailable(Vector3.zero,Vector3.new(1,1,1)))
 		assert(not pcall(function() G:SetBlock(Vector3.zero,"Stone") end))
 		assert(not pcall(function() G:GetBlock(Vector3.zero) end))
 		assert(not pcall(function() G.CellSize=1 end))

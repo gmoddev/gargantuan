@@ -973,10 +973,14 @@ if(BUILD_TESTING)
 	add_executable(gargantuan_blockgrid_field_tests "tests/blockgrid/BlockGridFieldTests.cpp"
 		"src/blockgrid/Field.cpp" "src/blockgrid/Codec.cpp" "src/blockgrid/Picking.cpp" "src/blockgrid/Edit.cpp"
 		"src/blockgrid/Geometry.cpp" "src/blockgrid/Definitions.cpp" "src/blockgrid/State.cpp" "src/blockgrid/Traversal.cpp"
-		"src/blockgrid/Transfer.cpp" "src/assets/AssetTypes.cpp")
+		"src/blockgrid/Transfer.cpp" "src/blockgrid/ReplicaPages.cpp" "src/assets/AssetTypes.cpp")
 	target_include_directories(gargantuan_blockgrid_field_tests PRIVATE "include")
 	target_link_libraries(gargantuan_blockgrid_field_tests PRIVATE glm::glm)
 	add_test(NAME gargantuan_blockgrid_field COMMAND gargantuan_blockgrid_field_tests)
+	add_executable(gargantuan_blockgrid_regional_stream_tests "tests/blockgrid/BlockGridStreamTests.cpp")
+	target_link_libraries(gargantuan_blockgrid_regional_stream_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_blockgrid_regional_stream COMMAND gargantuan_blockgrid_regional_stream_tests)
+	set_tests_properties(gargantuan_blockgrid_regional_stream PROPERTIES LABELS "blockgrid;network;streaming")
 	set_tests_properties(gargantuan_blockgrid_field PROPERTIES LABELS "blockgrid;storage;persistence")
 	add_executable(gargantuan_blockgrid_collision_catalog_tests "tests/blockgrid/BlockGridCollisionCatalogTests.cpp"
 		"src/blockgrid/Geometry.cpp" "src/blockgrid/Momentum.cpp")
@@ -1006,7 +1010,7 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_spatial_construction_gpu_benchmark PRIVATE gargantuan_core nlohmann_json)
 	if(GARGANTUAN_WITH_GNS)
 		add_executable(gargantuan_spatial_construction_network_benchmark EXCLUDE_FROM_ALL "tests/SpatialConstructionNetworkPerformance.cpp")
-		target_link_libraries(gargantuan_spatial_construction_network_benchmark PRIVATE gargantuan_core nlohmann_json)
+		target_link_libraries(gargantuan_spatial_construction_network_benchmark PRIVATE gargantuan_core gargantuan_gns_transport nlohmann_json)
 		if(WIN32)
 			add_dependencies(gargantuan_spatial_construction_network_benchmark gargantuan_stage_sdl_runtime)
 		endif()
@@ -1021,11 +1025,29 @@ if(BUILD_TESTING)
 	set_tests_properties(gargantuan_spatial_construction_integration PROPERTIES LABELS "spatial;blockgrid;integration")
 	find_program(GARGANTUAN_SPATIAL_TEST_PYTHON NAMES python3 python)
 	if(GARGANTUAN_SPATIAL_TEST_PYTHON)
+		add_test(NAME gargantuan_spatial_creator_play
+			COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialCreatorTrial.py"
+				--engine $<TARGET_FILE:gargantuan>)
+		add_test(NAME gargantuan_spatial_creator_doors
+			COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialCreatorTrial.py"
+				--engine $<TARGET_FILE:gargantuan> --doors)
+		set_tests_properties(gargantuan_spatial_creator_play gargantuan_spatial_creator_doors PROPERTIES
+			LABELS "spatial;blockgrid;creator;headless" TIMEOUT 65)
+		add_test(NAME gargantuan_spatial_grid_clipboard
+			COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialGridClipboardAuthoring.py"
+				--engine $<TARGET_FILE:gargantuan>)
+		set_tests_properties(gargantuan_spatial_grid_clipboard PROPERTIES LABELS "spatial;blockgrid;editor;headless" TIMEOUT 75)
 		add_test(NAME gargantuan_spatial_construction_yard
 			COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialConstructionYardInput.py"
 				--engine $<TARGET_FILE:gargantuan>)
 		set_tests_properties(gargantuan_spatial_construction_yard PROPERTIES LABELS "spatial;blockgrid;headless;sample" TIMEOUT 120)
 		if(GARGANTUAN_WITH_GNS)
+			add_test(NAME gargantuan_spatial_creator_network
+				COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialCreatorTrial.py"
+					--network --engine $<TARGET_FILE:gargantuan> --packager $<TARGET_FILE:gargantuan_packager>
+					--player-runtime $<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
+					--server-runtime $<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution)
+			set_tests_properties(gargantuan_spatial_creator_network PROPERTIES LABELS "spatial;network;creator;headless" TIMEOUT 140)
 			set(SpatialPackageTest "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialConstructionPackageSession.py"
 					--fixture $<TARGET_FILE:gargantuan_spatial_construction_integration_tests>
 					--packager $<TARGET_FILE:gargantuan_packager>
@@ -1041,6 +1063,14 @@ if(BUILD_TESTING)
 				COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialConstructionYardInput.py"
 					--engine $<TARGET_FILE:gargantuan> --durable)
 			set_tests_properties(gargantuan_spatial_construction_yard_restart PROPERTIES LABELS "spatial;blockgrid;persistence;headless;sample" TIMEOUT 150)
+			if(GARGANTUAN_WITH_GNS AND TARGET gargantuan_server AND TARGET gargantuan_player AND TARGET gargantuan_packager)
+				add_test(NAME gargantuan_spatial_construction_yard_multiplayer
+					COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialConstructionYardMultiplayer.py"
+						--engine $<TARGET_FILE:gargantuan> --packager $<TARGET_FILE:gargantuan_packager>
+						--player-runtime $<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
+						--server-runtime $<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution)
+				set_tests_properties(gargantuan_spatial_construction_yard_multiplayer PROPERTIES LABELS "spatial;network;persistence;headless;sample" TIMEOUT 240)
+			endif()
 		endif()
 	endif()
 	if(NOT GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION)

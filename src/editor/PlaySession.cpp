@@ -127,11 +127,11 @@ namespace gargantuan {
 		std::shared_ptr<IPersistenceProvider> Persistence,
 		const InstanceSerialization::TerrainSceneAdmission &AdmitTerrain,
 		PlayScriptSources Sources,
-		const InstanceSerialization::DomainTerrainAdmission &AdmitDomains
+		const InstanceSerialization::DomainTerrainAdmission &AdmitDomains,const blockgrid::SegmentMap* GridSegments
 	) : Id(SessionId), State(PlaySessionState::Starting), LaunchAuthoringRevision(AuthoringRevision) {
 		if (Id.Value == 0 || AuthoringRevision == 0) throw std::invalid_argument("Play session identity and revision must be nonzero");
 		std::istringstream Input(std::move(LaunchContents));
-		auto Deserialized = InstanceSerialization::Deserialize(Format, Input, AdmitTerrain, AdmitDomains);
+		auto Deserialized = InstanceSerialization::Deserialize(Format, Input, AdmitTerrain, AdmitDomains,GridSegments);
 		if (!Deserialized.Ok || !Deserialized.Instance || !Deserialized.Instance->IsA("DataModel")) {
 			State = PlaySessionState::Failed;
 			throw std::runtime_error("Play launch snapshot could not construct a DataModel");

@@ -237,7 +237,7 @@ namespace gargantuan::blockgrid {
 			throw std::invalid_argument("[BlockGrid:Material] Invalid material edit");
 		Field Next=*this;
 		if (!Remove) for (const auto& D:Materials) {
-			if (!D.Key.starts_with("material:") || FindDefinitionId(D.Key) || !Next.Define(D))
+			if (Next.FindDefinitionId(D.Key) || !Next.Define(D))
 				throw std::domain_error("[BlockGrid:Conflict] Material binding already exists");
 		}
 		std::vector<Cell> Origins;

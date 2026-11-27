@@ -1,4 +1,5 @@
 #pragma once
+#include "gargantuan/blockgrid/Persistence.hpp"
 
 #include "gargantuan/assets/AssetTypes.hpp"
 #include "gargantuan/content/ContentAvailability.hpp"
@@ -107,6 +108,7 @@ namespace gargantuan {
 		// select version 4 only when every content unit matches that version.
 		std::uint32_t ContentInstanceSchemaVersion = PackageContentInstanceSchemaVersion;
 		std::vector<terrain::TerrainArtifact> TerrainArtifacts;
+		blockgrid::SegmentMap GridSegments;
 		std::shared_ptr<const DistributedPlayerCapture> DistributedPlayer;
 		std::optional<RuntimeDistributionPlan> DistributionPlan;
 	};
@@ -187,6 +189,7 @@ namespace gargantuan {
 		std::optional<std::string> ContentManifestReference;
 		AssetContentId ContentManifestDigest;
 		std::vector<terrain::TerrainArtifact> TerrainArtifacts;
+		blockgrid::SegmentMap GridSegments;
 		PackageRuntimeLoadMode LoadMode = PackageRuntimeLoadMode::Complete;
 		std::optional<std::string> ClientCodeJson;
 		std::shared_ptr<const RuntimeDistributionCodeCatalog> RuntimeCode;

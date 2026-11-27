@@ -99,7 +99,8 @@ namespace gargantuan {
 			std::shared_ptr<IPersistenceProvider> Persistence = {},
 			const InstanceSerialization::TerrainSceneAdmission &AdmitTerrain = {},
 			PlayScriptSources Sources = {},
-			const InstanceSerialization::DomainTerrainAdmission &AdmitDomains = {}
+			const InstanceSerialization::DomainTerrainAdmission &AdmitDomains = {},
+			const blockgrid::SegmentMap* GridSegments=nullptr
 		);
 		~PlaySession();
 

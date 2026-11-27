@@ -76,6 +76,8 @@ namespace gargantuan {
 		struct PackageJob;
 		struct AnimationPreviewJob;
 		struct GuiPreviewState;
+		struct GridClipboardState;
+		std::unique_ptr<GridClipboardState> GridClipboard;
 		struct TerrainAuthoringState;
 		std::unique_ptr<TerrainAuthoringState> TerrainAuthoring;
 		std::unique_ptr<AnimationPreviewJob> ActiveAnimationPreview;

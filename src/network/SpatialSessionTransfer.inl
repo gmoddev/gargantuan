@@ -87,8 +87,7 @@ std::optional<SpatialAppliedBinding> ProjectTransferProvider(ConnectionId Connec
 	}
 	const auto Part = std::dynamic_pointer_cast<BasePart>(ObjectRegistry::Get().Lookup(Native.Owner));
 	const auto Key = TransferIdentity(Part);
-	if (!Part || !Key.IsValid() || WorldRoot::GetEffectiveWorld(*Part) != Destination || Native.Installed.size() != 1 ||
-		!Native.Resource.empty() || Native.Shape > PhysicsShapeKind::CornerWedge) return {};
+	if (!Part || !Key.IsValid() || WorldRoot::GetEffectiveWorld(*Part) != Destination || !SupportsTransferRigidProvider(Native)) return {};
 	// For native primitives the backend shape, dimensions, pose and collision filters are encoded
 	// independently by SR2's canonical receipt. Resource-backed triangle meshes require a verified leaf.
 	static const auto Primitive = [] {

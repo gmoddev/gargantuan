@@ -115,12 +115,12 @@ namespace gargantuan::blockgrid {
 			return CellHit{P,T,N};
 		}
 	}
-	std::optional<CellHit> Cast(const Field& Grid, Vec O, Vec D, unsigned Budget) {
+	std::optional<CellHit> Cast(const Field& Grid, Vec O, Vec D, unsigned Budget,const ReplicaCoverage* Coverage) {
 		if (!Budget || Budget>MaximumRayVisits || D==Vec{})
 			throw std::invalid_argument("[BlockGrid:Raycast] Invalid ray budget or zero direction");
 		for (unsigned A=0; A<3; ++A)
 			if (!std::isfinite(O[A]) || !std::isfinite(D[A])) throw std::invalid_argument("[BlockGrid:Raycast] Nonfinite ray");
-		if (!Grid.GetOccupiedCount()) return {};
+		if ((!Coverage || Coverage->Whole) && !Grid.GetOccupiedCount()) return {};
 		const Vec Min{-CoordinateLimit,-CoordinateLimit,-CoordinateLimit}, Max{CoordinateLimit,CoordinateLimit,CoordinateLimit};
 		const auto Domain=Clip(O,D,Min,Max);
 		if (!Domain || Domain->Hi<=0 || Domain->Lo>1) return {};
@@ -139,9 +139,16 @@ namespace gargantuan::blockgrid {
 		}
 		std::optional<CellHit> Best;
 		unsigned Remaining=MaximumRayTriangles;
+		std::optional<Cell> LastPage;
 		for (unsigned Visit=0; Visit<Budget; ++Visit) {
 			const Cell Here{P[0],P[1],P[2]};
 			if (!ValidCell(Here)) return Best;
+			if (Coverage && !Coverage->Whole) {
+				const auto Page=LeafOrigin(Here);
+				if (Page!=LastPage && !std::ranges::binary_search(Coverage->Origins,Page,CellOrder{}))
+					throw std::runtime_error("[BlockGrid:Unavailable] Ray entered a page outside installed replica coverage");
+				LastPage=Page;
+			}
 			if (const auto B=Grid.Get(Here);B.Definition!=Air) {
 				const auto Hit=HitShape(Here,Grid.GetDefinition(B.Definition),B,O,D,Remaining);
 				if (Hit && (!Best || (Hit->Fraction<Best->Fraction && !Tied(Hit->Fraction,Best->Fraction)) ||

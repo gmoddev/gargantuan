@@ -102,7 +102,7 @@ namespace gargantuan::blockgrid::binding {
 	struct Handle {
 		std::weak_ptr<BlockGrid> Owner;
 		ObjectId World,Domain;
-		std::uint64_t Config{};
+		std::uint64_t Config{}, DomainActivation{};
 		Clock::time_point Born{Clock::now()},Last{Born};
 		PageStatus Status{PageStatus::More};
 		std::string Token;
@@ -123,7 +123,8 @@ namespace gargantuan::blockgrid::binding {
 			if (!Grid || Grid->GetDestroyed() || Grid->IsDestroying() || Grid->GetReplicationScopeId()!=World ||
 				Grid->GetConfigurationRevision()!=Config) {Close(PageStatus::Expired);return;}
 			const auto W=WorldRoot::GetEffectiveWorld(*Grid);
-			if ((W?W->GetObjectId():ObjectId{})!=Domain || Now-Born>=std::chrono::seconds(30) || Now-Last>=std::chrono::seconds(5))
+			if ((W?W->GetObjectId():ObjectId{})!=Domain || (W?W->GetSpatialActivation():0)!=DomainActivation ||
+				Now-Born>=std::chrono::seconds(30) || Now-Last>=std::chrono::seconds(5))
 				Close(PageStatus::Expired);
 		}
 	};
@@ -159,6 +160,7 @@ namespace gargantuan::blockgrid::binding {
 			auto H=std::make_shared<Handle>(); H->IsEdit=Edit;
 			H->Owner=std::static_pointer_cast<BlockGrid>(Grid.shared_from_this()); H->World=Grid.GetReplicationScopeId();
 			const auto Domain=WorldRoot::GetEffectiveWorld(Grid); H->Domain=Domain?Domain->GetObjectId():ObjectId{};
+			H->DomainActivation=Domain?Domain->GetSpatialActivation():0;
 			H->Config=Grid.GetConfigurationRevision(); H->Token=Grid.GetBlockRevision();
 			Charge(*H,*Set,ChargeBytes); Set->Handles.push_back(H);
 			return H;

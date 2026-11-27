@@ -4,6 +4,7 @@
 #pragma once
 
 #include "gargantuan/assets/AssetTypes.hpp"
+#include "gargantuan/blockgrid/Persistence.hpp"
 #include "gargantuan/filesystem/ProjectIdentity.hpp"
 #include "gargantuan/runtime/WireValue.hpp"
 #include "gargantuan/terrain/DomainTerrainBindings.hpp"
@@ -22,8 +23,11 @@ namespace gargantuan::Gas {
 	inline constexpr std::uint16_t FormatVersion = 1;
 	inline constexpr std::uint16_t TerrainPlaceFormatVersion = 2;
 	inline constexpr std::uint16_t DomainTerrainPlaceFormatVersion = 3;
+	inline constexpr std::uint16_t SegmentedGridFormatVersion = 4;
 	inline constexpr std::uint32_t SchemaVersion = 1;
 	inline constexpr std::size_t MaximumDocumentBytes = 8 * 1024 * 1024;
+	inline constexpr std::size_t MaximumFileBytes = MaximumDocumentBytes+blockgrid::MaximumDocumentCellBytes+
+		4+36*blockgrid::MaximumDocumentSegments;
 	inline constexpr std::size_t MaximumInstances = 64 * 1024;
 	inline constexpr std::size_t MaximumDepth = 64;
 	inline constexpr std::size_t MaximumStringBytes = 64 * 1024;
@@ -84,10 +88,12 @@ namespace gargantuan::Gas {
 		std::vector<Node> Nodes;
 		std::vector<Dependency> Dependencies;
 		std::optional<PlaceMetadata> Place;
+		blockgrid::SegmentMap GridSegments;
 		bool operator==(const Document &) const = default;
 	};
 
 	[[nodiscard]] inline std::uint16_t GetFormatVersion(const Document &Value) noexcept {
+		if (!Value.GridSegments.empty()) return SegmentedGridFormatVersion;
 		if (Value.Place && !Value.Place->Domains.empty()) return DomainTerrainPlaceFormatVersion;
 		return Value.Place && Value.Place->TerrainManifest ? TerrainPlaceFormatVersion : FormatVersion;
 	}
@@ -95,5 +101,7 @@ namespace gargantuan::Gas {
 	// These operations handle inert values only. Callers still require frozen-schema,
 	// dependency and lifecycle validation before constructing or publishing Instances.
 	[[nodiscard]] SerializationResult<Binary> Encode(const Document &DocumentValue);
+	inline constexpr std::size_t FilePrefixBytes=20;
+	[[nodiscard]] bool AdmitsFileLength(std::span<const std::uint8_t> Prefix,std::uintmax_t Length);
 	[[nodiscard]] SerializationResult<Document> Decode(std::span<const std::uint8_t> Bytes);
 }

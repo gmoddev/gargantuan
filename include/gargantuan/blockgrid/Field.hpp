@@ -79,9 +79,11 @@ namespace gargantuan::blockgrid {
 	struct ValueWrite { Cell Position; std::uint8_t Channel; std::uint32_t Bits; };
 	struct Transfer { Region Source; Cell Destination; bool Move{}; };
 	struct PackedWrite { Region Destination; std::vector<Block> Values; };
-	using Operation=std::variant<Write,ValueWrite,Transfer,PackedWrite>;
+
 	using StateValues=std::array<std::uint32_t,MaximumChannels>;
 	struct CellState { Block Value; StateValues Values{}; bool operator==(const CellState&) const = default; };
+	struct PackedStateWrite { Region Destination; std::vector<CellState> Values; };
+	using Operation=std::variant<Write,ValueWrite,Transfer,PackedWrite,PackedStateWrite>;
 	struct StateChange { Cell Position; CellState Before,After; };
 	[[nodiscard]] std::uint32_t ScalarBits(ChannelKind Kind,std::variant<bool,double> Value);
 	[[nodiscard]] std::variant<bool,double> ScalarValue(ChannelKind Kind,std::uint32_t Bits);

@@ -10,5 +10,5 @@ namespace gargantuan::blockgrid {
 	inline constexpr unsigned MaximumRayTriangles = 32'768;
 	// Local coordinates in cell units. Direction is the entire bounded segment.
 	[[nodiscard]] std::optional<CellHit> Cast(const Field& Grid, std::array<double,3> Origin,
-		std::array<double,3> Direction, unsigned Budget = MaximumRayVisits);
+		std::array<double,3> Direction, unsigned Budget = MaximumRayVisits,const ReplicaCoverage* Coverage=nullptr);
 }

@@ -96,3 +96,31 @@ Each memory trial launched a fresh process, constructed a DataModel, Workspace a
 | 256 | Solid | 0.094 / 5.414 | 0.680 / 5.855 | −0.020 / 3.293 |
 | 2,048 | Checkerboard | 6.719 / 34.961 | 6.684 / 34.762 | 0.699 / 9.176 |
 | 2,048 | Solid | 0.715 / 35.031 | 1.242 / 34.828 | 0.512 / 10.059 |
+
+### Construction delivery over real GameNetworkingSockets
+
+Windows Release at `818e0b1efcf47506c7af309a9d09fc7a1dcccd85` ran nine trials for each of three scenes on fresh loopback UDP endpoints. A normal server and client negotiated the spatial profile, constructed independent runtimes and used a server-supplied focus. The two occupied scenes represented the same 296 unit cubes on an 8 × 8 × 8 shell. Each trial checked initial occupancy, removed the same top-corner cell, checked the receiver again and verified its physical ray height changed from eight units to seven. The empty scene exercised the same connection and sampling phases. Each phase ended after eight additional pump ticks. [81 trial phases](SpatialConstructionNetworkBenchmark.csv)
+
+| Phase and construction | Server application bytes | Server native packet bytes | Client application bytes | Client native packet bytes | Elapsed ms | Server pump ms | Client pump ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Join, empty | 4,954 | 5,355 | 254 | 467 | 74.8 | 1.56 | 0.91 |
+| Join, grid | 12,124 | 12,675 | 390 | 639 | 104.9 | 2.30 | 1.16 |
+| Join, Parts | 155,804 | 161,053 | 144 | 616 | 694.7 | 14.58 | 12.15 |
+| Delete, empty | 0 | 30 | 0 | 0 | 23.0 | 0.18 | 0.04 |
+| Delete, grid | 390 | 497 | 159 | 230 | 33.0 | 0.42 | 0.26 |
+| Delete, Parts | 45 | 117 | 0 | 30 | 46.2 | 2.59 | 10.99 |
+
+All entries are nine-trial medians. The initial grid took 12 native server packets, compared with 138 for Parts. At the edit, the native-grid transaction consumed more application bytes than one ordinary Instance deletion. The idle control had zero median server application bytes in all scenes. Background acknowledgement or session traffic still occurred, including 181 median server native packet bytes in the grid idle phase. The adapter counted admitted application bytes. Native packet sizes came from GNS's instrumented SNP data egress and exclude IP, Ethernet and unobserved connection setup. Elapsed time includes two-millisecond polling waits and drain ticks. Pump measurements cover time inside the synchronous server or client Poll and Step calls. Both ends ran in one process with a headless renderer. These trials do not establish physical-LAN latency, process CPU time or contention across many peers. [Measurement source](../../tests/SpatialConstructionNetworkPerformance.cpp)
+
+### Measured offscreen GPU work
+
+The same Windows Release build rendered each 256-cell construction through the real Vulkan EditorViewport on a GTX 1650 SUPER at 384 × 256. Twelve fresh processes each captured an empty scene, its first populated frame, 105 warm frames, the one-cell edit and the retired scene. Each process checked every warm image against its first populated image, saw changed pixels after the edit and recovered its exact empty image on retirement. Across representations the per-pixel occupied masks matched before and after each edit. The solid had 2,711 occupied pixels, including after its edit changed surface pixels. The checkerboard changed from 13,848 to 13,743 occupied pixels. [1,308 frame records](SpatialConstructionGpuFrames.csv)
+
+| Layout and representation | Warm draw calls per frame | Median submit µs | Median readback wait µs | Capture p50 / p95 / p99 µs | WDDM 3D engine µs per frame |
+| --- | ---: | ---: | ---: | --- | ---: |
+| Solid grid | 3 | 33 | 136 | 539 / 778 / 883 | 30.6 |
+| Solid Parts | 258 | 77 | 140 | 581 / 712 / 820 | 34.8 |
+| Checkerboard grid | 3 | 36 | 145 | 561 / 956 / 1,136 | 34.3 |
+| Checkerboard Parts | 258 | 80 | 142 | 586 / 735 / 935 | 34.7 |
+
+Each warm latency distribution contains 315 frame observations across three process starts. Capture includes CPU extraction. Fence waits include scheduling and synchronization. WDDM sampled process-specific 3D engine Running Time with a reported 10,000,000-tick time base immediately before and after each 105-frame sequence. The last column gives the median sequence difference divided by 105. This measures aggregate process engine activity and does not assign device timestamps to individual draws. Warm dedicated-usage deltas over the initialized empty viewport had a median of zero for all four cases. Shared-usage increases were 0.082 MiB for the solid grid and 0.480 MiB for the checkerboard grid, with zero median increase for Parts. The driver and allocator can satisfy work from already allocated pages. The measurements support reduced CPU draw submission on this workload. The checkerboard grid's capture tail remained higher on this device. [60 stage records](SpatialConstructionGpuCounters.csv) · [Vulkan workload](../../tests/SpatialConstructionGpuPerformance.cpp) · [WDDM sampler](../../tests/SpatialConstructionGpuCounters.ps1)

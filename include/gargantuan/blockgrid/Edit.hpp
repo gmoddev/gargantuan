@@ -36,6 +36,7 @@ namespace gargantuan::blockgrid {
 		std::optional<ChannelSpec> Channel;
 		std::vector<Operation> Commands;
 		std::vector<Definition> Materials;
+		bool ImportDefinitions{};
 		std::optional<MotionEdit> Motion;
 		std::optional<GridTransferEdit> Bilateral;
 	};

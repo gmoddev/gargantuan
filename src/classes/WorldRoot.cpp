@@ -1212,6 +1212,13 @@ namespace gargantuan {
 		return true;
 	}
 
+	void WorldRoot::InvalidateTerrainReplica() noexcept {
+		if (!TerrainReplicaCoverageRequired) return;
+		TerrainMotionAdmission.reset();
+		TerrainRuntimeValue.reset();
+		if (const auto Owner = GetOwnedTerrain()) Owner->RetireField();
+	}
+
 	const terrain::PhysicsStage *WorldRoot::GetTerrainPhysics() const noexcept {
 		return TerrainRuntimeValue ? &TerrainRuntimeValue->GetPhysicsStage() : nullptr;
 	}
@@ -1220,8 +1227,12 @@ namespace gargantuan {
 		return !dynamic_cast<const SpatialRegion *>(this) || bool(SpatialRegion::FindAttachedWorld(*this));
 	}
 
-	void WorldRoot::RetireDomainTerrainRuntime() {
+	void WorldRoot::RetireDomainRuntime() {
 		RetireSpatialCollision();
+		while (BlockGridState && !BlockGridState->Members.empty()) {
+			const auto Grid = BlockGridState->Members.begin()->second.Grid;
+			RemoveBlockGrid(Grid);
+		}
 		TerrainRuntimeValue.reset();
 		TerrainEditTickets.reset();
 		TerrainTicketBase = LastTerrainTicket;

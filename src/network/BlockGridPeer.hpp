@@ -16,6 +16,7 @@ namespace gargantuan::network {
 		std::array<glm::vec3,4> Centers{};
 		std::size_t Count{};
 		std::optional<SpatialDestinationBounds> Destination;
+		std::optional<SpatialDestinationBounds> ControlledMotion;
 	};
 	[[nodiscard]] blockgrid::ReplicaCoverage SelectGridCoverage(const blockgrid::Field& Field,const CFrame& Pose,
 		float CellSize,const GridInterest& Interest);
@@ -31,6 +32,7 @@ namespace gargantuan::network {
 		void Track(ObjectId Grid);
 		void Forget(ObjectId Grid);
 		void Retire();
+		void Prune(const Resolve &Find);
 		void Receive(const GridStreamMessage &Message, const Resolve &Find, std::uint64_t Tick);
 		void Pump(const Resolve &Find, const Send &Queue, std::uint64_t Tick,const GridInterest& Interest={});
 		[[nodiscard]] bool IsInstalled(ObjectId Source, const BlockGrid &Grid) const;
@@ -68,7 +70,7 @@ namespace gargantuan::network {
 		std::map<ObjectId, Entry> Grids;
 		std::optional<Transfer> Active;
 		GridStreamReceiver Receiver;
-		[[nodiscard]] bool FencesInstalled(ObjectId Source) const;
+		[[nodiscard]] bool FencesInstalled(ObjectId Source,const SpatialDestinationBounds* Bounds=nullptr) const;
 		[[nodiscard]] GridTransferFence CurrentFence(ObjectId Id,const BlockGrid& Grid,const Resolve& Find) const;
 		[[nodiscard]] std::optional<SpatialAppliedBinding> Binding(ObjectId Source,const BlockGrid& Grid,bool Empty,
 			const SpatialDestinationBounds* Bounds) const;

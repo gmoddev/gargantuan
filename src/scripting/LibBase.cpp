@@ -92,6 +92,12 @@ namespace gargantuan {
 
 		StackValue<std::shared_ptr<Instance>>::Push(L, scriptEngine->DataModel);
 		lua_setglobal(L, "game");
+		if (scriptEngine->DataModel) {
+			if (const auto Space = scriptEngine->DataModel->FindService("Workspace")) {
+				StackValue<std::shared_ptr<Instance>>::Push(L, *Space);
+				lua_setglobal(L, "workspace");
+			}
+		}
 
 		lua_createtable(L, 0, 0);
 		{

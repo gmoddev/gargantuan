@@ -9,7 +9,7 @@ ObjectId TerrainStreamOwner(ObjectId Region,std::uint64_t Grant) const {
 	return TransferIdentity(Runtime->Workspace).ToObjectId();
 }
 
-void RetireBootstrapTerrain(Peer &Value) {
+void RetireBootstrapTerrain(Peer &Value, bool Closing = false) {
 	if (!UsesBootstrapTerrain(Value)) return;
 	Value.RetiredBootstrapSerial=Value.TerrainIdentity.Serial;
 	if (Value.TerrainPending) Value.RetiredBootstrapSerial=std::max(Value.RetiredBootstrapSerial,Value.TerrainPending->Offer.Identity.Serial);
@@ -23,9 +23,12 @@ void RetireBootstrapTerrain(Peer &Value) {
 		World->TerrainMotionAdmission.reset();
 		NamedTerrainPublication=std::max(NamedTerrainPublication,Value.TerrainIdentity.Serial);
 		if (Value.TerrainPending) NamedTerrainPublication=std::max(NamedTerrainPublication,Value.TerrainPending->Offer.Identity.Serial);
-		auto Empty=std::make_unique<terrain::Field>(Configuration.TerrainBootstrap->Directory.Grid);
-		if (!World->InstallTerrainReplica(std::move(Empty),{},NextDomainTerrainPublication()))
-			throw std::runtime_error("[Terrain:Domain] Workspace collision retirement failed");
+		if (Closing) World->InvalidateTerrainReplica();
+		else {
+			auto Empty=std::make_unique<terrain::Field>(Configuration.TerrainBootstrap->Directory.Grid);
+			if (!World->InstallTerrainReplica(std::move(Empty),{},NextDomainTerrainPublication()))
+				throw std::runtime_error("[Terrain:Domain] Workspace collision retirement failed");
+		}
 	}
 	Value.TerrainWindow.reset();
 	Value.TerrainPending.reset();
@@ -57,7 +60,7 @@ bool BeginDomainTerrain(DomainTerrainDelivery &State, const terrain::Field &Fiel
 	if (!Snapshot) throw std::runtime_error("[Terrain:Domain] Unable to capture terrain window");
 	TerrainTransfer Transfer{
 		.Offer = {{Epoch, State.Acknowledged.Serial+1, Field.GetRevision()}, Center},
-		.Sending = std::make_shared<TerrainSendWork>(), .Versions = GetTerrainVersions(Field,Center), .StartedTick = CurrentTick};
+		.Sending = std::make_shared<TerrainSendWork>(), .Versions = GetTerrainVersions(Field,Center), .StartedTick = TerrainTick};
 	const auto Project = DomainTerrainProject(State.Region,Epoch);
 	const auto Work = Transfer.Sending;
 	TerrainJobs.Submit([Work, Samples=std::move(*Snapshot), Project, Center] {
@@ -74,8 +77,10 @@ void SendDomainTerrain(ConnectionId Connection, Peer &Value, DomainTerrainDelive
 	const auto Owner = Domain.GetOwnedTerrain();
 	if (!Owner || !Replication || !Replication->CanDeliverSpatialContent(Connection,State.Region)) return;
 	const auto &Field = Owner->GetField();
+	const auto Actor = TerrainFocusActor(Value.PlayerValue);
+	const auto Focus = Relevance->GetResolvedFocus(Connection);
 	const auto Position = Bounds ? glm::vec3((glm::dvec3(Bounds->Minimum)+glm::dvec3(Bounds->Maximum))*.5) :
-		GetTerrainFocusBounds(TerrainFocusActor(Value.PlayerValue)).Position;
+		(!Actor && !Focus.empty() ? Focus.front() : GetTerrainFocusBounds(Actor).Position);
 	const auto Center = GetTerrainSessionCenter(Field.GetGrid(), {Position.x,Position.y,Position.z});
 	if (!Center) return;
 	if (!State.Pending) {
@@ -171,7 +176,7 @@ void PumpDomainTerrain(ConnectionId Connection, Peer &Value, std::shared_ptr<Dom
 	Region=TerrainStreamOwner(Region,Grant);
 	if (!Region.IsValid()) return;
 	if (!State) State = MakeDomainTerrain(Region,Grant);
-	if (State->Pending && CurrentTick-State->Pending->StartedTick >= Configuration.HandshakeTimeoutTicks)
+	if (State->Pending && TerrainTick-State->Pending->StartedTick >= Configuration.HandshakeTimeoutTicks)
 		throw std::runtime_error("[Terrain:Domain] Terrain receipt timed out");
 	const auto Domain = TransferWorld(Region);
 	if (!Domain) return;
@@ -200,15 +205,21 @@ void PumpDomainTerrain(ConnectionId Connection, Peer &Value, std::shared_ptr<Dom
 	}
 }
 
-void RetireDomainTerrain(std::shared_ptr<DomainTerrainDelivery> &State) {
+void RetireDomainTerrain(std::shared_ptr<DomainTerrainDelivery> &State, bool Closing = false) {
 	if (!State) return;
+	if (State->Pending && State->Pending->Sending) State->Pending->Sending->Stop.request_stop();
+	if (State->Receiving) State->Receiving->Stop.request_stop();
 	const auto Owner = State->InstalledOwner.lock();
 	if (Owner && !Owner->GetDestroyed() && !Owner->IsDestroying() && Owner->TerrainMotionAdmission.lock()==State->Coverage) {
-		Owner->TerrainMotionAdmission.reset();
-		if (State->InstalledLifetime && Owner->GetOwnedTerrain() && Owner->IsTerrainCollisionReady()) {
-			auto Empty = std::make_unique<terrain::Field>(State->Grid);
-			(void)Owner->InstallTerrainReplica(std::move(Empty),{},NextDomainTerrainPublication());
+		if (State->InstalledLifetime) {
+			if (Closing) Owner->InvalidateTerrainReplica();
+			else {
+				auto Empty = std::make_unique<terrain::Field>(State->Grid);
+				if (!Owner->InstallTerrainReplica(std::move(Empty),{},NextDomainTerrainPublication()))
+					throw std::runtime_error("[Terrain:Domain] Destination collision retirement failed");
+			}
 		}
+		Owner->TerrainMotionAdmission.reset();
 	}
 	State.reset();
 }
@@ -253,7 +264,7 @@ void ReceiveDomainTerrain(const ReceivedMessageEvent &Message, Peer &Value) {
 				(Lane->Window && Lane->Grid!=Frame->Grid))
 				throw std::invalid_argument("[Terrain:Domain] Invalid terrain offer");
 			Lane->Grid = Frame->Grid;
-			Lane->Pending.emplace(TerrainTransfer{.Offer=*Offer,.StartedTick=CurrentTick});
+			Lane->Pending.emplace(TerrainTransfer{.Offer=*Offer,.StartedTick=TerrainTick});
 			Lane->Bytes.clear();
 			return;
 		}

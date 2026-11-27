@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Create and reopen the Construction Yard through the production EditorHost."""
 import argparse
+import json
 from pathlib import Path
 import sys
+from uuid import uuid4
 
 Sources = Path(__file__).resolve().parent
 sys.path.insert(0, str(Sources.parent / "TerrainQuarry"))
@@ -67,6 +69,14 @@ def Build(Engine, Destination):
                 raise RuntimeError(f"Reopened {Name} lost {Expected}")
         if not Host.Call("GetTerrainAuthoringState")["EditingAvailable"]:
             raise RuntimeError("Terrain authoring did not reopen")
+    Settings = Destination / ".gargantuan"
+    Settings.mkdir(exist_ok=True)
+    for Name, Data in (
+        ("runtime-distribution.json", {"Version": 1, "SessionIdentity": uuid4().hex}),
+        ("package-audience.json", {"Version": 1, "SharedAssets": []}),
+    ):
+        with (Settings / Name).open("x", encoding="utf-8") as Output:
+            json.dump(Data, Output)
     print(f"[Spatial:ConstructionYard] Saved and reopened {Destination}")
 
 

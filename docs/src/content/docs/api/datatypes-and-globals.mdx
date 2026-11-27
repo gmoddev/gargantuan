@@ -23,7 +23,7 @@ description: Native Luau constructors, returned value types, task, require, and 
 | `Tween` | Returned by `TweenService:Create` | `src/classes/Tween.cpp`; [property tweens](../input-gui-and-media/#property-tweens) |
 | `Vector2`, `Vector3` | `Vector2.new(X?, Y?)`, `Vector3.new(X?, Y?, Z?)` | `LibVector2.cpp`, `LibVector3.cpp`, vector bindings |
 | `AnimationTrack` | Returned by `Animator:LoadAnimation`; no constructor global | `src/animation/AnimationTrack.cpp` |
-| Base globals | `game`, `print(...)`, `warn(...)`, `_RUNTIME` | `LibBase.cpp` |
+| Base globals | `game`, `workspace`, `print(...)`, `warn(...)`, `_RUNTIME` | `LibBase.cpp`. The `workspace` global refers to the current VM’s `game:GetService("Workspace")`. |
 | Module loader | `require(...)` | `LibRequire.cpp`, `ModuleResolution.cpp` |
 | Task scheduler | `task.spawn`, `defer`, `delay`, `wait`, `cancel` | `LibTask.cpp`, `ThreadEngine.cpp` |
 

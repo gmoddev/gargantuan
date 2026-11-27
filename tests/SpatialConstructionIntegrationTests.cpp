@@ -5,6 +5,7 @@
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
@@ -528,7 +529,8 @@ namespace {
 			"changed PreRun registration or saved grid was absent after reopen");
 	}
 
-	void AddPackageSessionProof(const std::shared_ptr<DataModel> &Game, const std::shared_ptr<BlockGrid> &Inside) {
+	void AddPackageSessionProof(const std::shared_ptr<DataModel> &Game, const std::shared_ptr<BlockGrid> &Outside,
+		const std::shared_ptr<BlockGrid> &Inside) {
 		constexpr auto PrivateDefinition = "project:private_sealed_package_tile";
 		MutationGateway Gateway;
 		auto Request = std::make_shared<blockgrid::EditRequest>();
@@ -537,6 +539,14 @@ namespace {
 			ScriptSecurityContext::CoreTrusted()).Succeeded(), "private authored tile definition");
 		Require(Edit(Inside,Game->GetObjectId(),{Inside->GetField().GetDefinitionId(PrivateDefinition),0},
 			{1,0,1}).Succeeded(), "private authored tile placement");
+		auto Slab = std::make_shared<blockgrid::EditRequest>();
+		constexpr auto PublicSlab = "project:public_platform_slab";
+		Slab->Binding = blockgrid::BindingEdit{{PublicSlab,blockgrid::Shape::Slab}};
+		Require(Gateway.Apply(SubmitBlockGridEditCommand{Outside->GetObjectId(),Game->GetObjectId(),Slab},
+			ScriptSecurityContext::CoreTrusted()).Succeeded(), "public slab definition");
+		Require(Edit(Outside,Game->GetObjectId(),{Outside->GetField().GetDefinitionId(PublicSlab),0},
+			{-2,0,2}).Succeeded(), "nearby public slab");
+		Require(Edit(Outside,Game->GetObjectId(),{blockgrid::Brick,0},{160,0,0}).Succeeded(), "distant public cell");
 
 		auto Remote = std::make_shared<RemoteEvent>();
 		Remote->SetName("SpatialPackageProof");
@@ -553,6 +563,7 @@ namespace {
 			assert(Inside:GetBlock(Vector3.new(1, 0, 1)).Definition == "project:private_sealed_package_tile")
 			local Grid = World.WestGrid
 			local Cell = Vector3.new(-2, 0, 3)
+			assert(Grid:GetBlock(Vector3.new(160, 0, 0)).Definition == "Brick")
 			Grid:DefineChannel("private_damage", {Kind="UInt8", Default=0, Persistent=true})
 			Grid:DefineChannel("signal", {Kind="Bool", Default=false, Audience="RelevantPeers"})
 			local State = Grid:BeginEdit()
@@ -560,6 +571,7 @@ namespace {
 			State:SetValue(Cell, "signal", true)
 			State:Commit()
 			local Changed = false
+			warn("[Spatial:PackageAuthority] Public and private fields prepared")
 			game.SpatialPackageProof.OnServerEvent:Connect(function(_, Stage)
 				if Stage == "baseline" and not Changed then
 					assert(Grid:GetValue(Cell, "private_damage") == 91)
@@ -579,16 +591,35 @@ namespace {
 			local World = game.Workspace
 			local Cell = Vector3.new(-2, 0, 3)
 			local Sent, Done = false, false
+			local LastPhase = ""
+			local function Phase(Value)
+				if LastPhase ~= Value then
+					LastPhase = Value
+					warn("[Spatial:PackageObserver] " .. Value)
+				end
+			end
+			Phase("Observer started")
 			game:GetService("RunService").PostSimulation:Connect(function()
 				if Done then return end
 				local Grid = World:FindFirstChild("WestGrid")
 				local Event = game:FindFirstChild("SpatialPackageProof")
-				if not Grid or not Event then return end
+				if not Grid or not Event then
+					Phase("Waiting for grid=" .. tostring(Grid ~= nil) .. " event=" .. tostring(Event ~= nil))
+					return
+				end
 				local Ready, Block = pcall(function() return Grid:GetBlock(Cell) end)
-				if not Ready or not Block then return end
+				if not Ready or not Block then Phase("Waiting for public cell: " .. tostring(Block)) return end
+				Phase("Observed " .. Block.Definition .. " sent=" .. tostring(Sent))
 				assert(World:FindFirstChild("NestedRegion") == nil)
 				if Block.Definition == "Stone" and not Sent then
 					if not Grid:GetValue(Cell, "signal") then return end
+					local Slab = Vector3.new(-2, 0, 2)
+					assert(Grid:GetBlock(Slab).Definition == "project:public_platform_slab")
+					local Center = Grid:CellToWorld(Slab)
+					local Hit = Grid:Raycast(Center + Vector3.new(0, 2, 0), Vector3.new(0, -4, 0))
+					assert(Hit and Hit.Cell == Slab and math.abs(Hit.Position.Y - Center.Y) < 0.001)
+					local Far, Reason = pcall(function() return Grid:GetBlock(Vector3.new(160, 0, 0)) end)
+					assert(not Far and string.find(tostring(Reason), "[BlockGrid:Unavailable]", 1, true))
 					assert(not pcall(function() Grid:GetValue(Cell, "private_damage") end))
 					assert(not pcall(function() Grid:SetBlock(Cell, "Brick") end))
 					Sent = Event:TryFireServer("baseline")
@@ -643,10 +674,19 @@ namespace {
 		Region->SetName("NestedRegion");
 		Region->SetParent(Space);
 		auto Pose = CFrame::Angles(0,1.57079632679f,0);
-		Pose.Position = {8,4,-6};
-		MakeGrid(Space,"WestGrid",{blockgrid::Stone,0},Pose);
+		Pose.Position = {Session ? 3.f : 8.f,4,-6};
+		auto Outside = MakeGrid(Space,"WestGrid",{blockgrid::Stone,0},Pose);
 		auto Inside = MakeGrid(Region,"EastGrid",{blockgrid::Brick,1},Pose);
-		if (Session) AddPackageSessionProof(Game,Inside);
+		if (Session) {
+			// Keep the packaged Player's ordinary character in its observed grid neighborhood during the exchange.
+			auto SpawnFloor = std::make_shared<Part>();
+			SpawnFloor->SetName("SpawnFloor");
+			SpawnFloor->SetSize({6, 1, 6});
+			SpawnFloor->SetCFrame(CFrame(0, -.5f, 0));
+			SpawnFloor->SetAnchored(true);
+			SpawnFloor->SetParent(Space);
+			AddPackageSessionProof(Game,Outside,Inside);
+		}
 		else AddTerrainFixture(Space,Region);
 		if (WorkspaceTerrain) {
 			AddPackageWorkspaceTerrain(Space);

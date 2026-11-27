@@ -26,14 +26,14 @@ namespace gargantuan {
 	namespace blockgrid::binding {
 		using namespace blockgrid;
 		constexpr std::array<std::string_view,6> Faces{"+X","-X","+Y","-Y","+Z","-Z"};
-		BlockGrid& ReadTarget(lua_State* L, Instance* Object, bool Edit) {
+		BlockGrid& ReadTarget(lua_State* L, Instance* Object, bool Edit,bool AllowMissing) {
 			const auto* Script = ScriptEngine::Get(L);
 			const auto& Security = GetCurrentScriptSecurityContext();
 			if (!Script || Script->IsStopping() || !Script->DataModel || GetCurrentExecutionDomain()!=ExecutionDomain::Main ||
 				!Security.HasCapability(ScriptCapability::ReadDataModel) || Object->GetDestroyed() || Object->IsDestroying() ||
 				Object->GetDataModel()!=Script->DataModel)
 				throw std::runtime_error("[BlockGrid:Access] Grid must be live in the current DataModel");
-			if (Script->Mode==RuntimeMode::NetworkClient && (Edit || !static_cast<BlockGrid&>(*Object).HasReplicaField()))
+			if (Script->Mode==RuntimeMode::NetworkClient && (Edit || (!AllowMissing && !static_cast<BlockGrid&>(*Object).HasReplicaField())))
 				throw std::runtime_error("[BlockGrid:Unavailable] No verified BlockGrid replica data");
 			if (Edit && (Security.Domain!=ScriptExecutionDomain::Server || !Security.HasCapability(ScriptCapability::MutateDataModel)))
 				throw std::runtime_error("[BlockGrid:Access] Authoritative server gameplay context required");
@@ -251,8 +251,8 @@ namespace gargantuan {
 		const auto Scope=GetReplicationScopeId(), Id=GetObjectId();
 		const auto World=WorldRoot::GetEffectiveWorld(*this);
 		const auto Domain=World?World->GetObjectId():ObjectId{};
-		return std::format("{}.{}:{}.{}:{}.{}:{}:{}",Scope.Slot,Scope.Generation,Id.Slot,Id.Generation,Domain.Slot,Domain.Generation,
-			ConfigurationRevision,SourceRevision);
+		return std::format("{}.{}:{}.{}:{}.{}:{}:{}:{}",Scope.Slot,Scope.Generation,Id.Slot,Id.Generation,Domain.Slot,Domain.Generation,
+			World ? World->GetSpatialActivation() : 0,ConfigurationRevision,SourceRevision);
 	}
 	std::string BlockGrid::ApplyEdit(const blockgrid::EditRequest& Edit,const blockgrid::Patch* Prepared) {
 		AssertCanMutate();
@@ -442,6 +442,15 @@ namespace gargantuan {
 			}
 		lua_setfield(L,-2,"Cells"); return 1;
 	}
+	int BlockGrid::IsRegionAvailable(lua_State* L,Instance* Object) {
+		const auto& Grid=ReadTarget(L,Object,false,true);
+		const Region R{ReadCell(L,2),ReadCell(L,3,true)};
+		if (R.Min.X>=R.MaxExclusive.X || R.Min.Y>=R.MaxExclusive.Y || R.Min.Z>=R.MaxExclusive.Z)
+			throw std::invalid_argument("[BlockGrid:Bounds] Expected a nonempty half-open region");
+		const bool NeedsReplica=Grid.IsReplicaMaterialization() || ScriptEngine::Get(L)->Mode==RuntimeMode::NetworkClient;
+		const bool Available=!NeedsReplica || (Grid.ReplicaFieldAvailable && (!Grid.InstalledCoverage || Grid.InstalledCoverage->Contains(R)));
+		lua_pushboolean(L,Available);return 1;
+	}
 	int BlockGrid::CellToWorld(lua_State* L,Instance* Object) {
 		const auto& Grid=ReadTarget(L,Object);
 		const auto P=ReadCell(L,2);
@@ -481,7 +490,8 @@ namespace gargantuan {
 		const auto R=glm::dmat3(Grid.Transform.Rotation);
 		const auto Local=glm::transpose(R)*(O-glm::dvec3(Grid.Transform.Position))/static_cast<double>(Grid.Size);
 		const auto Delta=glm::transpose(R)*D/static_cast<double>(Grid.Size);
-		const auto Hit=blockgrid::Cast(Grid.Cells,{Local.x,Local.y,Local.z},{Delta.x,Delta.y,Delta.z});
+		const auto Hit=blockgrid::Cast(Grid.Cells,{Local.x,Local.y,Local.z},{Delta.x,Delta.y,Delta.z},
+			blockgrid::MaximumRayVisits,Grid.InstalledCoverage.get());
 		if (!Hit) { lua_pushnil(L); return 1; }
 		const auto& N=Hit->Normal;
 		Grid.PushGridHit(L,Hit->Position,glm::vec3(O+D*Hit->Fraction),glm::vec3(glm::normalize(R*glm::dvec3(N[0],N[1],N[2]))));

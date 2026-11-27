@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Team Fireworks
 // SPDX-License-Identifier: MPL-2.0
 #include "../../src/network/BlockGridPeer.hpp"
+#include "RegionalGridFixture.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/classes/BlockGrid.hpp"
@@ -144,9 +145,11 @@ namespace {
 		Require(!Out.IsInstalled(Id, *Source), "retirement retained the installation");
 		ReplicaRuntime.Destroy();
 	}
+#include "PairedGridStream.inl"
 	void Run(bool Socket) {
 		BootstrapNativeRuntimeSchema();
 		CheckInstallationRaces();
+		CheckPairedInstallations();
 		auto Sim = SimulatedNetwork::Create({.BaseLatency = 1ms});
 		auto Transport = [&]() -> std::shared_ptr<IGameTransport> {
 #if defined(GARGANTUAN_WITH_GNS)
@@ -164,6 +167,10 @@ namespace {
 		Interior->SetParent(Space);
 		auto Outside = Seed(Space, "ExteriorGrid", blockgrid::Stone);
 		auto Inside = Seed(Interior, "InteriorGrid", blockgrid::Brick);
+		auto Large=std::make_shared<BlockGrid>();
+		Large->SetName("LargeGrid"); Large->SetCanCollide(false);
+		Large->RestoreField(blockgrid::test::LargePublicField());
+		Large->SetParent(Space);
 		HeadlessRenderer ServerView(Vector2(64, 64)), ViewA(Vector2(64, 64)), ViewB(Vector2(64, 64));
 		Engine ServerRuntime(
 			World, &ServerView, nullptr, {.Mode = RuntimeMode::NetworkServer, .AdmitSpatialContent = true}
@@ -232,6 +239,39 @@ namespace {
 		};
 		Require(Server.Start().Succeeded() && A.Start().Succeeded(), "start first peer");
 		Attach(A, ViewA, ClientA);
+		Wait([&] { auto G=Find(*ClientA->DataModel,"LargeGrid"); return G && G->HasReplicaField() &&
+			G->GetField().FindDefinitionId("project:near").has_value(); },"large source failed to stream the initial window");
+		auto LargeReplica=Find(*ClientA->DataModel,"LargeGrid");
+		const auto LargeId=LargeReplica->GetObjectId();
+		auto Covered=[&](blockgrid::Cell P) {
+			try { LargeReplica->RequireReplicaCoverage(blockgrid::SingleCell(P)); return true; }
+			catch (const std::runtime_error&) { return false; }
+		};
+		const blockgrid::Cell Near{12,12,12},Far{84,52,52};
+		Require(Covered(Near) && !Covered(Far) && LargeReplica->GetField().GetValue(Near,0)==17 &&
+			LargeReplica->GetField().Get(Near).Orientation==11 && LargeReplica->GetField().GetChannelCount()==1 &&
+			!LargeReplica->GetField().FindDefinitionId("project:distant"),"large replica included distant or private data");
+		const auto Peers=Server.GetPeerIdentities();
+		Require(Peers.size()==1,"large fixture requires one subscribed exterior peer");
+		const std::array FocusFar{glm::vec3(84.5f,52.5f,52.5f)};
+		Require(Server.SetTrustedReplicationFocus(Peers.front().Connection,FocusFar),"server rejected trusted grid interest");
+		Wait([&] { return Covered(Far) && !Covered(Near) && LargeReplica->GetField().FindDefinitionId("project:distant").has_value(); },
+			"moved interest retained the old window or missed the new one");
+		Require(LargeReplica->GetObjectId()==LargeId && LargeReplica->GetField().Get(Far).Orientation==9 &&
+			!LargeReplica->GetField().FindDefinitionId("project:near"),"window movement replaced grid identity or retained its old schema");
+		auto Clear=std::make_shared<blockgrid::EditRequest>();
+		Clear->Writes.push_back({blockgrid::SingleCell(Far),{}});
+		Require(MutationGateway{}.Apply(SubmitBlockGridEditCommand{Large->GetObjectId(),World->GetObjectId(),Clear},
+			ScriptSecurityContext::CoreTrusted()).Succeeded(),"large far-cell deletion failed");
+		Wait([&] { return Covered(Far) && !LargeReplica->GetField().Get(Far).Definition &&
+			!LargeReplica->GetField().FindDefinitionId("project:distant"); },"large deletion or last-use schema retirement failed");
+		const std::array MultiFocus{glm::vec3(12.5f),FocusFar.front()};
+		Require(Server.SetTrustedReplicationFocus(Peers.front().Connection,MultiFocus),"server rejected independent interests");
+		Wait([&] { return Covered(Far) && Covered(Near) && LargeReplica->GetField().GetValue(Near,0)==17; },
+			"independent origins did not converge in one grid");
+		const std::array ResetFocus{glm::vec3(0)};
+		Require(Server.SetTrustedReplicationFocus(Peers.front().Connection,ResetFocus),"server rejected initial interest");
+		Wait([&] { return Covered(Near) && !Covered(Far); },"retired distant coverage still admitted reads");
 		GrantInterior = true;
 		Require(B.Start().Succeeded(), "start second peer");
 		StartedB = true;
@@ -248,7 +288,8 @@ namespace {
 			"scoped native baseline failed"
 		);
 		Require(
-			!Find(*ClientA->DataModel, "InteriorGrid") && !Find(*ClientB->DataModel, "ExteriorGrid"),
+			!Find(*ClientA->DataModel, "InteriorGrid") && !Find(*ClientB->DataModel, "ExteriorGrid") &&
+				!Find(*ClientB->DataModel,"LargeGrid"),
 			"incorrect audience"
 		);
 		auto Replica = Find(*ClientA->DataModel, "ExteriorGrid");
@@ -318,6 +359,13 @@ namespace {
 			[&] { return Replica->GetMotionMode() == "Static" && Replica->GetAssemblyProjection()->Mass == 0.f; },
 			"relevant replica did not retire dynamic state"
 		);
+		Outside->SetSpatialRegion(Interior);
+		Wait([&] { return !Find(*ClientA->DataModel,"ExteriorGrid") && Received(*ClientB,"ExteriorGrid",blockgrid::Brick); },
+			"cross-chart assignment failed to retire the old audience and install the new grid");
+		Require(Replica->GetDestroyed() || !Replica->HasReplicaField(),"detached grid shell retained its installed pages");
+		Outside->SetSpatialRegion(std::nullopt);
+		Wait([&] { return Received(*ClientA,"ExteriorGrid",blockgrid::Brick) && !Find(*ClientB->DataModel,"ExteriorGrid"); },
+			"returning grid shell did not acquire a fresh subscription");
 		A.Stop();
 		B.Stop();
 		Server.Stop();

@@ -1,5 +1,6 @@
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/ViewportFrame.hpp"
 
 namespace gargantuan {
@@ -34,10 +35,14 @@ namespace gargantuan {
 		if (Previous) {
 			Previous->SpatialRegions.erase(GetObjectId());
 			if (SpatialActivation) ++SpatialActivation;
-			RetireDomainTerrainRuntime();
+			RetireDomainRuntime();
 		}
 		if (Current) {
 			InitializeTerrain();
+			for (const auto &Child : GetDescendants()) {
+				if (std::dynamic_pointer_cast<BlockGrid>(Child) && GetEffectiveWorld(*Child).get() == this)
+					AddBlockGrid(Child);
+			}
 			Current->SpatialRegions.insert_or_assign(
 				GetObjectId(), std::static_pointer_cast<SpatialRegion>(shared_from_this())
 			);

@@ -50,6 +50,13 @@ namespace gargantuan {
 			return std::isfinite(Value.x) && std::isfinite(Value.y) && std::isfinite(Value.z);
 		}
 
+		std::shared_ptr<WorldRoot> PlayerWorld(const std::shared_ptr<Player> &PlayerValue) {
+			const auto Character = PlayerValue ? PlayerValue->GetCharacter().value_or(nullptr) : nullptr;
+			if (!Character || Character->GetDestroyed() || Character->IsDestroying()) return {};
+			const auto Root = Character->GetRootPart().value_or(nullptr);
+			return Root ? WorldRoot::GetEffectiveWorld(*Root) : WorldRoot::GetEffectiveWorld(*Character);
+		}
+
 		float DistanceSquared(const glm::vec3 &Left, const glm::vec3 &Right) {
 			const auto Difference = Left - Right;
 			return glm::dot(Difference, Difference);
@@ -423,7 +430,8 @@ namespace gargantuan {
 	InteractionService::QueryNearest(const glm::vec3 &Origin, const std::shared_ptr<Player> &PlayerValue) const {
 		QueryResult Result;
 		auto Center = PositionToCell(Origin);
-		if (!Center) return Result;
+		const auto Domain = PlayerValue ? PlayerWorld(PlayerValue) : PhysicsWorkspace.lock();
+		if (!Center || !Domain) return Result;
 		constexpr std::int64_t CellRadius = 4;
 		struct Candidate {
 			ObjectId Prompt;
@@ -446,8 +454,8 @@ namespace gargantuan {
 						auto Record = Prompts.find(PromptId);
 						if (Record == Prompts.end() || !Record->second.Indexed) continue;
 						auto Prompt = Record->second.Prompt.lock();
-						if (!Prompt || Prompt->GetDestroyed() || Prompt->IsDestroying() || !Prompt->GetEnabled())
-							continue;
+						if (!Prompt || Prompt->GetDestroyed() || Prompt->IsDestroying() || !Prompt->GetEnabled() ||
+							WorldRoot::GetEffectiveWorld(*Prompt) != Domain) continue;
 						const float CandidateDistanceSquared = DistanceSquared(Origin, Record->second.Position);
 						const float Limit = Prompt->GetMaxActivationDistance();
 						if (!std::isfinite(CandidateDistanceSquared) || CandidateDistanceSquared > Limit * Limit)
@@ -486,8 +494,9 @@ namespace gargantuan {
 		const glm::vec3 &Anchor
 	) const {
 		if (!Prompt || !Prompt->GetRequiresLineOfSight()) return true;
-		auto WorkspaceValue = PhysicsWorkspace.lock();
-		if (!WorkspaceValue || WorkspaceValue->GetDestroyed() || WorkspaceValue->IsDestroying()) return false;
+		const auto Domain = PlayerWorld(PlayerValue);
+		if (!Domain || Domain->GetDestroyed() || Domain->IsDestroying() ||
+			WorldRoot::GetEffectiveWorld(*Prompt) != Domain) return false;
 		auto Character = PlayerValue ? PlayerValue->GetCharacter() : std::nullopt;
 		if (!Character || !*Character || (*Character)->GetDestroyed() || (*Character)->IsDestroying()) return false;
 		const auto Direction = Anchor - Origin;
@@ -498,13 +507,13 @@ namespace gargantuan {
 		Params.FilterType = Enums::RaycastFilterType::Exclude;
 		Params.FilterDescendantsInstances.Values.emplace_back(*Character);
 		++LastLineOfSightRaycasts;
-		auto Result = WorkspaceValue->ResolveRaycast(Origin, Direction, Params);
+		auto Result = Domain->ResolveRaycast(Origin, Direction, Params);
 		if (!Result.Succeeded()) return false;
 		if (!Result.HasHit()) return true;
 		auto Current = Prompt->GetParent();
 		while (Current && *Current) {
 			if (*Current == Result.Instance) return true;
-			if (Current->get() == WorkspaceValue.get()) break;
+			if (Current->get() == Domain.get()) break;
 			Current = (*Current)->GetParent();
 		}
 		return false;
@@ -519,6 +528,8 @@ namespace gargantuan {
 		if (Found == Prompts.end() || !Found->second.Indexed) return false;
 		auto Prompt = Found->second.Prompt.lock();
 		if (!Prompt || Prompt->GetDestroyed() || Prompt->IsDestroying() || !Prompt->GetEnabled()) return false;
+		const auto Domain = PlayerWorld(PlayerValue);
+		if (!Domain || WorldRoot::GetEffectiveWorld(*Prompt) != Domain) return false;
 		auto Anchor = ResolveAnchor(Prompt);
 		if (!Anchor) return false;
 		const float CandidateDistanceSquared = DistanceSquared(*Origin, *Anchor);
