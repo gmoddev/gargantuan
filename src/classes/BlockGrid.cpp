@@ -217,6 +217,7 @@ namespace gargantuan {
 		if (const auto Protection=GetDataModel()->GetSpatialTransferProtection(); Protection && !Protection->AllowsResource(*this))
 			throw std::runtime_error("[BlockGrid:Replica] Collision is reserved for an active transfer");
 		Cells.InstallReplica(std::move(Value), Admission);
+		LastAssetService.reset();
 		AssetSequence = 0;
 		AssetsReady = false;
 		LastCellEdit.reset();

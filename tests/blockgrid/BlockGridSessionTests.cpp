@@ -7,6 +7,7 @@
 #include "gargantuan/network/BlockGridStream.hpp"
 #include "gargantuan/network/GameSession.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
+#include "../../src/network/BlockGridPeer.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
@@ -51,8 +52,73 @@ namespace {
 		Grid->SetParent(Parent);
 		return Grid;
 	}
+	void CheckInstallationRaces() {
+		auto Author = std::make_shared<DataModel>(), Replica = std::make_shared<DataModel>();
+		auto Source = Seed(Author->GetService("Workspace"), "Placed", blockgrid::Stone);
+		auto Shell = std::make_shared<BlockGrid>();
+		Shell->SetParent(Replica->GetService("Workspace"));
+		const auto Id = Source->GetObjectId();
+		BlockGridPeer Out(true, 37, {}), In(false, 37, {});
+		auto ResolveSource = [&](ObjectId Object) { return Object == Id ? Source : nullptr; };
+		auto ResolveShell = [&](ObjectId Object) { return Object == Id ? Shell : nullptr; };
+		std::vector<std::byte> Packet;
+		auto Send = [&](const GridStreamMessage &M) { Packet = EncodeGridStream(M); return true; };
+		auto Read = [&]() {
+			auto M = DecodeGridStream(Packet);
+			Require(M.has_value(), "failed to decode test packet");
+			return *M;
+		};
+		In.Track(Id);
+		In.Pump(ResolveShell, Send, 1);
+		Out.Receive(Read(), ResolveSource, 1);
+		Out.Pump(ResolveSource, Send, 2);
+		auto Offer = Read();
+		Require(Offer.Kind == GridStreamKind::Offer, "expected first offer");
+		In.Receive(Offer, ResolveShell, 2);
+		Out.Pump(ResolveSource, Send, 3);
+		In.Receive(Read(), ResolveShell, 3);
+		Packet.clear();
+		In.Pump(ResolveShell, Send, 4);
+		Require(Packet.empty() && !Shell->HasReplicaField(), "installed field at the wrong cell size");
+		Source->SetCanQuery(false);
+		Out.Pump(ResolveSource, Send, 5);
+		Require(Read().Kind == GridStreamKind::Forget, "stale placement did not cancel");
+		In.Receive(Read(), ResolveShell, 5);
+		Offer.Kind = GridStreamKind::Installed;
+		Out.Receive(Offer, ResolveSource, 5);
+		Require(!Out.IsInstalled(Id, *Source), "late acknowledgement admitted stale placement");
+		Shell->SetCellSize(2);
+		Shell->SetCanQuery(false);
+		Out.Pump(ResolveSource, Send, 6);
+		In.Receive(Read(), ResolveShell, 6);
+		Out.Pump(ResolveSource, Send, 7);
+		In.Receive(Read(), ResolveShell, 7);
+		In.Pump(ResolveShell, Send, 8);
+		auto Ack = Read();
+		Require(Ack.Kind == GridStreamKind::Installed && Shell->HasReplicaField(), "fresh field did not install");
+		auto Forged = Ack;
+		Forged.Placement.Bytes[0] ^= 1;
+		bool Rejected = false;
+		try { Out.Receive(Forged, ResolveSource, 8); } catch (const std::invalid_argument &) { Rejected = true; }
+		Require(Rejected && !Out.IsInstalled(Id, *Source), "changed placement digest was accepted");
+		Out.Receive(Ack, ResolveSource, 8);
+		Require(Out.IsInstalled(Id, *Source), "verified current placement did not open");
+		Source->SetCanCollide(false);
+		Require(!Out.IsInstalled(Id, *Source), "changing only collision retained an old receipt");
+		Out.Pump(ResolveSource, Send, 9);
+		auto Updated = Read();
+		Require(Updated.Revision == Ack.Revision && Updated.Prefix == Updated.Size, "stationary field bytes resent");
+		In.Receive(Updated, ResolveShell, 9);
+		Shell->SetCanCollide(false);
+		In.Pump(ResolveShell, Send, 10);
+		Out.Receive(Read(), ResolveSource, 10);
+		Require(Out.IsInstalled(Id, *Source), "collision-only update did not install");
+		Out.Forget(Id);
+		Require(!Out.IsInstalled(Id, *Source), "retirement retained the installation");
+	}
 	void Run(bool Socket) {
 		BootstrapNativeRuntimeSchema();
+		CheckInstallationRaces();
 		auto Sim = SimulatedNetwork::Create({.BaseLatency = 1ms});
 		auto Transport = [&]() -> std::shared_ptr<IGameTransport> {
 #if defined(GARGANTUAN_WITH_GNS)

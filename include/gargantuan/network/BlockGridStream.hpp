@@ -22,8 +22,8 @@ namespace gargantuan::network {
 	struct GridStreamMessage {
 		GridStreamKind Kind{};
 		GridStreamScope Scope;
-		std::uint64_t Subscription{}, Serial{}, Revision{};
-		AssetContentId Base, Target;
+		std::uint64_t Subscription{}, Serial{}, Revision{}, Configuration{};
+		AssetContentId Base, Target, Placement;
 		std::uint32_t Size{}, Prefix{}, Suffix{}, Offset{};
 		std::span<const std::uint8_t> Fragment;
 	};
@@ -40,6 +40,8 @@ namespace gargantuan::network {
 		std::uint64_t Subscription,
 		std::uint64_t Serial,
 		std::uint64_t Revision,
+		std::uint64_t Configuration,
+		AssetContentId Placement,
 		const GridReplicaContent &Next,
 		const GridReplicaContent *Known = nullptr
 	);

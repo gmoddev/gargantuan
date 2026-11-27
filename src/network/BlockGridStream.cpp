@@ -10,7 +10,7 @@
 namespace gargantuan::network {
 	namespace {
 		constexpr std::uint32_t Magic = 0x53474247; // GBGS
-		constexpr std::uint16_t Version = 1;
+		constexpr std::uint16_t Version = 2;
 		bool ValidScope(const GridStreamScope &Scope) {
 			return Scope.Epoch && Scope.Grid.IsValid() && (Scope.Domain.IsValid() || Scope.Domain == ObjectId{}) &&
 				   Scope.Domain != Scope.Grid;
@@ -22,9 +22,9 @@ namespace gargantuan::network {
 			case GridStreamKind::Forget:
 				return true;
 			case GridStreamKind::Installed:
-				return Message.Target.IsValid() && Message.Revision;
+				return Message.Target.IsValid() && Message.Placement.IsValid() && Message.Revision && Message.Configuration;
 			case GridStreamKind::Offer:
-				return Message.Revision && Message.Target.IsValid() && Message.Size &&
+				return Message.Revision && Message.Configuration && Message.Placement.IsValid() && Message.Target.IsValid() && Message.Size &&
 					   Message.Size <= MaximumGridReplicaBytes && Message.Prefix <= Message.Size &&
 					   Message.Suffix <= Message.Size - Message.Prefix &&
 					   (Message.Base.IsValid() || (!Message.Prefix && !Message.Suffix));
@@ -62,7 +62,9 @@ namespace gargantuan::network {
 		if (Value.Kind == GridStreamKind::Request) Writer.Append(std::as_bytes(std::span(Value.Base.Bytes)));
 		if (Value.Kind == GridStreamKind::Installed || Value.Kind == GridStreamKind::Offer) {
 			Writer.Integer(Value.Revision);
+			Writer.Integer(Value.Configuration);
 			Writer.Append(std::as_bytes(std::span(Value.Target.Bytes)));
+			Writer.Append(std::as_bytes(std::span(Value.Placement.Bytes)));
 		}
 		if (Value.Kind == GridStreamKind::Offer) {
 			Writer.Append(std::as_bytes(std::span(Value.Base.Bytes)));
@@ -91,7 +93,7 @@ namespace gargantuan::network {
 		M.Kind = static_cast<GridStreamKind>(Kind);
 		if (M.Kind == GridStreamKind::Request && !ReadDigest(Reader, M.Base)) return {};
 		if ((M.Kind == GridStreamKind::Installed || M.Kind == GridStreamKind::Offer) &&
-			(!Reader.Integer(M.Revision) || !ReadDigest(Reader, M.Target)))
+			(!Reader.Integer(M.Revision) || !Reader.Integer(M.Configuration) || !ReadDigest(Reader, M.Target) || !ReadDigest(Reader, M.Placement)))
 			return {};
 		if (M.Kind == GridStreamKind::Offer && (!ReadDigest(Reader, M.Base) || !Reader.Integer(M.Size) ||
 												!Reader.Integer(M.Prefix) || !Reader.Integer(M.Suffix)))
@@ -116,6 +118,8 @@ namespace gargantuan::network {
 		std::uint64_t Subscription,
 		std::uint64_t Serial,
 		std::uint64_t Revision,
+		std::uint64_t Configuration,
+		AssetContentId Placement,
 		const GridReplicaContent &Next,
 		const GridReplicaContent *Known
 	) {
@@ -128,7 +132,9 @@ namespace gargantuan::network {
 			.Subscription = Subscription,
 			.Serial = Serial,
 			.Revision = Revision,
+			.Configuration = Configuration,
 			.Target = Next.Digest,
+			.Placement = Placement,
 			.Size = static_cast<std::uint32_t>(Next.Bytes->size())
 		};
 		if (Known && Known->Bytes && Known->Digest.IsValid()) {
