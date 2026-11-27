@@ -21,7 +21,7 @@ namespace gargantuan::network {
 	struct SpatialTransferScope {
 		std::uint64_t SessionEpoch{}, WorldEpoch{}, FocusEpoch{};
 		std::uint32_t PlayerId{};
-		WireObjectId Subject, Source, Destination;
+		WireObjectId Subject, Source, Destination, Controller;
 		bool operator==(const SpatialTransferScope &) const = default;
 	};
 
@@ -41,7 +41,7 @@ namespace gargantuan::network {
 		WireCFrame SourcePose{}, DestinationPose{};
 		glm::vec3 LinearVelocity{}, AngularVelocity{};
 		std::vector<SpatialWireProvider> Owners;
-		AssetContentId Collision;
+		AssetContentId Collision, SubjectGeometry;
 	};
 
 	inline constexpr std::size_t MaximumSpatialTransferProviders = 64;

@@ -51,6 +51,8 @@ namespace gargantuan {
 		std::string ClientCodeIdentity;
 		std::string SessionIdentity;
 		bool SpatialContent{};
+		std::string WorkspaceTerrainManifest;
+		int WorkspaceTerrainSpacingShift{};
 	};
 
 	[[nodiscard]] RuntimeDistributionRequest ParseRuntimeDistributionRequest(std::string_view Json);

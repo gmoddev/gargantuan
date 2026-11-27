@@ -3895,8 +3895,8 @@ namespace gargantuan {
 						return Fail("MalformedRequest", "Grid edits require MaxExclusive, Definition and Revision");
 					const auto Max = DecodeGridCell(parameters["MaxExclusive"], true);
 					const auto &Name = parameters["Definition"].get_ref<const std::string &>();
-					const auto Definition = Name == "Air" ? std::optional(blockgrid::Air) : Grid->GetField().FindDefinitionId(Name);
-					if (!Max || !Definition)
+					auto Definition = Name == "Air" ? std::optional(blockgrid::Air) : Grid->GetField().FindDefinitionId(Name);
+					if (!Max || (!Definition && !Name.starts_with("material:")))
 						return Fail("InvalidGridRequest", "Invalid grid extent or block definition");
 					int Rotation = 0;
 					if (auto It = parameters.find("Orientation"); It != parameters.end()) {
@@ -3906,6 +3906,11 @@ namespace gargantuan {
 					}
 					auto Request = std::make_shared<blockgrid::EditRequest>();
 					Request->ExpectedRevision = parameters["Revision"].get<std::string>();
+					if (!Definition) {
+						try { Request->Materials.push_back(Grid->ResolveMaterialAlias(Name)); }
+						catch (const std::exception &Error) { return Fail("InvalidGridRequest",Error.what()); }
+						Definition = static_cast<std::uint16_t>(blockgrid::Brick + 1 + Grid->GetField().GetDefinitionCount());
+					}
 					Request->Writes.push_back({{*Cell, *Max}, {*Definition, static_cast<std::uint8_t>(Rotation)}});
 					auto Result = Mutations.Apply(SubmitBlockGridEditCommand{Grid->GetObjectId(), World->GetObjectId(), Request},
 						StudioMutationAuthority());

@@ -1,4 +1,5 @@
 #include "gargantuan/classes/Instance.hpp"
+#include "gargantuan/blockgrid/Assembly.hpp"
 #include "gargantuan/runtime/ServicePolicy.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -1329,6 +1330,7 @@ namespace gargantuan {
 			}
 		}
 		const auto oldScope = oldDataModel ? oldDataModel->GetObjectId() : ObjectId{};
+		ValidateBlockGridReparent(*this,newParent,subtree);
 		if (newParent && newDataModel && newDataModel->HasDefaultNetworkSpatialProfile())
 			for (const auto &Node : subtree) DataModel::CheckDefaultNetworkSpatialParticipant(*Node, newDataModel->SupportsNetworkSpatialContent());
 		bool FirstAdoption = !oldDataModel && newDataModel;

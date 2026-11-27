@@ -5,6 +5,7 @@
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/RemoteEvent.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/Terrain.hpp"
@@ -527,7 +528,111 @@ namespace {
 			"changed PreRun registration or saved grid was absent after reopen");
 	}
 
-	void WritePackageProject(const std::filesystem::path &Root) {
+	void AddPackageSessionProof(const std::shared_ptr<DataModel> &Game, const std::shared_ptr<BlockGrid> &Inside) {
+		constexpr auto PrivateDefinition = "project:private_sealed_package_tile";
+		MutationGateway Gateway;
+		auto Request = std::make_shared<blockgrid::EditRequest>();
+		Request->Binding = blockgrid::BindingEdit{{PrivateDefinition,blockgrid::Shape::Slab}};
+		Require(Gateway.Apply(SubmitBlockGridEditCommand{Inside->GetObjectId(),Game->GetObjectId(),Request},
+			ScriptSecurityContext::CoreTrusted()).Succeeded(), "private authored tile definition");
+		Require(Edit(Inside,Game->GetObjectId(),{Inside->GetField().GetDefinitionId(PrivateDefinition),0},
+			{1,0,1}).Succeeded(), "private authored tile placement");
+
+		auto Remote = std::make_shared<RemoteEvent>();
+		Remote->SetName("SpatialPackageProof");
+		Remote->SetParent(Game);
+		auto Scripts = std::make_shared<Folder>();
+		Scripts->SetName("GameScripts");
+		Scripts->SetParent(Game);
+		auto Server = std::make_shared<Script>();
+		Server->SetName("SpatialAuthority");
+		Server->SetRunContext(Enums::RunContext::Server);
+		Server->SetSource(R"(
+			local World = game.Workspace
+			local Inside = World.NestedRegion.EastGrid
+			assert(Inside:GetBlock(Vector3.new(1, 0, 1)).Definition == "project:private_sealed_package_tile")
+			local Grid = World.WestGrid
+			local Cell = Vector3.new(-2, 0, 3)
+			Grid:DefineChannel("private_damage", {Kind="UInt8", Default=0, Persistent=true})
+			Grid:DefineChannel("signal", {Kind="Bool", Default=false, Audience="RelevantPeers"})
+			local State = Grid:BeginEdit()
+			State:SetValue(Cell, "private_damage", 91)
+			State:SetValue(Cell, "signal", true)
+			State:Commit()
+			local Changed = false
+			game.SpatialPackageProof.OnServerEvent:Connect(function(_, Stage)
+				if Stage == "baseline" and not Changed then
+					assert(Grid:GetValue(Cell, "private_damage") == 91)
+					Grid:SetBlock(Cell, "Brick")
+					Changed = true
+					warn("[Spatial:PackageAuthority] Authenticated client baseline acknowledged and grid edited")
+				elseif Stage == "observed" and Changed then
+					warn("[Spatial:PackageAuthority] Client acknowledged the edited grid")
+				end
+			end)
+		)");
+		Server->SetParent(Scripts);
+		auto Client = std::make_shared<Script>();
+		Client->SetName("SpatialObserver");
+		Client->SetRunContext(Enums::RunContext::Client);
+		Client->SetSource(R"(
+			local World = game.Workspace
+			local Cell = Vector3.new(-2, 0, 3)
+			local Sent, Done = false, false
+			game:GetService("RunService").PostSimulation:Connect(function()
+				if Done then return end
+				local Grid = World:FindFirstChild("WestGrid")
+				local Event = game:FindFirstChild("SpatialPackageProof")
+				if not Grid or not Event then return end
+				local Ready, Block = pcall(function() return Grid:GetBlock(Cell) end)
+				if not Ready or not Block then return end
+				assert(World:FindFirstChild("NestedRegion") == nil)
+				if Block.Definition == "Stone" and not Sent then
+					if not Grid:GetValue(Cell, "signal") then return end
+					assert(not pcall(function() Grid:GetValue(Cell, "private_damage") end))
+					assert(not pcall(function() Grid:SetBlock(Cell, "Brick") end))
+					Sent = Event:TryFireServer("baseline")
+				elseif Sent and Block.Definition == "Brick" then
+					assert(Grid:Raycast(Grid:CellToWorld(Cell) + Vector3.new(0, 3, 0), Vector3.new(0, -6, 0)).Cell == Cell)
+					Done = Event:TryFireServer("observed")
+					if Done then warn("[Spatial:PackageObserver] Public grid, channel, ray and authoritative edit verified") end
+				end
+			end)
+		)");
+		Client->SetParent(Scripts);
+	}
+
+	void AddPackageWorkspaceTerrain(const std::shared_ptr<Workspace> &Space) {
+		auto Field = std::make_unique<terrain::Field>();
+		const terrain::BoxBrush Brush{{12,4.63,12},{8.7,2.0,8.7},terrain::BrushMode::Add,5};
+		const auto Keys = terrain::GetRegionChunks(terrain::GetBrushBounds(Field->GetGrid(),Brush).value()).value();
+		auto Prepared = terrain::Field::Prepare(Field->Capture(Keys).value(),Brush).value();
+		Require(Field->Commit(std::move(Prepared)).has_value(), "authored package terrain");
+		Space->RestoreTerrainField(std::move(Field));
+		auto Probe = std::make_shared<Script>();
+		Probe->SetName("WorkspaceTerrainObserver");
+		Probe->SetRunContext(Enums::RunContext::Client);
+		Probe->SetSource(R"(
+			local World = game.Workspace
+			local Params = RaycastParams.new()
+			Params.IncludeTerrain = true
+			local Seen = false
+			game:GetService("RunService").PostSimulation:Connect(function()
+				if Seen then return end
+				local Ready, Hit = pcall(function()
+					return World:Raycast(Vector3.new(12,18,12),Vector3.new(0,-18,0),Params)
+				end)
+				if Ready and Hit and Hit.Instance == World.Terrain then
+					assert(Hit.Position.Y > 3 and Hit.Position.Y < 9)
+					Seen = true
+					warn("[Spatial:PackageObserver] Streamed Workspace terrain collision verified")
+				end
+			end)
+		)");
+		Probe->SetParent(Space->GetDataModel());
+	}
+
+	void WritePackageProject(const std::filesystem::path &Root, bool Session, bool WorkspaceTerrain) {
 		Require(std::filesystem::create_directory(Root), "package fixture destination must be new");
 		DiskFilesystem Files(Root);
 		auto ProjectValue = Project::fromInit(&Files,"SpatialConstructionPackage");
@@ -540,8 +645,10 @@ namespace {
 		auto Pose = CFrame::Angles(0,1.57079632679f,0);
 		Pose.Position = {8,4,-6};
 		MakeGrid(Space,"WestGrid",{blockgrid::Stone,0},Pose);
-		MakeGrid(Region,"EastGrid",{blockgrid::Brick,1},Pose);
-		AddTerrainFixture(Space,Region);
+		auto Inside = MakeGrid(Region,"EastGrid",{blockgrid::Brick,1},Pose);
+		if (Session) AddPackageSessionProof(Game,Inside);
+		else AddTerrainFixture(Space,Region);
+		if (WorkspaceTerrain) AddPackageWorkspaceTerrain(Space);
 		auto Proof = std::make_shared<Script>();
 		Proof->SetName("VerifyPackagedGrids");
 		Proof->SetRunContext(Enums::RunContext::Server);
@@ -576,11 +683,14 @@ int main(int Count, char **Arguments) {
 			CheckOffscreenPixels();
 			return 0;
 		}
-		if (Count == 3 && std::string_view(Arguments[1]) == "--write-project") {
-			WritePackageProject(Arguments[2]);
-			return 0;
+		if (Count == 3) {
+			const std::string_view Mode = Arguments[1];
+			if (Mode == "--write-project" || Mode == "--write-session-project" || Mode == "--write-terrain-session-project") {
+				WritePackageProject(Arguments[2],Mode != "--write-project",Mode == "--write-terrain-session-project");
+				return 0;
+			}
 		}
-		Require(Count == 1, "supported modes are --vulkan and --write-project <new directory>");
+		Require(Count == 1, "supported modes are --vulkan, --write-project, --write-session-project and --write-terrain-session-project");
 		ScratchProject Scratch;
 		DiskFilesystem Files(Scratch.Root);
 		auto ProjectValue = Project::fromInit(&Files,"SpatialConstruction");

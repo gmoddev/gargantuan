@@ -19,19 +19,23 @@ namespace gargantuan::network {
 		BlockGridPeer(bool Server, std::uint64_t Epoch, ObjectId Domain);
 		void Track(ObjectId Grid);
 		void Forget(ObjectId Grid);
+		void Retire();
 		void Receive(const GridStreamMessage &Message, const Resolve &Find, std::uint64_t Tick);
 		void Pump(const Resolve &Find, const Send &Queue, std::uint64_t Tick);
-		[[nodiscard]] bool IsInstalled(ObjectId Grid, std::uint64_t PublicRevision) const;
+		[[nodiscard]] bool IsInstalled(ObjectId Source, const BlockGrid &Grid) const;
 
 	  private:
 		struct Entry {
-			std::uint64_t Subscription{}, Revision{}, LastSerial{};
+			std::uint64_t Subscription{}, Revision{}, Configuration{}, MotionRevision{}, LastSerial{}, MotionTick{};
+			AssetContentId Placement;
+			std::weak_ptr<BlockGrid> Replica;
 			bool Requested{};
 			GridReplicaContent Known;
 		};
 		struct Transfer {
 			GridStreamMessage Offer;
 			GridReplicaContent Content;
+			std::optional<blockgrid::Field> PendingField;
 			std::size_t Cursor{};
 			std::uint64_t ProgressTick{};
 			bool Offered{}, Installed{};

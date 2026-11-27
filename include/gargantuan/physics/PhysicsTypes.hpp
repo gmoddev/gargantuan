@@ -62,12 +62,25 @@ namespace gargantuan {
 		Wedge,
 		CornerWedge,
 		StaticTriangleMesh,
+		ConvexAssembly,
+	};
+	inline constexpr std::size_t MaximumPhysicsAssemblyHulls=128;
+	struct PhysicsConvexChild {
+		PhysicsShapeKind Kind{PhysicsShapeKind::Box};
+		CFrame Local;
+		glm::vec3 Size{1.f};
+	};
+	struct PhysicsMassProperties {
+		float Mass{};
+		glm::vec3 LocalCenter{};
+		glm::mat3 LocalInertia{0.f};
 	};
 
 	struct PhysicsShapeDesc {
 		PhysicsShapeKind Kind = PhysicsShapeKind::Box;
 		glm::vec3 Size{1.0f};
 		std::shared_ptr<const PhysicsTriangleMesh> Mesh;
+		std::shared_ptr<const std::vector<PhysicsConvexChild>> Hulls;
 	};
 
 	struct PhysicsBodyDesc {
@@ -200,6 +213,7 @@ namespace gargantuan {
 		std::uint16_t CollisionMask = MaximumPhysicsCollisionMask;
 		bool IncludeBlockGrids = false;
 		bool RequireCollidable = false;
+		bool ControllerGroups = false;
 	};
 
 	struct PhysicsRaycastRequest {

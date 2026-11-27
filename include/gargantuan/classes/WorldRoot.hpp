@@ -11,6 +11,7 @@
 #include "gargantuan/physics/SoftBodyBackend.hpp"
 #include "gargantuan/runtime/RuntimeMode.hpp"
 #include "gargantuan/runtime/SpatialDestination.hpp"
+#include "gargantuan/runtime/SpatialResidency.hpp"
 #include <span>
 
 #include <cstdint>
@@ -87,7 +88,15 @@ namespace gargantuan {
 		[[nodiscard]] bool ValidateSpatialDestination(const SpatialDestinationReceipt &Receipt);
 		[[nodiscard]] bool CanHoldSpatialCollision(ObjectId Subject) const;
 		[[nodiscard]] bool CanHoldSpatialSubject(ObjectId Subject);
+		[[nodiscard]] static std::optional<SpatialMovementProfile> DescribeSpatialMovement(const std::shared_ptr<BasePart> &Subject);
+		[[nodiscard]] PhysicsOperationResult CheckSpatialLanding(const std::shared_ptr<BasePart> &Member,
+			const SpatialMovementRequest &Movement,const SpatialDestinationReceipt &Receipt);
 		[[nodiscard]] std::uint64_t GetSpatialActivation() const noexcept { return SpatialActivation; }
+		[[nodiscard]] std::expected<std::shared_ptr<SpatialCollisionLease>,SpatialRequestFailure> RequestSpatialCollision(
+			SpatialResidencyAudience Audience,const SpatialDestinationBounds &Bounds,std::span<const ObjectId> RequiredOwners,
+			SpatialDemandPriority Priority,std::chrono::milliseconds Duration,SpatialResidencyClock::time_point Now);
+		[[nodiscard]] SpatialCollisionWork PumpSpatialCollision(SpatialResidencyClock::time_point Now,std::size_t MaximumCaptures=2);
+		void RetireSpatialAudience(SpatialResidencyAudience Audience);
 		// Main-only checked teleport for one ordinary rigid Part. Clearance uses its conservative oriented box.
 		[[nodiscard]] PhysicsOperationResult CommitSpatialTransfer(const std::shared_ptr<BasePart> &Member,
 			const SpatialMovementRequest &Movement, const SpatialDestinationReceipt &Receipt, const SpatialMovementLease &Admission = {});
@@ -194,10 +203,17 @@ namespace gargantuan {
 
 	  private:
 		friend class Engine;
+		friend class BlockGrid;
 		std::unique_ptr<BlockGridWorldState> BlockGridState;
 		void AddBlockGrid(const std::shared_ptr<Instance> &Value);
 		void RemoveBlockGrid(const std::shared_ptr<Instance> &Value);
 		bool SyncBlockGridCollision();
+		[[nodiscard]] bool SetGridMotion(BlockGrid& Grid,bool Dynamic);
+		[[nodiscard]] bool SetGridVelocity(BlockGrid& Grid,glm::vec3 Linear,glm::vec3 Angular);
+		[[nodiscard]] std::pair<PhysicsBodyState,PhysicsMassProperties> GetGridAssemblyState(const BlockGrid& Grid);
+		void ReadGridMotion();
+		void RefreshGridAssembly(BlockGrid& Grid);
+		void SetGridPose(BlockGrid& Grid,const CFrame& Pose);
 		bool AppendBlockGridFilter(ObjectId Object, std::vector<PhysicsBodyId> &Bodies) const;
 		std::shared_ptr<BlockGrid> ResolveBlockGrid(PhysicsBodyId Body) const;
 		std::optional<glm::ivec3> ResolveBlockCell(PhysicsBodyId Body, glm::vec3 Position) const;
@@ -275,6 +291,10 @@ namespace gargantuan {
 		void RetireDomainTerrainRuntime();
 		[[nodiscard]] bool IsSpatiallyAvailable() const;
 		std::uint64_t SpatialActivation{1};
+		friend class SpatialCollisionLease;
+		std::shared_ptr<SpatialCollisionQueue> CollisionDemand;
+		bool SpatialDemandScheduled{};
+		void RetireSpatialCollision();
 		std::uint64_t TerrainTicketBase{};
 		std::uint64_t LastTerrainTicket{};
 		[[nodiscard]] std::expected<std::uint64_t, terrain::EditStatus>

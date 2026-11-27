@@ -1,11 +1,14 @@
 // Copyright (c) 2026 Team Fireworks
 // SPDX-License-Identifier: MPL-2.0
+#include "../../src/network/BlockGridPeer.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/network/BlockGridStream.hpp"
 #include "gargantuan/network/GameSession.hpp"
+#include "gargantuan/network/ReplicaApplier.hpp"
+#include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/Renderer.hpp"
@@ -51,8 +54,85 @@ namespace {
 		Grid->SetParent(Parent);
 		return Grid;
 	}
+	void CheckInstallationRaces() {
+		auto Author = std::make_shared<DataModel>();
+		auto Source = Seed(Author->GetService("Workspace"), "Placed", blockgrid::Stone);
+		const auto Id = Source->GetObjectId();
+		ReplicationCoordinator Coordinator(Author);
+		const auto Baseline = Coordinator.AddPeer({1, 1}, ReplicationEpoch(1));
+		ReplicaApplier Replica;
+		Require(Baseline.Succeeded() && Replica.ApplyFrame(*Baseline.Frame).Succeeded(), "structural baseline failed");
+		auto Shell = std::dynamic_pointer_cast<BlockGrid>(Replica.Resolve(Id));
+		Require(Shell && Shell->IsReplicaMaterialization(), "missing replicated shell");
+		Shell->SetCellSize(1);
+		BlockGridPeer Out(true, 37, {}), In(false, 37, {});
+		auto ResolveSource = [&](ObjectId Object) { return Object == Id ? Source : nullptr; };
+		auto ResolveShell = [&](ObjectId Object) { return Object == Id ? Shell : nullptr; };
+		std::vector<std::byte> Packet;
+		auto Send = [&](const GridStreamMessage &M) {
+			Packet = EncodeGridStream(M);
+			return true;
+		};
+		auto Read = [&]() {
+			auto M = DecodeGridStream(Packet);
+			Require(M.has_value(), "failed to decode test packet");
+			return *M;
+		};
+		In.Track(Id);
+		In.Pump(ResolveShell, Send, 1);
+		Out.Receive(Read(), ResolveSource, 1);
+		Out.Pump(ResolveSource, Send, 2);
+		auto Offer = Read();
+		Require(Offer.Kind == GridStreamKind::Offer, "expected first offer");
+		In.Receive(Offer, ResolveShell, 2);
+		Out.Pump(ResolveSource, Send, 3);
+		In.Receive(Read(), ResolveShell, 3);
+		Packet.clear();
+		In.Pump(ResolveShell, Send, 4);
+		Require(Packet.empty() && !Shell->HasReplicaField(), "installed field at the wrong cell size");
+		Source->SetCanQuery(false);
+		Out.Pump(ResolveSource, Send, 5);
+		Require(Read().Kind == GridStreamKind::Forget, "stale placement did not cancel");
+		In.Receive(Read(), ResolveShell, 5);
+		Offer.Kind = GridStreamKind::Installed;
+		Out.Receive(Offer, ResolveSource, 5);
+		Require(!Out.IsInstalled(Id, *Source), "late acknowledgement admitted stale placement");
+		Shell->SetCellSize(2);
+		Shell->SetCanQuery(false);
+		Out.Pump(ResolveSource, Send, 6);
+		In.Receive(Read(), ResolveShell, 6);
+		Out.Pump(ResolveSource, Send, 7);
+		In.Receive(Read(), ResolveShell, 7);
+		In.Pump(ResolveShell, Send, 8);
+		auto Ack = Read();
+		Require(Ack.Kind == GridStreamKind::Installed && Shell->HasReplicaField(), "fresh field did not install");
+		auto Forged = Ack;
+		Forged.Placement.Bytes[0] ^= 1;
+		bool Rejected = false;
+		try {
+			Out.Receive(Forged, ResolveSource, 8);
+		} catch (const std::invalid_argument &) {
+			Rejected = true;
+		}
+		Require(Rejected && !Out.IsInstalled(Id, *Source), "changed placement digest was accepted");
+		Out.Receive(Ack, ResolveSource, 8);
+		Require(Out.IsInstalled(Id, *Source), "verified current placement did not open");
+		Source->SetCanCollide(false);
+		Require(!Out.IsInstalled(Id, *Source), "changing only collision retained an old receipt");
+		Out.Pump(ResolveSource, Send, 9);
+		auto Updated = Read();
+		Require(Updated.Revision == Ack.Revision && Updated.Prefix == Updated.Size, "stationary field bytes resent");
+		In.Receive(Updated, ResolveShell, 9);
+		Shell->SetCanCollide(false);
+		In.Pump(ResolveShell, Send, 10);
+		Out.Receive(Read(), ResolveSource, 10);
+		Require(Out.IsInstalled(Id, *Source), "collision-only update did not install");
+		Out.Forget(Id);
+		Require(!Out.IsInstalled(Id, *Source), "retirement retained the installation");
+	}
 	void Run(bool Socket) {
 		BootstrapNativeRuntimeSchema();
+		CheckInstallationRaces();
 		auto Sim = SimulatedNetwork::Create({.BaseLatency = 1ms});
 		auto Transport = [&]() -> std::shared_ptr<IGameTransport> {
 #if defined(GARGANTUAN_WITH_GNS)
@@ -114,9 +194,11 @@ namespace {
 			}
 			if (!Predicate()) {
 				std::cerr << "[BlockGrid:Session] tick=" << Tick << " server=" << static_cast<int>(Server.GetStatus())
-					<< " first=" << static_cast<int>(A.GetStatus()) << " second=" << static_cast<int>(B.GetStatus())
-					<< " players=" << Server.GetMetrics().PlayersCreated << " accepted=" << Server.GetMetrics().AcceptedPeers
-					<< " ServerError=" << Server.GetFailure() << " FirstError=" << A.GetFailure() << " SecondError=" << B.GetFailure() << '\n';
+						  << " first=" << static_cast<int>(A.GetStatus())
+						  << " second=" << static_cast<int>(B.GetStatus())
+						  << " players=" << Server.GetMetrics().PlayersCreated
+						  << " accepted=" << Server.GetMetrics().AcceptedPeers << " ServerError=" << Server.GetFailure()
+						  << " FirstError=" << A.GetFailure() << " SecondError=" << B.GetFailure() << '\n';
 				throw std::runtime_error(Failure);
 			}
 		};
@@ -175,6 +257,53 @@ namespace {
 		);
 		Wait([&] { return Received(*ClientA, "ExteriorGrid", blockgrid::Brick); }, "public delta failed");
 		Require(Received(*ClientB, "InteriorGrid", blockgrid::Brick), "unrelated domain changed");
+		auto Motion = [&](bool Dynamic) {
+			auto Edit = std::make_shared<blockgrid::EditRequest>();
+			Edit->ExpectedRevision = Outside->GetBlockRevision();
+			Edit->Motion = blockgrid::MotionEdit{Dynamic};
+			Require(
+				Gateway
+					.Apply(
+						SubmitBlockGridEditCommand{Outside->GetObjectId(), World->GetObjectId(), Edit},
+						ScriptSecurityContext::CoreTrusted()
+					)
+					.Succeeded(),
+				"server assembly transition failed"
+			);
+		};
+		Motion(true);
+		Wait([&] { return Replica->GetMotionMode() == "Dynamic"; }, "projected body did not activate");
+		const auto Initial = Replica->GetAssemblyProjection();
+		Require(
+			Initial && Initial->Dynamic && std::abs(Initial->Mass - 8.f) < .001f && !Replica->IsDynamicAssembly(),
+			"replica mass did not match the server-owned two-stud cube"
+		);
+		const auto Bytes = blockgrid::Encode(Replica->GetField());
+		for (unsigned I = 0; I < 20; ++I) {
+			Space->StepPhysics(1. / 60, std::nullopt);
+			Exchange();
+		}
+		const auto Last = Outside->GetAssemblyProjection();
+		Require(Last && Last->Revision > Initial->Revision, "native assembly did not move");
+		Wait(
+			[&] {
+				const auto Applied = Replica->GetAssemblyProjection();
+				return Applied && Applied->Revision == Last->Revision &&
+					   Applied->Pose.Position == Last->Pose.Position &&
+					   Applied->LinearVelocity == Last->LinearVelocity && Applied->LocalInertia == Last->LocalInertia;
+			},
+			"normal GameSession lost body state or pose"
+		);
+		Require(
+			!Replica->ApplyReplicaAssemblyProjection(*Initial) &&
+				Replica->GetCFrame().Position == Last->Pose.Position && blockgrid::Encode(Replica->GetField()) == Bytes,
+			"old receipt rewound the body or motion changed cell data"
+		);
+		Motion(false);
+		Wait(
+			[&] { return Replica->GetMotionMode() == "Static" && Replica->GetAssemblyProjection()->Mass == 0.f; },
+			"relevant replica did not retire dynamic state"
+		);
 		A.Stop();
 		B.Stop();
 		Server.Stop();
@@ -184,8 +313,10 @@ namespace {
 	}
 }
 int main(int Count, char **Arguments) {
-	SDL_SetLogOutputFunction([](void *,int,SDL_LogPriority,const char *Text) { std::cerr << Text << '\n'; },nullptr);
-	SDL_SetLogPriority(LogCategory::App,SDL_LOG_PRIORITY_WARN);
+	SDL_SetLogOutputFunction(
+		[](void *, int, SDL_LogPriority, const char *Text) { std::cerr << Text << '\n'; }, nullptr
+	);
+	SDL_SetLogPriority(LogCategory::App, SDL_LOG_PRIORITY_WARN);
 	try {
 		Run(Count > 1 && std::string_view(Arguments[1]) == "--gns");
 		std::cout << "[BlockGrid:Session] Two scoped peers installed collision, public state and live edits\n";

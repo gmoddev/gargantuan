@@ -189,6 +189,7 @@ namespace gargantuan {
 	void BlockGrid::SetSpatialRegion(std::optional<std::shared_ptr<SpatialRegion>> Value) {
 		CheckConfigurationWrite();
 		const auto Before=GetAssignedRegion();
+		if (DynamicAssembly && Before!=Value) throw std::domain_error("[BlockGrid:Motion] Freeze the assembly before changing its spatial domain");
 		SetAssignedRegion(*this,std::move(Value));
 		if (Before!=GetAssignedRegion()) {
 			++ConfigurationRevision;
@@ -213,15 +214,29 @@ namespace gargantuan {
 	}
 	void BlockGrid::InstallReplicaField(blockgrid::Field Value) {
 		AssertCanMutate();
-		if (!GetDataModel() || Editing) throw std::logic_error("[BlockGrid:Replica] Shell is unavailable");
+		if (!IsReplicaMaterialization() || !GetDataModel() || Editing) throw std::logic_error("[BlockGrid:Replica] Shell is unavailable");
 		if (const auto Protection=GetDataModel()->GetSpatialTransferProtection(); Protection && !Protection->AllowsResource(*this))
 			throw std::runtime_error("[BlockGrid:Replica] Collision is reserved for an active transfer");
 		Cells.InstallReplica(std::move(Value), Admission);
+		LastAssetService.reset();
 		AssetSequence = 0;
 		AssetsReady = false;
 		LastCellEdit.reset();
 		ReplicaFieldAvailable = true;
 		NotifyPropertyCommitted("BlockRevision");
+	}
+	void BlockGrid::RetireReplicaContent() {
+		AssertCanMutate();
+		if (!IsReplicaMaterialization()) throw std::logic_error("[BlockGrid:Replica] Expected a replica");
+		if (ReplicaFieldAvailable) {
+			Cells.InstallReplica(blockgrid::Field{}, Admission);
+			LastAssetService.reset();
+			LastCellEdit.reset();
+			AssetsReady = false;
+			ReplicaFieldAvailable = false;
+			NotifyPropertyCommitted("BlockRevision");
+		}
+		ClearReplicaAssemblyProjection();
 	}
 	std::string BlockGrid::GetBlockRevision() const { return RevisionToken(Cells.GetRevision()); }
 	std::string BlockGrid::GetPublicBlockRevision() const { return RevisionToken(Cells.GetPublicRevision())+"/peers"; }
@@ -239,6 +254,23 @@ namespace gargantuan {
 		if (const auto Protection=World->GetSpatialTransferProtection(); Protection && !Protection->AllowsResource(*this))
 			throw std::runtime_error("[BlockGrid:Edit] Collision is reserved for an active transfer");
 		if (Edit.ExpectedRevision && *Edit.ExpectedRevision!=GetBlockRevision()) throw std::domain_error("[BlockGrid:Conflict] Revision changed");
+		if (Edit.Motion) {
+			CheckConfigurationWrite();
+			World->EnsureAuthoritativeRevisionAvailable();
+			const auto Domain=WorldRoot::GetEffectiveWorld(*this);
+			if (!Domain || !EnsureAssetBindings()) throw std::runtime_error("[BlockGrid:Motion] Construction has no ready simulation world");
+			bool Changed;
+			if (const auto& V=Edit.Motion->Velocities) {
+				const auto Vector=[](const Point& P){return glm::vec3(P[0],P[1],P[2]);};
+				Changed=Domain->SetGridVelocity(*this,Vector(V->first),Vector(V->second));
+			} else Changed=Domain->SetGridMotion(*this,Edit.Motion->Dynamic);
+			if (Changed) {
+				World->AdvanceAuthoritativeRevision();
+				if (Edit.Motion->Velocities) { ++ConfigurationRevision; NotifyPropertyCommitted("BlockRevision"); }
+				else NotifyConfiguration("MotionMode");
+			}
+			return GetBlockRevision();
+		}
 		if (!Edit.Binding && !(Edit.Replay && (Edit.Replay->Binding || !Edit.Replay->Materials.empty())) && !EnsureAssetBindings())
 			throw std::runtime_error("[BlockGrid:Unavailable] Required block assets do not match this project");
 		World->EnsureAuthoritativeRevisionAvailable();
@@ -300,6 +332,7 @@ namespace gargantuan {
 		if (Changed) {
 			if (PriorGeometry != Cells.GetGeometryRevision()) LastCellEdit = PointEdit;
 			if (Edit.Binding || !Edit.Materials.empty() || (Edit.Replay && (Edit.Replay->Binding || !Edit.Replay->Materials.empty()))) AssetSequence=0;
+			if (DynamicAssembly) if (auto Domain=WorldRoot::GetEffectiveWorld(*this)) Domain->RefreshGridAssembly(*this);
 			World->AdvanceAuthoritativeRevision();
 			NotifyPropertyCommitted("BlockRevision");
 		}
@@ -321,16 +354,26 @@ namespace gargantuan {
 	void BlockGrid::SetCellSize(float Value) {
 		CheckConfigurationWrite(); ValidatePropertyMutation("CellSize",Value);
 		if (Size==Value) return;
-		if (Cells.GetOccupiedCount() || (Value!=0.5f && Value!=1.f && Value!=2.f))
+		if ((!IsReplicaMaterialization() && Cells.GetOccupiedCount()) || (Value!=0.5f && Value!=1.f && Value!=2.f))
 			throw std::invalid_argument("[BlockGrid:CellSize] Choose 0.5, 1, or 2 while the grid is empty");
+		if (ReplicaFieldAvailable) RetireReplicaContent();
 		Size=Value; NotifyConfiguration("CellSize");
 	}
 	CFrame BlockGrid::GetCFrame() const { return Transform; }
 	void BlockGrid::SetCFrame(gargantuan::CFrame Value) {
 		CheckConfigurationWrite(); ValidatePropertyMutation("CFrame",Value);
 		if (!ValidTransform(Value)) throw std::invalid_argument("[BlockGrid:CFrame] Expected an in-range proper rigid transform");
+		// A verified pose receipt owns this replica until it is retired. A delayed shell property cannot rewind a moving grid.
+		if (IsReplicaMaterialization() && AssemblyState) return;
 		if (Value.Position==Transform.Position && Value.Rotation==Transform.Rotation) return;
-		Transform=Value; NotifyConfiguration("CFrame");
+		if (DynamicAssembly) {
+			const auto Domain=WorldRoot::GetEffectiveWorld(*this);
+			if (!Domain) throw std::runtime_error("[BlockGrid:Motion] Assembly has no simulation world");
+			Domain->SetGridPose(*this,Value);
+		}
+		Transform=Value;
+		if (!DynamicAssembly && !IsReplicaMaterialization()) ++AssemblyRevision;
+		NotifyConfiguration("CFrame");
 	}
 	bool BlockGrid::GetVisible() const { return IsVisible; }
 	void BlockGrid::SetVisible(bool Value) {
@@ -340,6 +383,7 @@ namespace gargantuan {
 	bool BlockGrid::GetCanCollide() const { return Collides; }
 	void BlockGrid::SetCanCollide(bool Value) {
 		CheckConfigurationWrite(); ValidatePropertyMutation("CanCollide",Value);
+		if (DynamicAssembly && !Value) throw std::domain_error("[BlockGrid:Motion] Freeze the assembly before disabling collision");
 		if (Collides!=Value) { Collides=Value; NotifyConfiguration("CanCollide"); }
 	}
 	bool BlockGrid::GetCanQuery() const { return Queryable; }

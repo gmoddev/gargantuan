@@ -43,6 +43,7 @@ namespace gargantuan {
 
 	class Character : public Folder {
 		I_Character;
+		friend class WorldRoot;
 
 		CFrame Transform{0.0f, 6.0f, 0.0f};
 		std::optional<CFrame> PresentationOffset;

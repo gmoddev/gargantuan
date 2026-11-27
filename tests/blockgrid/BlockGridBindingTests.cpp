@@ -9,6 +9,7 @@
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
+#include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
@@ -75,6 +76,7 @@ namespace {
 			Bulk:WritePacked(A,Max,Buffer)
 			Bulk:Commit()
 			assert(Destination:GetBlock(A).Definition==Alias and not pcall(function() Destination:GetDefinitionDigest(Other) end))
+			G:RemoveBlock(A)
 			local Rev=G:GetRevision()
 			for _, Bad in {{Shape="Mesh",Mesh=Mesh},{Shape="Mesh",Mesh=Large,Collision="None"},
 				{Shape="Mesh",Mesh=Mat,Collision="None"},{Shape="Mesh",Mesh=Mesh,Collision="Asset",CollisionAsset=Mat},
@@ -169,11 +171,97 @@ namespace {
 		Check(std::ranges::any_of(Retired->Removes,[&](const auto &Removal){return Removal.Object==Grid->GetObjectId();}),
 			"deleting a required asset retires the published grid resource");
 	}
+	void TestMovingGrid() {
+		auto World=std::make_shared<DataModel>();
+		const auto Server=ScriptSecurityContext::ServerRuntime();
+		Run(World,RuntimeMode::Offline,Server,R"(
+			local Room=Instance.new("SpatialRegion")
+			Room.Name="Hangar"
+			Room.Parent=game.Workspace
+			local Floor=Instance.new("Part")
+			Floor.Anchored=true
+			Floor.Size=Vector3.new(64,1,64)
+			Floor.CFrame=CFrame.new(0,-.5,0)
+			Floor.Parent=Room
+			local G=Instance.new("BlockGrid")
+			G.Name="Carriage"
+			G.Parent=Room
+			G.CFrame=CFrame.new(0,4,0)
+			local First=G:GetRevision()
+			assert(not pcall(function() G:SetMotionMode("Dynamic",First) end) and G:GetRevision()==First)
+			G:SetBlock(Vector3.zero,"Stone")
+			G:SetBlock(Vector3.new(2,0,0),"Brick")
+			local Revision=G:GetRevision()
+			assert(not pcall(function() G:SetMotionMode("Dynamic",First) end))
+			local Moving=G:SetMotionMode("Dynamic",Revision)
+			local S=G:GetAssemblyState()
+			assert(Moving~=Revision and G.MotionMode=="Dynamic" and math.abs(S.Mass-2)<.001)
+			assert((S.LocalCenterOfMass-Vector3.new(1.5,.5,.5)).Magnitude<.001)
+			assert(S.LocalInertia[1].X>0 and S.LocalInertia[2].Y>S.LocalInertia[1].X)
+			local Declined=G:GetRevision()
+			assert(not pcall(function() G:Fill(Vector3.zero,Vector3.new(129,1,1),"Stone") end))
+			assert(not pcall(function() G.CanCollide=false end))
+			assert(not pcall(function() G.Parent=game.Workspace end))
+			assert(not pcall(function() G:SetAssemblyVelocity(Vector3.new(1000,0,0),Vector3.zero,Declined) end))
+			assert(G:GetRevision()==Declined and G.Parent==Room and G:GetAssemblyState().Mass==2)
+			G:SetAssemblyVelocity(Vector3.new(1,0,0),Vector3.zero,Declined)
+			assert(G:GetAssemblyState().LinearVelocity.X>.99)
+		)");
+		auto Room=std::dynamic_pointer_cast<WorldRoot>(World->GetService("Workspace")->FindFirstChild("Hangar",false));
+		auto Grid=std::dynamic_pointer_cast<BlockGrid>(Room->FindFirstChild("Carriage",false));
+		auto Prior=Grid->GetAssemblyProjection();
+		Check(Prior && blockgrid::ValidAssemblyProjection(*Prior),"invalid initial motion receipt");
+		const std::array Required{Grid->GetObjectId()};
+		const auto Receipt=Room->PrepareSpatialDestination({{-1,3,-1},{4,6,2}},Required);
+		Check(Receipt.has_value() && !Room->CanHoldSpatialCollision({}),"dynamic collision provided a static reservation");
+		const auto Body=std::ranges::find(Receipt->Providers,Grid->GetObjectId(),&SpatialProviderReceipt::Owner);
+		Check(Body!=Receipt->Providers.end() && !Body->AuthoritativeEmpty && Body->Shape==PhysicsShapeKind::ConvexAssembly &&
+			Body->Installed.size()==2 && Body->Installed[0].Body==Body->Installed[1].Body &&
+			Body->Installed[0].Piece!=Body->Installed[1].Piece,"native two-hull receipt lost a child or its owning body");
+		const auto Data=blockgrid::Encode(Grid->GetField());
+		const auto Cells=Grid->GetField().GetRevision(),Geometry=Grid->GetField().GetGeometryRevision();
+		const auto Token=Grid->GetBlockRevision();
+		for (int I=0;I<180;++I) Room->StepPhysics(1./60,std::nullopt);
+		const auto Rest=Grid->GetAssemblyProjection();
+		Check(Rest && Rest->Revision>Prior->Revision && Rest->Pose.Position.x>.03f && std::abs(Rest->Pose.Position.y)<.08f &&
+			blockgrid::ValidAssemblyProjection(*Rest),"native motion or floor contact did not reach the model");
+		Check(Grid->GetField().GetRevision()==Cells && Grid->GetField().GetGeometryRevision()==Geometry && Grid->GetBlockRevision()==Token &&
+			blockgrid::Encode(Grid->GetField())==Data,"movement changed immutable local cells");
+		auto Invalid=*Rest; Invalid.Mass=-1; Check(!blockgrid::ValidAssemblyProjection(Invalid),"invalid finite mass accepted");
+		bool Denied=false;
+		try { (void)Grid->ApplyReplicaAssemblyProjection(*Rest); } catch (const std::exception&) { Denied=true; }
+		Check(Denied,"replica motion reached an authoritative grid");
+		Run(World,RuntimeMode::Offline,Server,R"(
+			local Room=game.Workspace:FindFirstChild("Hangar")
+			local G=Room:FindFirstChild("Carriage")
+			local Params=RaycastParams.new()
+			Params.IncludeBlockGrids=true
+			local Center=G:CellToWorld(Vector3.zero)
+			local W=Room:Raycast(Center+Vector3.new(0,2,0),Vector3.new(0,-4,0),Params)
+			assert(W and W.Instance==G and W.GridHit.Cell==Vector3.zero)
+			local Overlap=Room:GetPartsInSphere(Center,.15,Params)
+			assert(#Overlap.GridCells==1 and Overlap.GridCells[1].Cell==Vector3.zero)
+			G:RemoveBlock(Vector3.new(2,0,0))
+			assert(math.abs(G:GetAssemblyState().Mass-1)<.001)
+			local Last=G:GetRevision()
+			assert(not pcall(function() G:RemoveBlock(Vector3.zero) end) and G:GetRevision()==Last)
+			G.CFrame=CFrame.new(1,6,3)
+			assert((G:GetAssemblyState().CFrame.Position-G.CFrame.Position).Magnitude<.001)
+			G:SetMotionMode("Static",G:GetRevision())
+			assert(G.MotionMode=="Static" and G:GetAssemblyState().Mass==0)
+			G.Parent=game.Workspace
+			G:SetMotionMode("Dynamic",G:GetRevision())
+			G.Parent=nil
+			assert(G.MotionMode=="Static")
+			G:Destroy()
+		)");
+	}
 }
 int main() try {
 	using namespace gargantuan;
 	BootstrapNativeRuntimeSchema();
 	TestAssetDefinitions();
+	TestMovingGrid();
 	auto World=std::make_shared<DataModel>();
 	std::ifstream Example(GARGANTUAN_BLOCKGRID_EXAMPLE,std::ios::binary);
 	Check(Example.good(),"could not load PoweredGate creator example");

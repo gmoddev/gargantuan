@@ -1010,6 +1010,17 @@ if(BUILD_TESTING)
 			COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialConstructionYardInput.py"
 				--engine $<TARGET_FILE:gargantuan>)
 		set_tests_properties(gargantuan_spatial_construction_yard PROPERTIES LABELS "spatial;blockgrid;headless;sample" TIMEOUT 120)
+		if(GARGANTUAN_WITH_GNS)
+			set(SpatialPackageTest "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialConstructionPackageSession.py"
+					--fixture $<TARGET_FILE:gargantuan_spatial_construction_integration_tests>
+					--packager $<TARGET_FILE:gargantuan_packager>
+					--player-runtime $<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
+					--server-runtime $<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution)
+			add_test(NAME gargantuan_spatial_construction_package_session COMMAND ${SpatialPackageTest})
+			add_test(NAME gargantuan_spatial_construction_package_terrain_session COMMAND ${SpatialPackageTest} --workspace-terrain)
+			set_tests_properties(gargantuan_spatial_construction_package_session gargantuan_spatial_construction_package_terrain_session
+				PROPERTIES LABELS "spatial;blockgrid;packaging;network;headless" TIMEOUT 120)
+		endif()
 		if(GARGANTUAN_WITH_LOCAL_SQLITE)
 			add_test(NAME gargantuan_spatial_construction_yard_restart
 				COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialConstructionYardInput.py"
@@ -1419,6 +1430,8 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_spatial_domain_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_spatial_transfer_tests "tests/SpatialTransferTests.cpp")
 	target_link_libraries(gargantuan_spatial_transfer_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_spatial_residency_tests "tests/SpatialResidencyTests.cpp")
+	target_link_libraries(gargantuan_spatial_residency_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_spatial_region_index_tests "tests/SpatialRegionIndexTests.cpp")
 	target_link_libraries(gargantuan_spatial_region_index_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_content_availability_tests "tests/ContentAvailabilityTests.cpp")
@@ -2112,6 +2125,8 @@ if(BUILD_TESTING)
 	set_tests_properties(gargantuan_spatial_domain PROPERTIES LABELS "spatial;physics;rendering;headless" TIMEOUT 30)
 	add_test(NAME gargantuan_spatial_transfer COMMAND gargantuan_spatial_transfer_tests)
 	set_tests_properties(gargantuan_spatial_transfer PROPERTIES LABELS "spatial;physics;network;headless" TIMEOUT 30)
+	add_test(NAME gargantuan_spatial_residency COMMAND gargantuan_spatial_residency_tests)
+	set_tests_properties(gargantuan_spatial_residency PROPERTIES LABELS "spatial;physics;headless" TIMEOUT 30)
 	add_test(NAME gargantuan_spatial_region_index COMMAND gargantuan_spatial_region_index_tests)
 	add_test(NAME gargantuan_spatial_region_index_benchmark_smoke
 		COMMAND gargantuan_spatial_region_index_benchmark --quick)

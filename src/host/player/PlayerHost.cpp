@@ -187,7 +187,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		ReportFarmResult(3, "connection_required");
 		return 3;
 	}
-	const bool NetworkTerrain = ClientEndpoint && !Payload->TerrainArtifacts.empty();
+	const bool NetworkTerrain = ClientEndpoint && (!Payload->TerrainArtifacts.empty() || !Payload->WorkspaceTerrainManifest.empty());
 	const bool SpatialContent = Payload->SpatialContent;
 	if (SpatialContent && (!Distributed || !ClientEndpoint || !network::IsLoopbackTransportEndpoint(*ClientEndpoint))) {
 		std::cerr << "[Spatial:Package] Packaged spatial sessions require a distributed Player and a loopback endpoint.\n";
@@ -253,8 +253,12 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 					.HydratePlayerGuiCode = Payload->RuntimeCode ?
 						PackageBuilder::MakeDistributedPlayerGuiCodeHydrator(*Payload) :
 						PackageBuilder::MakePlayerGuiCodeHydrator(PackagedWorld),
-					.TerrainBootstrap = NetworkTerrain ? network::MakeTerrainSessionData(Payload->Inspection.Identity,
-						Payload->Inspection.Revision, Payload->TerrainArtifacts, false) : nullptr,
+					.TerrainBootstrap = !Payload->WorkspaceTerrainManifest.empty() ?
+						network::MakeTerrainReceiver(Payload->Inspection.Identity,Payload->Inspection.Revision,
+							*AssetContentId::Parse(Payload->WorkspaceTerrainManifest),
+							terrain::GridSpec{static_cast<std::int8_t>(Payload->WorkspaceTerrainSpacingShift)}) :
+						NetworkTerrain ? network::MakeTerrainSessionData(Payload->Inspection.Identity,
+							Payload->Inspection.Revision, Payload->TerrainArtifacts, false) : nullptr,
 					.RuntimeDistributionIdentity = Payload->ClientCodeIdentity,
 					.HydratePackagedCode = PackageBuilder::MakeDistributedCodeHydrator(*Payload),
 					.SpatialContent = SpatialContent,

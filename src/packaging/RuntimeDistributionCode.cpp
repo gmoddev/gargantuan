@@ -123,18 +123,31 @@ namespace gargantuan::runtime_distribution {
 		if (Value.SpatialContent) {
 			Result["Version"] = 2u;
 			Result["SpatialContent"] = "BlockGrid1";
+			if (!Value.WorkspaceTerrainManifest.empty())
+				Result["WorkspaceTerrain"] = {{"Manifest",Value.WorkspaceTerrainManifest},{"SpacingShift",Value.WorkspaceTerrainSpacingShift}};
 		}
 		return Result;
 	}
 
 	Metadata DecodeMetadata(const Json &Value) {
 		const bool Spatial = Value.is_object() && Value.value("Version", 0u) == 2;
-		if (!Value.is_object() || Value.size() != (Spatial ? 11u : 10u) ||
+		const bool Terrain = Spatial && Value.contains("WorkspaceTerrain");
+		if (!Value.is_object() || Value.size() != (Spatial ? (Terrain ? 12u : 11u) : 10u) ||
 			(!Spatial && Value.value("Version", 0u) != 1) || (Spatial && String(Value,"SpatialContent") != "BlockGrid1") ||
 			String(Value, "ScriptCatalog") != CodeCatalogPath)
 			Reject("InvalidPolicy", "Runtime distribution manifest metadata is unsupported.");
 		Metadata Result;
 		Result.SpatialContent = Spatial;
+		if (Terrain) {
+			const auto &Pin = Value.at("WorkspaceTerrain");
+			if (!Pin.is_object() || Pin.size()!=2 || !Pin.contains("SpacingShift") || !Pin["SpacingShift"].is_number_integer())
+				Reject("InvalidPolicy","The spatial terrain binding is malformed.");
+			Result.WorkspaceTerrainManifest = String(Pin,"Manifest");
+			const auto Spacing=Pin["SpacingShift"].get<double>();
+			if (!AssetContentId::Parse(Result.WorkspaceTerrainManifest) || Spacing < -1 || Spacing > 1)
+				Reject("InvalidPolicy","The spatial terrain binding is outside the supported grid profile.");
+			Result.WorkspaceTerrainSpacingShift=static_cast<int>(Spacing);
+		}
 		const auto Target = String(Value, "Target");
 		if (Target == "DistributedPlayer") Result.Target = RuntimeDistributionTarget::DistributedPlayer;
 		else if (Target == "DedicatedServer") Result.Target = RuntimeDistributionTarget::DedicatedServer;

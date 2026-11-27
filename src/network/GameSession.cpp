@@ -10,6 +10,7 @@
 
 #include "GameSessionTestAccess.hpp"
 #include "BlockGridPeer.hpp"
+#include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 
@@ -163,7 +164,7 @@ namespace gargantuan::network {
 			   (!ReliableService || (Role == GameSessionRole::Server && ReliableService->IsValid() &&
 				ReliableService->MaximumConnections <= MaximumGameSessionPeers)) &&
 			   (!DeclareNormalOrdinaryService || Role == GameSessionRole::Client) &&
-			   (!TerrainBootstrap || (IsLoopbackTransportEndpoint(Endpoint) && !ReliableService && RuntimeDistributionIdentity.empty() &&
+			   (!TerrainBootstrap || (IsLoopbackTransportEndpoint(Endpoint) && !ReliableService && (RuntimeDistributionIdentity.empty() || SpatialContent) &&
 				TerrainBootstrap->Binding.IsValid() && TerrainBootstrap->Directory.Project.IsValid() &&
 				TerrainBootstrap->Directory.Grid.IsValid() &&
 				Limits.MaximumReliableMessageBytes >= TerrainFragmentHeaderBytes + MaximumTerrainFragmentBytes &&
@@ -284,6 +285,7 @@ namespace gargantuan::network {
 		std::shared_ptr<TerrainReceiveWork> ClientTerrainWork;
 		std::shared_ptr<const WorldRoot::TerrainMotionGuard> TerrainMotionAdmission;
 		std::shared_ptr<const DataModel::DefaultNetworkSpatialProfile> NetworkSpatialProfile;
+		std::shared_ptr<SpatialTransferProtection> SpatialProtection;
 		NetworkScheduler Scheduler;
 		GameplayInputServer ServerPossessionInput{Scheduler};
 		GameplayInputClient ClientPossessionInput{Scheduler};
@@ -691,6 +693,7 @@ namespace gargantuan::network {
 						(!Configuration.TerrainBootstrap && Owner && Owner->GetField().GetStats().MaterializedPages))
 						throw std::runtime_error("[Terrain:Network] Server terrain lacks collision or a delivery binding");
 					if (Configuration.TerrainBootstrap) AttachTerrainMotionAdmission(*Runtime->WorldRoot);
+					if (Configuration.SpatialContent) AttachSpatialProtection();
 					InitializeServerManagers();
 				} catch (...) {
 					FailSession({DisconnectReason::ResourceExhaustion, "Server session initialization failed"});
@@ -733,6 +736,8 @@ namespace gargantuan::network {
 		}
 
 		void ReleaseSessionResources() {
+			if (SpatialProtection) SpatialProtection->Retire();
+			SpatialProtection.reset();
 			NetworkSpatialProfile.reset();
 			TerrainMotionAdmission.reset();
 			if (ClientTerrainWork) ClientTerrainWork->Stop.request_stop();
@@ -909,6 +914,23 @@ namespace gargantuan::network {
 			auto Submitted = Scheduler.Submit(std::move(*Intent));
 			if (Submitted.TerminalDisconnect) PendingPeerFailures.try_emplace(Connection, std::move(*Submitted.TerminalDisconnect));
 			return Submitted.Accepted();
+		}
+
+		void AttachSpatialProtection() {
+			SpatialProtection = Runtime->DataModel->AcquireSpatialTransferProtection([this](ObjectId Object) {
+				const auto Controls = [&](const std::shared_ptr<Player> &PlayerValue) {
+					if (!PlayerValue) return false;
+					const auto Actor = TerrainFocusActor(PlayerValue);
+					if (Actor && Actor->GetObjectId() == Object) return true;
+					if (const auto CharacterValue = std::dynamic_pointer_cast<Character>(Actor))
+						if (const auto Root = CharacterValue->GetRootPart()) return (*Root)->GetObjectId() == Object;
+					return false;
+				};
+				if (Configuration.Role == GameSessionRole::Client) return Controls(Runtime->Players->GetLocalPlayer().value_or(nullptr));
+				for (const auto &[Connection,Value] : Peers)
+					if (Value.Phase == PeerPhase::Ready && !PendingPeerFailures.contains(Connection) && Controls(Value.PlayerValue)) return true;
+				return false;
+			});
 		}
 
 		std::shared_ptr<BlockGrid> ResolveGrid(ConnectionId Connection, const Peer &Value, ObjectId Id) const {
@@ -1399,6 +1421,8 @@ namespace gargantuan::network {
 				if (Configuration.SpatialContent) {
 					if (Configuration.ResolveInitialSpatialAudience)
 						PeerValue.AuthorizedSpatialRegion = Configuration.ResolveInitialSpatialAudience(*PeerValue.PlayerValue);
+					if (Configuration.TerrainBootstrap && PeerValue.AuthorizedSpatialRegion.IsValid())
+						throw std::invalid_argument("[Spatial:Network] Workspace terrain window requires a Workspace grant");
 					PeerValue.Grids = std::make_unique<BlockGridPeer>(true,PeerValue.SessionEpoch,PeerValue.AuthorizedSpatialRegion);
 				}
 			} catch (const std::exception &) {
@@ -2591,6 +2615,7 @@ namespace gargantuan::network {
 			if (Iterator == Peers.end()) return;
 			auto PeerValue = std::move(Iterator->second);
 			Peers.erase(Iterator);
+			if (PeerValue.Grids) PeerValue.Grids->Retire();
 			if (PeerValue.TerrainPending && PeerValue.TerrainPending->Sending)
 				PeerValue.TerrainPending->Sending->Stop.request_stop();
 			ConnectionsByPlayer.erase(PeerValue.PlayerObject);
@@ -3505,6 +3530,7 @@ namespace gargantuan::network {
 			try {
 				if (Configuration.SpatialContent) {
 					NetworkSpatialProfile = Runtime->DataModel->AcquireDefaultNetworkSpatialProfile(true);
+					AttachSpatialProtection();
 					for (const auto Id : ClientKnownObjects)
 						if (std::dynamic_pointer_cast<BlockGrid>(Replica.Resolve(Id))) PeerValue.Grids->Track(Id);
 				}

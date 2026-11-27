@@ -24,6 +24,11 @@ namespace gargantuan {
 		ObjectId Grid;
 		BlockGridBox Bounds;
 	};
+	struct BlockGridAssembly {
+		PhysicsBodyId Body;
+		CFrame Pose;
+		std::shared_ptr<const std::vector<PhysicsConvexChild>> Hulls;
+	};
 
 	struct BlockGridParticipant {
 		std::shared_ptr<BlockGrid> Grid;
@@ -39,11 +44,13 @@ namespace gargantuan {
 		bool Collidable{};
 		bool Queryable{};
 		bool Ready{};
+		std::unique_ptr<BlockGridAssembly> Assembly;
 	};
 
 	struct BlockGridWorldState {
 		std::map<ObjectId, BlockGridParticipant> Members;
 		std::unordered_map<PhysicsBodyId, BlockGridCollider> Owners;
+		std::unordered_map<PhysicsBodyId,ObjectId> Assemblies;
 		std::set<PhysicsBodyId> Retiring;
 		std::size_t ReservedBoxes{};
 	};

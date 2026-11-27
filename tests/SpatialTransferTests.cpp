@@ -1,6 +1,7 @@
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/Terrain.hpp"
@@ -18,6 +19,7 @@ namespace {
 	using namespace gargantuan;
 	using namespace gargantuan::network;
 	constexpr WireObjectId SourceKey{11, 1}, DestinationKey{12, 1}, SubjectKey{13, 1}, FloorKey{14, 1};
+	constexpr WireObjectId ControllerKey{15, 1};
 	constexpr ConnectionId Peer{2, 3}, OtherPeer{2, 4};
 	const SpatialDestinationBounds Bounds{{-3, 0, -3}, {3, 6, 3}};
 
@@ -30,6 +32,7 @@ namespace {
 		std::shared_ptr<Workspace> Source = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
 		std::shared_ptr<SpatialRegion> Destination = std::make_shared<SpatialRegion>();
 		std::shared_ptr<Part> Actor = std::make_shared<Part>(), Floor = std::make_shared<Part>();
+		std::shared_ptr<KinematicCharacter> Avatar;
 		SpatialTransferReservations Reservations;
 		std::shared_ptr<SpatialTransferProtection> Protection;
 		std::weak_ptr<const std::function<bool()>> LastReservation;
@@ -51,6 +54,7 @@ namespace {
 				if (Id == SourceKey) return Source->GetObjectId();
 				if (Id == DestinationKey) return Destination->GetObjectId();
 				if (Id == SubjectKey) return Actor->GetObjectId();
+				if (Id == ControllerKey && Avatar) return Avatar->GetObjectId();
 				return {};
 			};
 			Adapters.Resolve = [this](SpatialWireProvider Provider) -> std::optional<ObjectId> {
@@ -85,6 +89,17 @@ namespace {
 				LastReservation = Hold;
 				return Hold;
 			};
+		}
+		void AddController() {
+			Avatar = std::make_shared<KinematicCharacter>();
+			Avatar->SetParent(Source);
+			Avatar->SetCFrame(Actor->GetCFrame());
+			Actor->SetParent(Avatar);
+			Avatar->SetRootPart(Actor);
+			Avatar->SetCapsuleRadius(1.f);
+			Avatar->SetCapsuleHeight(4.f);
+			Avatar->ApplyRuntimeControllerFacts({1, 0, 2}, {0, 1, 0}, true);
+			Avatar->ApplyRuntimePresentationOffset(CFrame(.25f, 0, 0));
 		}
 		void Protect() {
 			Actor->SetAnchored(true);
@@ -242,7 +257,8 @@ namespace {
 		Far->SetParent(P.Authority.Destination);
 		P.Authority.Protect();
 		P.Replica.Protect();
-		const auto Native = P.Authority.Destination->PrepareSpatialDestination(Bounds).value();
+		const std::array Required{P.Authority.Floor->GetObjectId()};
+		const auto Native = P.Authority.Destination->PrepareSpatialDestination(Bounds, Required).value();
 		const auto Fabricated = std::make_shared<const std::function<bool()>>([] { return true; });
 		Check(
 			!P.Authority.Destination
@@ -308,6 +324,79 @@ namespace {
 		);
 	}
 
+	void CharacterAdmission() {
+		using enum SpatialTransferPhase;
+		{
+			Pair P;
+			P.Authority.AddController();
+			P.Replica.AddController();
+			P.Scope.Controller = ControllerKey;
+			P.Authority.Floor->SetCFrame(CFrame(0, 4.55f, 0));
+			P.Authority.Floor->SetCollisionGroup(7);
+			P.Authority.Floor->SetCollisionMask(1 << 7);
+			Check(
+				P.Begin().Status == SpatialTransferStatus::Denied && !P.Authority.AtDestination() &&
+					P.Authority.Avatar->GetGrounded(),
+				"root box missed the controller's occupied headroom or a foreign collision group"
+			);
+		}
+		{
+			Pair P;
+			P.Authority.AddController();
+			P.Replica.AddController();
+			P.Scope.Controller = ControllerKey;
+			const auto Sibling = std::make_shared<Part>();
+			Sibling->SetParent(P.Authority.Avatar);
+			Check(
+				P.Begin().Status == SpatialTransferStatus::Denied && !P.Authority.AtDestination(),
+				"a multi-body avatar was split"
+			);
+		}
+		{
+			Pair P;
+			P.Authority.AddController();
+			P.Replica.AddController();
+			P.Scope.Controller = ControllerKey;
+			P.Replica.Avatar->SetCapsuleHeight(5.f);
+			const auto OfferPacket = Packet(P.Begin(), Offer);
+			Check(
+				P.ClientReceive(OfferPacket).Status != SpatialTransferStatus::Progress,
+				"different installed capsule was marked ready"
+			);
+		}
+		{
+			Pair P;
+			P.Authority.AddController();
+			P.Replica.AddController();
+			P.Scope.Controller = ControllerKey;
+			P.Authority.Protect();
+			P.Replica.Protect();
+			const SpatialDestinationBounds TooSmall{{-.6f, 2.4f, -.6f}, {.6f, 3.6f, .6f}};
+			const auto Tiny = P.Authority.Destination->PrepareSpatialDestination(TooSmall).value();
+			Check(
+				!P.Authority.Destination->CheckSpatialLanding(P.Authority.Actor, P.Authority.Movement(), Tiny)
+					 .Succeeded(),
+				"partial capsule coverage accepted"
+			);
+			const auto OfferPacket = Packet(P.Begin(), Offer);
+			const auto ReadyPacket = Packet(P.ClientReceive(OfferPacket), Ready);
+			const auto ReservePacket = Packet(P.ServerReceive(ReadyPacket), Reserve);
+			const auto HeldPacket = Packet(P.ClientReceive(ReservePacket), Held);
+			const auto Committed = Packet(P.ServerReceive(HeldPacket), Commit);
+			const auto Ack = Packet(P.ClientReceive(Committed), Applied);
+			Check(P.ServerReceive(Ack).Status == SpatialTransferStatus::Applied, "character acknowledgment");
+			for (const auto *Side : {&P.Authority, &P.Replica})
+				Check(
+					Side->AtDestination() && Side->Avatar->GetCFrame().FuzzyEq(Side->Actor->GetCFrame()) &&
+						Side->Actor->GetParent().value_or(nullptr) == Side->Avatar && !Side->Avatar->GetGrounded() &&
+						Side->Avatar->GetFloorNormal() == glm::vec3(0) &&
+						Side->Avatar->GetVelocity() == glm::vec3(1, 0, 2) &&
+						Side->Avatar->GetPresentationCFrame().FuzzyEq(Side->Actor->GetCFrame()),
+					"admitted move must preserve character identity/velocity and retire old floor and presentation "
+					"state"
+				);
+		}
+	}
 	void Failures() {
 		using enum SpatialTransferPhase;
 		{
@@ -442,6 +531,7 @@ int main() try {
 	BootstrapNativeRuntimeSchema();
 	CheckedHandoff();
 	PreventBypasses();
+	CharacterAdmission();
 	Failures();
 	std::cout << "[Network:SpatialTransfer] Independent native realms, portable proof, bilateral holds and revocation "
 				 "passed.\n";

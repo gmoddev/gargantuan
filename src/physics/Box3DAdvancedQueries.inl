@@ -8,7 +8,7 @@
                 if (!Record || !(Filter.RequireCollidable ? Record->Description.CanCollide :
                     Record->Description.CanQuery.value_or(Record->Description.CanCollide))) return false;
                 if (Record->Description.RequiresBlockGridQuery && !Filter.IncludeBlockGrids) return false;
-                if (!PhysicsCanCollide(Filter.CollisionGroup, Filter.CollisionMask,
+                if (!Filter.ControllerGroups && !PhysicsCanCollide(Filter.CollisionGroup, Filter.CollisionMask,
                     Record->Description.CollisionGroup, Record->Description.CollisionMask)) return false;
                 const bool Listed = std::binary_search(Filter.Bodies.begin(), Filter.Bodies.end(), Body);
                 return Filter.Type == PhysicsQueryFilterType::Include ? Listed : !Listed;
@@ -54,8 +54,10 @@
                     C.Result->Candidates.push_back(Hit);return 1;
                 };
                 auto NativeFilter=b3DefaultQueryFilter();
-                NativeFilter.categoryBits=std::uint64_t{1} << Request.Filter.CollisionGroup;
-                NativeFilter.maskBits=Request.Filter.CollisionMask;
+                if (!Request.Filter.ControllerGroups) {
+                    NativeFilter.categoryBits=std::uint64_t{1} << Request.Filter.CollisionGroup;
+                    NativeFilter.maskBits=Request.Filter.CollisionMask;
+                }
                 (void)b3World_CastShape(World,Proxy.Origin,&Proxy.Proxy,Box3DConversions::ToBox3(Request.Direction),NativeFilter,Collect,&Context);
                 if (!Result.Succeeded() || Result.CandidatesTruncated) {
                     Result.Status=PhysicsOperationStatus::BackendFailure;Result.Message="Shape cast failed or candidate bound reached";Result.Candidates.clear();return Result;
@@ -79,8 +81,10 @@
                     C.Result->Bodies.push_back(*Owner);return true;
                 };
                 auto NativeFilter=b3DefaultQueryFilter();
-                NativeFilter.categoryBits=std::uint64_t{1} << Request.Filter.CollisionGroup;
-                NativeFilter.maskBits=Request.Filter.CollisionMask;
+                if (!Request.Filter.ControllerGroups) {
+                    NativeFilter.categoryBits=std::uint64_t{1} << Request.Filter.CollisionGroup;
+                    NativeFilter.maskBits=Request.Filter.CollisionMask;
+                }
                 (void)b3World_OverlapShape(World,Proxy.Origin,&Proxy.Proxy,NativeFilter,Collect,&Context);
                 if(Result.Truncated){Result.Status=PhysicsOperationStatus::BackendFailure;Result.Message="Overlap candidate bound reached";Result.Bodies.clear();return Result;}
                 std::ranges::sort(Result.Bodies);return Result;

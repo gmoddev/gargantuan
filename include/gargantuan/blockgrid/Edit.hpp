@@ -16,6 +16,7 @@ namespace gargantuan::blockgrid {
 		std::vector<Definition> Materials;
 	};
 	struct BindingEdit { Definition Spec; bool Replace{}; };
+	struct MotionEdit { bool Dynamic{}; std::optional<std::pair<Point,Point>> Velocities; };
 	[[nodiscard]] std::shared_ptr<const Patch> CapturePatch(const Field& Source, std::span<const Write> Writes);
 	[[nodiscard]] std::vector<Write> ReplayWrites(const Field& Source, const Patch& Value, bool Forward);
 	struct EditRequest {
@@ -28,5 +29,6 @@ namespace gargantuan::blockgrid {
 		std::optional<ChannelSpec> Channel;
 		std::vector<Operation> Commands;
 		std::vector<Definition> Materials;
+		std::optional<MotionEdit> Motion;
 	};
 }

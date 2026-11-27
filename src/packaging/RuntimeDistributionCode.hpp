@@ -39,6 +39,8 @@ namespace gargantuan {
 			std::string Compiler;
 			std::string ClientCodeIdentity;
 			bool SpatialContent{};
+			std::string WorkspaceTerrainManifest;
+			int WorkspaceTerrainSpacingShift{};
 		};
 
 		using ArtifactWriter = std::function<void(std::string, std::string_view)>;

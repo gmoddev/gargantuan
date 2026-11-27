@@ -38,6 +38,9 @@ namespace gargantuan::network {
 		std::vector<ArtifactRange> Artifacts;
 	};
 
+	// Client-side managed bootstrap pin. No server chunk coordinates or private sample bytes are required.
+	[[nodiscard]] std::shared_ptr<TerrainSessionData> MakeTerrainReceiver(ProjectId Project, std::uint64_t PackageVersion,
+		AssetContentId Manifest, terrain::GridSpec Grid);
 	[[nodiscard]] std::shared_ptr<const TerrainSessionData> MakeTerrainSessionData(
 		ProjectId Project, std::uint64_t PackageVersion, std::span<const terrain::TerrainArtifact> Artifacts,
 		bool Sender);
