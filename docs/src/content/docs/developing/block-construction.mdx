@@ -124,6 +124,8 @@ To reuse a group of cells, select its source grid and enter the two corners in t
 
 For a custom mesh, import it into the project's asset catalog. Use the inspector's asset picker to choose the visual mesh, its companion collision when needed, and a material. Give the definition a project key, place a cell and save. On reopen, the grid resolves those project assets again.
 
+To give a grid or Part its own domain assignment, select it in Explorer and search Properties for **SpatialRegion**. Choose the domain by its Explorer path and apply the change. **Use parent domain** clears that explicit assignment. A grid can stay under Workspace in Explorer while its cells belong to the workshop's coordinate space.
+
 Select **Workspace** or a **SpatialRegion** in Explorer to inspect its Parts, grids, terrain collision and active collision requests. **Show in viewport** switches the edit camera to that coordinate space. To hold local collision during startup, enter minimum and maximum coordinates and a duration, then choose **Add collision preload Script** and save. The generated server Script calls the public `RequestCollisionArea` method. During Play, **Inspect Play view** shows the live camera's domain and how many requests are ready. Stop restores the Edit world and its own counters.
 
 ## Enter a room through a door
