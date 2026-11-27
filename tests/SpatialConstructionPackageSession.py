@@ -16,11 +16,30 @@ def WriteJson(PathValue, Value):
     PathValue.write_text(json.dumps(Value), encoding="utf-8")
 
 
+def ManagedEnvironment():
+    Environment = os.environ.copy()
+    Environment.update(SDL_AUDIODRIVER="dummy", SDL_LOGGING="info")
+    if os.name == "nt":
+        Windows = Path(os.environ["SystemRoot"])
+        Environment["PATH"] = os.pathsep.join((str(Windows / "System32"), str(Windows)))
+    return Environment
+
+
+def ConsoleCapture():
+    # SDL on Windows writes redirected diagnostics only with a console attached.
+    if os.name != "nt":
+        return {}
+    Startup = subprocess.STARTUPINFO()
+    Startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    Startup.wShowWindow = subprocess.SW_HIDE
+    return {"startupinfo": Startup, "creationflags": subprocess.CREATE_NEW_CONSOLE}
+
+
 def Run(Arguments, Directory, Environment=None, Expected=0):
     Process = subprocess.run(
         [str(Argument) for Argument in Arguments], cwd=Directory, env=Environment,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=45,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **ConsoleCapture(),
     )
     Output = Process.stdout.decode(errors="replace")
     if Process.returncode != Expected:
@@ -69,11 +88,7 @@ def VerifyPair(Fixture, Packager, PlayerRuntime, ServerRuntime, Directory, WithT
     if not ShipsPrivateMarker(Server) or ShipsPrivateMarker(Player):
         raise RuntimeError("The server-only authored tile marker crossed the package audience boundary")
 
-    Environment = os.environ.copy()
-    if os.name == "nt":
-        Windows = Path(os.environ["SystemRoot"])
-        Environment["PATH"] = os.pathsep.join([str(Windows / "System32"), str(Windows)])
-    Environment["SDL_AUDIODRIVER"] = "dummy"
+    Environment = ManagedEnvironment()
     Suffix = ".exe" if os.name == "nt" else ""
     ServerExe, PlayerExe = Server / ("GargantuanServer" + Suffix), Player / ("GargantuanPlayer" + Suffix)
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as Available:
@@ -84,7 +99,7 @@ def VerifyPair(Fixture, Packager, PlayerRuntime, ServerRuntime, Directory, WithT
         Process = subprocess.Popen(
             [str(ServerExe), "--bind", Endpoint, "--max-ticks", "360"], cwd=Directory,
             env=Environment, stdout=Log, stderr=subprocess.STDOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **ConsoleCapture(),
         )
         try:
             Deadline = time.monotonic() + 15

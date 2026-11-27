@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 
-from SpatialConstructionPackageSession import Build, Run
+from SpatialConstructionPackageSession import Build, ConsoleCapture, ManagedEnvironment, Run
 
 Samples = Path(__file__).resolve().parents[1] / "samples"
 sys.path.insert(0, str(Samples / "TerrainQuarry"))
@@ -202,7 +202,7 @@ def Launch(Args, Root, Env, Name):
     Log = Root / (Name + ".log")
     with Log.open("wb") as Output:
         Process = subprocess.Popen([str(Arg) for Arg in Args], cwd=Root, env=Env, stdout=Output,
-                                   stderr=subprocess.STDOUT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                                   stderr=subprocess.STDOUT, **ConsoleCapture())
         try:
             yield Process, Log
         finally:
@@ -222,8 +222,9 @@ def Await(Owner, Marker, Others=()):
         if Marker in Text:
             return
         if time.monotonic() >= End or any(Process.poll() is not None for Process, _ in (Owner, *Others)):
-            Logs = "\n".join(File.name + "\n" + File.read_text(encoding="utf-8", errors="replace")[-2600:]
-                              for _, File in (Owner, *Others))
+            Logs = "\n".join(f"{File.name} (exit={Process.poll()})\n" +
+                             File.read_text(encoding="utf-8", errors="replace")[-2600:]
+                             for Process, File in (Owner, *Others))
             raise RuntimeError(f"Missing {Marker}\n{Logs}")
         time.sleep(.05)
 
@@ -235,11 +236,7 @@ def RunYard(Options, Root):
     AddObserver(Options.engine.resolve(), Project)
     Server, _ = Build(Options.packager, Project, Options.server_runtime, "DedicatedServer", Root, "Development")
     Player, _ = Build(Options.packager, Project, Options.player_runtime, "DistributedPlayer", Root, "Development")
-    Env = os.environ.copy()
-    Env["SDL_AUDIODRIVER"] = "dummy"
-    if os.name == "nt":
-        Windows = Path(Env["SystemRoot"])
-        Env["PATH"] = os.pathsep.join((str(Windows / "System32"), str(Windows)))
+    Env = ManagedEnvironment()
     Exe = ".exe" if os.name == "nt" else ""
     Database = Root / "yard.sqlite"
     DigSignature = None

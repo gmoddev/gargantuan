@@ -10,7 +10,7 @@ import tempfile
 import time
 from uuid import uuid4
 
-from SpatialConstructionPackageSession import Build, WriteJson
+from SpatialConstructionPackageSession import Build, ManagedEnvironment, WriteJson
 from SpatialConstructionYardMultiplayer import Await, EditorHost, Launch
 
 
@@ -102,7 +102,7 @@ def Network(Args, Directory):
         Available.bind(("127.0.0.1", 0))
         Endpoint = f"127.0.0.1:{Available.getsockname()[1]}"
     Suffix = ".exe" if os.name == "nt" else ""
-    Env = dict(os.environ, SDL_AUDIODRIVER="dummy")
+    Env = ManagedEnvironment()
     with Launch([Server / ("GargantuanServer" + Suffix), "--bind", Endpoint], Directory, Env, "creator-server") as Host:
         Await(Host, "[Runtime:Server] StartupWallMilliseconds=")
         with Launch([Player / ("GargantuanPlayer" + Suffix), "--headless", "--connect", Endpoint,
