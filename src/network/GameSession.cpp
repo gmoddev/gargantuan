@@ -1307,7 +1307,6 @@ namespace gargantuan::network {
 				Reject(Connection, DisconnectReason::IncompatibleVersion, "Client terrain package does not match the server");
 				return;
 			}
-			}
 			if (Hello.RuntimeDistributionIdentity != Configuration.RuntimeDistributionIdentity) {
 				++Metrics.RejectedHandshakes;
 				Reject(Connection, DisconnectReason::ProtocolViolation, "Client runtime distribution identity is incompatible");

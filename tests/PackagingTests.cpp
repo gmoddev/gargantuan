@@ -140,6 +140,20 @@ namespace {
 		World->InitializeLoadedProjectRevision();
 		const auto Revision = World->GetAuthoritativeRevision();
 		const auto Payload = PackageBuilder::Capture(ProjectValue, World, Revision, Revision);
+		const auto Managed = PackageBuilder::Capture(ProjectValue, World, Revision, Revision, PackageAudience::Trusted,
+			RuntimeDistributionRequest{.Preset = RuntimeDistributionPreset::Compiled});
+		for (const auto Target : {RuntimeDistributionTarget::DistributedPlayer, RuntimeDistributionTarget::DedicatedServer}) {
+			const auto Audience = Target == RuntimeDistributionTarget::DistributedPlayer
+				? PackageAudience::DistributedPlayer : PackageAudience::Trusted;
+			bool UnsupportedTarget = false;
+			try {
+				(void)PackageBuilder::Capture(ProjectValue, World, Revision, Revision, Audience,
+					RuntimeDistributionRequest{.Target = Target});
+			} catch (const RuntimeDistributionError &Error) {
+				UnsupportedTarget = Error.Code == "UnsupportedTerrainTarget";
+			}
+			Require(UnsupportedTarget, "managed network terrain must fail before projecting or packaging project content");
+		}
 		World->Destroy();
 		Require(Payload.TerrainArtifacts.size() == 3, "capture exactly two terrain leaves and one manifest");
 		const auto Development = Root / "TerrainDevelopment";
@@ -168,6 +182,21 @@ namespace {
 		};
 		const auto Leaf = Relative(Payload.TerrainArtifacts.front());
 		const auto Manifest = Relative(Payload.TerrainArtifacts.back());
+		const auto ManagedOutput = Root / "TerrainManagedOffline";
+		const auto ManagedBuild = Build(Managed, Runtime, ManagedOutput, PackageConfiguration::Development);
+		Require(ManagedBuild.Ok && !ManagedBuild.ManifestSha256.empty(), "build managed compiled Offline Player with terrain");
+		const RuntimeDistributionAdmission Pinned{.ExpectedManifestSha256 = ManagedBuild.ManifestSha256};
+		const auto ManagedPackage = PackageBuilder::Load(ManagedOutput, Diagnostics, Pinned,
+			PackageRuntimeLoadMode::LoopbackDevelopmentClient);
+		Require(ManagedPackage && ManagedPackage->RuntimeCode && ManagedPackage->TerrainArtifacts.size() == 3 &&
+			ManagedPackage->LoadMode == PackageRuntimeLoadMode::Complete, "managed Offline Player must always load complete terrain");
+		const auto ManagedWorld = PackageBuilder::LoadWorld(*ManagedPackage, ManagedOutput);
+		const auto ManagedSpace = std::dynamic_pointer_cast<Workspace>(ManagedWorld->GetService("Workspace"));
+		Require(ManagedSpace && ManagedSpace->GetTerrain()->GetField().Read(Writes[1].Point) == Writes[1].Value,
+			"managed catalog binding preserves the same distant terrain value");
+		ManagedWorld->Destroy();
+		Require(std::filesystem::remove(ManagedOutput / Leaf) && !PackageBuilder::Load(ManagedOutput, Diagnostics, Pinned,
+			PackageRuntimeLoadMode::LoopbackDevelopmentClient), "managed Offline Player rejects missing terrain leaves");
 		for (const auto &Artifact : Payload.TerrainArtifacts)
 			if (Artifact.Id.Purpose == terrain::TerrainArtifactPurpose::Chunk)
 				Require(std::filesystem::remove(Development / Relative(Artifact)), "remove local dormant GTCH fixture");

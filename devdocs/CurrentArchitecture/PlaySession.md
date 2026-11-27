@@ -137,9 +137,30 @@ Repeated Play/Stop tests verify that authoring descendants, revision, dirty
 state, and history remain unchanged while runtime actions, Players, characters,
 modules, and connections are recreated and discarded per session.
 
+## Local root debugger
+
+The optional local debugger parks the launch Script at its first executable
+root instruction. A step pauses before the next different line in that
+same root frame. Native and nested calls finish before a root step can park.
+Ordinary yield, completion, or failure ends this debug pass. Continue
+restores normal scheduling, and Stop discards the rooted coroutine with the
+runtime. The debug pass uses the existing real execution deadline with one
+remaining budget across all resume turns and excludes time spent parked.
+
+The session suspends Engine simulation, queued task resumes, and gameplay
+input while parked. Presentation reuses the current frame, or extracts a full
+frame if the sink restarts or resizes. A resized presentation scales the
+committed GUI display list without delivering input or relaying out the runtime
+GUI. Only the latest resize event reaches gameplay when leaving the pause. A
+failure in the resumed top-level Script retains its verified authored source
+location. The Engine simulation
+delta and native scheduled-task clock exclude the parked interval. Script
+wall-clock APIs still report real time. No audio or persistence provider is
+active on a root-debug launch. See the [wire contract](EditorHostProtocol.md#local-root-script-debugger-version-1).
+
 ## Deliberately deferred
 
-Multiplayer, client/server topology, live-edit synchronization, pause/step/debug,
+Multiplayer, client/server topology, live-edit synchronization, arbitrary debugger attachment,
 breakpoints, test sessions, device emulation, runtime object selection, runtime
 changes applied back to authoring, plugin execution, source mounting, GASM behavior,
 simulation ownership, and asset importing remain outside this foundation.

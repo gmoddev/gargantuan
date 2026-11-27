@@ -8,17 +8,22 @@
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
+#include "../src/serialization/JsonCodec.hpp"
 
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 
 namespace {
 	using namespace gargantuan;
@@ -59,6 +64,208 @@ namespace {
 	Json Create(Client &Api, const Json &Parent, std::string_view Class, std::string_view Name) {
 		return Api.Ok("CreateInstance", {{"Parent", Parent}, {"Name", Name},
 			{"ClassSchemaId", SchemaId::FromNativeName("Engine", Class).ToString()}, {"DefinitionVersion", 1}})["Object"];
+	}
+	void TestPlaySourceLocation(const std::filesystem::path &Root) {
+		Check(SDL_Init(0), "initialize SDL for local Play");
+		struct ScopeExit { ~ScopeExit() { SDL_Quit(); } } Cleanup;
+		Client Api;
+		const auto Hello = Api.Ok("Handshake");
+		Check(Hello["PlayScriptFailureLocationVersion"] == 1 &&
+			std::ranges::find(Hello["Capabilities"], Json("PlayScriptFailureLocation")) != Hello["Capabilities"].end(),
+			"local Play source location version advertised");
+		Api.Ok("CreateProject", {{"Destination", Root.generic_string()}, {"Name", "Play Source Location"}});
+		const auto Parent = FindObject(Api.Ok("GetSnapshot"), "Workspace")["Id"];
+		const auto Failing = Create(Api, Parent, "Script", "RepeatedName");
+		const auto Nested = Create(Api, Parent, "Script", "RepeatedName");
+		const auto Commit = [&](const Json &Object, const std::string &Text) {
+			const auto Current = Api.Ok("GetScriptSource", {{"Object", Object}});
+			Api.Ok("SetScriptSource", {{"Object", Object}, {"ExpectedSourceVersion", Current["SourceVersion"]}, {"Source", Text}});
+		};
+		Commit(Failing, "-- First authoring revision\nreturn nil");
+		Commit(Failing, "warn('RepeatedName:1999: spoofed print')\nerror('RepeatedName:9999: actual failure text', 0)");
+		Commit(Nested, "local function throwError()\nerror('nested failure', 0)\nend\nthrowError()");
+		const auto Authored = Api.Ok("GetScriptBinding", {{"Object", Failing}});
+		const auto Source = Api.Ok("GetScriptSource", {{"Object", Failing}});
+		Api.Error("StartPlaySession", {{"IncludeScriptFailureLocations", "true"}}, "MalformedRequest");
+		auto Start = Api.Ok("StartPlaySession");
+		for (const auto &Entry : Start["Diagnostics"])
+			Check(!Entry.contains("Source"), "legacy Play launch omits authored source locations");
+		Api.Ok("StopPlaySession", {{"PlaySessionId", Start["PlaySessionId"]}});
+		Start = Api.Ok("StartPlaySession", {{"IncludeScriptFailureLocations", true}});
+		Json Location;
+		std::size_t Located = 0;
+		const auto ReadRows = [&](const Json &Packet) {
+			for (const auto &Entry : Packet["Diagnostics"]) {
+				if (!Entry.contains("Source")) continue;
+				Check(Entry["Severity"] == "Error" && Entry["Message"].get<std::string>().find("actual failure text") != std::string::npos,
+					"print, nested functions, and name collisions cannot fabricate an authored location");
+				Location = Entry["Source"];
+				++Located;
+			}
+		};
+		ReadRows(Start);
+		Api.Host.PumpPlaySessionForTesting();
+		ReadRows(Api.Ok("PollPlayDiagnostics", {{"PlaySessionId", Start["PlaySessionId"]}}));
+		ReadRows(Api.Ok("StopPlaySession", {{"PlaySessionId", Start["PlaySessionId"]}}));
+		Check(Located == 1 && Location["Binding"] == Authored["Binding"] && Location["Scope"] == Authored["Scope"] &&
+			Location["Object"] == Failing &&
+			Location["SourceVersion"] == Source["SourceVersion"] && Location["LaunchAuthoritativeRevision"] == Start["LaunchAuthoritativeRevision"] &&
+			Location["Line"] == 2, "trusted VM line and exact authored launch binding survive Stop");
+		const Json Resolve{{"Binding", Location["Binding"]}, {"ExpectedScope", Location["Scope"]}, {"ExpectedObject", Location["Object"]},
+			{"ExpectedSourceVersion", Location["SourceVersion"]}};
+		Check(Api.Ok("ResolveScriptBinding", Resolve)["Object"] == Failing, "post-Stop location resolves exact live source");
+		auto WrongObject = Resolve;
+		WrongObject["ExpectedObject"] = Nested;
+		Api.Error("ResolveScriptBinding", WrongObject, "StaleObject");
+		Commit(Failing, "-- Revised after Stop");
+		Api.Error("ResolveScriptBinding", Resolve, "SourceVersionConflict");
+		Api.Ok("SaveProject");
+		Api.Ok("OpenProject", {{"Root", Root.generic_string()}});
+		Api.Error("ResolveScriptBinding", Resolve, "StaleProject");
+	}
+
+	void TestPlayRootDebugger(const std::filesystem::path &Root) {
+		Check(SDL_Init(0), "initialize SDL for root debugger");
+		struct ScopeExit { ~ScopeExit() { SDL_Quit(); } } Cleanup;
+		Client Api;
+		Check(Api.Ok("Handshake")["PlayRootDebugVersion"] == 1, "local root debugger advertised");
+		Api.Ok("CreateProject", {{"Destination", Root.generic_string()}, {"Name", "Local Root Debugger"}});
+		const auto Snapshot = Api.Ok("GetSnapshot");
+		const auto Parent = FindObject(Snapshot, "Workspace")["Id"];
+		const auto StarterGui = FindObject(Snapshot, "StarterGui")["Id"];
+		const auto Screen = Create(Api, StarterGui, "ScreenGui", "PausedHUD");
+		Api.Ok("CreateInstance", {{"Parent", Screen}, {"Name", "PauseIndicator"},
+			{"ClassSchemaId", SchemaId::FromNativeName("Engine", "Frame").ToString()}, {"DefinitionVersion", 1},
+			{"InitialProperties", Json::array({Json{
+				{"DeclaringClassSchemaId", SchemaId::FromNativeName("Engine", "GuiObject").ToString()},
+				{"DeclaringDefinitionVersion", 1}, {"Property", "Size"},
+				{"Value", JsonCodec::EncodeWireValue(WireUDim2{{0, 80}, {0, 40}})},
+			}})}});
+		const auto Target = Create(Api, Parent, "Script", "SteppedRoot");
+		const auto OldSource = Api.Ok("GetScriptSource", {{"Object", Target}});
+		Api.Ok("SetScriptSource", {{"Object", Target}, {"ExpectedSourceVersion", OldSource["SourceVersion"]},
+			{"Source", "print('root-first')\ntask.delay(0.5, function() print('after-pause-timer') end)\nprint('root-last')"}});
+		const auto Source = Api.Ok("GetScriptSource", {{"Object", Target}});
+		const auto Authoring = Api.Ok("GetProjectState");
+		const Json RootOption{{"Object", Target}, {"SourceVersion", Source["SourceVersion"]}};
+		Api.Error("StartPlaySession", {{"DebugRoot", {{ "Object", Target }, {"SourceVersion", OldSource["SourceVersion"]}}}},
+			"DebugSourceUnavailable");
+		Api.Error("StartPlaySession", {{"DebugRoot", RootOption}, {"PersistenceMode", "Disposable"}}, "MalformedRequest");
+		const auto Open = [&] {
+			Api.Ok("OpenViewportTransport", {{"Transport", "LatestFrameMailbox"},
+				{"Version", LatestFrameMailboxLayout::Version}, {"PixelFormat", "BGRA8"}});
+		};
+		if (LatestFrameMailbox::IsSupported()) {
+			Open();
+			Api.Ok("ConfigureViewport", {{"Width", 640u}, {"Height", 480u}});
+		}
+		const auto Start = Api.Ok("StartPlaySession", {{"DebugRoot", RootOption}});
+		const auto Id = Start["PlaySessionId"];
+		auto Pause = Start["DebugPause"];
+		const auto HasMessage = [](const Json &Packet, std::string_view Message) {
+			return std::ranges::any_of(Packet["Diagnostics"], [&](const Json &Entry) {
+				return Entry.value("Message", "").find(Message) != std::string::npos;
+			});
+		};
+		Check(Pause["Serial"] == 1 && Pause["CanResume"] == true && Pause["Source"]["Line"] == 1 &&
+			Pause["Source"]["Object"] == Target && !HasMessage(Start, "root-first"),
+			"entry pause occurs before the selected Script executes its first line");
+		if (LatestFrameMailbox::IsSupported()) {
+			std::vector<std::uint8_t> Pixels;
+			RenderPublicationPtr Captured;
+			Api.Host.SetViewportCaptureForTesting([&](RenderPublicationPtr Publication) {
+				Captured = Publication;
+				const auto Width = Publication->Frame.ViewportWidth;
+				const auto Height = Publication->Frame.ViewportHeight;
+				Pixels.assign(static_cast<std::size_t>(Width) * Height * 4, 0);
+				return EditorViewportCaptureView{.Width = Width, .Height = Height, .BgraPixels = Pixels};
+			});
+			const auto StartPresentation = [&] {
+				Api.Ok("StartViewportPresentation", {{"FrameRateMode", "Adaptive"}});
+			};
+			std::optional<float> InitialUiRight;
+			const auto CheckFrame = [&](std::string_view Stage, std::uint32_t Width, std::uint32_t Height) {
+				const auto Previous = Api.Ok("GetViewportPresentationState");
+				Captured.reset();
+				Api.Host.PumpViewportPresentationForTesting();
+				const auto Frame = Api.Ok("GetViewportPresentationState");
+				Check(Captured && Captured->FullResync && Captured->Frame.ViewportWidth == Width &&
+					Captured->Frame.ViewportHeight == Height && Frame["Mode"] == "Play" &&
+					Frame["PlaySessionId"] == Id && Frame["ProducedFrames"] > Previous["ProducedFrames"] &&
+					Frame["PresentationFailures"] == Previous["PresentationFailures"],
+					std::string(Stage) + ": paused presentation must publish a full frame for the exact Play session and dimensions. " +
+						Frame.dump());
+				const auto &Ui = Captured->GetUi();
+				float Right = 0;
+				for (const auto &Batch : Ui.Batches)
+					for (const auto &Vertex : Batch.Vertices) Right = std::max(Right, Vertex.Position.x);
+				Check(Ui.ViewportWidth == Width && Ui.ViewportHeight == Height && Right > 0,
+					std::string(Stage) + ": frozen HUD geometry fits the target presentation");
+				if (!InitialUiRight) InitialUiRight = Right;
+				Check(std::abs(Right - *InitialUiRight * (static_cast<float>(Width) / 640.0f)) < 0.05f,
+					std::string(Stage) + ": frozen HUD geometry scales from the original viewport");
+				Check(Api.Ok("GetPlayRootDebugState", {{"PlaySessionId", Id}})["DebugPause"] == Pause &&
+					!HasMessage(Api.Ok("PollPlayDiagnostics", {{"PlaySessionId", Id}}), "root-first"),
+					"paused presentation does not resume scripts or replace the pause");
+			};
+			StartPresentation();
+			CheckFrame("Entry", 640, 480);
+			Api.Ok("ConfigureViewport", {{"Width", 480u}, {"Height", 360u}});
+			CheckFrame("Resize", 480, 360);
+			Api.Ok("CloseViewportTransport");
+			Open();
+			StartPresentation();
+			CheckFrame("Reattach", 480, 360);
+			Api.Ok("CloseViewportTransport");
+			Api.Host.SetViewportCaptureForTesting({});
+		}
+		Api.Host.PumpPlaySessionForTesting();
+		Check(Api.Ok("GetPlayRootDebugState", {{"PlaySessionId", Id}})["DebugPause"] == Pause,
+			"ordinary simulation pump leaves the paused Script untouched");
+		Api.Error("ResumePlayRootDebug", {{"PlaySessionId", Id}, {"PauseSerial", 2}, {"Action", "NextLine"}},
+			"DebugPauseUnavailable");
+		Api.Error("ResumePlayRootDebug", {{"PlaySessionId", "999"}, {"PauseSerial", 1}, {"Action", "Continue"}},
+			"StalePlaySession");
+		Api.Error("ResumePlayRootDebug", {{"PlaySessionId", Id}, {"PauseSerial", 1}, {"Action", "Eval"}}, "MalformedRequest");
+		Api.Error("SaveProject", Json::object(), "PlaySessionActive");
+		const auto Step = [&](std::string Action) {
+			return Api.Ok("ResumePlayRootDebug", {{"PlaySessionId", Id}, {"PauseSerial", Pause["Serial"]}, {"Action", Action}})["DebugPause"];
+		};
+		Pause = Step("NextLine");
+		Check(Pause["Serial"] == 2 && Pause["Source"]["Line"] == 2 &&
+			HasMessage(Api.Ok("PollPlayDiagnostics", {{"PlaySessionId", Id}}), "root-first"), "next line executes only its predecessor");
+		Pause = Step("NextLine");
+		Check(Pause["Serial"] == 3 && Pause["Source"]["Line"] == 3, "next line preserves the same root");
+		std::this_thread::sleep_for(std::chrono::milliseconds(600));
+		Api.Host.PumpPlaySessionForTesting();
+		Check(!HasMessage(Api.Ok("PollPlayDiagnostics", {{"PlaySessionId", Id}}), "after-pause-timer"),
+			"delayed task remains parked while the debugger owns the runtime");
+		Check(Step("Continue").is_null(), "continue retires the paused root");
+		Api.Host.PumpPlaySessionForTesting();
+		const auto Continued = Api.Ok("PollPlayDiagnostics", {{"PlaySessionId", Id}});
+		Check(HasMessage(Continued, "root-last") && !HasMessage(Continued, "after-pause-timer"),
+			"continue executes the terminal line and preserves remaining delay time");
+		Api.Ok("StopPlaySession", {{"PlaySessionId", Id}});
+		const auto StopPaused = Api.Ok("StartPlaySession", {{"DebugRoot", RootOption}});
+		Check(StopPaused["DebugPause"]["Source"]["Line"] == 1, "each launch has a fresh pause");
+		Api.Ok("StopPlaySession", {{"PlaySessionId", StopPaused["PlaySessionId"]}});
+		Api.Error("GetPlayRootDebugState", {{"PlaySessionId", StopPaused["PlaySessionId"]}}, "StalePlaySession");
+		Check(Api.Ok("GetProjectState") == Authoring, "runtime stepping never mutates authoritative project state or history");
+
+		const auto Revision = Api.Ok("SetScriptSource", {{"Object", Target}, {"ExpectedSourceVersion", Source["SourceVersion"]},
+			{"Source", "print('root-will-fail')\nerror('Forged.luau:99999: continued root', 0)"}})["SourceVersion"];
+		const auto FailureStart = Api.Ok("StartPlaySession", {{"DebugRoot", {{"Object", Target}, {"SourceVersion", Revision}}}});
+		const auto FailureId = FailureStart["PlaySessionId"];
+		Check(FailureStart["DebugPause"]["Source"]["Line"] == 1, "failing root is paused at entry");
+		Api.Ok("ResumePlayRootDebug", {{"PlaySessionId", FailureId},
+			{"PauseSerial", FailureStart["DebugPause"]["Serial"]}, {"Action", "Continue"}});
+		const auto Failure = Api.Ok("PollPlayDiagnostics", {{"PlaySessionId", FailureId}});
+		Check(std::ranges::any_of(Failure["Diagnostics"], [&](const Json &Entry) {
+			return Entry.value("Message", "").find("continued root") != std::string::npos &&
+				Entry.contains("Source") && Entry["Source"]["Object"] == Target &&
+				Entry["Source"]["Line"] == 2 && Entry["Source"]["SourceVersion"] == Revision;
+		}), "continued root error retains trusted authored identity and line");
+		Api.Ok("StopPlaySession", {{"PlaySessionId", FailureId}});
 	}
 	void TestNativeIdentityAndPersistence() {
 		auto World = std::make_shared<DataModel>(); World->SetArchivable(true);
@@ -272,6 +479,8 @@ int main() {
 		const auto Root = std::filesystem::temp_directory_path() / ("gargantuan-script-bindings-" +
 			std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
 		TestEditorProtocol(Root / "Project");
+		TestPlaySourceLocation(Root / "PlayLocation");
+		TestPlayRootDebugger(Root / "PlayDebugger");
 		std::cout << "[Editor:ScriptBinding] PASS Checks=" << Checks << " Fixture=" << Root.generic_string() << '\n';
 		return 0;
 	} catch (const std::exception &Error) {

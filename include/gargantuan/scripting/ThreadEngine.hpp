@@ -3,6 +3,8 @@
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 
 #include <lua.h>
+#include <chrono>
+#include <functional>
 #include <cstddef>
 #include <deque>
 #include <optional>
@@ -45,6 +47,7 @@ namespace gargantuan {
 		int TakeThreadReference(lua_State *thread);
 		void ShutdownRuntime();
 		void Step();
+		void SetDevelopmentClock(std::function<std::chrono::steady_clock::time_point()> Clock);
 		void ResumeThread(lua_State *thread, int threadReference, int argumentCount);
 		bool CancelPendingTasks(lua_State *Caller, lua_State *Thread);
 		bool QueueScheduledTask(lua_State *Thread, ScheduledTask::Type Type, double DelaySeconds, ArgumentRange Arguments);
@@ -53,6 +56,8 @@ namespace gargantuan {
 	  private:
 		lua_State *L;
 		bool Stopping = false;
+		std::function<std::chrono::steady_clock::time_point()> DevelopmentClock;
+		[[nodiscard]] double Now() const;
 
 		struct CompareWakeTime {
 			bool operator()(const ScheduledTask &Left, const ScheduledTask &Right) const {

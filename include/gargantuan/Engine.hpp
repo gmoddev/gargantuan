@@ -89,6 +89,7 @@ namespace gargantuan {
 		~Engine();
 
 		void Step();
+		void SetDevelopmentClock(std::function<std::chrono::steady_clock::time_point()> Clock);
 		float GetDeltaTime();
 		[[nodiscard]] HostEventResult ProcessEvent(const HostEvent &Event);
 		[[nodiscard]] bool ReplaceEntitlementProvider(std::shared_ptr<IEntitlementProvider> Provider);
@@ -108,6 +109,7 @@ namespace gargantuan {
 	  private:
 		std::chrono::steady_clock::time_point CurrentTick{};
 		std::chrono::steady_clock::time_point LastTick{};
+		std::function<std::chrono::steady_clock::time_point()> DevelopmentClock;
 		bool Destroyed = false;
 		bool ResidencyPolicyEnabled = false;
 		bool StreamingDiagnosticsEnabled = false;

@@ -18,7 +18,7 @@ namespace gargantuan {
 			unsigned UntilCheck = 1;
 			bool Expired = false;
 
-			BudgetScope(lua_State *State, std::chrono::milliseconds Duration)
+			BudgetScope(lua_State *State, Clock::duration Duration)
 				: Main(lua_mainthread(State)), Parent(Active), PriorInterrupt(lua_callbacks(Main)->interrupt),
 				  Deadline(Clock::now() + Duration) {
 				Active = this;
@@ -46,27 +46,30 @@ namespace gargantuan {
 		thread_local BudgetScope *BudgetScope::Active = nullptr;
 
 		template <typename Function>
-		int RunGameplay(lua_State *State, Function Call) {
+		int RunGameplay(lua_State *State, Function Call, GameplayResumeBudget *Retained = nullptr) {
 			if (lua_callbacks(State)->interrupt == BudgetScope::Interrupt) return Call();
 			auto *Engine = ScriptEngine::Get(State);
-			const auto Duration = std::min(Engine->GameplayExecutionBudget, std::chrono::milliseconds(86'400'000));
-			if (Duration.count() <= 0) return Call();
+			const auto Configured = std::min(Engine->GameplayExecutionBudget, std::chrono::milliseconds(86'400'000));
+			if (!Retained && Configured.count() <= 0) return Call();
+			const auto Duration = Retained ? Retained->Remaining : Clock::duration(Configured);
 			int Status;
 			bool Expired;
 			{
+				const auto Started = Retained ? Clock::now() : Clock::time_point{};
 				BudgetScope Scope(State, Duration);
 				Status = Call();
 				Expired = Scope.Expired;
+				if (Retained) Retained->Remaining -= Clock::now() - Started;
 			}
 			if (Expired)
 				Engine->EmitRuntimeDiagnostic("Error", "[Runtime:ExecutionBudget] gameplay execution exceeded " +
-					std::to_string(Duration.count()) + " ms");
+					std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(Duration).count()) + " ms");
 			return Status;
 		}
 	}
 
-	int ResumeGameplay(lua_State *Thread, lua_State *From, int ArgumentCount) {
-		return RunGameplay(Thread, [&] { return lua_resume(Thread, From, ArgumentCount); });
+	int ResumeGameplay(lua_State *Thread, lua_State *From, int ArgumentCount, GameplayResumeBudget *Retained) {
+		return RunGameplay(Thread, [&] { return lua_resume(Thread, From, ArgumentCount); }, Retained);
 	}
 	int CallGameplay(lua_State *State, int ArgumentCount, int ResultCount) {
 		return RunGameplay(State, [&] { return lua_pcall(State, ArgumentCount, ResultCount, 0); });

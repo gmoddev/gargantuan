@@ -122,8 +122,10 @@ surfaces before running gameplay scripts. The
 [Terrain Foundation 2 bootstrap](../../docs/adr/TerrainNetworkBootstrap.md)
 handles terrain during matching loopback Development sessions.
 
-A packaged player connecting to a loopback endpoint with a Development
-package uses a scoped client startup mode. It verifies the pinned GTMF against
+A packaged player connecting to a loopback endpoint with a trusted
+Development package uses a scoped client startup mode. Managed Offline Player
+packages use complete verification even if a loopback load mode is requested.
+Managed network targets require separate terrain audience qualification. It verifies the pinned GTMF against
 the scene reference and validates each declared GTCH pin and size in the
 package table. The temporary packaged code world gets an empty terrain shell.
 The session later verifies the received leaf bytes and installs the field in

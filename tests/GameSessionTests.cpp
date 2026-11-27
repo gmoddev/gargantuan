@@ -700,6 +700,7 @@ namespace {
 		);
 		Check(Encoded && DecodeGameSessionMessage(*Encoded).has_value(), "GSES client hello round-trips");
 		if (!Encoded) return;
+		Check((*Encoded)[4] == std::byte{GameSessionProtocolVersion}, "ordinary GSES retains version 2");
 		for (std::size_t Size = 0; Size < Encoded->size(); ++Size)
 			Check(
 				!DecodeGameSessionMessage(std::span(*Encoded).first(Size)),
@@ -746,7 +747,8 @@ namespace {
 		}
 		const std::string Pair(64, 'a');
 		auto Managed = EncodeGameSessionMessage(GameSessionClientHello{77, Limits, {}, Pair});
-		Check(Managed.has_value(), "Managed GSES can advertise its pair identity");
+		Check(Managed && (*Managed)[4] == std::byte{GameSessionDistributionProtocolVersion},
+			"Managed GSES retains version 3 for the pair identity");
 		if (Managed) {
 			const auto Decoded = DecodeGameSessionMessage(*Managed);
 			Check(Decoded && std::get<GameSessionClientHello>(*Decoded).RuntimeDistributionIdentity == Pair,
@@ -771,13 +773,14 @@ namespace {
 			Check(Decoded && std::get<GameSessionClientHello>(*Decoded).TerrainBinding == Binding,
 				"Terrain GSES preserves the exact terrain binding");
 			auto MissingBinding = *Terrain;
-			MissingBinding.back() = std::byte{0};
 			MissingBinding[MissingBinding.size() - Binding.Bytes.size()] = std::byte{0};
 			Check(!DecodeGameSessionMessage(MissingBinding), "Terrain GSES rejects an empty binding");
 			auto WrongTerrainVersion = *Terrain;
 			WrongTerrainVersion[4] = std::byte{GameSessionDistributionProtocolVersion};
 			Check(!DecodeGameSessionMessage(WrongTerrainVersion), "Managed GSES cannot consume a terrain binding");
 		}
+		Check(TerrainReady && (*TerrainReady)[4] == std::byte{GameSessionTerrainProtocolVersion},
+			"Terrain readiness uses the same terrain-specific protocol");
 		if (TerrainReady) {
 			const auto Decoded = DecodeGameSessionMessage(*TerrainReady);
 			Check(Decoded && std::get<GameSessionClientReady>(*Decoded).TerrainBinding == Binding,

@@ -1152,6 +1152,9 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_input_action_tests PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_script_document_binding_tests "tests/ScriptDocumentBindingTests.cpp")
 	target_link_libraries(gargantuan_script_document_binding_tests PRIVATE gargantuan_core nlohmann_json)
+	add_executable(gargantuan_root_debug_vm_tests "tests/RootScriptDebugVmTests.cpp" "src/scripting/RootScriptDebug.cpp")
+	target_include_directories(gargantuan_root_debug_vm_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+	target_link_libraries(gargantuan_root_debug_vm_tests PRIVATE Luau.Compiler Luau.VM)
 	add_executable(gargantuan_input_action_benchmark "tests/InputActionBenchmark.cpp" "tests/ActionMapBaseline.cpp")
 	target_link_libraries(gargantuan_input_action_benchmark PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_interaction_foundation_tests "tests/InteractionFoundationTests.cpp")
@@ -1796,6 +1799,7 @@ if(BUILD_TESTING)
 			gargantuan_player_runtime_tests
 			gargantuan_input_action_tests
 			gargantuan_script_document_binding_tests
+			gargantuan_root_debug_vm_tests
 			gargantuan_input_action_benchmark
 			gargantuan_interaction_foundation_tests
 			gargantuan_interaction_foundation_benchmark
@@ -1963,6 +1967,7 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_player_runtime COMMAND gargantuan_player_runtime_tests)
 	add_test(NAME gargantuan_input_action COMMAND gargantuan_input_action_tests)
 	add_test(NAME gargantuan_script_document_binding COMMAND gargantuan_script_document_binding_tests)
+	add_test(NAME gargantuan_root_debug_vm COMMAND gargantuan_root_debug_vm_tests)
 	add_test(NAME gargantuan_input_action_benchmark_smoke COMMAND gargantuan_input_action_benchmark --quick)
 	add_test(NAME gargantuan_interaction_foundation COMMAND gargantuan_interaction_foundation_tests)
 	add_test(NAME gargantuan_interaction_foundation_benchmark_smoke
@@ -2062,6 +2067,7 @@ if(BUILD_TESTING)
 	set_tests_properties(gargantuan_player_runtime PROPERTIES LABELS "player;runtime;headless" TIMEOUT 180)
 	set_tests_properties(gargantuan_input_action gargantuan_input_action_benchmark_smoke PROPERTIES LABELS "input;runtime;headless" TIMEOUT 180)
 	set_tests_properties(gargantuan_script_document_binding PROPERTIES LABELS "editor;persistence;headless" TIMEOUT 180)
+	set_tests_properties(gargantuan_root_debug_vm PROPERTIES LABELS "editor;scripting;headless" TIMEOUT 20)
 	set_tests_properties(gargantuan_interaction_foundation PROPERTIES
 		LABELS "interaction;player;input;gui;runtime;headless" TIMEOUT 180
 	)

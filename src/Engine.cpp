@@ -275,6 +275,11 @@ namespace gargantuan {
 		return std::chrono::duration<float>(CurrentTick - LastTick).count();
 	}
 
+	void Engine::SetDevelopmentClock(std::function<std::chrono::steady_clock::time_point()> Clock) {
+		Script->Threads.SetDevelopmentClock(Clock);
+		DevelopmentClock = std::move(Clock);
+	}
+
 	HostEventResult Engine::ProcessEvent(const HostEvent &Event) {
 		HostEventResult Result;
 		if (Destroyed) return Result;
@@ -414,7 +419,7 @@ namespace gargantuan {
 		}
 
 		if (Destroyed) return;
-		CurrentTick = std::chrono::steady_clock::now();
+		CurrentTick = DevelopmentClock ? DevelopmentClock() : std::chrono::steady_clock::now();
 		if (LastTick.time_since_epoch().count() == 0) LastTick = CurrentTick;
 		float deltaTime = GetDeltaTime();
 		if (SimulationTick != std::numeric_limits<std::uint64_t>::max()) ++SimulationTick;

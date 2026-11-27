@@ -30,6 +30,9 @@ observations. These dispositions apply to the 10B development branch.
 | Reliable remote callback order | Resolved on the independent 10B candidate at `39b747402`. Per-peer FIFOs keep their ordering across pump exhaustion and the outbound dependency queue preserves same-stream event and request order. Permanent regressions cover reentry, retirement, sustained saturation, simulated delivery and two-client GNS. |
 
 Public multiplayer package confidentiality remains a separate release gate.
+The unified private candidate uses a dedicated terrain handshake. Managed
+network packages reject authored terrain pending an independently qualified
+content audience and startup path.
 
 ## Team Create Foundation 1
 

@@ -7,13 +7,19 @@ content and identity path.
 
 ## Package and session identity
 
-GSES version 3 carries a 32-byte terrain binding in hello, acceptance and
-readiness. Zero identifies a terrain-free session. Terrain peers compare
-SHA-256 over the project UUID, little-endian package revision, canonical
-GTMF digest and little-endian terrain stream version. An incompatible peer
-is rejected before Player creation. A matching client pins its GTMF and
-verifies startup code and assets. Offline, server and full validation
-admit the complete persisted closure.
+The unified Engine assigns GSES version 4 to hello, acceptance and
+readiness for terrain. Each carries one nonzero 32-byte terrain binding.
+The historical Terrain-only candidate used version 3. That version is
+reserved in the unified Engine for the distinct managed package hello and
+acceptance format. Ordinary terrain-free sessions retain version 2. The
+Engine rejects a handshake that combines terrain and managed code identities.
+
+Terrain peers compare SHA-256 over the project UUID, little-endian package
+revision, canonical GTMF digest and little-endian terrain stream version.
+An incompatible peer is rejected before Player creation. A matching trusted
+loopback Development client pins its GTMF and verifies startup code and
+assets. Offline, server and full validation admit the complete persisted
+closure.
 
 ## Regional transfer
 

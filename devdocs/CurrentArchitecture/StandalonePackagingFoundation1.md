@@ -60,6 +60,11 @@ inspection and per-game runtime data. It is not an authentication credential.
 - optional project PreRun schema source;
 - a runtime-only AssetService catalog plus immutable canonical artifacts.
 
+A terrain-bearing payload also pins the canonical GTMF and GTCH closure from
+the same project revision. A trusted loopback Development Player may defer
+only the declared dormant GTCH leaves to its server. Offline packages
+including managed Offline Player retain complete verification.
+
 It contains no Studio state, EditorHost token, MCP state, source mount, secrets,
 or package destination. `PackageBuilder::Capture` obtains project serialization
 and assets synchronously from one authoritative world before asynchronous I/O

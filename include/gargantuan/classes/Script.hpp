@@ -6,6 +6,8 @@
 #include <string>
 
 namespace gargantuan {
+	struct GameplayResumeBudget;
+	struct ScriptSecurityContext;
 	G_ENUM(RunContext, Client, Server, None);
 
 	enum class ScriptStatus : int {
@@ -13,6 +15,7 @@ namespace gargantuan {
 		Idle,
 		Running,
 		Yielded,
+		DebugPaused,
 		Error,
 		Finished,
 	};
@@ -31,6 +34,15 @@ namespace gargantuan {
 
 		void Cleanup();
 		bool ShouldStep();
-		ScriptStatus Step(lua_State *L);
+		ScriptStatus Step(lua_State *L, int *FailureLine = nullptr,
+			GameplayResumeBudget *DebugBudget = nullptr, int *StepLine = nullptr);
+		ScriptStatus ResumeDebug(lua_State *L, const ScriptSecurityContext &Security,
+			GameplayResumeBudget &Budget, int *StepLine, int *FailureLine);
+
+	  private:
+		// Valid only while the owned debug coroutine retains its root frame.
+		const void *DebugRootClosure = nullptr;
+		ScriptStatus ResumeOwnedThread(lua_State *L, int *FailureLine,
+			GameplayResumeBudget *DebugBudget, int *StepLine);
 	};
 }

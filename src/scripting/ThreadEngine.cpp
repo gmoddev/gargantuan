@@ -12,9 +12,14 @@
 #include <utility>
 
 namespace gargantuan {
-	double GetCurrentTime() {
-		return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-	};
+	double ThreadEngine::Now() const {
+		const auto Time = DevelopmentClock ? DevelopmentClock() : std::chrono::steady_clock::now();
+		return std::chrono::duration<double>(Time.time_since_epoch()).count();
+	}
+
+	void ThreadEngine::SetDevelopmentClock(std::function<std::chrono::steady_clock::time_point()> Clock) {
+		DevelopmentClock = std::move(Clock);
+	}
 
 	ThreadEngine::ThreadEngine(lua_State *mainState) : L(mainState) {};
 
@@ -165,7 +170,7 @@ namespace gargantuan {
 		// A task can destroy the Engine while its active continuation still
 		// owns a coroutine reference that must be released before the VM closes.
 		[[maybe_unused]] auto KeepAlive = ScriptEngine::Get(L)->weak_from_this().lock();
-		const auto CurrentTime = GetCurrentTime();
+		const auto CurrentTime = Now();
 		while (!Stopping && !ScheduledQueue.empty() && ScheduledQueue.front().WakeTime <= CurrentTime) {
 			std::pop_heap(ScheduledQueue.begin(), ScheduledQueue.end(), CompareWakeTime{});
 			auto Task = std::move(ScheduledQueue.back());
@@ -189,10 +194,10 @@ namespace gargantuan {
 		lua_State *Thread, ScheduledTask::Type Type, double DelaySeconds, ArgumentRange Arguments
 	) {
 		if (Stopping || ScheduledQueue.size() + DeferredQueue.size() >= MaximumQueuedScriptTasks) return false;
-		const auto Now = GetCurrentTime();
+		const auto Scheduled = Now();
 		const auto Entry = CaptureTask(Thread, Arguments);
 		try {
-			ScheduledQueue.push_back({.type = Type, .Entry = Entry, .ScheduledTime = Now, .WakeTime = Now + DelaySeconds});
+			ScheduledQueue.push_back({.type = Type, .Entry = Entry, .ScheduledTime = Scheduled, .WakeTime = Scheduled + DelaySeconds});
 		} catch (...) {
 			ReleaseTask(Entry);
 			throw;

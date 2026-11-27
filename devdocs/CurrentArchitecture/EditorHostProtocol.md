@@ -271,7 +271,7 @@ A supporting host advertises `PlayPersistence` in
 in the build. The token-bound owner must have `EditorCommands` and
 `ReadDataModel` for each command.
 
-`StartPlaySession.Params` accepts one optional field, `PersistenceMode`,
+`StartPlaySession.Params` accepts the optional field `PersistenceMode`,
 with the closed values `Disabled`, `Disposable`, or `Persistent`. An omitted
 mode defaults to `Disabled`. The start result echoes the accepted mode.
 Unknown fields and modes return `MalformedRequest`. If the requested local
@@ -293,6 +293,50 @@ required inspected `Revision`. It returns the provider's conditional delete
 `PlayPersistenceBusy` during Play or Animation Preview, and have a
 150-millisecond provider deadline. They do not create a database, accept
 storage locators, or advance the authoring revision or transaction history.
+
+## Local Play script failure locations, version 1
+
+Local `Handshake` advertises `PlayScriptFailureLocation` with
+`PlayScriptFailureLocationVersion` 1. Set `IncludeScriptFailureLocations`
+to true in `StartPlaySession` to request source locations. Authoring binding
+and source version capture is limited to 4,096 persistent Script resources.
+A snapshot exceeding the bound still launches with ordinary diagnostics.
+
+An eligible Error row from Start, Poll or Stop has additive `Source` fields
+`Binding` (the existing version-1 Script binding), `Scope`, `Object`,
+`LaunchAuthoritativeRevision`, `SourceVersion`, and one-based `Line`.
+The enclosing result supplies the exact `PlaySessionId`. The runtime
+reports a line only when Luau's failing frame is the exact root closure
+loaded for a launch-cloned Script whose source version remains unchanged.
+Print output, runtime-created Scripts, nested closure failures and later
+scheduled resumes retain ordinary diagnostic rows. Names and exception
+strings are display text.
+
+For navigation, call `ResolveScriptBinding` with the captured `Binding`
+and the three fence fields `ExpectedScope`, `ExpectedObject`, and
+`ExpectedSourceVersion`. An expired scope returns `StaleProject`. A replaced
+live object returns `StaleObject`, including a restored resource binding. A changed source
+returns `SourceVersionConflict`. A consumer still validates the resolved
+authoritative source version after opening the document and before moving
+the caret. The ordinary binding protocol and authoring permissions apply.
+
+## Local root Script debugger, version 1
+
+Local `Handshake` advertises `PlayRootDebug` with `PlayRootDebugVersion` 1.
+Pass `DebugRoot` with `Object` and `SourceVersion` to `StartPlaySession`
+for an enabled, persistent top-level Script owned by the current project.
+This launch mode uses the local offline runtime with audio and persistence
+disabled. Normal Play uses its existing configuration.
+
+`StartPlaySession`, `GetPlayRootDebugState`, and `ResumePlayRootDebug`
+return `DebugPause`, either null or a value with `Serial`, `CanResume`,
+and the authored source location shape above. A read supplies the owned
+`PlaySessionId`. A resume also supplies the exact `PauseSerial` and
+`Action` of `NextLine` or `Continue`. An expired session ID returns
+`StalePlaySession`. A stale pause serial or spent execution budget returns
+`DebugPauseUnavailable`. The existing Stop command retires all ownership
+for a paused runtime. An enabled Script with no executable entry continues
+with a diagnostic and no pause.
 
 ## Streaming diagnostics extension, version 1
 

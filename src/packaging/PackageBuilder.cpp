@@ -2574,10 +2574,6 @@ namespace gargantuan {
 		World->MarkPersistenceSubtreeArchivable();
 		World->Root = PackageRoot / "content";
 		World->Filesystem = nullptr;
-		if (Payload.Inspection.Target == RuntimeDistributionTarget::DedicatedServer)
-			World->PackagedClientCodeIdentity = Payload.ClientCodeIdentity;
-		if (Payload.RuntimeCode)
-			(void)runtime_distribution::BindCatalog(*Payload.RuntimeCode, World, false);
 		auto Assets = std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
 		if (!Assets) throw std::runtime_error("The packaged project has no canonical AssetService");
 		Assets->LoadRuntimeAssetSnapshot(Payload.Assets);
@@ -2590,16 +2586,22 @@ namespace gargantuan {
 			throw std::invalid_argument("A distributed Player package requires a replicated world");
 		if (Payload.LoadMode != PackageRuntimeLoadMode::Complete)
 			throw std::invalid_argument("[Package:Terrain] A complete payload is required to load a gameplay world");
-		return LoadPackagedScene(Payload, PackageRoot, terrain::GetSceneTerrainAdmission(Payload.Inspection.Identity,
+		auto World = LoadPackagedScene(Payload, PackageRoot, terrain::GetSceneTerrainAdmission(Payload.Inspection.Identity,
 			[&Payload](const terrain::TerrainArtifactId &Id, std::size_t Maximum) {
 				return terrain::ReadCapturedTerrainArtifact(Payload.TerrainArtifacts, Id, Maximum);
 			}));
+		if (Payload.Inspection.Target == RuntimeDistributionTarget::DedicatedServer)
+			World->PackagedClientCodeIdentity = Payload.ClientCodeIdentity;
+		if (Payload.RuntimeCode)
+			(void)runtime_distribution::BindCatalog(*Payload.RuntimeCode, World, false);
+		return World;
 	}
 
 	std::shared_ptr<DataModel> PackageBuilder::LoadClientCodeWorld(const RuntimePackagePayload &Payload,
 		const std::filesystem::path &PackageRoot) {
 		if (Payload.LoadMode != PackageRuntimeLoadMode::LoopbackDevelopmentClient ||
-			Payload.Inspection.Configuration != PackageConfiguration::Development)
+			Payload.Inspection.Configuration != PackageConfiguration::Development ||
+			Payload.Inspection.Audience != PackageAudience::Trusted || Payload.Inspection.Target)
 			throw std::invalid_argument("[Package:Terrain] Client code hydration requires a loopback Development payload");
 		return LoadPackagedScene(Payload, PackageRoot, [&Payload](DataModel &, const AssetContentId &Digest) {
 			const terrain::TerrainArtifactId Id{terrain::TerrainArtifactPurpose::Manifest, Digest};

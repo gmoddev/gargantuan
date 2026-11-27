@@ -1,10 +1,13 @@
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/scripting/ExecutionBudget.hpp"
+#include "gargantuan/scripting/RootScriptDebug.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 
+#include <algorithm>
 #include <lua.h>
+#include <stdexcept>
 
 namespace gargantuan {
 	Script::Script() {
@@ -45,6 +48,7 @@ namespace gargantuan {
 		}
 		ThreadReference = LUA_NOREF;
 		Thread = nullptr;
+		DebugRootClosure = nullptr;
 		CleanupAfterResume = false;
 	}
 
@@ -53,6 +57,7 @@ namespace gargantuan {
 		case ScriptStatus::Error:
 		case ScriptStatus::Disabled:
 		case ScriptStatus::Yielded:
+		case ScriptStatus::DebugPaused:
 		case ScriptStatus::Finished:
 			return false;
 
@@ -61,7 +66,8 @@ namespace gargantuan {
 		}
 	}
 
-	ScriptStatus Script::Step(lua_State *L) {
+	ScriptStatus Script::Step(lua_State *L, int *FailureLine, GameplayResumeBudget *DebugBudget, int *StepLine) {
+		if (FailureLine) *FailureLine = 0;
 		[[maybe_unused]] auto KeepScriptAlive = weak_from_this().lock();
 		if (!ShouldStep() || Thread) return Status;
 		Status = ScriptStatus::Running;
@@ -73,7 +79,11 @@ namespace gargantuan {
 
 		auto scriptEngine = ScriptEngine::Get(L);
 		[[maybe_unused]] auto KeepRuntimeAlive = scriptEngine->weak_from_this().lock();
-		CompileBytecode(&scriptEngine->CompileOptions);
+		if (FailureLine || StepLine) {
+			auto Options = scriptEngine->CompileOptions;
+			Options.debugLevel = std::max(Options.debugLevel, 1);
+			CompileBytecode(&Options);
+		} else CompileBytecode(&scriptEngine->CompileOptions);
 		if (BytecodeCompileStatus != BytecodeCompileStatus::Success) {
 			Status = ScriptStatus::Error;
 			ErrorMessage = BytecodeCompileError.value();
@@ -101,20 +111,58 @@ namespace gargantuan {
 			Cleanup();
 			throw;
 		}
+		return ResumeOwnedThread(L, FailureLine, DebugBudget, StepLine);
+	}
 
+	ScriptStatus Script::ResumeDebug(lua_State *L, const ScriptSecurityContext &Security,
+		GameplayResumeBudget &Budget, int *StepLine, int *FailureLine) {
+		if (FailureLine) *FailureLine = 0;
+		if (Status != ScriptStatus::DebugPaused || !Thread || lua_status(Thread) != LUA_BREAK)
+			throw std::logic_error("[Editor:PlayDebugger] Suspended Script is no longer owned");
+		[[maybe_unused]] auto KeepScriptAlive = weak_from_this().lock();
+		[[maybe_unused]] auto KeepRuntimeAlive = ScriptEngine::Get(L)->weak_from_this().lock();
+		ScriptSecurityScope SecurityScope(Security);
+		Status = ScriptStatus::Running;
+		return ResumeOwnedThread(L, FailureLine, &Budget, StepLine);
+	}
+
+	ScriptStatus Script::ResumeOwnedThread(lua_State *L, int *FailureLine, GameplayResumeBudget *DebugBudget, int *StepLine) {
 		// Property writes and Destroying callbacks can request cleanup from inside
 		// this coroutine. Keep its registry root until lua_resume has returned.
 		auto *RunningThread = Thread;
+		const auto *RootClosure = DebugRootClosure;
+		if (lua_status(RunningThread) == LUA_OK && (FailureLine || StepLine)) {
+			RootClosure = lua_topointer(RunningThread, -1);
+			if (StepLine) DebugRootClosure = RootClosure;
+		}
 		Resuming = true;
 		int status;
 		try {
-			status = ResumeGameplay(RunningThread, L, 0);
+			if (StepLine) {
+				RootScriptDebugTurn Turn(RunningThread, *StepLine);
+				status = ResumeGameplay(RunningThread, L, 0, DebugBudget);
+				*StepLine = Turn.GetLine();
+			} else status = ResumeGameplay(RunningThread, L, 0, DebugBudget);
 		} catch (...) {
 			Resuming = false;
 			if (CleanupAfterResume) Cleanup();
 			throw;
 		}
 		Resuming = false;
+		if (status != LUA_BREAK) DebugRootClosure = nullptr;
+		if (status == LUA_ERRRUN && FailureLine && RootClosure && !CleanupAfterResume && lua_checkstack(RunningThread, 1)) {
+			// Locate the failing Luau frame without reading the user-controlled error text.
+			// Only the exact loaded Script closure can supply an authored line.
+			for (int Level = 0; Level < 32; ++Level) {
+				lua_Debug Frame{};
+				if (!lua_getinfo(RunningThread, Level, "slf", &Frame)) break;
+				const bool IsRoot = lua_topointer(RunningThread, -1) == RootClosure;
+				lua_pop(RunningThread, 1);
+				if (Frame.what && Frame.what[0] == 'C') continue;
+				if (IsRoot && Frame.currentline > 0) *FailureLine = Frame.currentline;
+				break;
+			}
+		}
 		if (status != LUA_YIELD && status != LUA_BREAK && status != LUA_OK) {
 			const auto *Message = lua_tostring(RunningThread, -1);
 			ErrorMessage = Message ? Message : "Luau execution failed";
@@ -129,8 +177,11 @@ namespace gargantuan {
 		}
 		switch (status) {
 		case LUA_YIELD:
-		case LUA_BREAK:
 			Status = ScriptStatus::Yielded;
+			break;
+
+		case LUA_BREAK:
+			Status = StepLine && *StepLine > 0 ? ScriptStatus::DebugPaused : ScriptStatus::Yielded;
 			break;
 
 		case LUA_OK:

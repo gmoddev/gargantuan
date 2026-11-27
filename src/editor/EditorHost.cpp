@@ -14,6 +14,7 @@
 #include "gargantuan/classes/BasePart.hpp"
 #include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/LuaSourceContainer.hpp"
+#include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/Terrain.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "terrain/RenderStage.hpp"
@@ -582,6 +583,29 @@ namespace gargantuan {
 				{"PersistedRevision", PersistedRevision}, {"IdentityOrigin", Script->WasSourceIdLoaded() ? "Loaded" : "Generated"}};
 		}
 
+		PlayScriptSources CapturePlayScriptSources(const Project &ProjectValue, const std::shared_ptr<DataModel> &World) {
+			PlayScriptSources Sources{.Project = ProjectValue.Identity, .Scope = World->GetObjectId()};
+			std::vector<std::shared_ptr<Instance>> Pending{World};
+			std::size_t Visited = 0;
+			while (!Pending.empty()) {
+				auto Object = std::move(Pending.back());
+				Pending.pop_back();
+				if (++Visited > MaximumPersistenceObjects) return {};
+				if (Object->GetDestroyed() || !Object->GetArchivable() || Object->GetReplicationScopeId() != Sources.Scope)
+					continue;
+				if (auto ScriptValue = std::dynamic_pointer_cast<Script>(Object)) {
+					const auto *Definition = InstanceClassRegistry::GetDefinition(ScriptValue.get());
+					if (Sources.Bindings.size() == PlayScriptSources::MaximumBindings ||
+						!Sources.Bindings.emplace(ScriptValue->GetSourceId(), PlayScriptBinding{
+							Definition->Id, Definition->DefinitionVersion, ScriptValue->GetSourceVersion(), ScriptValue->GetObjectId()}).second)
+						return {};
+				}
+				if (Object->Children.size() > MaximumPersistenceObjects - Visited - Pending.size()) return {};
+				Pending.insert(Pending.end(), Object->Children.begin(), Object->Children.end());
+			}
+			return Sources;
+		}
+
 		Json EncodePlayInputSnapshot(const std::shared_ptr<DataModel> &RuntimeWorld, InputService &Input) {
 			const auto Snapshot = Input.Inspect();
 			const auto EncodeId = [](ObjectId Id) -> Json {
@@ -628,13 +652,35 @@ namespace gargantuan {
 			return Result;
 		}
 
+		Json EncodePlayScriptLocation(const PlayScriptFailureLocation &Source) {
+			return {
+				{"Binding", {{"Version", 1}, {"ProjectId", Source.Project.ToString()}, {"SourceId", Source.SourceId},
+					{"ClassSchemaId", Source.Binding.ClassSchemaId.ToString()},
+					{"ClassDefinitionVersion", Source.Binding.ClassDefinitionVersion}}},
+				{"Scope", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Source.Scope))},
+				{"Object", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Source.Binding.AuthoringObject))},
+				{"LaunchAuthoritativeRevision", Source.LaunchRevision},
+				{"SourceVersion", Source.Binding.SourceVersion}, {"Line", Source.Line},
+			};
+		}
+
+		Json EncodePlayRootDebugPause(const PlaySession &Session) {
+			const auto Pause = Session.GetRootDebugPause();
+			return Pause ? Json({{"Serial", Pause->Serial}, {"CanResume", Pause->CanResume},
+				{"Source", EncodePlayScriptLocation(Pause->Source)}}) : Json(nullptr);
+		}
+
 		Json EncodePlayDiagnostics(std::vector<PlayDiagnostic> Diagnostics) {
 			Json Result = Json::array();
-			for (auto &Diagnostic : Diagnostics) Result.push_back({
-				{"Sequence", Diagnostic.Sequence}, {"TimestampMilliseconds", Diagnostic.TimestampMilliseconds},
-				{"Severity", std::move(Diagnostic.Severity)}, {"Category", std::move(Diagnostic.Category)},
-				{"Message", std::move(Diagnostic.Message)},
-			});
+			for (auto &Diagnostic : Diagnostics) {
+				Json Entry = {
+					{"Sequence", Diagnostic.Sequence}, {"TimestampMilliseconds", Diagnostic.TimestampMilliseconds},
+					{"Severity", std::move(Diagnostic.Severity)}, {"Category", std::move(Diagnostic.Category)},
+					{"Message", std::move(Diagnostic.Message)},
+				};
+				if (const auto &Source = Diagnostic.Source) Entry["Source"] = EncodePlayScriptLocation(*Source);
+				Result.push_back(std::move(Entry));
+			}
 			return Result;
 		}
 
@@ -1764,7 +1810,7 @@ namespace gargantuan {
 					"OptimisticProjectRevision", "CreateInstanceInitialProperties", "CreateScriptWithSource",
 					"ReadScriptSource", "WriteScriptSource", "ScriptDocumentBinding", "PreRunSource", "ValidatePreRun",
 					"CustomServiceDeclarations", "ReplicatedStorage",
-					"PlaySession", "DiagnosticStream", "SendPlayInput", "StreamingDiagnostics", "PlayInputInspection", "PlayPersistence",
+					"PlaySession", "DiagnosticStream", "PlayScriptFailureLocation", "PlayRootDebug", "SendPlayInput", "StreamingDiagnostics", "PlayInputInspection", "PlayPersistence",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
 					"AdvancedMaterialMetadata",
 					"AnimationRig", "AnimationPreview", "AnimationPreviewBlend", "CharacterComposition",
@@ -1808,6 +1854,8 @@ namespace gargantuan {
 						{"AnimationPreviewBlendVersion", 1},
 						{"CharacterCompositionVersion", 1},
 						{"PlayPersistenceVersion", 1},
+						{"PlayScriptFailureLocationVersion", 1},
+						{"PlayRootDebugVersion", 1},
 						{"PlayPersistentStorage", SupportsDurableLocalPersistence()},
 						{"Capabilities", std::move(capabilities)},
 						{"ViewportWireVersion", 2},
@@ -2129,9 +2177,10 @@ namespace gargantuan {
 			}
 
 			if (method == "StartPlaySession") {
-				if (!HasOnlyFields(parameters, {"PersistenceMode"}) ||
-					(parameters.contains("PersistenceMode") && !parameters["PersistenceMode"].is_string()))
-					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Invalid Play persistence parameters"));
+				if (!HasOnlyFields(parameters, {"PersistenceMode", "IncludeScriptFailureLocations", "DebugRoot"}) ||
+					(parameters.contains("PersistenceMode") && !parameters["PersistenceMode"].is_string()) ||
+					(parameters.contains("IncludeScriptFailureLocations") && !parameters["IncludeScriptFailureLocations"].is_boolean()))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Invalid Play launch parameters"));
 				const auto PersistenceMode = parameters.value("PersistenceMode", std::string("Disabled"));
 				if (PersistenceMode != "Disabled" && PersistenceMode != "Disposable" && PersistenceMode != "Persistent")
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Unknown Play persistence mode"));
@@ -2148,6 +2197,22 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionActive", "One local Play session is already active"));
 				if (NextPlaySessionId == 0)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionExhausted", "Play session identity is exhausted"));
+				std::optional<std::string> DebugSourceId;
+				if (parameters.contains("DebugRoot")) {
+					const auto &Root = parameters["DebugRoot"];
+					if (!Root.is_object() || !HasOnlyFields(Root, {"Object", "SourceVersion"}) ||
+						!Root.contains("Object") || !Root.contains("SourceVersion") || PersistenceMode != "Disabled")
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Root debugging requires a Script and disabled persistence"));
+					const auto Object = JsonCodec::DecodeObjectId(Root["Object"]);
+					const auto Version = JsonCodec::DecodeUnsigned32(Root["SourceVersion"]);
+					if (!Object || !Version || *Version == 0)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Debug source identity is invalid"));
+					const auto Target = std::dynamic_pointer_cast<Script>(ObjectRegistry::Get().Lookup(Object->ToObjectId()));
+					if (!Target || Target->GetReplicationScopeId() != World->GetObjectId() ||
+						static_cast<std::uint32_t>(Target->GetSourceVersion()) != *Version || !Target->GetEnabled())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "DebugSourceUnavailable", "The enabled authored Script or its source version changed"));
+					DebugSourceId = Target->GetSourceId();
+				}
 				std::shared_ptr<IPersistenceProvider> Persistence;
 				if (PersistenceMode != "Disabled") {
 					try {
@@ -2170,11 +2235,14 @@ namespace gargantuan {
 								: std::span<const terrain::TerrainArtifact>{};
 							return terrain::ReadCapturedTerrainArtifact(Artifacts, Artifact, Maximum);
 						});
+					auto ScriptSources = (DebugSourceId || parameters.value("IncludeScriptFailureLocations", false))
+						? CapturePlayScriptSources(*CurrentProject, World) : PlayScriptSources{};
+					ScriptSources.DebugSourceId = DebugSourceId;
 					auto NewPlaySession = std::make_unique<PlaySession>(
 						Id, std::move(Snapshot.Contents), CurrentProject->InstanceFileFormat,
 						CurrentProject->Root, ViewportWidth == 0 ? 720 : ViewportWidth,
 						ViewportHeight == 0 ? 540 : ViewportHeight, Snapshot.Revision, std::move(Snapshot.Assets),
-						AudioEnabled, std::move(Persistence), AdmitTerrain
+						AudioEnabled && !DebugSourceId, std::move(Persistence), AdmitTerrain, std::move(ScriptSources)
 					);
 					AdvanceViewportGeneration();
 					ActivePlaySession = std::move(NewPlaySession);
@@ -2182,20 +2250,47 @@ namespace gargantuan {
 					LastPlaySessionState = ActivePlaySession->GetState();
 					NextPlayStep = std::chrono::steady_clock::now();
 					ViewportRenderer.reset();
-					return SerializeBoundedResponse(SuccessResponse(requestId, {
+					Json Result = {
 						{"PlaySessionId", std::to_string(Id.Value)},
 						{"State", GetPlaySessionStateName(LastPlaySessionState)},
 						{"PersistenceMode", PersistenceMode},
 						{"LaunchAuthoritativeRevision", Snapshot.Revision},
 						{"ViewportGeneration", ViewportGeneration},
 						{"Diagnostics", EncodePlayDiagnostics(ActivePlaySession->DrainDiagnostics())},
-					}));
+					};
+					if (DebugSourceId) Result["DebugPause"] = EncodePlayRootDebugPause(*ActivePlaySession);
+					return SerializeBoundedResponse(SuccessResponse(requestId, std::move(Result)));
 				} catch (const std::exception &Error) {
 					ActivePlaySession.reset();
 					LastPlaySessionId = Id;
 					LastPlaySessionState = PlaySessionState::Failed;
 					return SerializeBoundedResponse(ErrorResponse(requestId, "PlayStartFailed", Error.what()));
 				}
+			}
+
+			if (method == "GetPlayRootDebugState" || method == "ResumePlayRootDebug") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::EditorCommands) ||
+					!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Debugger requires local owner access"));
+				const bool Resume = method == "ResumePlayRootDebug";
+				if (!(Resume ? HasOnlyFields(parameters, {"PlaySessionId", "PauseSerial", "Action"}) :
+					HasOnlyFields(parameters, {"PlaySessionId"})) || !parameters.contains("PlaySessionId"))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Invalid debugger request"));
+				const auto Id = DecodePlaySessionId(parameters["PlaySessionId"]);
+				if (!Id || !ActivePlaySession || ActivePlaySession->GetId().Value != Id->Value)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StalePlaySession", "Debugger requires the owned Play session"));
+				if (Resume) {
+					const auto Serial = parameters.contains("PauseSerial") ? JsonCodec::DecodeUnsigned32(parameters["PauseSerial"]) : std::nullopt;
+					const auto Action = parameters.contains("Action") && parameters["Action"].is_string()
+						? parameters["Action"].get<std::string>() : std::string{};
+					if (!Serial || *Serial == 0 || (Action != "NextLine" && Action != "Continue"))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Debugger requires an exact pause and NextLine or Continue"));
+					if (!ActivePlaySession->ResumeRootDebug(*Serial, Action == "NextLine"))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "DebugPauseUnavailable", "Debugger pause is stale or its execution budget is spent"));
+				}
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"PlaySessionId", std::to_string(Id->Value)}, {"DebugPause", EncodePlayRootDebugPause(*ActivePlaySession)},
+				}));
 			}
 
 			if (method == "InspectPlayPersistenceRecord" || method == "ResetPlayPersistenceRecord") {
@@ -4153,10 +4248,7 @@ namespace gargantuan {
 						return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportUnavailable", error.what()));
 					}
 				}
-				if (DimensionsChanged && ActivePlaySession) {
-					ActivePlaySession->Resize(*width, *height);
-					ActivePlaySession->RequestRenderFullResync();
-				}
+				if (DimensionsChanged && ActivePlaySession) ActivePlaySession->Resize(*width, *height);
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"ViewportVersion", ViewportLatestFrameMailbox ? 2 : 1},
 					{"Generation", ViewportGeneration}, {"Width", *width}, {"Height", *height},
@@ -4198,7 +4290,8 @@ namespace gargantuan {
 				else if (ViewportCameraRevision != std::numeric_limits<std::uint64_t>::max()) {
 					++ViewportCameraRevision;
 				}
-				LastViewportPublication.reset();
+				if (!ActivePlaySession || !ActivePlaySession->IsRootDebugPaused())
+					LastViewportPublication.reset();
 				NextViewportFrame = std::chrono::steady_clock::now();
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"Position", {position->x, position->y, position->z}},
@@ -4393,8 +4486,22 @@ namespace gargantuan {
 					if (Found.Script != Script)
 						return SerializeBoundedResponse(ErrorResponse(requestId, "ResourceNotPersistent", "Script is not in the persistent project hierarchy"));
 				} else {
-					if (!HasOnlyFields(parameters, {"Binding"}) || !parameters.contains("Binding"))
-						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "ResolveScriptBinding requires Binding"));
+				if (!HasOnlyFields(parameters, {"Binding", "ExpectedScope", "ExpectedObject", "ExpectedSourceVersion"}) ||
+					!parameters.contains("Binding") ||
+					parameters.contains("ExpectedScope") != parameters.contains("ExpectedObject") ||
+					parameters.contains("ExpectedScope") != parameters.contains("ExpectedSourceVersion"))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "ResolveScriptBinding requires Binding and complete source location fields"));
+				std::optional<WireObjectId> ExpectedObject;
+				std::optional<std::uint32_t> ExpectedSourceVersion;
+				if (parameters.contains("ExpectedScope")) {
+					const auto Scope = JsonCodec::DecodeObjectId(parameters["ExpectedScope"]);
+					ExpectedObject = JsonCodec::DecodeObjectId(parameters["ExpectedObject"]);
+					ExpectedSourceVersion = JsonCodec::DecodeUnsigned32(parameters["ExpectedSourceVersion"]);
+					if (!Scope || !ExpectedObject || !ExpectedSourceVersion || *ExpectedSourceVersion == 0)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Source location fence is invalid"));
+					if (Scope->ToObjectId() != World->GetObjectId())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "StaleProject", "Source location belongs to a retired authoring scope"));
+				}
 					const auto &Binding = parameters["Binding"];
 					if (!Binding.is_object() || Binding.size() != 5 ||
 						!HasOnlyFields(Binding, {"Version", "ProjectId", "SourceId", "ClassSchemaId", "ClassDefinitionVersion"}) ||
@@ -4418,8 +4525,12 @@ namespace gargantuan {
 					Script = Found.Script;
 					if (!Script) return SerializeBoundedResponse(ErrorResponse(requestId, "ResourceNotFound", "Script resource no longer exists"));
 					const auto *Definition = InstanceClassRegistry::GetDefinition(Script.get());
-					if (Definition->Id != *ClassId || Definition->DefinitionVersion != *Version)
-						return SerializeBoundedResponse(ErrorResponse(requestId, "IncompatibleBinding", "Script resource schema changed"));
+				if (Definition->Id != *ClassId || Definition->DefinitionVersion != *Version)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "IncompatibleBinding", "Script resource schema changed"));
+				if (ExpectedObject && ExpectedObject->ToObjectId() != Script->GetObjectId())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleObject", "Source location belongs to a retired Script object"));
+				if (ExpectedSourceVersion && *ExpectedSourceVersion != static_cast<std::uint32_t>(Script->GetSourceVersion()))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "SourceVersionConflict", "Source changed since the Play failure"));
 				}
 				return SerializeBoundedResponse(SuccessResponse(requestId, EncodeScriptBindingResult(*CurrentProject, World, PersistedRevision, Script)));
 			}

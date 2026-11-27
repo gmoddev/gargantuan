@@ -3,6 +3,7 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/runtime/RuntimeMode.hpp"
+#include "gargantuan/scripting/ExecutionBudget.hpp"
 #include "gargantuan/scripting/ThreadEngine.hpp"
 
 #include <Luau/Compiler.h>
@@ -81,6 +82,11 @@ namespace gargantuan {
 		[[nodiscard]] bool IsStopping() const { return Stopping; }
 		std::shared_ptr<Instance> FindRequiredInstanceByPath(const char *path);
 		void EmitRuntimeDiagnostic(std::string Severity, std::string Message) const noexcept;
+		void SetScriptFailureObserver(std::function<void(const Script &, int, std::string)> Observer);
+		bool ArmRootScriptDebug(const std::shared_ptr<Script> &Target);
+		void ResumeRootScriptDebug(bool Step);
+		[[nodiscard]] int GetPausedRootLine() const;
+		[[nodiscard]] bool HasRootDebugBudget() const;
 		void TrackSignalConnection(const std::shared_ptr<SignalConnection> &Connection);
 		void TrackRemoteFunction(const std::shared_ptr<RemoteFunction> &Function);
 		void TrackManagedScriptThread(lua_State *Thread, const std::shared_ptr<Script> &ScriptValue);
@@ -108,9 +114,18 @@ namespace gargantuan {
 		std::unordered_map<lua_State *, std::weak_ptr<Script>> ManagedScriptThreads;
 		std::shared_ptr<TweenRuntime> Tweens;
 		std::shared_ptr<PersistenceRuntime> Persistence;
+		std::function<void(const Script &, int, std::string)> ObserveScriptFailure;
+		struct RootDebugState {
+			std::weak_ptr<Script> Target;
+			GameplayResumeBudget Budget;
+			ScriptSecurityContext Security;
+			int Line = 0;
+		};
+		std::optional<RootDebugState> RootDebug;
 		ManagedScriptIterator ManagedScriptPruneCursor = ManagedScripts.end();
 		void TrackManagedScript(const std::shared_ptr<Script> &ScriptValue);
 		void PruneExpiredManagedScripts();
+		void ReportScriptFailure(Script &Failed, int Line);
 		bool Stopping = false;
 	};
 }

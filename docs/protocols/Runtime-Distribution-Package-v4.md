@@ -73,4 +73,10 @@ For unsigned Compiled/Protected, deliver the builder's manifest digest via trust
 
 ## Network compatibility
 
-Legacy GSES v2 remains for unpaired legacy hosts. Format 4 network participants require matching 64-lowercase-hex client code identities in GSES v3 Hello and Accepted. Their readiness uses the existing epoch/player binding. Authoritative Server publishes no ModuleScript clear source on managed sessions. The Player uses its local package for approved scripts and denies nonempty reflected source on live structural frames. Initial package binding records the server identity for any later materialization of those scripts. Ordinary recreation under a reused hierarchy path does not replace an approved code binding. The package pair must be reissued to update authoritative executable client code.
+Legacy GSES v2 remains for ordinary terrain-free hosts. Format 4 network participants require matching 64-lowercase-hex client code identities in GSES v3 Hello and Accepted. Their readiness uses the existing epoch/player binding. Authoritative Server publishes no ModuleScript clear source on managed sessions. The Player uses its local package for approved scripts and denies nonempty reflected source on live structural frames. Initial package binding records the server identity for any later materialization of those scripts. Ordinary recreation under a reused hierarchy path does not replace an approved code binding. The package pair must be reissued to update authoritative executable client code.
+
+A managed Offline Player can carry the fully verified project terrain closure.
+The Engine rejects authored terrain for managed Dedicated Server and Distributed
+Player targets. Trusted loopback Development terrain sessions have a separate
+[GSES version 4](../adr/TerrainNetworkBootstrap.md) handshake. Their terrain
+binding does not change the version 3 managed package format.

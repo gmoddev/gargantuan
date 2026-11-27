@@ -193,6 +193,7 @@ namespace gargantuan {
 	void ScriptEngine::ShutdownRuntime() {
 		if (Stopping) return;
 		Stopping = true;
+		RootDebug.reset();
 		if (Persistence) Persistence->Shutdown();
 		Persistence.reset();
 		if (Tweens) Tweens->Shutdown();
@@ -391,6 +392,61 @@ namespace gargantuan {
 		}
 	}
 
+	void ScriptEngine::SetScriptFailureObserver(std::function<void(const Script &, int, std::string)> Observer) {
+		ObserveScriptFailure = std::move(Observer);
+	}
+
+	bool ScriptEngine::ArmRootScriptDebug(const std::shared_ptr<Script> &Target) {
+		if (Stopping || RootDebug || Mode != RuntimeMode::Offline || !Target ||
+			!Target->ShouldStep() || !ScriptQueue.contains(Target) || !CanRunScript(*Target) ||
+			GameplayExecutionBudget <= std::chrono::milliseconds::zero()) return false;
+		RootDebug.emplace(RootDebugState{Target,
+			{std::min(GameplayExecutionBudget, std::chrono::milliseconds(86'400'000))}, {}});
+		return true;
+	}
+
+	int ScriptEngine::GetPausedRootLine() const {
+		return RootDebug ? RootDebug->Line : 0;
+	}
+
+	bool ScriptEngine::HasRootDebugBudget() const {
+		return RootDebug && RootDebug->Budget.Remaining > std::chrono::steady_clock::duration::zero();
+	}
+
+	void ScriptEngine::ReportScriptFailure(Script &Failed, int FailureLine) {
+		const auto DiagnosticName = Failed.GetScriptDiagnosticName();
+		LOG_CRITICAL(Lua, "[Runtime:Luau] [%s] %s", DiagnosticName.c_str(), Failed.ErrorMessage.c_str());
+		if (!RuntimeDiagnostic) return;
+		auto Message = "[" + DiagnosticName + "] " + Failed.ErrorMessage;
+		if (FailureLine > 0 && ObserveScriptFailure) {
+			try {
+				if (Message.size() > 2'048 || !IsValidProtocolUtf8(Message))
+					Message = BoundedDiagnosticText(Message, 2'048);
+				ObserveScriptFailure(Failed, FailureLine, Message);
+				return;
+			} catch (...) {
+				LOG_ERROR(Lua, "[Runtime:Diagnostics] Script failure observer failed");
+			}
+		}
+		EmitRuntimeDiagnostic("Error", std::move(Message));
+	}
+
+	void ScriptEngine::ResumeRootScriptDebug(bool Step) {
+		[[maybe_unused]] auto KeepAlive = weak_from_this().lock();
+		if (!GetPausedRootLine() || !HasRootDebugBudget()) throw std::logic_error("[Editor:PlayDebugger] No resumable debug budget");
+		auto Owner = RootDebug->Target.lock();
+		if (!Owner) throw std::logic_error("[Editor:PlayDebugger] Suspended Script retired");
+		// Engine destruction during the Script can clear RootDebug. Keep this turn's
+		// budget and permission values local through the VM unwind.
+		auto Turn = std::move(*RootDebug);
+		RootDebug.reset();
+		int FailureLine = 0;
+		const auto Status = Owner->ResumeDebug(L, Turn.Security, Turn.Budget, Step ? &Turn.Line : nullptr, &FailureLine);
+		if (Stopping) return;
+		if (Status == ScriptStatus::DebugPaused) RootDebug.emplace(std::move(Turn));
+		else if (Status == ScriptStatus::Error) ReportScriptFailure(*Owner, FailureLine);
+	}
+
 	std::shared_ptr<Instance> ScriptEngine::FindRequiredInstanceByPath(const char *rawPath) {
 		LOG_INFO(App, "Attempting to find required instance %s", rawPath);
 
@@ -415,7 +471,7 @@ namespace gargantuan {
 		// Engine::Destroy may release its owner from a Lua callback. Keep the
 		// VM and this queue alive through the current step.
 		[[maybe_unused]] auto KeepAlive = weak_from_this().lock();
-		if (Stopping) return;
+		if (Stopping || GetPausedRootLine()) return;
 		if (Persistence) Persistence->Pump();
 		Threads.Step();
 		if (Stopping) return;
@@ -432,19 +488,25 @@ namespace gargantuan {
 				continue;
 			}
 			TrackManagedScript(script);
-			auto status = script->Step(L);
+			int FailureLine = 0;
+			const auto Debug = RootDebug && RootDebug->Target.lock() == script;
+			auto Turn = Debug ? std::move(RootDebug) : std::nullopt;
+			if (Debug) RootDebug.reset();
+			if (Turn) Turn->Security = script->GetRunContext() == Enums::RunContext::Client
+				? ScriptSecurityContext::ClientRuntime() : ScriptSecurityContext::ServerRuntime();
+			auto status = script->Step(L, ObserveScriptFailure && script->WasSourceIdLoaded() ? &FailureLine : nullptr,
+				Turn ? &Turn->Budget : nullptr, Turn ? &Turn->Line : nullptr);
 			if (Stopping) return;
+			if (Turn && status == ScriptStatus::DebugPaused) {
+				RootDebug = std::move(Turn);
+				ScriptQueue.erase(script);
+				return;
+			}
 
 			switch (status) {
-			case ScriptStatus::Error: {
-				const auto DiagnosticName = script->GetScriptDiagnosticName();
-				LOG_CRITICAL(
-					Lua, "[Runtime:Luau] [%s] %s", DiagnosticName.c_str(), script->ErrorMessage.c_str()
-				);
-				if (RuntimeDiagnostic)
-					EmitRuntimeDiagnostic("Error", "[" + DiagnosticName + "] " + script->ErrorMessage);
+			case ScriptStatus::Error:
+				ReportScriptFailure(*script, FailureLine);
 				[[fallthrough]];
-			}
 
 			case ScriptStatus::Finished:
 				if (status == ScriptStatus::Finished && RuntimeDiagnostic)
