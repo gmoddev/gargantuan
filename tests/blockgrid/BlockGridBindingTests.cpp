@@ -88,7 +88,7 @@ int main() try {
 	Grid->SetAdmission({});
 	Check(Gateway.Apply(Command,ScriptSecurityContext::ServerRuntime()).Succeeded(),"admit edited source");
 	Check(Gateway.Apply(Command,ScriptSecurityContext::ServerRuntime()).Status==MutationStatus::Conflict,"stale token");
-	Check(!Gateway.Apply(Command,MutationAuthorityContext::AuthenticatedPeer(ScriptSecurityContext::ServerRuntime(),
+	Check(!Gateway.Apply(Command,MutationAuthorityContext::AuthenticatedPeer(ScriptSecurityContext::ClientRuntime(),
 		World->GetObjectId())).Succeeded(),"peer cannot inject");
 	const auto Studio=ScriptSecurityContext::StudioCoreUi();
 	constexpr std::uint64_t Owner=7;
