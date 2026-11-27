@@ -5,6 +5,7 @@
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
