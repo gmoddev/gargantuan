@@ -28,13 +28,13 @@ def Run(Arguments, Directory, Environment=None, Expected=0):
     return Output
 
 
-def Build(Packager, Project, Distribution, Target, Directory):
+def Build(Packager, Project, Distribution, Target, Directory, Configuration):
     Request = Directory / f"{Target}.json"
     WriteJson(Request, {"Version": 1, "Target": Target, "Preset": "Open",
                         "PublisherTrust": "DigestOnly", "ModLoading": "Disabled"})
     Staged = Directory / f"staging-{Target}"
     Run([Packager, "build", "--project", Project, "--output", Staged,
-         "--runtime", Distribution, "--configuration", "Release", "--distribution", Request], Directory)
+         "--runtime", Distribution, "--configuration", Configuration, "--distribution", Request], Directory)
     Moved = Directory / Target
     Staged.rename(Moved)
     Run([Packager, "validate", Moved], Directory)
@@ -42,19 +42,26 @@ def Build(Packager, Project, Distribution, Target, Directory):
     Metadata = Manifest["RuntimeDistribution"]
     if Metadata["Target"] != Target or Metadata.get("SpatialContent") != "BlockGrid1":
         raise RuntimeError(f"{Target} package is missing its negotiated spatial profile")
-    return Moved, Metadata["ClientCodeIdentity"]
+    return Moved, Metadata
 
 
-def VerifyPair(Fixture, Packager, PlayerRuntime, ServerRuntime, Directory):
+def VerifyPair(Fixture, Packager, PlayerRuntime, ServerRuntime, Directory, WithTerrain):
     Project = Directory / "Project"
-    Run([Fixture, "--write-session-project", Project], Directory)
+    Run([Fixture, "--write-terrain-session-project" if WithTerrain else "--write-session-project", Project], Directory)
     Settings = Project / ".gargantuan"
     WriteJson(Settings / "runtime-distribution.json", {"Version": 1, "SessionIdentity": uuid4().hex})
     WriteJson(Settings / "package-audience.json", {"Version": 1, "SharedAssets": []})
-    Server, ServerIdentity = Build(Packager, Project, ServerRuntime, "DedicatedServer", Directory)
-    Player, PlayerIdentity = Build(Packager, Project, PlayerRuntime, "DistributedPlayer", Directory)
-    if ServerIdentity != PlayerIdentity:
+    Configuration = "Development" if WithTerrain else "Release"
+    Server, ServerMetadata = Build(Packager, Project, ServerRuntime, "DedicatedServer", Directory, Configuration)
+    Player, PlayerMetadata = Build(Packager, Project, PlayerRuntime, "DistributedPlayer", Directory, Configuration)
+    if ServerMetadata["ClientCodeIdentity"] != PlayerMetadata["ClientCodeIdentity"]:
         raise RuntimeError("The package pair disagrees on its client code identity")
+    if WithTerrain:
+        Pin = PlayerMetadata.get("WorkspaceTerrain")
+        if not Pin or Pin != ServerMetadata.get("WorkspaceTerrain") or len(Pin["Manifest"]) != 64:
+            raise RuntimeError("Workspace terrain metadata differs between the package pair")
+        if not any((Server / "content").rglob("*.gtch")) or any((Player / "content").rglob("*.gtch")):
+            raise RuntimeError("The Workspace terrain chunk payload crossed the package audience boundary")
 
     Private = b"project:private_sealed_package_tile"
     def ShipsPrivateMarker(Package):
@@ -89,6 +96,8 @@ def VerifyPair(Fixture, Packager, PlayerRuntime, ServerRuntime, Directory):
             if "[Spatial:PackageObserver] Public grid, channel, ray and authoritative edit verified" not in ClientOutput:
                 raise RuntimeError("Packaged client did not observe the edited field\n" + ClientOutput[-2200:]
                                    + "\n" + LogFile.read_text(errors="replace")[-2200:])
+            if WithTerrain and "[Spatial:PackageObserver] Streamed Workspace terrain collision verified" not in ClientOutput:
+                raise RuntimeError("Packaged client did not observe streamed terrain\n" + ClientOutput[-2200:])
             if Process.wait(timeout=20) != 0:
                 raise RuntimeError("Packaged Server failed\n" + LogFile.read_text(errors="replace")[-2400:])
         finally:
@@ -104,16 +113,19 @@ def VerifyPair(Fixture, Packager, PlayerRuntime, ServerRuntime, Directory):
         raise RuntimeError("Packaged Server did not receive the client's final acknowledgment\n" + ServerOutput[-2000:])
     print("[Spatial:PackageSession] Relocated managed Server and distributed Player verified the authorized grid,"
           " private state exclusion, live edit and client acknowledgment over GNS")
+    if WithTerrain:
+        print("[Spatial:PackageSession] Client terrain arrived over GNS and provided physical collision")
 
 
 def Main():
     Args = argparse.ArgumentParser()
     for Name in ("fixture", "packager", "player-runtime", "server-runtime"):
         Args.add_argument("--" + Name, type=Path, required=True)
+    Args.add_argument("--workspace-terrain", action="store_true")
     Options = Args.parse_args()
     with tempfile.TemporaryDirectory(prefix="spg-") as Scratch:
         VerifyPair(Options.fixture.resolve(), Options.packager.resolve(), Options.player_runtime.resolve(),
-                   Options.server_runtime.resolve(), Path(Scratch))
+                   Options.server_runtime.resolve(), Path(Scratch), Options.workspace_terrain)
 
 
 if __name__ == "__main__":

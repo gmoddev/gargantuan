@@ -602,7 +602,37 @@ namespace {
 		Client->SetParent(Scripts);
 	}
 
-	void WritePackageProject(const std::filesystem::path &Root, bool Session) {
+	void AddPackageWorkspaceTerrain(const std::shared_ptr<Workspace> &Space) {
+		auto Field = std::make_unique<terrain::Field>();
+		const terrain::BoxBrush Brush{{12,4.63,12},{8.7,2.0,8.7},terrain::BrushMode::Add,5};
+		const auto Keys = terrain::GetRegionChunks(terrain::GetBrushBounds(Field->GetGrid(),Brush).value()).value();
+		auto Prepared = terrain::Field::Prepare(Field->Capture(Keys).value(),Brush).value();
+		Require(Field->Commit(std::move(Prepared)).has_value(), "authored package terrain");
+		Space->RestoreTerrainField(std::move(Field));
+		auto Probe = std::make_shared<Script>();
+		Probe->SetName("WorkspaceTerrainObserver");
+		Probe->SetRunContext(Enums::RunContext::Client);
+		Probe->SetSource(R"(
+			local World = game.Workspace
+			local Params = RaycastParams.new()
+			Params.IncludeTerrain = true
+			local Seen = false
+			game:GetService("RunService").PostSimulation:Connect(function()
+				if Seen then return end
+				local Ready, Hit = pcall(function()
+					return World:Raycast(Vector3.new(12,18,12),Vector3.new(0,-18,0),Params)
+				end)
+				if Ready and Hit and Hit.Instance == World.Terrain then
+					assert(Hit.Position.Y > 3 and Hit.Position.Y < 9)
+					Seen = true
+					warn("[Spatial:PackageObserver] Streamed Workspace terrain collision verified")
+				end
+			end)
+		)");
+		Probe->SetParent(Space->GetDataModel());
+	}
+
+	void WritePackageProject(const std::filesystem::path &Root, bool Session, bool WorkspaceTerrain) {
 		Require(std::filesystem::create_directory(Root), "package fixture destination must be new");
 		DiskFilesystem Files(Root);
 		auto ProjectValue = Project::fromInit(&Files,"SpatialConstructionPackage");
@@ -618,6 +648,7 @@ namespace {
 		auto Inside = MakeGrid(Region,"EastGrid",{blockgrid::Brick,1},Pose);
 		if (Session) AddPackageSessionProof(Game,Inside);
 		else AddTerrainFixture(Space,Region);
+		if (WorkspaceTerrain) AddPackageWorkspaceTerrain(Space);
 		auto Proof = std::make_shared<Script>();
 		Proof->SetName("VerifyPackagedGrids");
 		Proof->SetRunContext(Enums::RunContext::Server);
@@ -652,12 +683,14 @@ int main(int Count, char **Arguments) {
 			CheckOffscreenPixels();
 			return 0;
 		}
-		if (Count == 3 && (std::string_view(Arguments[1]) == "--write-project" ||
-			std::string_view(Arguments[1]) == "--write-session-project")) {
-			WritePackageProject(Arguments[2],std::string_view(Arguments[1]) == "--write-session-project");
-			return 0;
+		if (Count == 3) {
+			const std::string_view Mode = Arguments[1];
+			if (Mode == "--write-project" || Mode == "--write-session-project" || Mode == "--write-terrain-session-project") {
+				WritePackageProject(Arguments[2],Mode != "--write-project",Mode == "--write-terrain-session-project");
+				return 0;
+			}
 		}
-		Require(Count == 1, "supported modes are --vulkan, --write-project and --write-session-project");
+		Require(Count == 1, "supported modes are --vulkan, --write-project, --write-session-project and --write-terrain-session-project");
 		ScratchProject Scratch;
 		DiskFilesystem Files(Scratch.Root);
 		auto ProjectValue = Project::fromInit(&Files,"SpatialConstruction");

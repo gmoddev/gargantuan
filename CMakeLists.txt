@@ -1011,13 +1011,15 @@ if(BUILD_TESTING)
 				--engine $<TARGET_FILE:gargantuan>)
 		set_tests_properties(gargantuan_spatial_construction_yard PROPERTIES LABELS "spatial;blockgrid;headless;sample" TIMEOUT 120)
 		if(GARGANTUAN_WITH_GNS)
-			add_test(NAME gargantuan_spatial_construction_package_session
-				COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialConstructionPackageSession.py"
+			set(SpatialPackageTest "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialConstructionPackageSession.py"
 					--fixture $<TARGET_FILE:gargantuan_spatial_construction_integration_tests>
 					--packager $<TARGET_FILE:gargantuan_packager>
 					--player-runtime $<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
 					--server-runtime $<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution)
-			set_tests_properties(gargantuan_spatial_construction_package_session PROPERTIES LABELS "spatial;blockgrid;packaging;network;headless" TIMEOUT 120)
+			add_test(NAME gargantuan_spatial_construction_package_session COMMAND ${SpatialPackageTest})
+			add_test(NAME gargantuan_spatial_construction_package_terrain_session COMMAND ${SpatialPackageTest} --workspace-terrain)
+			set_tests_properties(gargantuan_spatial_construction_package_session gargantuan_spatial_construction_package_terrain_session
+				PROPERTIES LABELS "spatial;blockgrid;packaging;network;headless" TIMEOUT 120)
 		endif()
 		if(GARGANTUAN_WITH_LOCAL_SQLITE)
 			add_test(NAME gargantuan_spatial_construction_yard_restart
