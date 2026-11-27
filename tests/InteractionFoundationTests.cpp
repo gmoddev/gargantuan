@@ -5,6 +5,7 @@
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/ProximityPrompt.hpp"
 #include "gargantuan/classes/ScreenGui.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/TextBox.hpp"
 #include "gargantuan/classes/TextButton.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -140,6 +141,24 @@ namespace {
 			return {PartValue, Prompt};
 		}
 	};
+
+	void TestIndependentPromptSpaces() {
+		Fixture Value;
+		auto Room = std::make_shared<SpatialRegion>();
+		Room->SetParent(Value.Runtime->Workspace);
+		auto [OutsidePart, Outside] = Value.MakePrompt("OutdoorDoor", {3, 0, 0});
+		auto [InsidePart, Inside] = Value.MakePrompt("InteriorDoor", {3, 0, 0});
+		InsidePart->SetSpatialRegion(Room);
+		Inside->SetRequiresLineOfSight(true);
+		Value.Advance();
+		Check(Value.Runtime->Interaction->GetActivePrompt() == Outside, "outdoor character selects only the outdoor door");
+		Value.Character->SetParent(Room);
+		Value.Advance();
+		Check(Value.Runtime->Interaction->GetActivePrompt() == Inside, "inside door uses its own chart for line of sight");
+		InsidePart->SetSpatialRegion(std::nullopt);
+		Value.Advance();
+		Check(!Value.Runtime->Interaction->GetAvailable(), "moving a prompt's parent out of the chart revokes interaction");
+	}
 
 	void TestDiscoverySelectionAndAnchors() {
 		Fixture Value;
@@ -580,6 +599,7 @@ int main() {
 		return 1;
 	}
 	TestDiscoverySelectionAndAnchors();
+	TestIndependentPromptSpaces();
 	TestActivationHoldAndReentrancy();
 	TestSemanticInputAndTextFocus();
 	TestDefaultTouchPresentation();
