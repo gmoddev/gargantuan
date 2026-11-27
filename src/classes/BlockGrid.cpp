@@ -214,7 +214,7 @@ namespace gargantuan {
 	}
 	void BlockGrid::InstallReplicaField(blockgrid::Field Value) {
 		AssertCanMutate();
-		if (!GetDataModel() || Editing) throw std::logic_error("[BlockGrid:Replica] Shell is unavailable");
+		if (!IsReplicaMaterialization() || !GetDataModel() || Editing) throw std::logic_error("[BlockGrid:Replica] Shell is unavailable");
 		if (const auto Protection=GetDataModel()->GetSpatialTransferProtection(); Protection && !Protection->AllowsResource(*this))
 			throw std::runtime_error("[BlockGrid:Replica] Collision is reserved for an active transfer");
 		Cells.InstallReplica(std::move(Value), Admission);
@@ -224,6 +224,19 @@ namespace gargantuan {
 		LastCellEdit.reset();
 		ReplicaFieldAvailable = true;
 		NotifyPropertyCommitted("BlockRevision");
+	}
+	void BlockGrid::RetireReplicaContent() {
+		AssertCanMutate();
+		if (!IsReplicaMaterialization()) throw std::logic_error("[BlockGrid:Replica] Expected a replica");
+		if (ReplicaFieldAvailable) {
+			Cells.InstallReplica(blockgrid::Field{}, Admission);
+			LastAssetService.reset();
+			LastCellEdit.reset();
+			AssetsReady = false;
+			ReplicaFieldAvailable = false;
+			NotifyPropertyCommitted("BlockRevision");
+		}
+		ClearReplicaAssemblyProjection();
 	}
 	std::string BlockGrid::GetBlockRevision() const { return RevisionToken(Cells.GetRevision()); }
 	std::string BlockGrid::GetPublicBlockRevision() const { return RevisionToken(Cells.GetPublicRevision())+"/peers"; }
@@ -341,8 +354,9 @@ namespace gargantuan {
 	void BlockGrid::SetCellSize(float Value) {
 		CheckConfigurationWrite(); ValidatePropertyMutation("CellSize",Value);
 		if (Size==Value) return;
-		if (Cells.GetOccupiedCount() || (Value!=0.5f && Value!=1.f && Value!=2.f))
+		if ((!IsReplicaMaterialization() && Cells.GetOccupiedCount()) || (Value!=0.5f && Value!=1.f && Value!=2.f))
 			throw std::invalid_argument("[BlockGrid:CellSize] Choose 0.5, 1, or 2 while the grid is empty");
+		if (ReplicaFieldAvailable) RetireReplicaContent();
 		Size=Value; NotifyConfiguration("CellSize");
 	}
 	CFrame BlockGrid::GetCFrame() const { return Transform; }

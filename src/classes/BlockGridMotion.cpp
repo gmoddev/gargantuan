@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "BlockGridBinding.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/datatypes/Vector3.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include <cmath>
@@ -50,6 +52,10 @@ namespace gargantuan {
 			return false;
 		}
 		const bool Changed=!AssemblyState || AssemblyState->Dynamic!=P.Dynamic;
+		const auto World=GetDataModel();
+		if (!World) throw std::invalid_argument("[BlockGrid:Motion] Detached replica");
+		if (const auto Protection=World->GetSpatialTransferProtection(); Protection && !Protection->AllowsResource(*this))
+			throw std::domain_error("[BlockGrid:Motion] Native collision is reserved for a spatial transfer");
 		if (!AssemblyState) AssemblyState=std::make_unique<blockgrid::AssemblyProjection>();
 		const bool Moved=Transform.Position!=P.Pose.Position || Transform.Rotation!=P.Pose.Rotation;
 		*AssemblyState=P;

@@ -270,6 +270,8 @@ namespace gargantuan {
 	bool WorldRoot::CanHoldSpatialCollision(ObjectId Subject) const {
 		if (GetCurrentExecutionDomain()!=ExecutionDomain::Main || TrackedParts.size()>MaximumInspectedColliders || !IdDeformables.empty()) return false;
 		if (BlockGridState && !BlockGridState->Assemblies.empty()) return false;
+		if (BlockGridState) for (const auto &[Id, Member] : BlockGridState->Members)
+			if (Member.Grid->IsReplicaMaterialization() && Member.Grid->GetMotionMode()=="Dynamic") return false;
 		for (const auto &[Id,Weak]:TrackedParts) {
 			if (Id==Subject) continue;
 			const auto Part=Weak.lock();

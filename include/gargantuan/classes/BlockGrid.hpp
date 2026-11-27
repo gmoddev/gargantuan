@@ -17,6 +17,7 @@ namespace gargantuan {
 	  public:
 		BlockGrid();
 		[[nodiscard]] const blockgrid::Field& GetField() const;
+		[[nodiscard]] std::uint64_t GetAssemblyRevision() const noexcept { return AssemblyRevision; }
 		[[nodiscard]] const std::optional<blockgrid::CellDelta>& GetLastCellEdit() const { return LastCellEdit; }
 		// Resolves decoded project pins after adoption. False means a required resource is unavailable.
 		[[nodiscard]] bool EnsureAssetBindings() const;
@@ -33,6 +34,7 @@ namespace gargantuan {
 		void RestoreField(blockgrid::Field Value);
 		// Used only after the authenticated content receiver resolves the live structural shell.
 		void InstallReplicaField(blockgrid::Field Value);
+		void RetireReplicaContent();
 		[[nodiscard]] bool HasReplicaField() const { return ReplicaFieldAvailable; }
 		void SetAdmission(blockgrid::Field::Admission BeforeCommit);
 		void PushGridHit(lua_State* L, blockgrid::Cell Cell, glm::vec3 Position, glm::vec3 Normal) const;

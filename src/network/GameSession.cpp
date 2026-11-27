@@ -2615,6 +2615,7 @@ namespace gargantuan::network {
 			if (Iterator == Peers.end()) return;
 			auto PeerValue = std::move(Iterator->second);
 			Peers.erase(Iterator);
+			if (PeerValue.Grids) PeerValue.Grids->Retire();
 			if (PeerValue.TerrainPending && PeerValue.TerrainPending->Sending)
 				PeerValue.TerrainPending->Sending->Stop.request_stop();
 			ConnectionsByPlayer.erase(PeerValue.PlayerObject);

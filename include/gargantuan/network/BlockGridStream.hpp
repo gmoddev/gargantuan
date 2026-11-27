@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 #include "gargantuan/assets/AssetTypes.hpp"
+#include "gargantuan/blockgrid/Assembly.hpp"
 #include "gargantuan/blockgrid/Field.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
 
@@ -22,8 +23,9 @@ namespace gargantuan::network {
 	struct GridStreamMessage {
 		GridStreamKind Kind{};
 		GridStreamScope Scope;
-		std::uint64_t Subscription{}, Serial{}, Revision{}, Configuration{};
+		std::uint64_t Subscription{}, Serial{}, Revision{}, Configuration{}, MotionRevision{};
 		AssetContentId Base, Target, Placement;
+		std::optional<blockgrid::AssemblyProjection> Assembly;
 		std::uint32_t Size{}, Prefix{}, Suffix{}, Offset{};
 		std::span<const std::uint8_t> Fragment;
 	};
@@ -42,6 +44,7 @@ namespace gargantuan::network {
 		std::uint64_t Revision,
 		std::uint64_t Configuration,
 		AssetContentId Placement,
+		const blockgrid::AssemblyProjection &Assembly,
 		const GridReplicaContent &Next,
 		const GridReplicaContent *Known = nullptr
 	);

@@ -22,10 +22,13 @@ namespace gargantuan::network {
 			case GridStreamKind::Forget:
 				return true;
 			case GridStreamKind::Installed:
-				return Message.Target.IsValid() && Message.Placement.IsValid() && Message.Revision && Message.Configuration;
+				return Message.Target.IsValid() && Message.Placement.IsValid() && Message.Revision &&
+					   Message.Configuration && Message.MotionRevision;
 			case GridStreamKind::Offer:
-				return Message.Revision && Message.Configuration && Message.Placement.IsValid() && Message.Target.IsValid() && Message.Size &&
-					   Message.Size <= MaximumGridReplicaBytes && Message.Prefix <= Message.Size &&
+				return Message.Assembly && blockgrid::ValidAssemblyProjection(*Message.Assembly) &&
+					   Message.MotionRevision == Message.Assembly->Revision && Message.Revision &&
+					   Message.Configuration && Message.Placement.IsValid() && Message.Target.IsValid() &&
+					   Message.Size && Message.Size <= MaximumGridReplicaBytes && Message.Prefix <= Message.Size &&
 					   Message.Suffix <= Message.Size - Message.Prefix &&
 					   (Message.Base.IsValid() || (!Message.Prefix && !Message.Suffix));
 			case GridStreamKind::Fragment:
@@ -33,6 +36,12 @@ namespace gargantuan::network {
 					   Message.Offset <= MaximumGridReplicaBytes - Message.Fragment.size();
 			}
 			return false;
+		}
+		template <class Projection, class Component> bool VisitMotionComponents(Projection &P, Component Visit) {
+			auto Vector = [&](auto &V) { return Visit(V.x) && Visit(V.y) && Visit(V.z); };
+			auto Matrix = [&](auto &M) { return Vector(M[0]) && Vector(M[1]) && Vector(M[2]); };
+			return Vector(P.Pose.Position) && Matrix(P.Pose.Rotation) && Vector(P.LinearVelocity) &&
+				   Vector(P.AngularVelocity) && Visit(P.Mass) && Vector(P.LocalCenterOfMass) && Matrix(P.LocalInertia);
 		}
 		bool ReadDigest(GameBinaryReader &Reader, AssetContentId &Digest) {
 			std::span<const std::byte> Raw;
@@ -63,10 +72,18 @@ namespace gargantuan::network {
 		if (Value.Kind == GridStreamKind::Installed || Value.Kind == GridStreamKind::Offer) {
 			Writer.Integer(Value.Revision);
 			Writer.Integer(Value.Configuration);
+			Writer.Integer(Value.MotionRevision);
 			Writer.Append(std::as_bytes(std::span(Value.Target.Bytes)));
 			Writer.Append(std::as_bytes(std::span(Value.Placement.Bytes)));
 		}
 		if (Value.Kind == GridStreamKind::Offer) {
+			const auto &Assembly = *Value.Assembly;
+			Writer.Integer(Assembly.Version);
+			Writer.Integer<std::uint8_t>(Assembly.Dynamic);
+			VisitMotionComponents(Assembly, [&](float Number) {
+				Writer.Float(Number);
+				return Writer.Succeeded();
+			});
 			Writer.Append(std::as_bytes(std::span(Value.Base.Bytes)));
 			Writer.Integer(Value.Size);
 			Writer.Integer(Value.Prefix);
@@ -93,8 +110,18 @@ namespace gargantuan::network {
 		M.Kind = static_cast<GridStreamKind>(Kind);
 		if (M.Kind == GridStreamKind::Request && !ReadDigest(Reader, M.Base)) return {};
 		if ((M.Kind == GridStreamKind::Installed || M.Kind == GridStreamKind::Offer) &&
-			(!Reader.Integer(M.Revision) || !Reader.Integer(M.Configuration) || !ReadDigest(Reader, M.Target) || !ReadDigest(Reader, M.Placement)))
+			(!Reader.Integer(M.Revision) || !Reader.Integer(M.Configuration) || !Reader.Integer(M.MotionRevision) ||
+			 !ReadDigest(Reader, M.Target) || !ReadDigest(Reader, M.Placement)))
 			return {};
+		if (M.Kind == GridStreamKind::Offer) {
+			auto &Assembly = M.Assembly.emplace();
+			std::uint8_t Dynamic{};
+			if (!Reader.Integer(Assembly.Version) || !Reader.Integer(Dynamic) || Dynamic > 1 ||
+				!VisitMotionComponents(Assembly, [&](float &Number) { return Reader.Float(Number); }))
+				return {};
+			Assembly.Revision = M.MotionRevision;
+			Assembly.Dynamic = Dynamic != 0;
+		}
 		if (M.Kind == GridStreamKind::Offer && (!ReadDigest(Reader, M.Base) || !Reader.Integer(M.Size) ||
 												!Reader.Integer(M.Prefix) || !Reader.Integer(M.Suffix)))
 			return {};
@@ -120,6 +147,7 @@ namespace gargantuan::network {
 		std::uint64_t Revision,
 		std::uint64_t Configuration,
 		AssetContentId Placement,
+		const blockgrid::AssemblyProjection &Assembly,
 		const GridReplicaContent &Next,
 		const GridReplicaContent *Known
 	) {
@@ -133,11 +161,19 @@ namespace gargantuan::network {
 			.Serial = Serial,
 			.Revision = Revision,
 			.Configuration = Configuration,
+			.MotionRevision = Assembly.Revision,
 			.Target = Next.Digest,
 			.Placement = Placement,
+			.Assembly = Assembly,
 			.Size = static_cast<std::uint32_t>(Next.Bytes->size())
 		};
 		if (Known && Known->Bytes && Known->Digest.IsValid()) {
+			if (Next.Bytes == Known->Bytes) {
+				Offer.Base = Known->Digest;
+				Offer.Prefix = Offer.Size;
+				if (!Valid(Offer)) throw std::invalid_argument("[BlockGrid:Network] Invalid motion-only offer");
+				return Offer;
+			}
 			const auto Common = std::min(Next.Bytes->size(), Known->Bytes->size());
 			while (Offer.Prefix < Common && (*Next.Bytes)[Offer.Prefix] == (*Known->Bytes)[Offer.Prefix])
 				++Offer.Prefix;
