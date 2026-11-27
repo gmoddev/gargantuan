@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <limits>
 
 namespace gargantuan {
@@ -11,6 +12,21 @@ namespace gargantuan {
 		constexpr std::size_t FaceBytes = 4 * sizeof(RenderVertex) + 6 * sizeof(std::uint32_t);
 		constexpr std::size_t MeshRecordBytes = sizeof(RenderMeshCreate) + sizeof(RenderObjectCreate) +
 			sizeof(RenderMeshRemove) + sizeof(RenderObjectUpdate);
+
+		glm::vec3 Vector(const blockgrid::Point &Point) {
+			return {Point[0], Point[1], Point[2]};
+		}
+
+		bool Covered(const blockgrid::Field &Field, blockgrid::Cell Position, unsigned Face) {
+			glm::ivec3 Neighbor(Position.X, Position.Y, Position.Z);
+			Neighbor[Face / 2] += (Face & 1) ? -1 : 1;
+			const blockgrid::Cell Adjacent{Neighbor.x, Neighbor.y, Neighbor.z};
+			if (!blockgrid::ValidCell(Adjacent)) return false;
+			const auto Block = Field.Get(Adjacent);
+			if (Block.Definition <= blockgrid::Brick) return Block.Definition != blockgrid::Air;
+			const auto Shape = Field.GetDefinition(Block.Definition).Geometry;
+			return (blockgrid::GetGeometry(Shape, Block.Orientation).FullFaces & (1u << (Face ^ 1))) != 0;
+		}
 
 		std::size_t UploadBytes(const RenderMeshCreate &Mesh) {
 			return Mesh.Vertices->size() * sizeof(RenderVertex) + Mesh.Indices->size() * sizeof(std::uint32_t);
@@ -24,15 +40,45 @@ namespace gargantuan {
 			Field.ForEachOccupied([&](blockgrid::Cell Cell, blockgrid::Block Value) {
 				if (!WithinBudget) return;
 				const glm::ivec3 Position(Cell.X, Cell.Y, Cell.Z);
+				const auto &Definition = Field.GetDefinition(Value.Definition);
+				std::array<std::uint8_t, 4> Tint{0, 0, 0, 255};
+				for (unsigned C = 0; C < 3; ++C)
+					Tint[C] = static_cast<std::uint8_t>(std::lround(Definition.Color[C] * 255.0f));
+				if (Definition.Geometry != blockgrid::Shape::Cube) {
+					for (const auto &Face : blockgrid::GetGeometry(Definition.Geometry, Value.Orientation).Faces) {
+						if (Face.Boundary >= 0 && Covered(Field, Cell, static_cast<unsigned>(Face.Boundary))) continue;
+						const auto Bytes = Face.Count * sizeof(RenderVertex) + (Face.Count - 2) * 3 * sizeof(std::uint32_t);
+						if (Bytes > Budget) { WithinBudget = false; return; }
+						Budget -= Bytes;
+						const auto First = static_cast<std::uint32_t>(Vertices->size());
+						const auto Origin = Vector(Face.Corners[0]);
+						const auto Normal = Vector(Face.Normal);
+						const auto Tangent = glm::normalize(Vector(Face.Corners[1]) - Origin);
+						const auto Bitangent = glm::cross(Normal, Tangent);
+						for (unsigned I = 0; I < Face.Count; ++I) {
+							const auto Offset = Vector(Face.Corners[I]);
+							RenderVertex Vertex;
+							Vertex.Position = glm::vec3(Position) + Offset;
+							Vertex.Normal = Normal;
+							Vertex.Tangent = glm::vec4(Tangent, 1.0f);
+							Vertex.TextureCoordinate = {glm::dot(Offset - Origin, Tangent), glm::dot(Offset - Origin, Bitangent)};
+							Vertex.Tint = Tint;
+							Vertices->push_back(Vertex);
+							Bounds.Minimum = glm::min(Bounds.Minimum, Vertex.Position);
+							Bounds.Maximum = glm::max(Bounds.Maximum, Vertex.Position);
+						}
+						Indices->insert(Indices->end(), {First, First + 1, First + 2});
+						if (Face.Count == 4) Indices->insert(Indices->end(), {First, First + 2, First + 3});
+					}
+					return;
+				}
 				for (unsigned Axis = 0; Axis < 3; ++Axis) {
 					glm::ivec3 Normal(0), U(0), V(0);
 					U[(Axis + 1) % 3] = 1;
 					V[(Axis + 2) % 3] = 1;
 					for (int Sign : {-1, 1}) {
 						Normal[Axis] = Sign;
-						const auto Neighbor = Position + Normal;
-						const blockgrid::Cell Adjacent{Neighbor.x, Neighbor.y, Neighbor.z};
-						if (blockgrid::ValidCell(Adjacent) && Field.Get(Adjacent).Definition != blockgrid::Air) continue;
+						if (Covered(Field, Cell, 2 * Axis + (Sign < 0))) continue;
 						if (Budget < FaceBytes) { WithinBudget = false; return; }
 						Budget -= FaceBytes;
 						const auto Origin = Position + (Sign > 0 ? Normal : glm::ivec3(0));
@@ -43,8 +89,7 @@ namespace gargantuan {
 							Vertex.Normal = glm::vec3(Normal);
 							Vertex.Tangent = glm::vec4(glm::vec3(U), float(Sign));
 							Vertex.TextureCoordinate = {float(Offset[(Axis+1)%3]), float(Offset[(Axis+2)%3])};
-							Vertex.Tint = Value.Definition == blockgrid::Brick ?
-								std::array<std::uint8_t, 4>{150, 57, 37, 255} : std::array<std::uint8_t, 4>{139, 144, 151, 255};
+							Vertex.Tint = Tint;
 							Vertices->push_back(Vertex);
 							Bounds.Minimum = glm::min(Bounds.Minimum, Vertex.Position);
 							Bounds.Maximum = glm::max(Bounds.Maximum, Vertex.Position);
