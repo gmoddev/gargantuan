@@ -167,6 +167,33 @@ namespace {
 			!Provider->Installed.empty() && !Provider->AuthoritativeEmpty, "grid receipt must bind installed native bodies");
 		Grid->SetCFrame(CFrame(0,2,0));
 		Check(!A->ValidateSpatialDestination(WithGrid), "moving grid owner must invalidate a held destination");
+		const auto Actor = MakePart(Default, {1,1,1}, {20,0,0});
+		Actor->SetAnchored(false); Actor->SetSpatialRegion(A);
+		Actor->SetLinearVelocity({3,0,0}); Actor->ApplyImpulse({2,0,0});
+		const auto Identity = Actor->GetObjectId();
+		const SpatialMovementRequest Movement{Identity, A->GetObjectId(), A->GetSpatialActivation(),
+			Actor->GetCFrame(), CFrame(0,0,0)};
+		const auto Blocked = B->PrepareSpatialDestination(Bounds).value();
+		Check(!B->CommitSpatialTransfer(Actor, Movement, Blocked).Succeeded() &&
+			WorldRoot::GetEffectiveWorld(*Actor) == A && Actor->GetLinearVelocity().x == 3.f,
+			"occupied handoff cannot move or consume the source body");
+		Foreign->SetCFrame(CFrame(90,0,0));
+		Check(!B->CommitSpatialTransfer(Actor, Movement, Blocked).Succeeded(), "handoff accepted an expired destination receipt");
+		const auto Solid = std::make_shared<BlockGrid>();
+		blockgrid::Field CollisionOnly;
+		Check(CollisionOnly.Apply(Writes), "collision-only grid fixture");
+		Solid->RestoreField(std::move(CollisionOnly)); Solid->SetCanQuery(false); Solid->SetParent(B);
+		const auto CollisionReceipt = B->PrepareSpatialDestination(Bounds).value();
+		Check(!B->CommitSpatialTransfer(Actor, Movement, CollisionReceipt).Succeeded(), "non-queryable solid grid allowed a body overlap");
+		Solid->SetCFrame(CFrame(65,0,0));
+		const auto Clear = B->PrepareSpatialDestination(Bounds).value();
+		Check(B->CommitSpatialTransfer(Actor, Movement, Clear).Succeeded() && Actor->GetObjectId() == Identity &&
+			WorldRoot::GetEffectiveWorld(*Actor) == B && Actor->GetParent().value_or(nullptr) == Default &&
+			Actor->GetCFrame().Position == glm::vec3(0) && Actor->GetLinearVelocity().x == 3.f &&
+			!Ray(*A,20).HasHit() && Ray(*B,0).Instance == Actor,
+			"successful checked handoff preserves identity, parent and queued motion while changing coordinates");
+		B->StepPhysics(.02, std::nullopt);
+		Check(Actor->GetLinearVelocity().x > 3.f, "a pending impulse must reach the destination safe point exactly once");
 		const auto Previous = A->PrepareSpatialDestination(Bounds).value();
 		A->SetParent(nullptr); A->SetParent(Default);
 		Check(!A->ValidateSpatialDestination(Previous), "reactivation changed the semantic domain epoch");

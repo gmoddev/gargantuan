@@ -85,6 +85,10 @@ namespace gargantuan {
 		[[nodiscard]] std::expected<SpatialDestinationReceipt, PhysicsOperationStatus> PrepareSpatialDestination(
 			const SpatialDestinationBounds &Bounds, std::span<const ObjectId> RequiredOwners = {});
 		[[nodiscard]] bool ValidateSpatialDestination(const SpatialDestinationReceipt &Receipt);
+		[[nodiscard]] std::uint64_t GetSpatialActivation() const noexcept { return SpatialActivation; }
+		// Main-only checked teleport for one ordinary rigid Part. Clearance uses its conservative oriented box.
+		[[nodiscard]] PhysicsOperationResult CommitSpatialTransfer(const std::shared_ptr<BasePart> &Member,
+			const SpatialMovementRequest &Movement, const SpatialDestinationReceipt &Receipt);
 		[[nodiscard]] const std::map<ObjectId, std::weak_ptr<Instance>> &GetExplicitSpatialRoots() const { return ExplicitSpatialRoots; }
 
 		PhysicsWorld Physics;
@@ -231,9 +235,9 @@ namespace gargantuan {
 		[[nodiscard]] PhysicsConstraintId CreateConstraintJoint(const std::shared_ptr<Constraint> &Constraint);
 		std::map<ObjectId, std::weak_ptr<Instance>> ExplicitSpatialRoots;
 		static void MoveSpatialMembers(const std::shared_ptr<Instance> &Root,
-			const std::shared_ptr<WorldRoot> &Before, const std::shared_ptr<WorldRoot> &After);
+			const std::shared_ptr<WorldRoot> &Before, const std::shared_ptr<WorldRoot> &After, const CFrame *DestinationPose = nullptr);
 		void AdmitSpatialMember(const std::shared_ptr<Instance> &Member);
-		void RemoveSpatialMember(const std::shared_ptr<Instance> &Member);
+		void RemoveSpatialMember(const std::shared_ptr<Instance> &Member, bool PreserveMotion = false);
 		void TrackPart(const std::shared_ptr<BasePart> &Part);
 		bool MarkPartDirty(ObjectId Object);
 		void TrackDeformable(const std::shared_ptr<DeformableBody> &Body);
@@ -241,7 +245,7 @@ namespace gargantuan {
 		void TrackSoftBodyMaterial(const std::shared_ptr<SoftBodyMaterial> &Material);
 		void TrackConstraint(const std::shared_ptr<Constraint> &Constraint);
 		void RefreshJointAttachmentConnections(const std::shared_ptr<Constraint> &Constraint);
-		void RemovePart(const std::shared_ptr<BasePart> &Part);
+		void RemovePart(const std::shared_ptr<BasePart> &Part, bool PreserveMotion = false);
 		void RemoveDeformable(const std::shared_ptr<DeformableBody> &Body);
 		void RemoveSoftBodyAttachment(const std::shared_ptr<SoftBodyAttachment> &Attachment);
 		void RemoveSoftBodyMaterial(const std::shared_ptr<SoftBodyMaterial> &Material);

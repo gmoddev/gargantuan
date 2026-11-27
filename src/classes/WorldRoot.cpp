@@ -600,7 +600,7 @@ namespace gargantuan {
 		}
 	}
 
-	void WorldRoot::RemovePart(const std::shared_ptr<BasePart> &Part) {
+	void WorldRoot::RemovePart(const std::shared_ptr<BasePart> &Part, bool PreserveMotion) {
 		if (!Part) return;
 		const auto Object = Part->GetObjectId();
 		erase(Parts, Part);
@@ -625,15 +625,17 @@ namespace gargantuan {
 			}
 			PartBodies.erase(Found);
 		}
-		Part->PublishedPhysicsState = {};
-		Part->AccumulatedImpulse = {};
-		Part->AccumulatedAngularImpulse = {};
-		Part->AccumulatedForce = {};
-		Part->AccumulatedTorque = {};
-		Part->AccumulatedPointImpulses.clear();
-		Part->PendingLinearVelocity.reset();
-		Part->PendingAngularVelocity.reset();
-		Part->PendingAwake.reset();
+		if (!PreserveMotion) {
+			Part->PublishedPhysicsState = {};
+			Part->AccumulatedImpulse = {};
+			Part->AccumulatedAngularImpulse = {};
+			Part->AccumulatedForce = {};
+			Part->AccumulatedTorque = {};
+			Part->AccumulatedPointImpulses.clear();
+			Part->PendingLinearVelocity.reset();
+			Part->PendingAngularVelocity.reset();
+			Part->PendingAwake.reset();
+		}
 		RemoveInvalidConstraintMappings();
 		for (const auto &[Id, _] : TrackedConstraints) DirtyConstraints.insert(Id);
 	}
@@ -1109,10 +1111,10 @@ namespace gargantuan {
 		}
 	}
 
-	void WorldRoot::RemoveSpatialMember(const std::shared_ptr<Instance> &Instance) {
+	void WorldRoot::RemoveSpatialMember(const std::shared_ptr<Instance> &Instance, bool PreserveMotion) {
 			RemoveBlockGrid(Instance);
 		if (auto Part = std::dynamic_pointer_cast<BasePart>(Instance)) {
-			if (TrackedParts.contains(Part->GetObjectId())) RemovePart(Part);
+			if (TrackedParts.contains(Part->GetObjectId())) RemovePart(Part, PreserveMotion);
 		} else if (auto Body = std::dynamic_pointer_cast<DeformableBody>(Instance))
 			RemoveDeformable(Body);
 		else if (auto Attachment = std::dynamic_pointer_cast<SoftBodyAttachment>(Instance))
@@ -1506,7 +1508,7 @@ namespace gargantuan {
 			? std::dynamic_pointer_cast<DeformableBody>(StackValue<std::shared_ptr<Instance>>::From(L, 2))
 			: nullptr;
 		if (!World || World->GetDestroyed() || World->IsDestroying() || !Body || Body->GetDestroyed() ||
-			Body->IsDestroying() || Body->FindFirstAncestorWhichIsA("WorldRoot").get() != World) {
+			Body->IsDestroying() || GetEffectiveWorld(*Body).get() != World) {
 			lua_pushnil(L);
 			return 1;
 		}
@@ -1543,7 +1545,7 @@ namespace gargantuan {
 		const auto Index = lua_isnumber(L, 3) ? lua_tonumber(L, 3) : -1.0;
 		if (!World || World->GetDestroyed() || World->IsDestroying() || !Body || Body->GetDestroyed() ||
 			Body->IsDestroying() || !std::isfinite(Index) || Index < 0 || Index >= MaximumSoftBodyVertices ||
-			std::trunc(Index) != Index || Body->FindFirstAncestorWhichIsA("WorldRoot").get() != World) {
+			std::trunc(Index) != Index || GetEffectiveWorld(*Body).get() != World) {
 			lua_pushnil(L);
 			return 1;
 		}

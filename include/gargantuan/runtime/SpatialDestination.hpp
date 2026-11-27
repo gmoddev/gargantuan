@@ -14,6 +14,12 @@ namespace gargantuan {
 		bool operator==(const SpatialDestinationBounds &) const = default;
 	};
 
+	struct SpatialMovementRequest {
+		ObjectId Member, SourceDomain;
+		std::uint64_t SourceActivation{};
+		CFrame SourcePose, DestinationPose;
+	};
+
 	enum class SpatialCollisionProvider : std::uint8_t { Rigid, Terrain, BlockGrid };
 
 	struct SpatialInstalledCollider {

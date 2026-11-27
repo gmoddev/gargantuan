@@ -5,7 +5,8 @@
             }
             bool AcceptAdvancedQueryBody(PhysicsBodyId Body, const PhysicsQueryFilter &Filter) const {
                 const auto *Record = FindBody(Body);
-                if (!Record || !Record->Description.CanQuery.value_or(Record->Description.CanCollide)) return false;
+                if (!Record || !(Filter.RequireCollidable ? Record->Description.CanCollide :
+                    Record->Description.CanQuery.value_or(Record->Description.CanCollide))) return false;
                 if (Record->Description.RequiresBlockGridQuery && !Filter.IncludeBlockGrids) return false;
                 if (!PhysicsCanCollide(Filter.CollisionGroup, Filter.CollisionMask,
                     Record->Description.CollisionGroup, Record->Description.CollisionMask)) return false;
