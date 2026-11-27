@@ -1002,6 +1002,13 @@ if(BUILD_TESTING)
 	endif()
 	add_test(NAME gargantuan_spatial_construction_integration COMMAND gargantuan_spatial_construction_integration_tests)
 	set_tests_properties(gargantuan_spatial_construction_integration PROPERTIES LABELS "spatial;blockgrid;integration")
+	find_program(GARGANTUAN_SPATIAL_TEST_PYTHON NAMES python3 python)
+	if(GARGANTUAN_SPATIAL_TEST_PYTHON)
+		add_test(NAME gargantuan_spatial_construction_yard
+			COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialConstructionYardInput.py"
+				--engine $<TARGET_FILE:gargantuan>)
+		set_tests_properties(gargantuan_spatial_construction_yard PROPERTIES LABELS "spatial;blockgrid;headless;sample" TIMEOUT 120)
+	endif()
 	if(NOT GARGANTUAN_HEADLESS_GEOMETRY_QUALIFICATION)
 		add_dependencies(gargantuan_spatial_construction_integration_tests gargantuan_shaders)
 		if(GARGANTUAN_RUN_GRAPHICAL_PACKAGE_SMOKE)
