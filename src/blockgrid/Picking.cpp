@@ -34,7 +34,9 @@ namespace gargantuan::blockgrid {
 			return Span;
 		}
 		bool CellPrecedes(Cell A,Cell B) { return std::tie(A.X,A.Y,A.Z)<std::tie(B.X,B.Y,B.Z); }
-		std::optional<CellHit> HitMesh(Cell P,const Definition& Spec,const RotationBasis& Axes,Vec O,Vec D,unsigned& Remaining) {
+		enum class MeshEndpoints { Open, Closed };
+		std::optional<CellHit> HitMesh(Cell P,const Definition& Spec,const RotationBasis& Axes,Vec O,Vec D,
+			unsigned& Remaining,MeshEndpoints Endpoints) {
 			if (!Spec.Assets || !Spec.Assets->Resolved || !Spec.Assets->Resolved->QueryMesh)
 				throw std::runtime_error("[BlockGrid:Unavailable] Mesh query data is unavailable");
 			const auto& M=*Spec.Assets->Resolved->QueryMesh;
@@ -47,13 +49,14 @@ namespace gargantuan::blockgrid {
 				const glm::dvec3 A=(*M.Positions)[(*M.Indices)[I]], B=(*M.Positions)[(*M.Indices)[I+1]], C=(*M.Positions)[(*M.Indices)[I+2]];
 				const auto AB=B-A, AC=C-A, Cross=glm::cross(Direction,AC);
 				const double Det=glm::dot(AB,Cross);
-				// Static triangle meshes use Box3D's front-facing surface and open segment endpoints.
+				// Physics and viewport picks both use the front-facing triangle.
 				if (Det<=0) continue;
 				const auto Offset=Origin-A, Q=glm::cross(Offset,AB);
 				const double U=glm::dot(Offset,Cross)/Det, V=glm::dot(Direction,Q)/Det;
 				if (U<0 || V<0 || U+V>1) continue;
 				const double T=glm::dot(AC,Q)/Det;
-				if (T<=0 || T>=1 || (Best && (T>Best->Fraction || Tied(T,Best->Fraction)))) continue;
+				if (T<0 || T>1 || (Endpoints==MeshEndpoints::Open && (T==0 || T==1)) ||
+					(Best && (T>Best->Fraction || Tied(T,Best->Fraction)))) continue;
 				const auto Local=glm::normalize(glm::cross(AB,AC));
 				Vec Normal{};
 				for (unsigned J=0;J<3;++J) for (unsigned K=0;K<3;++K) Normal[J]+=Axes[K][J]*Local[K];
@@ -61,7 +64,8 @@ namespace gargantuan::blockgrid {
 			}
 			return Best;
 		}
-		std::optional<CellHit> HitShape(Cell P,const Definition& Spec,Block B,Vec Origin,Vec Direction,unsigned& Remaining) {
+		std::optional<CellHit> HitShape(Cell P,const Definition& Spec,Block B,Vec Origin,Vec Direction,
+			unsigned& Remaining,MeshEndpoints Endpoints) {
 			if (!Spec.Queryable) return {};
 			if (Spec.Geometry==Shape::Cube) {
 				const Vec Min{static_cast<double>(P.X),static_cast<double>(P.Y),static_cast<double>(P.Z)};
@@ -80,7 +84,7 @@ namespace gargantuan::blockgrid {
 				O[I]+=Axes[I][A]*Offset[A];
 				D[I]+=Axes[I][A]*Direction[A];
 			}
-			if (Spec.Geometry==Shape::Mesh) return HitMesh(P,Spec,Axes,O,D,Remaining);
+			if (Spec.Geometry==Shape::Mesh) return HitMesh(P,Spec,Axes,O,D,Remaining,Endpoints);
 			const bool Low=Spec.Geometry==Shape::Slab || Spec.Geometry==Shape::Stairs;
 			auto A=Clip(O,D,{0,0,0},{1,Low?.5:1.,1});
 			if (A && Spec.Geometry==Shape::Wedge) {
@@ -115,7 +119,8 @@ namespace gargantuan::blockgrid {
 			return CellHit{P,T,N};
 		}
 	}
-	std::optional<CellHit> Cast(const Field& Grid, Vec O, Vec D, unsigned Budget,const ReplicaCoverage* Coverage) {
+	static std::optional<CellHit> CastSegment(const Field& Grid, Vec O, Vec D, unsigned Budget,
+		const ReplicaCoverage* Coverage, MeshEndpoints Endpoints) {
 		if (!Budget || Budget>MaximumRayVisits || D==Vec{})
 			throw std::invalid_argument("[BlockGrid:Raycast] Invalid ray budget or zero direction");
 		for (unsigned A=0; A<3; ++A)
@@ -150,7 +155,7 @@ namespace gargantuan::blockgrid {
 				LastPage=Page;
 			}
 			if (const auto B=Grid.Get(Here);B.Definition!=Air) {
-				const auto Hit=HitShape(Here,Grid.GetDefinition(B.Definition),B,O,D,Remaining);
+				const auto Hit=HitShape(Here,Grid.GetDefinition(B.Definition),B,O,D,Remaining,Endpoints);
 				if (Hit && (!Best || (Hit->Fraction<Best->Fraction && !Tied(Hit->Fraction,Best->Fraction)) ||
 					(Tied(Hit->Fraction,Best->Fraction) && CellPrecedes(Here,Best->Position)))) Best=Hit;
 			}
@@ -160,5 +165,11 @@ namespace gargantuan::blockgrid {
 				if (Tied(Next[A],T)) { P[A]+=Step[A]; Next[A]=Boundary(A); }
 		}
 		throw std::length_error("[BlockGrid:Raycast] Cell visit budget exceeded before completion");
+	}
+	std::optional<CellHit> Cast(const Field& Grid, Vec Origin, Vec Direction, unsigned Budget,const ReplicaCoverage* Coverage) {
+		return CastSegment(Grid,Origin,Direction,Budget,Coverage,MeshEndpoints::Open);
+	}
+	std::optional<CellHit> CastVisibleSegment(const Field& Grid, Vec Origin, Vec Direction) {
+		return CastSegment(Grid,Origin,Direction,MaximumRayVisits,nullptr,MeshEndpoints::Closed);
 	}
 }

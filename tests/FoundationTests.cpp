@@ -1,5 +1,6 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/Engine.hpp"
+#include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/FileLink.hpp"
 #include "gargantuan/classes/Folder.hpp"
@@ -2230,6 +2231,79 @@ namespace {
 			Check(!StrictClassPayload.HasCandidate(),
 				"strict custom class payload rejection aborts the complete candidate");
 		}
+	}
+
+	void TestViewportPickClipPlanes() {
+		using namespace gargantuan;
+		auto CheckBox = [](float PixelX, float CenterX, float Depth, float DepthSize,
+			std::optional<float> Expected, const char *Message) {
+			RenderSnapshot Snapshot;
+			Snapshot.Id = 1;
+			Snapshot.ViewportWidth = Snapshot.ViewportHeight = 100;
+			Snapshot.Camera.VerticalFieldOfView = 90.0f;
+			Snapshot.Camera.NearPlane = 1.0f;
+			Snapshot.Camera.FarPlane = 10.0f;
+			RenderItem Item;
+			Item.Object = {1, 1};
+			Item.ModelMatrix[2][2] = DepthSize;
+			Item.ModelMatrix[3] = {CenterX, 0.0f, -Depth, 1.0f};
+			Item.InverseModelMatrix = glm::inverse(Item.ModelMatrix);
+			Snapshot.Items.push_back(Item);
+			RenderPublication Publication;
+			Publication.Id = 1;
+			Publication.FullResync = true;
+			Publication.Frame.ViewportWidth = Publication.Frame.ViewportHeight = 100;
+			Publication.Frame.Camera = Snapshot.Camera;
+			Publication.Creates.push_back({Item});
+			RenderProjection Projection;
+			(void)Projection.Apply(Publication);
+			for (const auto &Pick : {PickEditorViewport(Snapshot, PixelX, 49.5f), PickEditorViewport(Projection, PixelX, 49.5f)}) {
+				Check(Expected ? Pick && Pick->Object == Item.Object && std::abs(Pick->Distance - *Expected) < 0.001f :
+					!Pick, Message);
+			}
+		};
+		CheckBox(49.5f, 0, 0.6f, 0.2f, std::nullopt, "geometry clipped before the near plane cannot be picked");
+		CheckBox(49.5f, 0, 1.0f, 0.4f, 1.0f, "bounds straddling the near plane start at the visible ray interval");
+		CheckBox(49.5f, 0, 11.0f, 0.4f, std::nullopt, "geometry beyond the far plane cannot be picked");
+		CheckBox(49.5f, 0, 10.1f, 0.6f, 9.8f, "geometry straddling the far plane remains pickable");
+		CheckBox(89.5f, 7.2f, 9.0f, 0.5f, 8.75f * std::sqrt(1.64f),
+			"off-center picks reach the far plane along the oblique ray");
+		CheckBox(89.5f, 0.68f, 0.85f, 0.16f, std::nullopt,
+			"off-center geometry before the near plane stays clipped even beyond its radial distance");
+
+		auto Game = std::make_shared<DataModel>();
+		auto Space = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto Grid = std::make_shared<BlockGrid>();
+		blockgrid::Field Field;
+		const std::array<blockgrid::Write, 2> Cells{{
+			{blockgrid::SingleCell({0,0,-1}), {blockgrid::Stone}},
+			{blockgrid::SingleCell({0,0,-3}), {blockgrid::Brick}},
+		}};
+		Check(Field.Apply(Cells), "grid clipping fixture contains separated surfaces on one ray");
+		Grid->RestoreField(std::move(Field));
+		Grid->SetParent(Space);
+		RenderPublisher Publisher;
+		RenderProjection Projection;
+		RenderCameraInput Camera;
+		Camera.Position = {.5f, .5f, 0};
+		Camera.NearPlane = 1.125f;
+		auto PickGrid = [&](float FarPlane) {
+			Camera.FarPlane = FarPlane;
+			(void)Projection.Apply(*Publisher.Publish(*Space, Camera, 100, 100));
+			return PickEditorViewport(Projection, 49.5f, 49.5f, Space.get());
+		};
+		Check(!PickGrid(1.5f), "an entirely clipped cell does not select the grid's mesh bounds");
+		const auto Deeper = PickGrid(10);
+		Check(Deeper && Deeper->Object == Grid->GetObjectId() && Deeper->Cell == glm::ivec3(0,0,-3) &&
+			Deeper->LocalNormal == glm::ivec3(0,0,1) && std::abs(Deeper->Distance - 2) < 1e-5f,
+			"the visible cell behind a clipped foreground cell returns its own distance and face");
+		auto Coincident = std::make_shared<Part>();
+		Coincident->SetSize({1,1,1});
+		Coincident->SetCFrame(CFrame(glm::vec3(.5f,.5f,-2.5f)));
+		Coincident->SetParent(Space);
+		const auto Tied = PickGrid(10);
+		Check(Tied && Tied->Object == std::min(Grid->GetObjectId(), Coincident->GetObjectId()),
+			"coincident grid and Part surfaces select the stable lower object identity");
 	}
 
 	void TestRenderSnapshotExtraction() {
@@ -5430,6 +5504,9 @@ namespace {
 		Check(!unauthorized["Ok"].get<bool>() && unauthorized["Error"]["Code"] == "Unauthorized", "EditorHost rejects the wrong launch token");
 		auto handshake = call("Handshake", Json::object(), "test-token");
 		Check(handshake["Ok"].get<bool>() && handshake["Result"]["ProtocolVersion"] == 1, "EditorHost negotiates protocol version 1");
+		Check(std::ranges::contains(handshake["Result"]["Capabilities"], "PickPresentedViewportV1") ==
+				LatestFrameMailbox::IsSupported(),
+			"frame-bound scene picking is offered only on a producing mailbox transport");
 		Check(
 			handshake["Result"]["StudioExecutionDomain"] == "Studio" &&
 				handshake["Result"]["StudioCapabilities"] == Json::array({
@@ -7179,6 +7256,79 @@ namespace {
 				"latest-frame presentation replaces frames monotonically without a capture request"
 			);
 			bool InjectViewportFailure = true;
+			const auto &Visible = FirstPresentationState["Result"];
+			Json PresentedPick{{"X", 159.5}, {"Y", 99.5}, {"Mailbox", LatestTransport["Result"]["Name"]},
+				{"FrameNumber", Visible["LatestSequence"]}, {"Generation", Visible["Generation"]},
+				{"CameraRevision", Visible["CameraRevision"]}};
+			Check(call("PickPresentedViewportV1", PresentedPick, "test-token")["Ok"] == true,
+				"presented pick accepts a recent frame when world and camera are unchanged");
+			for (const auto &Field : {"Mailbox", "FrameNumber", "Generation", "CameraRevision"}) {
+				auto Stale = PresentedPick;
+				if (std::string_view(Field) == "Mailbox") Stale[Field] = "retired-engine-mailbox";
+				else Stale[Field] = std::numeric_limits<std::uint64_t>::max();
+				Check(call("PickPresentedViewportV1", Stale, "test-token")["Error"]["Code"] == "StaleFrame",
+					"presented pick rejects a foreign transport or superseded frame identity");
+			}
+			auto CameraCommand = [&](Json Position, Json Target) {
+				return call("SetViewportCamera", {{"Position", Position}, {"Target", Target},
+					{"FieldOfView", 70.0}, {"CameraRevision", 10}}, "test-token");
+			};
+			Check(CameraCommand({1,2,10}, {0,0,0})["Ok"] == true &&
+				call("PickPresentedViewportV1", PresentedPick, "test-token")["Ok"] == true,
+				"an identical camera retry retains the displayed frame");
+			Check(CameraCommand({.5,.5,.05}, {.5,.5,-1})["Ok"] == true &&
+				call("PickPresentedViewportV1", PresentedPick, "test-token")["Error"]["Code"] == "StaleFrame",
+				"reusing a camera revision for a different ray retires the displayed frame");
+			if (WorkspaceObject != objects.end()) {
+				const auto Scope = snapshot["Result"]["Snapshot"]["Cursor"]["Scope"];
+				const auto WorkspaceId = (*WorkspaceObject)["Id"];
+				auto Create = [&](const char *Class, const Json &Parent) {
+					auto Result = call("CreateInstance", {{"ClassSchemaId", SchemaId::FromNativeName("Engine", Class).ToString()},
+						{"DefinitionVersion", 1}, {"Parent", Parent}}, "test-token");
+					return Result.at("Result").at("Object");
+				};
+				const auto Room = Create("SpatialRegion", WorkspaceId);
+				const auto Grid = Create("BlockGrid", Room);
+				for (const int Z : {0, -3}) {
+					const Json Cell = {0,0,Z};
+					auto Read = call("ReadBlockGridCell", {{"Scope", Scope}, {"Object", Grid}, {"Cell", Cell}}, "test-token");
+					auto Edit = call("EditBlockGridRegion", {{"Scope", Scope}, {"Object", Grid}, {"Cell", Cell},
+						{"MaxExclusive", {1,1,Z+1}}, {"Definition", "Stone"}, {"Revision", Read.at("Result").at("Revision")}}, "test-token");
+					Check(Edit["Ok"] == true, "the normal authoring path places the two regional fixture cells");
+				}
+				auto NewFrame = [&] {
+					host.PumpViewportPresentationForTesting();
+					auto State = call("GetViewportPresentationState", Json::object(), "test-token").at("Result");
+					auto Params = PresentedPick;
+					Params["FrameNumber"] = State["LatestSequence"];
+					Params["Generation"] = State["Generation"];
+					Params["CameraRevision"] = State["CameraRevision"];
+					return Params;
+				};
+				auto Select = [&](const Json &Domain) {
+					return call("SetEditorSpatialView", {{"Scope", Scope}, {"Object", Domain}}, "test-token").at("Ok") == true;
+				};
+				auto AuthoredRevision = [&] {
+					return call("GetProjectState", Json::object(), "test-token").at("Result").at("AuthoritativeRevision");
+				};
+				const auto DefaultFrame = NewFrame();
+				const auto Revision = AuthoredRevision();
+				Check(Select(Room) && AuthoredRevision() == Revision &&
+					call("PickPresentedViewportV1", DefaultFrame, "test-token")["Error"]["Code"] == "StaleFrame",
+					"a spatial view switch rejects the previous frame at the same authored revision");
+				const auto RegionalFrame = NewFrame();
+				auto Hit = call("PickPresentedViewportV1", RegionalFrame, "test-token");
+				Check(Hit["Ok"] == true && Hit["Result"]["Object"] == Grid && Hit["Result"]["Cell"] == Json::array({0,0,-3}) &&
+					Hit["Result"]["LocalNormal"] == Json::array({0,0,1}),
+					"the presented regional view skips its clipped cell and picks the deeper visible face");
+				Check(Select(WorkspaceId) && call("PickPresentedViewportV1", RegionalFrame, "test-token")["Error"]["Code"] == "StaleFrame" &&
+					call("PickPresentedViewportV1", DefaultFrame, "test-token")["Error"]["Code"] == "StaleFrame",
+					"returning to Workspace cannot revive a receipt from either past view");
+				auto Returned = call("PickPresentedViewportV1", NewFrame(), "test-token");
+				Check(Returned["Ok"] == true && Returned["Result"]["Object"] != Grid, "Workspace picks exclude the coincident room grid");
+				Check(call("DestroyInstance", {{"Object", Room}}, "test-token")["Ok"] == true, "regional pick fixture retires");
+			}
+			(void)CameraCommand({1,2,10}, {0,0,0});
 			host.SetViewportPresentationCheckpointForTesting([&](std::string_view Stage) {
 				if (InjectViewportFailure && Stage == "BeforePublish") {
 					InjectViewportFailure = false;
@@ -9226,6 +9376,7 @@ int main() {
 	TestClassExtensionSchema();
 	TestCustomClassSchema();
 	TestRenderSnapshotExtraction();
+	TestViewportPickClipPlanes();
 	TestRenderBackendBoundary();
 	TestScriptSecurityModel();
 	TestMutationGateway();

@@ -116,6 +116,17 @@ namespace gargantuan {
 		std::uint32_t ViewportWidth = 0;
 		std::uint32_t ViewportHeight = 0;
 		std::uint64_t ViewportFrameNumber = 0;
+		struct EditViewportSource {
+			ObjectId Domain;
+			std::uint64_t Activation = 0, WorldRevision = 0;
+		};
+		EditViewportSource LastEditViewportSource;
+		struct PresentedEditFrame {
+			std::uint64_t Sequence = 0, Generation = 0, CameraRevision = 0;
+			EditViewportSource Source;
+		};
+		// A small history tolerates the normal lag between compositor admission and a pointer press.
+		std::array<PresentedEditFrame, 32> PresentedEditFrames{};
 		std::uint64_t ViewportGeneration = 1;
 		std::uint64_t ViewportCameraRevision = 0;
 		std::uint64_t ViewportProducedFrames = 0;
