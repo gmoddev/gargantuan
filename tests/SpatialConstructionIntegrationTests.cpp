@@ -560,6 +560,7 @@ namespace {
 			State:SetValue(Cell, "signal", true)
 			State:Commit()
 			local Changed = false
+			warn("[Spatial:PackageAuthority] Public and private fields prepared")
 			game.SpatialPackageProof.OnServerEvent:Connect(function(_, Stage)
 				if Stage == "baseline" and not Changed then
 					assert(Grid:GetValue(Cell, "private_damage") == 91)
@@ -579,13 +580,25 @@ namespace {
 			local World = game.Workspace
 			local Cell = Vector3.new(-2, 0, 3)
 			local Sent, Done = false, false
+			local LastPhase = ""
+			local function Phase(Value)
+				if LastPhase ~= Value then
+					LastPhase = Value
+					warn("[Spatial:PackageObserver] " .. Value)
+				end
+			end
+			Phase("Observer started")
 			game:GetService("RunService").PostSimulation:Connect(function()
 				if Done then return end
 				local Grid = World:FindFirstChild("WestGrid")
 				local Event = game:FindFirstChild("SpatialPackageProof")
-				if not Grid or not Event then return end
+				if not Grid or not Event then
+					Phase("Waiting for grid=" .. tostring(Grid ~= nil) .. " event=" .. tostring(Event ~= nil))
+					return
+				end
 				local Ready, Block = pcall(function() return Grid:GetBlock(Cell) end)
-				if not Ready or not Block then return end
+				if not Ready or not Block then Phase("Waiting for public cell: " .. tostring(Block)) return end
+				Phase("Observed " .. Block.Definition .. " sent=" .. tostring(Sent))
 				assert(World:FindFirstChild("NestedRegion") == nil)
 				if Block.Definition == "Stone" and not Sent then
 					if not Grid:GetValue(Cell, "signal") then return end
