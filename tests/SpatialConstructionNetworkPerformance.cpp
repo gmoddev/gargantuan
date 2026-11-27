@@ -88,7 +88,7 @@ namespace {
 		const auto Adapter = Transport.GetStatistics(Connection);
 		Require(Adapter && Adapter->BytesSent && Adapter->MessagesSent, "missing GNS application counters");
 		Stamp Value{*Adapter->BytesSent, *Adapter->MessagesSent};
-		const auto Native = detail::ReliableServiceFeedbackAccess::Observe(Transport, Connection);
+		const auto Native = gargantuan::network::detail::ReliableServiceFeedbackAccess::Observe(Transport, Connection);
 		if (Native) {
 			Value.Packets = Native->NativePacketsSent;
 			Value.PacketBytes = Native->NativePacketBytesSent;

@@ -75,7 +75,8 @@ for ($Trial=1; $Trial -le $Trials; $Trial++) {
                     $Process.StandardInput.WriteLine('continue')
                     $Process.StandardInput.Flush()
                 }
-                if (!$Process.WaitForExit(15000) -or $Process.ExitCode) { throw "GPU benchmark failed. $($Errors.Result)" }
+                if (!$Process.WaitForExit(15000)) { throw 'GPU benchmark stalled after the final counter sample' }
+                if ($Process.ExitCode) { throw "GPU benchmark failed. $($Errors.Result)" }
             } finally {
                 if (!$Process.HasExited) { $Process.Kill(); $Process.WaitForExit() }
                 $Process.Dispose()
