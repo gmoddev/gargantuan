@@ -1345,6 +1345,9 @@ if(BUILD_TESTING)
 	target_compile_definitions(gargantuan_packaging_tests PRIVATE
 		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
 		GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT="$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution"
+		GARGANTUAN_SERVER_RUNTIME_DISTRIBUTION_ROOT="$<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution"
+		GARGANTUAN_PACKAGE_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}"
+		GARGANTUAN_PACKAGE_BUILD_ROOT="${CMAKE_CURRENT_BINARY_DIR}"
 	)
 	add_dependencies(gargantuan_packaging_tests gargantuan_packager gargantuan_runtime_distribution)
 	add_executable(gargantuan_blockgrid_persistence_tests "tests/blockgrid/BlockGridPersistenceTests.cpp")

@@ -174,6 +174,13 @@ executable does not relink. `gargantuan_packaged_shaders` compares that runtime
 directory with the complete source shader set and fails when a compiled output
 is missing.
 
+The packaging regression reads every byte of the standalone package content and
+the staged dedicated-server distribution in 64 KiB chunks. An absolute Engine
+source, build or authoring project path fails the test with the file and byte
+offset. A source-relative diagnostic such as `./vendor/sdl/src/video/...` retains
+its provenance when the Engine checkout is mounted at `/src`. SDL and the
+qualified GNS target map compiler source and build prefixes privately.
+
 The Windows production contract runs the complete registered matrix. The Linux
 sanitizer configuration with `GARGANTUAN_WITH_GNS=OFF` and renderer benchmarks
 disabled omits platform/real-transport and renderer-headless entries; that
