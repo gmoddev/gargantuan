@@ -38,7 +38,6 @@ namespace gargantuan {
 		[[nodiscard]] std::string RevisionToken(std::uint64_t SourceRevision) const;
 		void CheckConfigurationWrite() const;
 		void NotifyConfiguration(std::string_view Name);
-		blockgrid::Field Cells;
 		std::optional<blockgrid::CellDelta> LastCellEdit;
 		mutable blockgrid::Field Cells;
 		blockgrid::Field::Admission Admission;
