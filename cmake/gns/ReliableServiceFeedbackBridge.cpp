@@ -1,6 +1,6 @@
 #include "ReliableServiceFeedback.hpp"
 #include "ServiceTimingDiagnostics.hpp"
-#include <steam/isteamnetworkingsockets.h>
+#include <steam/steamnetworkingsockets_flat.h>
 #include <chrono>
 #include <array>
 #include <mutex>
@@ -196,6 +196,6 @@ bool GargantuanCloseWithReliableServiceFeedback(ISteamNetworkingSockets *Interfa
 	} Capture(Result);
 	// Reuse the existing close operation, its existing lock order, and no-linger
 	// semantics. Capture happens after purge under the SAME connection lock.
-	return Interface->CloseConnection(Handle, Reason, Diagnostic, false);
+	return SteamAPI_ISteamNetworkingSockets_CloseConnection(Interface, Handle, Reason, Diagnostic, false);
 }
 }
