@@ -2,6 +2,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
 
 #include "gargantuan/serialization/GasDocument.hpp"
+#include "blockgrid/RegionalGridFixture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -285,6 +286,76 @@ namespace {
 		Check(!Gas::Decode(Patched), "Unknown property type rejects");
 	}
 
+	void TestSegmentedNativeGrid() {
+		using namespace blockgrid;
+		// One more dense native leaf would exceed the native field limit. Sixty-five
+		// occupied cells per leaf keep physical storage dense and collision scenes small.
+		constexpr auto LeafBytes=13+3*LeafVolume;
+		constexpr auto LeafCount=(MaximumEncodedBytes-9)/LeafBytes;
+		Gas::Binary FieldBytes{'B','G','R','D',1};
+		FieldBytes.reserve(9+LeafCount*LeafBytes);
+		auto Put=[&](std::uint32_t Value,unsigned Width) {
+			for (unsigned I=0;I<Width;++I) FieldBytes.push_back(static_cast<std::uint8_t>(Value>>(8*I)));
+		};
+		Put(static_cast<std::uint32_t>(LeafCount),4);
+		for (unsigned Leaf=0;Leaf<LeafCount;++Leaf) {
+			Put(Leaf*LeafSide,4);Put(0,4);Put(0,4);Put(2,1);
+			for (unsigned I=0;I<LeafVolume;++I) {
+				Put(I<=64?Stone:Air,2);Put(I<=64?(I+Leaf)%24:0,1);
+			}
+		}
+		const auto Native=blockgrid::Decode(FieldBytes);
+		Check(Native.GetOccupiedCount()==LeafCount*65 && blockgrid::Encode(Native)==FieldBytes,
+			"Near-limit field is an actual canonical native field");
+		SegmentCapture Grids;
+		const auto Packed=Grids.Store(FieldBytes);
+		const auto Manifest=DecodeSegmentManifest(Packed);
+		Check(Manifest.Parts.size()==64 && Grids.Parts.size()==64,"Near-limit field occupies 64 distinct bounded segments");
+		auto Model=Minimal();
+		auto& Node=Model.Nodes.front();
+		Node.Class=SchemaId::FromNativeName("Engine","BlockGrid");
+		Node.SavedProperties.emplace(SegmentKey,Packed);
+		Model.GridSegments=Grids.Parts;
+		const auto Bytes=Gas::Encode(Model).value();
+		Check(Bytes.size()>Gas::MaximumDocumentBytes && Gas::AdmitsFileLength(Bytes,Bytes.size()),
+			"Only native data extends a segmented file past the ordinary graph cap");
+		const auto Reopened=Gas::Decode(Bytes).value();
+		Check(Reopened==Model && JoinSegments(Manifest,Reopened.GridSegments)==FieldBytes,"Near-limit GASM must preserve every byte");
+		SegmentRequirements Requirements;
+		for (unsigned I=0;I<4;++I) Requirements.Add(Manifest);
+		bool Exhausted=false;
+		try { Requirements.Add(Manifest); } catch (const std::length_error&) { Exhausted=true; }
+		Check(Exhausted,"Repeated owner references must be charged against the logical document limit");
+		Model.GridSegments.erase(Model.GridSegments.begin());
+		Check(!Gas::Encode(Model),"Missing segment must be rejected");
+		Model.GridSegments=Grids.Parts;
+		Node.Class=FolderClass;
+		Check(!Gas::Encode(Model),"Reserved segment data requires a native grid owner");
+		Node.Class=SchemaId::FromNativeName("Engine","BlockGrid");
+		auto& Record=std::get<Gas::Binary>(Node.SavedProperties.at(SegmentKey));
+		Record[9]^=1;
+		Check(!Gas::Encode(Model),"Wrong full-field digest must fail even when individual segments match");
+		// Use the smaller real field for damaged-file tests to keep the corpus inexpensive.
+		const auto Representative=blockgrid::Encode(blockgrid::test::LargePublicField());
+		Grids={};
+		Record=Grids.Store(Representative);
+		Model.GridSegments=Grids.Parts;
+		auto Damaged=Gas::Encode(Model).value();
+		Damaged[Damaged.size()-DigestBytes-1]^=1;
+		Rehash(Damaged);
+		Check(!Gas::Decode(Damaged),"Independent segment digests must survive outer file-digest replacement");
+		Damaged=Gas::Encode(Model).value();
+		const auto At=std::search(Damaged.begin(),Damaged.end(),Record.begin(),Record.end());
+		if (At==Damaged.end()) throw std::runtime_error("Could not locate encoded native owner manifest");
+		At[9]^=1;
+		Rehash(Damaged);
+		Check(!Gas::Decode(Damaged),"A mismatched complete-field digest must be rejected on file decode");
+		Model.Nodes.front().SavedProperties["Ordinary"]=Gas::Binary(Gas::MaximumBinaryBytes+1);
+		Check(!Gas::Encode(Model),"Large native sections must preserve the generic per-value limit");
+		std::cout<<"[BlockGrid:SegmentCodec] "<<FieldBytes.size()<<" native bytes, "<<Manifest.Parts.size()
+			<<" segments, "<<Native.GetOccupiedCount()<<" occupied cells, "<<Bytes.size()<<" portable bytes\n";
+	}
+
 	void TestDeterministicMutationCorpus() {
 		const auto Encoded = Gas::Encode(ExampleModel());
 		if (!Encoded) return;
@@ -318,6 +389,7 @@ int main() {
 	TestProfilesAndCanonicalValues();
 	TestEncodeRejections();
 	TestMalformedDocuments();
+	TestSegmentedNativeGrid();
 	TestDeterministicMutationCorpus();
 	return Failures == 0 ? 0 : 1;
 }

@@ -1333,6 +1333,12 @@ if(BUILD_TESTING)
 		GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT="$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution"
 	)
 	add_dependencies(gargantuan_packaging_tests gargantuan_packager gargantuan_runtime_distribution)
+	add_executable(gargantuan_blockgrid_persistence_tests "tests/blockgrid/BlockGridPersistenceTests.cpp")
+	target_link_libraries(gargantuan_blockgrid_persistence_tests PRIVATE gargantuan_core)
+	add_dependencies(gargantuan_blockgrid_persistence_tests gargantuan_runtime_distribution)
+	add_test(NAME gargantuan_blockgrid_persistence COMMAND gargantuan_blockgrid_persistence_tests
+		"$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution")
+	set_tests_properties(gargantuan_blockgrid_persistence PROPERTIES LABELS "blockgrid;persistence;gas;packaging;editor")
 	add_executable(gargantuan_packaging_editor_host_tests "tests/PackagingEditorHostTests.cpp")
 	target_link_libraries(gargantuan_packaging_editor_host_tests PRIVATE gargantuan_core nlohmann_json)
 	target_compile_definitions(gargantuan_packaging_editor_host_tests PRIVATE
