@@ -4,6 +4,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/reflection/PreRunRegistration.hpp"
+#include "gargantuan/reflection/PreRunCollection.hpp"
 
 #include "gargantuan/filesystem/Paths.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -14,6 +15,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <lua.h>
 #include <luacode.h>
 #include <lualib.h>
@@ -474,10 +476,18 @@ namespace gargantuan {
 		try {
 			if (source.size() > MaximumPreRunSourceBytes)
 				Fail(state, PreRunDiagnosticCode::SourceTooLarge, "source exceeds its byte limit");
-			lua_State *L = lua_newstate(BudgetAllocator, &state);
-			if (!L) Fail(state, PreRunDiagnosticCode::MemoryBudgetExceeded, "failed to allocate PreRun VM");
-			auto close = [&] { lua_close(L); };
-			try {
+			std::vector<PreRunChunk> Chunks;
+			try { Chunks = ReadPreRunChunks(source); }
+			catch (const std::invalid_argument &Error) { Fail(state, PreRunDiagnosticCode::CompileError, Error.what()); }
+			const bool Named = source.starts_with(PreRunCollectionPrefix);
+			for (const auto &Chunk : Chunks) {
+				if (Named) state.SourceName = "PreRun/" + std::string(Chunk.Name);
+				state.CurrentDefinition.clear();
+				if (std::chrono::steady_clock::now() > state.Deadline)
+					Fail(state, PreRunDiagnosticCode::ExecutionBudgetExceeded, "PreRun execution budget exceeded");
+				std::unique_ptr<lua_State, decltype(&lua_close)> Vm(lua_newstate(BudgetAllocator, &state), lua_close);
+				lua_State *L = Vm.get();
+				if (!L) Fail(state, PreRunDiagnosticCode::MemoryBudgetExceeded, "failed to allocate PreRun VM");
 				lua_callbacks(L)->userdata = &state;
 				lua_callbacks(L)->interrupt = Interrupt;
 				OpenSafeLibraries(L);
@@ -485,7 +495,7 @@ namespace gargantuan {
 				lua_CompileOptions CompileOptions{
 					.vectorPrecision = 0,
 				};
-				char *bytecode = luau_compile(source.data(), source.size(), &CompileOptions, &bytecodeSize);
+				char *bytecode = luau_compile(Chunk.Source.data(), Chunk.Source.size(), &CompileOptions, &bytecodeSize);
 				if (!bytecode) Fail(state, PreRunDiagnosticCode::CompileError, "Luau compiler returned no bytecode");
 				const auto loadStatus = luau_load(L, state.SourceName.c_str(), bytecode, bytecodeSize, 0);
 				std::free(bytecode);
@@ -494,18 +504,17 @@ namespace gargantuan {
 					Fail(state, PreRunDiagnosticCode::CompileError, message ? message : "Luau compilation failed");
 				}
 				ScriptSecurityScope securityScope(state.Security);
-				const auto status = lua_pcall(L, 0, 0, 0);
+				int status;
+				try { status = lua_pcall(L, 0, 0, 0); }
+				catch (const PreRunExecutionInterrupted &) {
+					Fail(state, PreRunDiagnosticCode::ExecutionBudgetExceeded, "PreRun execution budget exceeded");
+				}
 				if (status != LUA_OK) {
 					const auto *message = lua_tostring(L, -1);
 					Fail(state, PreRunDiagnosticCode::RuntimeError, message ? message : "PreRun execution failed");
 				}
-				close();
-			} catch (const PreRunExecutionInterrupted &) {
-				close();
-				Fail(state, PreRunDiagnosticCode::ExecutionBudgetExceeded, "PreRun execution budget exceeded");
-			} catch (...) {
-				close();
-				throw;
+				if (std::chrono::steady_clock::now() > state.Deadline)
+					Fail(state, PreRunDiagnosticCode::ExecutionBudgetExceeded, "PreRun execution budget exceeded");
 			}
 		} catch (...) {
 			if (lifecycle.HasCandidate()) lifecycle.AbortCandidate(authority);

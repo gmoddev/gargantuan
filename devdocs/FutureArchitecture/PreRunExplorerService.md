@@ -1,6 +1,6 @@
 # PreRun as an Explorer service
 
-**Status** · Proposed for Studio and Engine. The baseline is Windows Studio RC9, Studio `5a4aca95` and Engine `284443879`.
+**Status** · Design record for Studio and Engine. The baseline is Windows Studio RC9, Studio `5a4aca95` and Engine `284443879`. The implemented Explorer service keeps ordering and sources in one atomic resource and uses a collection-wide save revision. The [current authoring contract](../CurrentArchitecture/PreRunAuthoring.md) describes the implemented format and editor workflow.
 
 ## What a creator sees
 
