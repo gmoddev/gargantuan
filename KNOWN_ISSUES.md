@@ -15,6 +15,11 @@ open until its resolution criteria are implemented and verified.
 
 [Terrain campaign ledger](devdocs/Validation/TerrainCampaign.md)
 
+The native Offline Player could report walking speed while making almost no
+progress across flat terrain or a Part on very short frames. The unified
+candidate applies the first collision-tested capsule step at those frame
+durations. The physics regression covers accumulated travel and wall blocking.
+
 ## Foundation 10B development entries
 
 The November 24 strategic reconciliation at `0195d658d` records the original

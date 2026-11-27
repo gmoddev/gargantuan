@@ -737,7 +737,9 @@ namespace gargantuan {
 							static_cast<int>(Context.PlaneCount)
 						).delta
 					);
-					if (glm::dot(SolvedDelta, SolvedDelta) < MotionToleranceSquared) break;
+					// The convergence tolerance applies to residuals after the first sweep.
+					if (SolvedDelta == glm::vec3(0.0f) ||
+						(Iteration > 0 && glm::dot(SolvedDelta, SolvedDelta) < MotionToleranceSquared)) break;
 					if (Request.IsCenterCovered && !Request.IsCenterCovered(CurrentPosition + SolvedDelta))
 						return CoverageDenied();
 

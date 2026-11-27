@@ -333,7 +333,10 @@ implementation is in `WorldRoot.cpp` and `Box3DAdvancedQueries.inl`.
 The Box3D adapter uses `b3World_CollideMover`, `b3SolvePlanes`,
 `b3World_CastMover`, and `b3ClipVector`. It resolves contact planes toward the
 requested target before each cast, which preserves tangential horizontal motion
-while gravity is clipped by a floor. Work is bounded at five mover iterations
+while gravity is clipped by a floor. Each representable nonzero initial delta
+is swept even on short frames. The convergence tolerance bounds subsequent
+iterations after the first sweep has applied its collision-limited translation.
+Work is bounded at five mover iterations
 and 32 collision planes per collection. Reaching the plane bound is explicit in
 `PlanesTruncated`. Current `CanCollide` state filters both plane collection and
 casts. Non-finite positions/translations/velocities, non-positive radii, and

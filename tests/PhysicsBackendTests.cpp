@@ -822,6 +822,18 @@ namespace {
 			GroundSlide.Succeeded() && GroundSlide.HasFloor && GroundSlide.Position.x > 1.9f,
 			"bounded mover iterations preserve tangential motion while grounding clips gravity"
 		);
+		PhysicsKinematicMotionRequest ShortStep{
+			.Position = Ground.Position,
+			.Translation = {0.004f, -0.0001f, 0.0f},
+			.Velocity = {16.0f, -0.4f, 0.0f},
+		};
+		for (int Frame = 0; Frame < 100; ++Frame) {
+			const auto Step = World.MoveKinematicCapsule(ShortStep);
+			Check(Step.Succeeded() && Step.HasFloor, "short grounded steps retain floor contact");
+			ShortStep.Position = Step.Position;
+		}
+		Check(Near(ShortStep.Position.x - Ground.Position.x, 0.4f),
+			"successive high-frame-rate capsule requests preserve the full walk distance");
 
 		PhysicsBodyDesc Wall;
 		Wall.Anchored = true;
@@ -843,6 +855,11 @@ namespace {
 			Blocked.AppliedTranslation.x < 8.0f && Blocked.Velocity.x < 0.01f,
 			"obstacle result bounds translation and removes velocity into the contact plane"
 		);
+		ShortStep.Position = Blocked.Position;
+		for (int Frame = 0; Frame < 100; ++Frame)
+			ShortStep.Position = World.MoveKinematicCapsule(ShortStep).Position;
+		Check(Near(ShortStep.Position.x, Blocked.Position.x, 0.01f),
+			"successive short capsule requests stay blocked at the wall");
 
 		auto Invalid = World.MoveKinematicCapsule({.Radius = 0.0f, .Height = 4.0f});
 		Check(
