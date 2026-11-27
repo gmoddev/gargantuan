@@ -374,6 +374,21 @@ namespace {
 			"cancellation moved the actor"
 		);
 		ObserveStage = true;
+		const glm::vec3 SourceControllerVelocity(0,-3.270000219f,.007f);
+		auto WitnessedControllerLanding=std::make_shared<bool>(false);
+		SignalConnection::Pointer LandingObservation;
+		if (Avatar) {
+			const auto LocalAvatar=std::dynamic_pointer_cast<KinematicCharacter>(Find(*OwnerRuntime,"TransferCharacter"));
+			const auto Normal=glm::normalize(glm::vec3(.034f,1.f,-.091f));
+			Avatar->ApplyRuntimeControllerFacts(SourceControllerVelocity,Normal,true);
+			LocalAvatar->ApplyRuntimeControllerFacts(glm::round(SourceControllerVelocity*64.f)/64.f,glm::round(Normal*32767.f)/32767.f,true);
+			LandingObservation=LocalAvatar->GetPropertyChangedSignal("CFrame")->Connect(
+				[Weak=std::weak_ptr(LocalAvatar),WitnessedControllerLanding,SourceControllerVelocity,Target](std::monostate) {
+					const auto Replica=Weak.lock();
+					if (Replica && Replica->GetCFrame().FuzzyEq(Target) && Replica->GetVelocity()==SourceControllerVelocity &&
+						!Replica->GetGrounded() && Replica->GetFloorNormal()==glm::vec3(0)) *WitnessedControllerLanding=true;
+				});
+		}
 		std::shared_ptr<Script> Creator;
 		if (CharacterProfile) {
 			const auto Shared = std::make_shared<ModuleScript>();
@@ -440,6 +455,7 @@ script:SetAttribute("Isolated", true)
 			"bilateral movement did not converge"
 		);
 		ObserveStage = false;
+		if (LandingObservation) LandingObservation->Disconnect();
 		if (Creator) {
 			ServerRuntime.Script->Step();
 			Require(
@@ -484,6 +500,7 @@ script:SetAttribute("Isolated", true)
 			);
 			Require(
 				LocalAvatar && LocalAvatar->GetCFrame().FuzzyEq(Target) && Avatar->GetCFrame().FuzzyEq(Target) &&
+					*WitnessedControllerLanding &&
 					LocalAvatar->GetRootPart().value_or(nullptr) == ReplicaActor,
 				"character and physical root diverged"
 			);

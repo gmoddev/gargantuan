@@ -241,7 +241,7 @@ namespace gargantuan::network {
 				SpatialResidencyAudience Issuer;
 				std::shared_ptr<SpatialTransferStatus> Observation;
 				const char *OfferPendingReason{};
-				bool Started{}, Committed{};
+				bool Started{}, Committed{}, SourceCheckpointConsumed{};
 			};
 			std::uint64_t LastSerial{};
 			std::optional<Request> Pending;

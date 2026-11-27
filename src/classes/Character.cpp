@@ -118,6 +118,28 @@ namespace gargantuan {
 		CommitSimulationTransform(Value);
 	}
 
+	bool Character::ApplyRuntimeSourceCheckpoint(const CFrame &Value, glm::vec3 Velocity, glm::vec3 FloorNormal, bool Grounded) {
+		const auto Root = RootPartValue;
+		auto *Controller = dynamic_cast<KinematicCharacter *>(this);
+		if (!Controller || !Root || GetDestroyed() || IsDestroying() || Root->GetDestroyed() || Root->IsDestroying() ||
+			!IsFinite(Value) || !IsFinite(Velocity) || !IsFinite(FloorNormal)) return false;
+		const auto Realm = GetDataModel();
+		const auto Guard = Realm ? Realm->GetSpatialTransferProtection() : nullptr;
+		if (!Guard || !Guard->Controls(*Root) || !Guard->AllowsSimulationPose(*Root, Value)) return false;
+		const bool Changed = Transform.Position != Value.Position || Transform.Rotation != Value.Rotation;
+		// Observers of either transform see one complete controller checkpoint.
+		Controller->ApplyRuntimeControllerFacts(Velocity, FloorNormal, Grounded);
+		Transform = Value;
+		Root->SetSimulationCFrame(Value, true);
+		if (GetDestroyed() || IsDestroying() || Root != RootPartValue) return false;
+		if (Changed) {
+			if (const auto It=PropertyChangedSignals.find("CFrame"); It!=PropertyChangedSignals.end() && It->second) It->second->Fire({});
+			if (const auto It=PropertyChangedSignals.find("Position"); It!=PropertyChangedSignals.end() && It->second) It->second->Fire({});
+		}
+		return Root == RootPartValue && Transform.Position == Value.Position && Transform.Rotation == Value.Rotation &&
+			Root->GetCFrame().Position == Value.Position && Root->GetCFrame().Rotation == Value.Rotation;
+	}
+
 	void Character::ApplyRuntimePresentationOffset(std::optional<CFrame> Value) {
 		if (GetDestroyed() || IsDestroying() || (Value && !IsFinite(*Value)))
 			throw std::invalid_argument(

@@ -203,6 +203,10 @@ SpatialTransferStatus CancelTransfer(ConnectionId Connection, Peer &Value, Spati
 	auto &Lane = *Value.SpatialTransfer;
 	auto Step = Configuration.Role == GameSessionRole::Server ? Lane.Server.Cancel() : Lane.Replica.Cancel();
 	if (Step.Status == SpatialTransferStatus::Busy) return Step.Status;
+	if (!Step.Reply && Configuration.Role == GameSessionRole::Client && Lane.Pending->WaitingOffer) {
+		Step.Reply = *Lane.Pending->WaitingOffer;
+		Step.Reply->Phase = SpatialTransferPhase::Cancel;
+	}
 	if (Step.Reply) (void)SendTransferFrame(Connection, Value, *Step.Reply);
 	const auto Status = Lane.Pending->Committed || Step.Status == SpatialTransferStatus::CommittedUnconfirmed ?
 		SpatialTransferStatus::CommittedUnconfirmed : Reason;
@@ -375,6 +379,19 @@ void PumpSessionTransfer(ConnectionId Connection, Peer &Value) {
 	if (!Request.DestinationActivation) Request.DestinationActivation = Destination->GetSpatialActivation();
 	if (!Server) {
 		if (!Request.WaitingOffer) return;
+		if (Request.Scope.Controller.IsValid() && !Request.SourceCheckpointConsumed) {
+			// Ordinary snapshots quantize rotation and velocity and may still be in flight. The authenticated
+			// reliable offer establishes the final source state once while the old control epoch is fenced.
+			const auto Offer = *Request.WaitingOffer;
+			Request.SourceCheckpointConsumed = true;
+			const auto Reason = InstallSpatialControllerCheckpoint(Offer, *Destination, Adapters);
+			if (!HasTransfer(Value) || Lane.Pending->Scope != Offer.Scope || Lane.Pending->Serial != Offer.Serial) return;
+			if (Reason) {
+				Lane.Pending->OfferPendingReason = Reason;
+				(void)CancelTransfer(Connection, Value, SpatialTransferStatus::Denied);
+				return;
+			}
+		}
 		Request.OfferPendingReason = GetSpatialOfferPendingReason(*Request.WaitingOffer, *Destination, Adapters);
 		if (Request.OfferPendingReason) return;
 		auto Frame = std::move(*Request.WaitingOffer);
