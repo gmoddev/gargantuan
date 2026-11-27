@@ -77,6 +77,6 @@ The same grid can be fully available on the server and partially available to a 
 | Native edit and traversal handles | Four of each per grid, 64 total per VM. Five idle seconds or 30 seconds total. |
 | Dynamic assemblies | 64 per world, 1–128 occupied cells and physical hulls per grid. Each cell must be within 64 cells of the origin on each axis. Mesh definitions require Static mode. |
 | Server collision observations | 64 per domain and eight per audience. Expiry and Release free capacity. |
-| Per-peer grid delivery | Eight grid subscriptions per lane. Up to four trusted focus origins. A staged landing can cover up to 108 native leaves. Oversized landings cannot establish readiness. |
+| Per-peer grid delivery | Eight grid subscriptions per lane and up to four trusted focus origins. A staged landing can cover a rectangle of up to 1,024 aligned 8³ pages, including empty pages. An installed window can contain up to 108 occupied pages. A landing that exceeds either limit waits for valid coverage. |
 
 Use bounded Fill, native edits and cursor pages for bulk gameplay. A rigid transform reuses local geometry. Choose grids for meaningful identity or movement. Project Save and Save As persist authored data and asset references. Play-time edits use the game's persistence policy. The [Construction Yard example](../../../../../samples/ConstructionYard/README.md) demonstrates replaying a versioned edit document after a server restart.
