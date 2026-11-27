@@ -12,6 +12,9 @@
 #include "gargantuan/assets/GasDependencies.hpp"
 #include "gargantuan/assets/GasInstanceSerialization.hpp"
 #include "gargantuan/classes/BasePart.hpp"
+#include "gargantuan/classes/BlockGrid.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
+#include "gargantuan/blockgrid/Edit.hpp"
 #include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/LuaSourceContainer.hpp"
 #include "gargantuan/classes/Script.hpp"
@@ -495,7 +498,7 @@ namespace gargantuan {
 				Method == "ImportGasModel" || Method == "OpenGasPlace" ||
 				Method == "DuplicateInstance" || Method == "ReparentInstance" ||
 				Method == "ImportAsset" || Method == "ReimportAsset" || Method == "DeleteAsset" ||
-				Method == "StartPackageBuild" || Method == "SubmitTerrainBrush" ||
+				Method == "StartPackageBuild" || Method == "SubmitTerrainBrush" || Method == "EditBlockGridRegion" ||
 				Method == "UndoTerrainEdit" || Method == "RedoTerrainEdit" || Method == "CancelTerrainEdit";
 		}
 
@@ -1007,6 +1010,19 @@ namespace gargantuan {
 
 		constexpr std::size_t MaximumTerrainBrushSamples = 4096;
 
+		std::optional<blockgrid::Cell> DecodeGridCell(const Json &Value, bool Endpoint = false) {
+			if (!Value.is_array() || Value.size() != 3) return std::nullopt;
+			std::array<int, 3> Coordinates{};
+			for (unsigned I = 0; I < 3; ++I) {
+				if (!Value[I].is_number_integer()) return std::nullopt;
+				const auto Coordinate = Value[I].get<double>();
+				if (Coordinate < -blockgrid::CoordinateLimit || Coordinate > blockgrid::CoordinateLimit - (Endpoint ? 0 : 1))
+					return std::nullopt;
+				Coordinates[I] = static_cast<int>(Coordinate);
+			}
+			return blockgrid::Cell{Coordinates[0], Coordinates[1], Coordinates[2]};
+		}
+
 		struct EditorTerrainBrush {
 			terrain::EditRequest Edit;
 			terrain::SampleBox Bounds;
@@ -1397,6 +1413,7 @@ namespace gargantuan {
 		GuiPreviewFramePublished = false;
 		ViewportRenderer.reset();
 		ViewportPublisher = std::move(NewPublisher);
+		DefaultViewportTerrain.reset();
 	}
 
 	void EditorHost::StepViewportSpatial() {
@@ -1457,8 +1474,11 @@ namespace gargantuan {
 		}
 		RetiredGuiPreviewTextures.clear();
 		StepViewportSpatial();
+		const auto Domain = WorkspaceService.GetCurrentSpatialRegion();
+		const auto &ViewWorld = Domain ? static_cast<const WorldRoot &>(**Domain) : static_cast<const WorldRoot &>(WorkspaceService);
+		ViewportPublisher->SetTerrainRenderState(Domain ? ViewWorld.GetTerrainRenderState() : DefaultViewportTerrain);
 		LastViewportPublication = ViewportPublisher->Publish(
-			WorkspaceService, Camera, ViewportWidth, ViewportHeight
+			ViewWorld, Camera, ViewportWidth, ViewportHeight
 		);
 	}
 
@@ -1641,7 +1661,8 @@ namespace gargantuan {
 					TerrainAuthoring->History->AtRevision = Revision;
 					TerrainAuthoring->History->Undone = Pending.Operation == TerrainAuthoringState::Action::Undo;
 				}
-				ViewportPublisher->SetTerrainRenderState(Space->GetTerrainRenderState());
+				DefaultViewportTerrain = Space->GetTerrainRenderState();
+				ViewportPublisher->SetTerrainRenderState(DefaultViewportTerrain);
 				NextViewportFrame = std::chrono::steady_clock::now();
 			} else {
 				// A provider violation after the field commit still makes the scene dirty.
@@ -1825,6 +1846,7 @@ namespace gargantuan {
 					"TerrainGasPlaceV2", "TerrainMaterialBindingsV1", "TerrainProjectGridV1",
 					"TerrainAuthoringV1", "GetTerrainAuthoringState", "SubmitTerrainBrush",
 					"GetTerrainEditStatus", "CancelTerrainEdit", "UndoTerrainEdit", "RedoTerrainEdit", "RaycastTerrainSurface",
+					"ReadBlockGridCell", "EditBlockGridRegion",
 					"BeginTransaction",
 					"CommitTransaction",
 					"AuthoritativeTransactions",
@@ -2873,7 +2895,8 @@ namespace gargantuan {
 				CurrentProject = std::move(CandidateProject);
 				World = std::move(CandidateWorld.Value);
 				World->Filesystem = Filesystem.get();
-				ViewportPublisher->SetTerrainRenderState(std::move(Preview).Bind(TerrainOwner));
+				DefaultViewportTerrain = std::move(Preview).Bind(TerrainOwner);
+				ViewportPublisher->SetTerrainRenderState(DefaultViewportTerrain);
 				PersistedRevision = World->GetAuthoritativeRevision();
 				ViewportCamera = RenderCameraInput{};
 				return Response;
@@ -3777,6 +3800,59 @@ namespace gargantuan {
 				);
 			};
 
+			if (method == "ReadBlockGridCell" || method == "EditBlockGridRegion") {
+				const bool Edit = method == "EditBlockGridRegion";
+				const auto Fail = [&](std::string Code, std::string Message) {
+					return SerializeBoundedResponse(ErrorResponse(requestId, std::move(Code), std::move(Message)));
+				};
+				if (StudioSecurity.Domain != ScriptExecutionDomain::Studio ||
+					!StudioSecurity.HasCapability(ScriptCapability::EditorCommands) ||
+					!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel) ||
+					(Edit && !StudioSecurity.HasCapability(ScriptCapability::MutateDataModel)))
+					return Fail("Unauthorized", "BlockGrid authoring requires Studio capabilities");
+				if (!parameters.contains("Scope") || !parameters.contains("Object") || !parameters.contains("Cell"))
+					return Fail("MalformedRequest", "A scoped grid identity and integer Cell are required");
+				const auto Scope = JsonCodec::DecodeObjectId(parameters["Scope"]);
+				const auto Id = JsonCodec::DecodeObjectId(parameters["Object"]);
+				const auto Cell = DecodeGridCell(parameters["Cell"]);
+				if (!Id || !Cell || !Scope || Scope->ToObjectId() != World->GetObjectId())
+					return Fail("InvalidGridRequest", "The scope, grid identity or cell is invalid");
+				auto Grid = std::dynamic_pointer_cast<BlockGrid>(ObjectRegistry::Get().Lookup(Id->ToObjectId()));
+				if (!Grid || Grid->GetDataModel() != World || Grid->IsDestroying() || Grid->GetDestroyed())
+					return Fail("StaleObject", "The selected BlockGrid is unavailable in this project");
+				if (Edit) {
+					if (HasRevisionConflict()) return Fail("RevisionConflict", "The project changed before the grid edit");
+					if (!HasOnlyFields(parameters, {"Scope", "Object", "Cell", "MaxExclusive", "Definition", "Orientation",
+						"Revision", "TransactionId", "ExpectedRevision"}) || !parameters.contains("MaxExclusive") ||
+						!parameters.contains("Definition") || !parameters["Definition"].is_string() ||
+						!parameters.contains("Revision") || !parameters["Revision"].is_string())
+						return Fail("MalformedRequest", "Grid edits require MaxExclusive, Definition and Revision");
+					const auto Max = DecodeGridCell(parameters["MaxExclusive"], true);
+					const auto &Name = parameters["Definition"].get_ref<const std::string &>();
+					const auto Definition = Name == "Stone" ? blockgrid::Stone : Name == "Brick" ? blockgrid::Brick : blockgrid::Air;
+					if (!Max || (Definition == blockgrid::Air && Name != "Air"))
+						return Fail("InvalidGridRequest", "Invalid grid extent or block definition");
+					int Rotation = 0;
+					if (auto It = parameters.find("Orientation"); It != parameters.end()) {
+						if (!It->is_number_integer() || It->get<double>() < 0 || It->get<double>() >= 24)
+							return Fail("InvalidGridRequest", "Orientation must be an integer from 0 through 23");
+						Rotation = It->get<int>();
+					}
+					auto Request = std::make_shared<blockgrid::EditRequest>();
+					Request->ExpectedRevision = parameters["Revision"].get<std::string>();
+					Request->Writes.push_back({{*Cell, *Max}, {Definition, static_cast<std::uint8_t>(Rotation)}});
+					auto Result = Mutations.Apply(SubmitBlockGridEditCommand{Grid->GetObjectId(), World->GetObjectId(), Request},
+						StudioMutationAuthority());
+					if (!Result.Succeeded()) return Fail(MutationStatusName(Result.Status), Result.Message);
+				} else if (!HasOnlyFields(parameters, {"Scope", "Object", "Cell"}))
+					return Fail("MalformedRequest", "Unknown cell read field");
+				const auto Value = Grid->GetField().Get(*Cell);
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"Revision", Grid->GetBlockRevision()}, {"Definition", Value.Definition == blockgrid::Stone ? "Stone" :
+						Value.Definition == blockgrid::Brick ? "Brick" : "Air"}, {"Orientation", Value.Orientation}
+				}));
+			}
+
 			if (method == "GetTerrainAuthoringState" || method == "SubmitTerrainBrush" ||
 				method == "GetTerrainEditStatus" || method == "CancelTerrainEdit" ||
 				method == "UndoTerrainEdit" || method == "RedoTerrainEdit" || method == "RaycastTerrainSurface") {
@@ -4102,7 +4178,8 @@ namespace gargantuan {
 				ResetEditorViewportDocument();
 				World->Destroy();
 				World = std::move(Candidate);
-				ViewportPublisher->SetTerrainRenderState(std::move(TerrainRender));
+				DefaultViewportTerrain = std::move(TerrainRender);
+				ViewportPublisher->SetTerrainRenderState(DefaultViewportTerrain);
 				ActiveAnimationPreview.reset();
 				PersistedRevision = 0;
 				ResetAuthoringCursors();
@@ -4420,17 +4497,21 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PickViewport requires numeric X and Y"));
 				if (ViewportWidth == 0 || ViewportHeight == 0)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportRequired", "ConfigureViewport must succeed first"));
-				if (!LastViewportPublication) {
+				const auto SelectedDomain = workspace->GetCurrentSpatialRegion();
+				const WorldRoot &ViewWorld = SelectedDomain ? static_cast<const WorldRoot &>(**SelectedDomain) : *workspace;
+				if (!LastViewportPublication || ViewWorld.HasBlockGrids()) {
 					PublishEditViewport(*workspace, camera);
 				}
 				if (ViewportProjection.GetLastPublicationId() != LastViewportPublication->Id)
 					(void)ViewportProjection.Apply(*LastViewportPublication);
 				auto pick = PickEditorViewport(
-					ViewportProjection, parameters["X"].get<float>(), parameters["Y"].get<float>()
+					ViewportProjection, parameters["X"].get<float>(), parameters["Y"].get<float>(), &ViewWorld
 				);
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"Object", pick ? Json(JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(pick->Object))) : Json(nullptr)},
 					{"Distance", pick ? Json(pick->Distance) : Json(nullptr)},
+					{"Cell", pick && pick->Cell ? Json::array({pick->Cell->x,pick->Cell->y,pick->Cell->z}) : Json(nullptr)},
+					{"LocalNormal", pick && pick->LocalNormal ? Json::array({pick->LocalNormal->x,pick->LocalNormal->y,pick->LocalNormal->z}) : Json(nullptr)},
 				}));
 			}
 

@@ -18,6 +18,7 @@
 #include <vector>
 
 namespace gargantuan {
+	class WorldRoot;
 	struct SDLRendererMetrics;
 	struct EditorViewportFrame {
 		std::uint32_t Width = 0;
@@ -38,6 +39,8 @@ namespace gargantuan {
 	struct EditorViewportPick {
 		ObjectId Object;
 		float Distance = 0.0f;
+		std::optional<glm::ivec3> Cell;
+		std::optional<glm::ivec3> LocalNormal;
 	};
 
 	[[nodiscard]] std::optional<EditorViewportPick> PickEditorViewport(
@@ -48,7 +51,8 @@ namespace gargantuan {
 	[[nodiscard]] std::optional<EditorViewportPick> PickEditorViewport(
 		const RenderProjection &Projection,
 		float X,
-		float Y
+		float Y,
+		const WorldRoot *EditWorld = nullptr
 	);
 
 	class EditorViewportRenderer final {

@@ -106,6 +106,7 @@ namespace gargantuan {
 		bool GuiPreviewFramePublished = false;
 		std::uint64_t NextGuiPreviewPlacementGeneration = 1;
 		RenderPublicationPtr LastViewportPublication;
+		std::shared_ptr<const terrain::RenderState> DefaultViewportTerrain;
 		RenderProjection ViewportProjection;
 		std::unique_ptr<EditorViewportRenderer> ViewportRenderer;
 		std::unique_ptr<SharedFrameRing> ViewportFrameRing;

@@ -4,6 +4,9 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/editor/EditorViewport.hpp"
+#include "gargantuan/blockgrid/Picking.hpp"
+#include "gargantuan/classes/BlockGrid.hpp"
+#include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/render/SDLRenderer.hpp"
 
@@ -82,7 +85,8 @@ namespace gargantuan {
 		return Closest;
 	}
 
-	std::optional<EditorViewportPick> PickEditorViewport(const RenderProjection &Projection, float X, float Y) {
+	std::optional<EditorViewportPick> PickEditorViewport(const RenderProjection &Projection, float X, float Y,
+		const WorldRoot *EditWorld) {
 		const auto &Frame = Projection.GetFrame();
 		if (Projection.GetLastPublicationId() == InvalidRenderPublicationId || Frame.ViewportWidth == 0 ||
 			Frame.ViewportHeight == 0 || !std::isfinite(X) || !std::isfinite(Y) || X < 0.0f || Y < 0.0f ||
@@ -101,9 +105,41 @@ namespace gargantuan {
 		for (const auto &[Object, Projected] : Projection.GetObjects()) {
 			(void)Object;
 			if (!Projected.Visible) continue;
+			if (Projected.Mesh && Projected.Mesh->Domain == RenderMeshDomain::BlockGrid) {
+				if (!EditWorld) continue;
+				const auto Grid = std::dynamic_pointer_cast<BlockGrid>(ObjectRegistry::Get().Lookup(Object));
+				const auto *Bounds = Projection.GetMeshBounds(*Projected.Mesh);
+				if (!Grid || !Bounds || WorldRoot::GetEffectiveWorld(*Grid).get() != EditWorld) continue;
+				const auto Inverse = glm::dmat4(Projected.Item.InverseModelMatrix);
+				const auto Local = glm::dvec3(Inverse * glm::dvec4(Camera.Position, 1));
+				const auto Ray = glm::dvec3(Inverse * glm::dvec4(Direction, 0));
+				double Enter = 0, Exit = Closest ? Closest->Distance : Camera.FarPlane;
+				for (unsigned Axis = 0; Axis < 3; ++Axis) {
+					if (Ray[Axis] == 0) {
+						if (Local[Axis] < Bounds->Minimum[Axis] || Local[Axis] > Bounds->Maximum[Axis]) Exit = -1;
+						continue;
+					}
+					const double A = (Bounds->Minimum[Axis] - Local[Axis]) / Ray[Axis];
+					const double B = (Bounds->Maximum[Axis] - Local[Axis]) / Ray[Axis];
+					Enter = std::max(Enter, std::min(A, B));
+					Exit = std::min(Exit, std::max(A, B));
+				}
+				if (Exit < Enter || Exit <= 0) continue;
+				Enter = std::max(0.0, Enter - 0.0001);
+				const auto Start = Local + Ray * Enter;
+				const auto Span = Ray * (Exit - Enter);
+				const auto Hit = blockgrid::Cast(Grid->GetField(), {Start.x,Start.y,Start.z}, {Span.x,Span.y,Span.z});
+				if (!Hit) continue;
+				const auto Distance = static_cast<float>(Enter + (Exit-Enter) * Hit->Fraction);
+				if (!Closest || Distance < Closest->Distance || (Distance == Closest->Distance && Object < Closest->Object))
+					Closest = EditorViewportPick{Object, Distance, glm::ivec3(Hit->Position.X,Hit->Position.Y,Hit->Position.Z),
+						glm::ivec3(Hit->Normal[0],Hit->Normal[1],Hit->Normal[2])};
+				continue;
+			}
 			auto Distance = IntersectItem(Projected.Item, Camera.Position, Direction);
-			if (!Distance || (Closest && *Distance >= Closest->Distance)) continue;
-			Closest = EditorViewportPick{Projected.Item.Object, *Distance};
+			if (!Distance || (Closest && (*Distance > Closest->Distance ||
+				(*Distance == Closest->Distance && Object >= Closest->Object)))) continue;
+			Closest = EditorViewportPick{Object, *Distance};
 		}
 		return Closest;
 	}
