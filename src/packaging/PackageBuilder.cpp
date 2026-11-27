@@ -151,7 +151,7 @@ namespace gargantuan {
 				"notices/Manifold-Authors.txt", "notices/GLM.txt", "notices/nlohmann-json.txt", "notices/Luau.txt",
 				"notices/magic-enum.txt", "notices/SDL3.txt", "notices/SDL3_image.txt", "notices/SDL3_ttf.txt",
 				"notices/Tracy.txt", "notices/GameNetworkingSockets.txt", "notices/ProtocolBuffers.txt",
-				"notices/MSVC-Runtime.txt", "notices/openssl.txt",
+				"notices/MSVC-Runtime.txt", "notices/openssl.txt", "notices/MC33.txt",
 			};
 			constexpr std::array Libraries{
 				"SDL3.dll", "libprotobuf.dll", "libprotobufd.dll", "concrt140.dll", "msvcp140.dll",

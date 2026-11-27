@@ -889,16 +889,27 @@ int main() {
 			"package manifest omitted player/runtime/notices"
 		);
 #if defined(_WIN32)
-		for (const auto *RuntimeFile : {"msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"})
-			Require(
-				std::ranges::any_of(
-					Manifest["Content"],
-					[RuntimeFile](const Json &Entry) {
-						return Entry["Path"] == RuntimeFile && Entry["Category"] == "Runtime";
-					}
-				),
-				"package manifest omitted an explicit MSVC runtime dependency"
-			);
+		constexpr std::array MicrosoftRuntimeFiles{
+			"concrt140.dll", "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "msvcp140_atomic_wait.dll",
+			"msvcp140_codecvt_ids.dll", "vccorlib140.dll", "vcruntime140.dll", "vcruntime140_1.dll",
+			"vcruntime140_threads.dll", "vc_redist.x64.exe",
+		};
+		Require(std::ranges::any_of(Manifest["Content"], [](const Json &Entry) {
+			return Entry["Path"] == "notices/MSVC-Runtime.txt" && Entry["Category"] == "Notice";
+		}), "Windows package manifest omitted the centrally serviced VC++ prerequisite notice");
+		const auto Prerequisite = ReadText(ReleaseA / "notices/MSVC-Runtime.txt");
+		Require(Prerequisite.contains("requires version ") && !Prerequisite.contains("@GARGANTUAN_MSVC_RUNTIME_MINIMUM@"),
+			"Windows package prerequisite notice omitted the required toolset version");
+		for (const auto *RuntimeFile : MicrosoftRuntimeFiles) {
+			const auto Present = std::ranges::any_of(Manifest["Content"], [RuntimeFile](const Json &Entry) {
+				auto Name = std::filesystem::path(Entry["Path"].get<std::string>()).filename().string();
+				std::ranges::transform(Name, Name.begin(), [](unsigned char Character) {
+					return static_cast<char>(std::tolower(Character));
+				});
+				return Name == RuntimeFile;
+			});
+			Require(!Present, "game package bundled a separately acquired Microsoft runtime component");
+		}
 #endif
 		for (const auto &Entry : Manifest["Content"])
 			Require(

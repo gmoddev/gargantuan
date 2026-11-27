@@ -211,9 +211,14 @@ int main() {
 		Require(Completed["Result"].value("Complete", false), "Studio distributed Player packaging did not complete");
 		const auto Capability = Paths::GetExecutableDirectory() / "RuntimeDistribution/distributed-player-capability.json";
 		if (std::filesystem::exists(Capability)) {
-			Require(Completed["Result"].value("Ok", false), "Studio distributed Player packaging failed");
+			Require(Completed["Result"].value("Ok", false), "Studio distributed Player packaging failed: " +
+				Completed["Result"]["Diagnostics"].dump());
 			const auto DistributedManifest = Json::parse(ReadText(DistributedOutput / "game.package.json"));
 			const auto DistributedAssets = Json::parse(ReadText(DistributedOutput / "content/assets/catalog.json"));
+			Require(std::ranges::any_of(DistributedManifest["Content"], [](const Json &Entry) {
+				return Entry["Path"] == "notices/MC33.txt" && Entry["Category"] == "Notice";
+			}) && std::filesystem::is_regular_file(DistributedOutput / "notices/MC33.txt"),
+				"Studio distributed Player omitted the terrain algorithm notice");
 			Require(DistributedManifest["Audience"] == "DistributedPlayer" && DistributedAssets["Assets"].empty() &&
 				std::filesystem::exists(DistributedOutput / "content/client-code.json") &&
 				!std::filesystem::exists(DistributedOutput / "content/game.instance.json"),

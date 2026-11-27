@@ -47,8 +47,9 @@ patch's SHA-256 and resulting tree matched its receipt. The final tree was
   is qualified. See the [terrain handshake](../../docs/adr/TerrainNetworkBootstrap.md)
   and [managed package contract](../../docs/protocols/Runtime-Distribution-Package-v4.md).
 - The native stage preserves the MC33 notice alongside the RC1 component
-  notices and MPL source delivery. Game packages exclude app-local Microsoft
-  VC++ DLLs and the Microsoft installer. Stage against matching covered-source
+  notices and MPL source delivery. The distributed Player runtime allowlist
+  admits the staged MC33 file in the Notice category. Game packages exclude
+  app-local Microsoft VC++ DLLs and the Microsoft installer. Stage against matching covered-source
   input and review each selected dependency profile. See the
   [release staging procedure](RuntimeReleaseLicensing.md).
 - SQLite remains a local development provider. The Server's optional Node
