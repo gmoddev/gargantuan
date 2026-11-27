@@ -31,6 +31,7 @@ export default defineConfig({
           { label: "API organization", slug: "api" },
           { label: "Instances and services", slug: "api/instances-and-services" },
           { label: "World and rendering", slug: "api/world-and-rendering" },
+          { label: "BlockGrid and spatial domains", slug: "api/block-grid-and-spatial-domains" },
           { label: "Input, GUI and media", slug: "api/input-gui-and-media" },
           { label: "Networking and persistence", slug: "api/networking-and-persistence" },
           { label: "Declaration catalog", slug: "api/declaration-catalog" },

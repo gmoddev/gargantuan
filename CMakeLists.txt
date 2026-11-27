@@ -1025,6 +1025,14 @@ if(BUILD_TESTING)
 	set_tests_properties(gargantuan_spatial_construction_integration PROPERTIES LABELS "spatial;blockgrid;integration")
 	find_program(GARGANTUAN_SPATIAL_TEST_PYTHON NAMES python3 python)
 	if(GARGANTUAN_SPATIAL_TEST_PYTHON)
+		add_test(NAME gargantuan_spatial_creator_play
+			COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialCreatorTrial.py"
+				--engine $<TARGET_FILE:gargantuan>)
+		add_test(NAME gargantuan_spatial_creator_doors
+			COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialCreatorTrial.py"
+				--engine $<TARGET_FILE:gargantuan> --doors)
+		set_tests_properties(gargantuan_spatial_creator_play gargantuan_spatial_creator_doors PROPERTIES
+			LABELS "spatial;blockgrid;creator;headless" TIMEOUT 65)
 		add_test(NAME gargantuan_spatial_grid_clipboard
 			COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialGridClipboardAuthoring.py"
 				--engine $<TARGET_FILE:gargantuan>)
@@ -1034,6 +1042,12 @@ if(BUILD_TESTING)
 				--engine $<TARGET_FILE:gargantuan>)
 		set_tests_properties(gargantuan_spatial_construction_yard PROPERTIES LABELS "spatial;blockgrid;headless;sample" TIMEOUT 120)
 		if(GARGANTUAN_WITH_GNS)
+			add_test(NAME gargantuan_spatial_creator_network
+				COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialCreatorTrial.py"
+					--network --engine $<TARGET_FILE:gargantuan> --packager $<TARGET_FILE:gargantuan_packager>
+					--player-runtime $<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
+					--server-runtime $<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution)
+			set_tests_properties(gargantuan_spatial_creator_network PROPERTIES LABELS "spatial;network;creator;headless" TIMEOUT 140)
 			set(SpatialPackageTest "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialConstructionPackageSession.py"
 					--fixture $<TARGET_FILE:gargantuan_spatial_construction_integration_tests>
 					--packager $<TARGET_FILE:gargantuan_packager>

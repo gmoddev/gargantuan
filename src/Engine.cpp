@@ -92,6 +92,9 @@ namespace gargantuan {
 			bool Complete = false;
 			~ConstructionLifetime() { if (!Complete) Runtime.Destroy(); }
 		} Construction{*this};
+		// An embedded VM may open before this live world's default services are materialized.
+		StackValue<std::shared_ptr<Instance>>::Push(Script->L, Workspace);
+		lua_setglobal(Script->L, "workspace");
 		if (ProviderConfiguration.Mode != RuntimeMode::Offline)
 			NetworkSpatialProfile = DataModel->AcquireDefaultNetworkSpatialProfile(ProviderConfiguration.AdmitSpatialContent);
 		WorldRoot->RequiresSpatialMotionProof = NetworkSpatialProfile && NetworkSpatialProfile->SpatialContent;
