@@ -983,6 +983,10 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_instance_reference_persistence_tests PRIVATE gargantuan_core nlohmann_json)
 	add_test(NAME gargantuan_instance_reference_persistence COMMAND gargantuan_instance_reference_persistence_tests)
 	set_tests_properties(gargantuan_instance_reference_persistence PROPERTIES LABELS "persistence;identity;references")
+	add_executable(gargantuan_spatial_construction_integration_tests "tests/SpatialConstructionIntegrationTests.cpp")
+	target_link_libraries(gargantuan_spatial_construction_integration_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_spatial_construction_integration COMMAND gargantuan_spatial_construction_integration_tests)
+	set_tests_properties(gargantuan_spatial_construction_integration PROPERTIES LABELS "spatial;blockgrid;integration")
 	add_executable(gargantuan_prepared_property_tests "tests/PreparedPropertyTests.cpp")
 	add_executable(gargantuan_physics_editorhost_tests "tests/PhysicsEditorHostTests.cpp")
 	target_link_libraries(gargantuan_physics_editorhost_tests PRIVATE gargantuan_core nlohmann_json)
@@ -1800,6 +1804,7 @@ if(BUILD_TESTING)
 		)
 		set(GARGANTUAN_SDL_RUNTIME_TARGETS
 			gargantuan
+			gargantuan_spatial_construction_integration_tests
 			gargantuan_foundation_tests
 			gargantuan_runtime_package_crypto_tests
 			gargantuan_gas_document_tests
