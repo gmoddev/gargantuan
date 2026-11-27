@@ -6,6 +6,7 @@
 #include "gargantuan/blockgrid/Edit.hpp"
 #include "gargantuan/blockgrid/Picking.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/datatypes/Color3.hpp"
 #include "gargantuan/datatypes/Vector3.hpp"
@@ -199,6 +200,8 @@ namespace gargantuan {
 	void BlockGrid::InstallReplicaField(blockgrid::Field Value) {
 		AssertCanMutate();
 		if (!GetDataModel() || Editing) throw std::logic_error("[BlockGrid:Replica] Shell is unavailable");
+		if (const auto Protection=GetDataModel()->GetSpatialTransferProtection(); Protection && !Protection->AllowsResource(*this))
+			throw std::runtime_error("[BlockGrid:Replica] Collision is reserved for an active transfer");
 		Cells.InstallReplica(std::move(Value), Admission);
 		AssetSequence = 0;
 		AssetsReady = false;
@@ -219,6 +222,8 @@ namespace gargantuan {
 		AssertCanMutate();
 		const auto World=GetDataModel();
 		if (!World || Editing) throw std::logic_error("[BlockGrid:Edit] Grid is unavailable for admission");
+		if (const auto Protection=World->GetSpatialTransferProtection(); Protection && !Protection->AllowsResource(*this))
+			throw std::runtime_error("[BlockGrid:Edit] Collision is reserved for an active transfer");
 		if (Edit.ExpectedRevision && *Edit.ExpectedRevision!=GetBlockRevision()) throw std::domain_error("[BlockGrid:Conflict] Revision changed");
 		if (!Edit.Binding && !(Edit.Replay && Edit.Replay->Binding) && !EnsureAssetBindings())
 			throw std::runtime_error("[BlockGrid:Unavailable] Required block assets do not match this project");

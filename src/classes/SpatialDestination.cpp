@@ -2,6 +2,7 @@
 
 #include "BlockGridWorldState.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/network/SpatialTransferProtection.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/ViewportFrame.hpp"
@@ -152,7 +153,7 @@ namespace gargantuan {
 	}
 
 	PhysicsOperationResult WorldRoot::CommitSpatialTransfer(const std::shared_ptr<BasePart> &Member,
-		const SpatialMovementRequest &Movement, const SpatialDestinationReceipt &Receipt) {
+		const SpatialMovementRequest &Movement, const SpatialDestinationReceipt &Receipt, const SpatialMovementLease &Admission) {
 		using enum PhysicsOperationStatus;
 		if (GetCurrentExecutionDomain() != ExecutionDomain::Main || !Member || Member->GetDestroyed() ||
 			Member->IsDestroying() || Member->GetObjectId() != Movement.Member || !dynamic_cast<Part *>(Member.get()))
@@ -162,6 +163,9 @@ namespace gargantuan {
 		if (!Source || !SourceRealm || SourceRealm->GetObjectId() != Receipt.Realm || Movement.SourceDomain != Source->GetObjectId() ||
 			Movement.SourceActivation != Source->SpatialActivation || Source->SteppingPhysics || SteppingPhysics)
 			return {InvalidId, "[Spatial:Transfer] The source domain or safe point changed"};
+		if (const auto Protection=SourceRealm->GetSpatialTransferProtection(); Protection && Protection->RequiresGrant(*Member,*this,Receipt.Bounds) &&
+			!Protection->Reservations.Admits(Admission,Movement,Receipt))
+			return {InvalidDescription,"[Spatial:Transfer] Session movement requires the issued bilateral reservation"};
 		const auto Original = Member->GetCFrame();
 		if (Original.Position != Movement.SourcePose.Position || Original.Rotation != Movement.SourcePose.Rotation)
 			return {InvalidId, "[Spatial:Transfer] The source pose changed"};
@@ -217,13 +221,13 @@ namespace gargantuan {
 		if (!Overlap.Succeeded()) return {Overlap.Status, Overlap.Message};
 		if (Overlap.Truncated || !Overlap.Bodies.empty()) return {InvalidDescription, "[Spatial:Transfer] Destination is occupied"};
 		try {
-			Member->AssertCanMutate(); Member->ValidatePropertyMutation("CFrame", Pose);
+			Member->AssertCanMutate(); Member->ValidateAdmittedSpatialProperty("CFrame",Pose);
 			SourceRealm->EnsureAuthoritativeRevisionAvailable();
 			if (Source.get() == this) {
 				auto Description = SourceState->Description; Description.Transform = Pose;
 				const auto Applied = Physics.UpdateBody(Native->second, Description);
 				if (!Applied.Succeeded()) return Applied;
-				Member->SetCFrame(Pose);
+				Member->CFrame=Pose; Member->NotifyPropertyCommitted("CFrame");
 			} else {
 				const auto Region = std::dynamic_pointer_cast<SpatialRegion>(shared_from_this());
 				const auto Parent = Member->GetParent().value_or(nullptr);
@@ -234,6 +238,30 @@ namespace gargantuan {
 		} catch (const std::invalid_argument &Error) { return {InvalidDescription, Error.what()}; }
 		catch (const std::exception &Error) { return {BackendFailure, Error.what()}; }
 		return {};
+	}
+
+	bool WorldRoot::CanHoldSpatialSubject(ObjectId Subject) {
+		if (GetCurrentExecutionDomain()!=ExecutionDomain::Main || SteppingPhysics) return false;
+		ApplyPendingPhysicsChanges();
+		const auto It=PartBodies.find(Subject);
+		if (It==PartBodies.end()) return false;
+		const auto State=Physics.GetBodyState(It->second);
+		return State && (State->Description.Anchored || (State->Description.Kinematic &&
+			State->LinearVelocity==glm::vec3(0) && State->AngularVelocity==glm::vec3(0)));
+	}
+	bool WorldRoot::CanHoldSpatialCollision(ObjectId Subject) const {
+		if (GetCurrentExecutionDomain()!=ExecutionDomain::Main || TrackedParts.size()>MaximumInspectedColliders || !IdDeformables.empty()) return false;
+		for (const auto &[Id,Weak]:TrackedParts) {
+			if (Id==Subject) continue;
+			const auto Part=Weak.lock();
+			if (!Part) return false;
+			if (!Part->GetCanCollide()) continue;
+			const auto Body=PartBodies.find(Id);
+			if (Body==PartBodies.end()) return false;
+			const auto State=Physics.GetBodyState(Body->second);
+			if (!State || !State->Description.Anchored) return false;
+		}
+		return true;
 	}
 
 	bool WorldRoot::ValidateSpatialDestination(const SpatialDestinationReceipt &Receipt) {

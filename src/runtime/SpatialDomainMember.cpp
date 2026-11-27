@@ -65,7 +65,8 @@ namespace gargantuan {
 	void SpatialDomainMember::ChangeAssignedRegion(Instance &Owner, std::optional<std::shared_ptr<SpatialRegion>> Value,
 		const CFrame *DestinationPose) {
 		Owner.AssertCanMutate();
-		Owner.ValidatePropertyMutation("SpatialRegion", Value);
+		if (DestinationPose) Owner.ValidateAdmittedSpatialProperty("SpatialRegion",Value);
+		else Owner.ValidatePropertyMutation("SpatialRegion",Value);
 		auto Region = Value.value_or(nullptr);
 		const auto Realm = Owner.GetDataModel();
 		if (Region && Realm && Realm->HasDefaultNetworkSpatialProfile() && !Realm->SupportsNetworkSpatialContent())

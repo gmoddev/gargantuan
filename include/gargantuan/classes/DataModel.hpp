@@ -16,6 +16,7 @@ namespace gargantuan {
 	class AssetService;
 	class PackageBuilder;
 	class SpatialRegion;
+	namespace network { class SpatialTransferProtection; }
 	class DataModel : public ServiceProvider {
 		I_DataModel;
 		~DataModel() override;
@@ -26,10 +27,13 @@ namespace gargantuan {
 		BaseFilesystem *Filesystem = nullptr;
 		TagIndex Tags;
 		[[nodiscard]] std::vector<std::shared_ptr<SpatialRegion>> GetSpatialRegions() const;
+		[[nodiscard]] std::shared_ptr<network::SpatialTransferProtection> AcquireSpatialTransferProtection(std::function<bool(ObjectId)> IsControlled);
+		[[nodiscard]] std::shared_ptr<network::SpatialTransferProtection> GetSpatialTransferProtection() const { return MovementProtection.lock(); }
 
 	  private:
 		friend class SpatialRegion;
 		std::map<ObjectId, std::weak_ptr<SpatialRegion>> SpatialRegions;
+		std::weak_ptr<network::SpatialTransferProtection> MovementProtection;
 
 	  public:
 		AuthoritativeTransactionHistory Transactions;

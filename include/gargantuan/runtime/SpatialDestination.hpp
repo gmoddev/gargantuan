@@ -5,10 +5,13 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace gargantuan {
+	using SpatialMovementLease = std::shared_ptr<const std::function<bool()>>;
 	struct SpatialDestinationBounds {
 		glm::vec3 Minimum{}, Maximum{};
 		bool operator==(const SpatialDestinationBounds &) const = default;
