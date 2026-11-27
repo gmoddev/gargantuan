@@ -56,6 +56,9 @@ bool SetStructuralAudience(ConnectionId Connection, ObjectId Region, const std::
 	return false;
 }
 
+static bool SupportsTransferRigidProvider(const SpatialProviderReceipt &Provider) {
+	return Provider.Shape<=PhysicsShapeKind::CornerWedge && Provider.Resource.empty() && Provider.Installed.size()==1;
+}
 bool StageTransferDomain(ConnectionId Connection, WireObjectId Destination, const SpatialDestinationBounds &Bounds, std::uint64_t Serial) {
 	const auto It=Peers.find(Connection);
 	if (!Configuration.SpatialContent || Configuration.Role!=GameSessionRole::Server || It==Peers.end() ||
@@ -67,7 +70,9 @@ bool StageTransferDomain(ConnectionId Connection, WireObjectId Destination, cons
 	const auto World=TransferWorld(Destination.ToObjectId());
 	if (!World || (World==Runtime->Workspace?ObjectId{}:World->GetObjectId())==Value.AuthorizedSpatialRegion) return false;
 	const auto Proof=World->PrepareSpatialDestination(Bounds,{});
-	if (!Proof || Proof->Providers.size()>MaximumSpatialTransferProviders) return false;
+	if (!Proof || Proof->Providers.size()>MaximumSpatialTransferProviders || std::ranges::any_of(Proof->Providers,[](const auto& Provider) {
+		return Provider.Provider==SpatialCollisionProvider::Rigid && !SupportsTransferRigidProvider(Provider);
+	})) return false;
 	std::set<ObjectId> Members;
 	auto AddAncestors=[&](std::shared_ptr<Instance> Object) {
 		while (Object && Object!=Runtime->DataModel) {
