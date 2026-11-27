@@ -40,6 +40,7 @@ export default defineConfig({
           { label: "SDL GPU renderer", slug: "developing/renderer" },
           { label: "Publication and projection", slug: "developing/render-extraction" },
           { label: "Rigid and deformable physics", slug: "developing/physics" },
+          { label: "Block construction and independent spaces", slug: "developing/block-construction" },
           { label: "Current networking", slug: "developing/current-networking" },
         ] },
         { label: "Studio integration", items: [
