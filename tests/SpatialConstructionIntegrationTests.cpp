@@ -52,9 +52,10 @@ namespace {
 		return std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
 	}
 
-	MutationResult Edit(const std::shared_ptr<BlockGrid> &Grid, ObjectId Scope, blockgrid::Block Value) {
+	MutationResult Edit(const std::shared_ptr<BlockGrid> &Grid, ObjectId Scope, blockgrid::Block Value,
+		blockgrid::Cell Position = Target) {
 		auto Request = std::make_shared<blockgrid::EditRequest>();
-		Request->Writes.push_back({blockgrid::SingleCell(Target), Value});
+		Request->Writes.push_back({blockgrid::SingleCell(Position), Value});
 		MutationGateway Gateway;
 		return Gateway.Apply(SubmitBlockGridEditCommand{Grid->GetObjectId(), Scope, Request},
 			ScriptSecurityContext::CoreTrusted());
@@ -358,6 +359,42 @@ namespace {
 		std::cout << "[Spatial:ConstructionGpu] VisiblePixels=" << VisiblePixels
 			<< " MovedPixels=" << MovedPixels << " HiddenResidual=" << Changed(Blank,Hidden)
 			<< " DeletedResidual=" << Changed(Blank,Deleted) << '\n';
+
+		auto Sparse = std::make_shared<BlockGrid>();
+		blockgrid::Field Field;
+		std::vector<blockgrid::Write> Writes;
+		for (int Z = 0; Z < 32; ++Z)
+			for (int X = 0; X < 16; ++X)
+				if ((X + Z) % 2 == 0) Writes.push_back({blockgrid::SingleCell({X,0,Z}),{blockgrid::Stone,0}});
+		Require(Field.Apply(Writes), "could not seed sparse GPU fixture");
+		Sparse->RestoreField(std::move(Field));
+		Sparse->SetParent(World);
+		constexpr blockgrid::Cell Chosen{4,0,4};
+		const auto Detail = MakeLookAtRenderCameraInput({4.5f,6.0f,5.5f},{4.5f,0.5f,4.5f},{0,1,0},58);
+		RenderPublisher FullPublisher;
+		EditorViewportRenderer FullView(Width,Height);
+		const auto Compare = [&](bool ExpectPatch) {
+			const auto Partial = Publisher.Publish(*World,Detail,Width,Height);
+			if (ExpectPatch)
+				Require(Partial->MeshCreates.empty() && Partial->MeshVertexUpdates.size() == 1 &&
+					Partial->MeshVertexUpdates.front().Vertices->size() == 24, "sparse edit missed partial GPU path");
+			const auto Actual = View.Capture(Partial);
+			FullPublisher.RequestFullResync();
+			const auto Rebuilt = FullView.Capture(FullPublisher.Publish(*World,Detail,Width,Height));
+			Require(Actual.RgbPixels.size() == Width*Height*3 && Actual.RgbPixels == Rebuilt.RgbPixels,
+				"partial GPU output differs from independently rebuilt topology");
+			return Actual.RgbPixels;
+		};
+		const auto Filled = Compare(false);
+		Require(Edit(Sparse,Game->GetObjectId(),{},Chosen).Succeeded(), "sparse GPU removal failed");
+		const auto Cut = Compare(true);
+		Require(Edit(Sparse,Game->GetObjectId(),{blockgrid::Brick,0},Chosen).Succeeded(), "sparse GPU restore failed");
+		const auto Brick = Compare(true);
+		const auto CutPixels = Changed(Filled,Cut), RestoredPixels = Changed(Cut,Brick);
+		Require(CutPixels >= 32 && RestoredPixels >= 32 && Changed(Filled,Brick) >= 32,
+			"native readback missed topology removal or restored tint");
+		std::cout << "[Spatial:ConstructionGpu] SparseRemovedPixels=" << CutPixels
+			<< " SparseRestoredPixels=" << RestoredPixels << " RebuildResidual=0\n";
 		Game->Destroy();
 	}
 
