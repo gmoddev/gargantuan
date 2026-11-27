@@ -159,6 +159,41 @@ namespace gargantuan::blockgrid {
 }
 
 namespace gargantuan {
+	blockgrid::Definition BlockGrid::ResolveMaterialAlias(std::string_view Key) const {
+		if (!Key.starts_with("material:") || !AssetId::Parse(Key.substr(9)))
+			throw std::invalid_argument("[BlockGrid:Definition] Unknown definition or invalid material ID");
+		blockgrid::Definition D{std::string(Key)};
+		auto Binding=std::make_shared<blockgrid::AssetBinding>();
+		Binding->Material=Key.substr(9);
+		D.Assets=std::move(Binding);
+		return ResolveAssetDefinition(std::move(D));
+	}
+	std::shared_ptr<const blockgrid::Patch> BlockGrid::PlanMaterialEdit(const blockgrid::EditRequest& Edit) const {
+		using namespace blockgrid;
+		if (Edit.Materials.empty() || Edit.Materials.size()>MaximumNewMaterials || (Edit.Writes.empty()==Edit.Commands.empty()))
+			throw std::invalid_argument("[BlockGrid:Material] Invalid number of bindings or placement commands");
+		Field Staged=Cells;
+		std::vector<blockgrid::Definition> Resolved;
+		for (const auto& Candidate:Edit.Materials) {
+			if (!Candidate.Key.starts_with("material:") || Staged.FindDefinitionId(Candidate.Key))
+				throw std::domain_error("[BlockGrid:Conflict] Material binding already exists");
+			auto D=ResolveAssetDefinition(Candidate);
+			(void)Staged.Define(D); Resolved.push_back(std::move(D));
+		}
+		const auto First=static_cast<std::uint16_t>(Brick+1+Cells.GetDefinitionCount());
+		auto Out=std::make_shared<Patch>();
+		if (!Edit.Commands.empty()) Out->StateCells=Staged.PlanOperations(Edit.Commands);
+		else Out->StateCells=Staged.PlanOperations(std::vector<Operation>(Edit.Writes.begin(),Edit.Writes.end()));
+		// An edit may place an unseen material then clear or replace it. Keep only aliases used in final cells.
+		std::vector<std::uint16_t> Remap(Resolved.size());
+		for (const auto& C:Out->StateCells) if (C.After.Value.Definition>=First) Remap.at(C.After.Value.Definition-First)=1;
+		for (std::size_t I=0;I<Remap.size();++I) if (Remap[I]) {
+			Remap[I]=static_cast<std::uint16_t>(First+Out->Materials.size());
+			Out->Materials.push_back(std::move(Resolved[I]));
+		}
+		for (auto& C:Out->StateCells) if (C.After.Value.Definition>=First) C.After.Value.Definition=Remap[C.After.Value.Definition-First];
+		return Out;
+	}
 	blockgrid::Definition BlockGrid::ResolveAssetDefinition(blockgrid::Definition Spec) const {
 		AssertAuthoritativeMutation("BlockGrid definition validation");
 		if (Spec.Assets) {

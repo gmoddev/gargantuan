@@ -46,14 +46,35 @@ namespace {
 		Check(Visual && Visual->CollisionAsset && Visual->Primitives && Visual->Primitives->size()==2 &&
 			Visual->Primitives->front().Material.has_value(),"fixture companion and two material slots");
 		const auto Material=*Visual->Primitives->front().Material;
-		const auto Script=std::format("local Mesh='{}'\nlocal Collider='{}'\nlocal Mat='{}'\nlocal Large='{}'\n",
-			Tile.Record->Id.ToString(),Visual->CollisionAsset->ToString(),Material.ToString(),Oversized.Record->Id.ToString())+R"(
+		const auto Script=std::format("local Mesh='{}'\nlocal Collider='{}'\nlocal Mat='{}'\nlocal Accent='{}'\nlocal Large='{}'\n",
+			Tile.Record->Id.ToString(),Visual->CollisionAsset->ToString(),Material.ToString(),Visual->Primitives->back().Material->ToString(),
+			Oversized.Record->Id.ToString())+R"(
 			local G=Instance.new("BlockGrid")
 			G.Name="AssetTiles"
 			G.Parent=game.Workspace
 			G:DefineBlock("project:tile",{Shape="Mesh",Mesh=Mesh,Collision="Asset",CollisionAsset=Collider})
 			G:DefineBlock("project:ghost",{Shape="Mesh",Mesh=Mesh,Collision="None"})
 			G:DefineBlock("project:tinted",{Shape="Slab",Material="asset://"..Mat})
+			local A=Vector3.new(6,0,0)
+			local Alias,Other="material:"..Mat,"material:"..Accent
+			local Original=G:GetRevision()
+			assert(not pcall(function() G:Fill(A,A,Alias) end))
+			assert(G:GetRevision()==Original and not pcall(function() G:GetDefinitionDigest(Alias) end))
+			local None=G:BeginEdit()
+			None:SetBlock(A,Other)
+			None:RemoveBlock(A)
+			assert(None:Commit()==Original and not pcall(function() G:GetDefinitionDigest(Other) end))
+			local First=G:SetBlock(A,Alias)
+			assert(First~=Original and G:GetBlock(A).Definition==Alias and G:SetBlock(A,Alias)==First)
+			local Destination=Instance.new("BlockGrid")
+			Destination.Parent=game.Workspace
+			local Max=A+Vector3.new(1,1,1)
+			local Buffer=G:ReadPacked(A,Max)
+			local Bulk=Destination:BeginEdit()
+			Bulk:SetBlock(A,Other)
+			Bulk:WritePacked(A,Max,Buffer)
+			Bulk:Commit()
+			assert(Destination:GetBlock(A).Definition==Alias and not pcall(function() Destination:GetDefinitionDigest(Other) end))
 			local Rev=G:GetRevision()
 			for _, Bad in {{Shape="Mesh",Mesh=Mesh},{Shape="Mesh",Mesh=Large,Collision="None"},
 				{Shape="Mesh",Mesh=Mat,Collision="None"},{Shape="Mesh",Mesh=Mesh,Collision="Asset",CollisionAsset=Mat},
@@ -110,6 +131,27 @@ namespace {
 			"whole dependency closure and immutable material slots");
 		Check(D.Primitives->front().Material.BaseColorTexture.has_value() && D.Primitives->back().Material.OpacityMode==RenderOpacityMode::Transparent &&
 			D.Primitives->back().Material.EmissiveFactor.x>.7f,"material textures, transparency and emissive inputs");
+		auto Authored=std::make_shared<BlockGrid>();
+		Authored->SetParent(World->GetService("Workspace"));
+		const auto Key="material:"+Material.ToString();
+		auto Input=std::make_shared<blockgrid::EditRequest>();
+		Input->ExpectedRevision=Authored->GetBlockRevision();
+		Input->Materials.push_back(Authored->ResolveMaterialAlias(Key));
+		Input->Writes.push_back({blockgrid::SingleCell({0,0,0}),{3,0}});
+		const SubmitBlockGridEditCommand Cmd{Authored->GetObjectId(),World->GetObjectId(),Input};
+		const auto Security=ScriptSecurityContext::StudioCoreUi();
+		MutationGateway Gateway;
+		Authored->SetAdmission([](const auto&,auto){return false;});
+		Check(!Gateway.Apply(Cmd,MutationAuthorityContext::Studio(Security,World->GetObjectId(),{},7)).Succeeded() &&
+			!Authored->GetField().FindDefinitionId(Key),"failed admission leaked a material alias");
+		Authored->SetAdmission({});
+		const auto Rev=Authored->GetField().GetRevision();
+		Check(Gateway.Apply(Cmd,MutationAuthorityContext::Studio(Security,World->GetObjectId(),{},7)).Succeeded() &&
+			Authored->GetField().GetRevision()==Rev+1,"first-use material must be a single authoring edit");
+		Check(Gateway.Undo(*World,Security).Succeeded() && !Authored->GetField().FindDefinitionId(Key) &&
+			!Authored->GetField().GetOccupiedCount(),"undo must remove the placement and its implicit binding");
+		Check(Gateway.Redo(*World,Security).Succeeded() && Authored->GetField().Get({0,0,0}).Definition==3,
+			"redo must restore the same material placement");
 		const auto Bytes=blockgrid::Encode(F);
 		const auto SavedAssets=Service->CaptureProjectAssets();
 		auto Reload=std::make_shared<DataModel>();

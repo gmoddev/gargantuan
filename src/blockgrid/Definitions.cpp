@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "gargantuan/blockgrid/Field.hpp"
 #include "gargantuan/blockgrid/Assets.hpp"
+#include "gargantuan/blockgrid/Edit.hpp"
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -213,5 +214,32 @@ namespace gargantuan::blockgrid {
 		++Revision;
 		++GeometryRevision;
 		++PublicRevision;
+	}
+	bool Field::ApplyMaterialChanges(std::span<const Definition> Materials,std::span<const StateChange> Changes,
+		bool Remove,const Admission& BeforeCommit) {
+		if (Materials.empty()) return ApplyChanges(Changes,BeforeCommit);
+		if (Materials.size()>MaximumNewMaterials || Changes.empty())
+			throw std::invalid_argument("[BlockGrid:Material] Invalid material edit");
+		Field Next=*this;
+		if (!Remove) for (const auto& D:Materials) {
+			if (!D.Key.starts_with("material:") || FindDefinitionId(D.Key) || !Next.Define(D))
+				throw std::domain_error("[BlockGrid:Conflict] Material binding already exists");
+		}
+		std::vector<Cell> Origins;
+		const auto Changed=Next.ApplyChanges(Changes,[&](const Candidate& Staged,auto) {
+			Staged.ForEachChangedLeaf([&](Cell P,const Leaf*){Origins.push_back(P);}); return true;
+		});
+		if (!Changed) return false;
+		if (Remove) for (auto It=Materials.rbegin();It!=Materials.rend();++It) Next.UndoDefinitionInsertion(*It);
+		Directory Added; std::vector<Cell> Erased;
+		for (const auto P:Origins) {
+			if (const auto It=Next.Leaves.find(P);It!=Next.Leaves.end()) Added.emplace(P,It->second);
+			else Erased.push_back(P);
+		}
+		const Candidate View(*this,Next.Definitions.get(),Added,Erased,Next.Leaves.size(),Next.Occupied);
+		if (BeforeCommit && !BeforeCommit(View,{})) throw std::length_error("[BlockGrid:Admission] Material placement denied");
+		Next.Revision=Revision+1; Next.GeometryRevision=GeometryRevision+1; Next.PublicRevision=PublicRevision+1;
+		*this=std::move(Next);
+		return true;
 	}
 }

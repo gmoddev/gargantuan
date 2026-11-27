@@ -64,6 +64,19 @@ namespace {
 		Broken=Bytes; Broken.resize(30); Reject([&]{(void)Decode(Broken);});
 		auto Bad=std::make_shared<AssetBinding>(*Binding); Bad->Pins[0].Kind=0; Previous.Assets=Bad;
 		Reject([&]{(void)F.Define(Previous,true);}); Check(Encode(F)==Bytes);
+		auto Mat=std::make_shared<AssetBinding>();
+		Mat->Material=Id; Mat->Pins={{Id,Sum,static_cast<std::uint8_t>(AssetKind::Material)}};
+		Definition Alias{"material:"+Id}; Alias.Assets=Mat;
+		Field Site; const auto Before=Encode(Site);
+		StateChange Placement{{1,0,0},{},{{3,0}}};
+		std::span<const Definition> Materials(&Alias,1); std::span<StateChange> Changes(&Placement,1);
+		Reject([&]{(void)Site.ApplyMaterialChanges(Materials,Changes,false,[&](const auto& Candidate,auto) {
+			Check(Candidate.GetDefinition(3)==Alias && Candidate.Get(Placement.Position)==Block{3,0}); return false;
+		});});
+		Check(Encode(Site)==Before && Site.GetRevision()==1);
+		Check(Site.ApplyMaterialChanges(Materials,Changes,false) && Site.GetRevision()==2);
+		std::swap(Placement.Before,Placement.After);
+		Check(Site.ApplyMaterialChanges(Materials,Changes,true) && Site.GetRevision()==3 && Encode(Site)==Before);
 	}
 	void TestDefinitions() {
 		Field F;

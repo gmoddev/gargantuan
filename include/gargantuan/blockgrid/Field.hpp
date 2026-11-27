@@ -184,6 +184,8 @@ namespace gargantuan::blockgrid {
 		[[nodiscard]] bool ApplyOperations(std::span<const Operation> Commands,const Admission& BeforeCommit={});
 		[[nodiscard]] std::vector<StateChange> PlanOperations(std::span<const Operation> Commands,std::size_t CommandLimit=MaximumCommands) const;
 		[[nodiscard]] bool ApplyChanges(std::span<const StateChange> Changes,const Admission& BeforeCommit={});
+		[[nodiscard]] bool ApplyMaterialChanges(std::span<const Definition> Materials,std::span<const StateChange> Changes,
+			bool Remove,const Admission& BeforeCommit={});
 
 	  private:
 		friend std::vector<std::uint8_t> Encode(const Field&);
