@@ -141,8 +141,19 @@ namespace {
 		const GameSessionConfiguration Client{
 			.Role = GameSessionRole::Client, .Endpoint = Endpoint, .Limits = Limits, .TerrainBootstrap=ReceiverTerrain, .SpatialContent = true
 		};
-		GameSession Owner(Transport(), Client), Spectator(Transport(), Client);
 		std::unique_ptr<Engine> OwnerRuntime, SpectatorRuntime;
+		GameSession Owner(Transport(), Client), Spectator(Transport(), Client);
+		struct Cleanup {
+			GameSession &Owner, &Spectator, &Server;
+			std::unique_ptr<Engine> &OwnerRuntime, &SpectatorRuntime;
+			Engine &ServerRuntime;
+			~Cleanup() {
+				Owner.Stop(); Spectator.Stop(); Server.Stop();
+				if (OwnerRuntime) OwnerRuntime->Destroy();
+				if (SpectatorRuntime) SpectatorRuntime->Destroy();
+				ServerRuntime.Destroy();
+			}
+		} End{Owner, Spectator, Server, OwnerRuntime, SpectatorRuntime, ServerRuntime};
 		std::uint64_t Tick{};
 		bool ObserveStage{}, SawScopedGrid{};
 		std::optional<ConnectionId> Connection;
@@ -180,12 +191,16 @@ namespace {
 					break;
 			}
 			if (!Predicate()) {
-				std::cerr << "[Spatial:Session] tick=" << Tick << " character=" << CharacterProfile
+				std::cerr << "[Spatial:Session] " << Failure << " tick=" << Tick << " character=" << CharacterProfile
 						  << " owner=" << Owner.GetFailure() << " spectator=" << Spectator.GetFailure()
 						  << " server=" << Server.GetFailure();
 				if (Connection) {
 					const auto Status = Server.GetSpatialTransferStatus(*Connection);
 					if (Status) std::cerr << " transfer=" << static_cast<int>(*Status);
+				}
+				if (const auto Primary=Owner.GetPrimaryConnection()) {
+					const auto Status=Owner.GetSpatialTransferStatus(*Primary);
+					if (Status) std::cerr << " ownerTransfer=" << static_cast<int>(*Status);
 				}
 				std::cerr << '\n';
 				throw std::runtime_error(std::string(Failure));
@@ -425,12 +440,7 @@ script:SetAttribute("Isolated", true)
 				SpectatorRuntime->Workspace->GetTerrain()->GetField().GetStats().MaterializedPages==0,
 				"returning controller failed to reacquire Workspace terrain exclusively");
 		}
-		Owner.Stop();
-		Spectator.Stop();
-		Server.Stop();
-		OwnerRuntime->Destroy();
-		SpectatorRuntime->Destroy();
-		ServerRuntime.Destroy();
+
 	}
 }
 int main(int Count, char **Args) {
