@@ -13,6 +13,7 @@
 #include "gargantuan/runtime/ApplicationPresentation.hpp"
 #include "gargantuan/persistence/LocalPersistenceProvider.hpp"
 #include "packaging/ApplicationTemplate.hpp"
+#include "packaging/RuntimeDistributionCode.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
@@ -54,6 +55,8 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	Program.add_description("Gargantuan standalone game runtime");
 	Program.add_argument("--headless").flag().help("disable the graphical renderer");
 	Program.add_argument("--startup-smoke").flag().help("exit after a bounded runtime startup smoke");
+	Program.add_argument("--local-server-root").default_value(std::string()).help("installed private Server package directory");
+	Program.add_argument("--local-server-manifest-sha256").default_value(std::string()).help("trusted digest for the paired private Server");
 	Program.add_argument("--profile-root").default_value(std::string()).help("parent directory for project-isolated local game data");
 	Program.add_argument("--session-smoke").flag().help("require a bounded packaged game-session acceptance proof");
 	Program.add_argument("--max-frames").scan<'i', int>().default_value(0).help("bounded test-only frame count");
@@ -70,6 +73,12 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	Program.add_argument("--farm-recovery-workload").flag().help("observe bounded post-reload overload and recovery cases");
 	Program.add_argument("--farm-publication-evidence").default_value(std::string())
 		.help("fixed new role-local Character publication evidence file for the scale run");
+	Program.add_argument("--join-listing-source").default_value(std::string()).help("native invitation source (Node or LAN)");
+	Program.add_argument("--join-listing-id").default_value(std::string()).help("opaque native session identity");
+	Program.add_argument("--join-expires-ms").scan<'i', std::int64_t>().default_value(std::int64_t{0}).help("invitation expiry in Unix milliseconds");
+	Program.add_argument("--sample-presented-pixel").flag().help("report changes to the installed window qualification pixel");
+	Program.add_argument("--join-proof-env").default_value(std::string()).help("environment variable containing the short-lived native join proof");
+	Program.add_argument("--server-key-env").default_value(std::string()).help("environment variable containing the pinned GNS server key");
 	Program.add_argument("--allow-insecure-development-network")
 		.flag()
 		.help("allow DevelopmentLocal networking beyond loopback; authentication is not provided");
@@ -112,11 +121,45 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		std::cerr << "GargantuanPlayer client farm arguments are invalid.\n";
 		return 2;
 	}
+	std::optional<PrivateServerPackage> PrivateServer;
+	if (Program.is_used("--local-server-root") || Program.is_used("--local-server-manifest-sha256")) {
+		const auto Directory = std::filesystem::u8path(Program.get<std::string>("--local-server-root"));
+		const auto Manifest = Program.get<std::string>("--local-server-manifest-sha256");
+		if (!Directory.is_absolute() || !AssetContentId::Parse(Manifest)) {
+			std::cerr << "[Lifecycle:Player] Private server requires an absolute package root and manifest digest.\n";
+			return 2;
+		}
+		PrivateServer = PrivateServerPackage{Directory.lexically_normal(), Manifest};
+	}
 	const bool AllowInsecureDevelopmentNetwork = Program.is_used("--allow-insecure-development-network");
 	const auto ClientEndpoint = ClientText.empty() ? std::nullopt : host::ParseEndpoint(ClientText);
+	std::optional<host::PlayerAdmission> Admission;
+	if (Program.is_used("--join-proof-env") || Program.is_used("--server-key-env")) {
+		const auto Proof = host::detail::ReadPlayerJoinProof(Program.get<std::string>("--join-proof-env"));
+		const auto ServerKey = host::detail::ReadPlayerServerPublicKey(Program.get<std::string>("--server-key-env"));
+		if (!ClientEndpoint || !Proof || AllowInsecureDevelopmentNetwork ||
+			(!ServerKey && (Program.is_used("--server-key-env") || !network::IsLoopbackTransportEndpoint(*ClientEndpoint)))) {
+			std::cerr << "[Network:Admission] A pinned endpoint and native join proof are required.\n";
+			return 2;
+		}
+		Admission = host::PlayerAdmission{*ClientEndpoint, *Proof, ServerKey};
+	}
+	std::optional<SessionInvitation> Invitation;
+	if (Program.is_used("--join-listing-id") || Program.is_used("--join-listing-source") || Program.is_used("--join-expires-ms")) {
+		const auto Source = Program.get<std::string>("--join-listing-source");
+		const auto Id = Program.get<std::string>("--join-listing-id");
+		const auto Expiry = Program.get<std::int64_t>("--join-expires-ms");
+		const auto Now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+		if (!Admission || !Admission->ServerKey || !ProjectId::Parse(Id) || (Source != "Node" && Source != "LAN") ||
+			Expiry <= Now || Expiry > Now + 60'000) {
+			std::cerr << "[Network:Admission] Invalid or expired native session invitation.\n";
+			return 2;
+		}
+		Invitation = SessionInvitation{Source, Id, {}, ClientText, std::chrono::steady_clock::now() + std::chrono::milliseconds(Expiry - Now)};
+	}
 	if ((!ClientText.empty() && !ClientEndpoint) ||
 		(ClientEndpoint && !network::IsLoopbackTransportEndpoint(*ClientEndpoint) &&
-		 !AllowInsecureDevelopmentNetwork) ||
+		 !AllowInsecureDevelopmentNetwork && !Admission) ||
 		(Program.is_used("--session-smoke") && ClientText.empty())) {
 		std::cerr << "GargantuanPlayer network endpoint arguments are invalid.\n";
 		return 2;
@@ -184,31 +227,13 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		return ExitCode;
 	}
 	const bool Distributed = Payload->Inspection.Audience == PackageAudience::DistributedPlayer;
-	if (Payload->ApplicationTemplate && !ClientText.empty()) {
-		std::cerr << "[Package:Audience] This standalone package requires an offline session.\n";
-		return 3;
-	}
-	if (Payload->Inspection.Target && !Distributed && !ClientText.empty()) {
-		std::cerr << "[Package:Audience] A managed offline Player cannot join a network session.\n";
-		return 3;
-	}
-	if (Distributed && ClientText.empty()) {
+	if (Distributed && ClientText.empty() && !Payload->ApplicationTemplate) {
 		std::cerr << "[Package:Audience] A distributed Player package requires a multiplayer connection.\n";
 		ReportFarmResult(3, "connection_required");
 		return 3;
 	}
 	const bool NetworkTerrain = ClientEndpoint && (!Payload->TerrainArtifacts.empty() || !Payload->WorkspaceTerrainManifest.empty());
 	const bool SpatialContent = Payload->SpatialContent;
-	if (SpatialContent && (!Distributed || !ClientEndpoint || !network::IsLoopbackTransportEndpoint(*ClientEndpoint))) {
-		std::cerr << "[Spatial:Package] Packaged spatial sessions require a distributed Player and a loopback endpoint.\n";
-		return 7;
-	}
-	if (NetworkTerrain && (Payload->Inspection.Configuration != PackageConfiguration::Development ||
-		!network::IsLoopbackTransportEndpoint(*ClientEndpoint))) {
-		std::cerr << "[Terrain:Network] Terrain delivery currently requires a loopback Development package.\n";
-		ReportFarmResult(7, "terrain_policy");
-		return 7;
-	}
 
 	const bool Headless = Program.is_used("--headless");
 	if (!SDL_Init(Headless ? SDL_INIT_EVENTS : SDL_INIT_VIDEO)) {
@@ -250,36 +275,64 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		const Vector2 ViewportSize(720, 540);
 		if (Headless)
 			Renderer = std::make_unique<HeadlessRenderer>(ViewportSize);
-		else
-			Renderer = std::make_unique<SDLRenderer>(ViewportSize);
+		else {
+			SDLRendererOptions Options;
+			if (Program.is_used("--sample-presented-pixel"))
+				Options.PresentedPixel = [Last = std::optional<std::array<std::uint8_t, 3>>{}](auto Color) mutable {
+					if (Last == Color) return;
+					Last = Color;
+					std::cout << "[Lifecycle:PresentedPixel] " << unsigned(Color[0]) << " " << unsigned(Color[1]) << " "
+						<< unsigned(Color[2]) << std::endl;
+				};
+			Renderer = std::make_unique<SDLRenderer>(ViewportSize, std::move(Options));
+		}
 		if (Payload->ApplicationTemplate) {
 			auto Graph = application_template::Load(*Payload->ApplicationTemplate);
 			Graph.World->Root = PackageRoot / "content";
 			Graph.World->Filesystem = nullptr;
+			if (Payload->ApplicationCode) (void)runtime_distribution::BindCatalog(*Payload->ApplicationCode, Graph.World, false);
 			auto Assets = std::dynamic_pointer_cast<AssetService>(Graph.World->GetService("AssetService"));
 			Assets->LoadRuntimeAssetSnapshot(application_template::SelectAssets(*Payload->ApplicationTemplate, Payload->Assets));
+			if (Invitation) Invitation->Name = Payload->Inspection.DisplayName;
+			const auto ConfigureWorlds = [&](ApplicationSession &Sessions) {
+				const auto Profile = UserData();
+				const auto Identity = Payload->Inspection.Identity.ToString();
+				Sessions.ConfigureCatalog(MakeDurableLocalPersistenceProvider({
+					.Path = Profile / "world-catalog.sqlite", .ProfileId = Identity}), Graph.World,
+					application_template::WorldBaseline(*Payload),
+					[Profile, Identity](const WorldSlot &Slot, bool Create) {
+						return MakeDurableLocalPersistenceProvider({.Path = Profile / (Slot.SaveId + ".sqlite"),
+							.ProfileId = Identity + "/" + Slot.WorldId, .CreateIfMissing = Create, .RecordWorldWrites = true});
+					});
+			};
 			ApplicationPresentation App(Graph.World, Graph.Entry, Paths::GetExecutableDirectory() / "runtime" / "GargantuanSans.ttf",
 				[](std::string Level, std::string Message) {
 					std::clog << "[Lifecycle:Application] " << Level << " " << Message << '\n';
-				}, !Headless);
+				}, !Headless, ConfigureWorlds, std::move(Invitation));
 			if (App.HasMainMenu()) {
 				const auto Profile = UserData();
-				const auto Hash = [](const std::string &Bytes) {
-					return AssetContentId::Hash(std::span(reinterpret_cast<const std::uint8_t *>(Bytes.data()), Bytes.size())).ToString();
-				};
-				const auto Identity = Payload->Inspection.Identity.ToString();
-				App.Sessions.ConfigureCatalog(MakeDurableLocalPersistenceProvider({
-					.Path = Profile / "world-catalog.sqlite", .ProfileId = Identity}), Graph.World,
-					Hash(Payload->ProjectJson) + "/" + Hash(Payload->Assets.CatalogJson) + "/" +
-						Payload->ContentManifestDigest.ToString() + "/" + Hash(Payload->PreRunSource.value_or("")),
-					[Profile, Identity](const WorldSlot &Slot, bool Create) {
-						return MakeDurableLocalPersistenceProvider({.Path = Profile / (Slot.SaveId + ".sqlite"),
-							.ProfileId = Identity + "/" + Slot.WorldId, .CreateIfMissing = Create});
-					});
 				const int Requested = Program.get<int>("--max-frames");
 				const int Limit = Requested > 0 ? Requested : Program.is_used("--startup-smoke") ? 12 : 0;
-				return RunStandalonePlayer(App, *Renderer, *Payload, PackageRoot, Profile, Limit);
+				return RunStandalonePlayer(App, *Renderer, *Payload, PackageRoot, Profile, Limit, std::move(Admission), std::move(PrivateServer), Program.is_used("--sample-presented-pixel"));
 			}
+		}
+		if (Payload->Inspection.Target && !Distributed && !ClientText.empty()) {
+			std::cerr << "[Package:Audience] A managed offline Player cannot join a network session.\n";
+			return 3;
+		}
+		if (SpatialContent && (!Distributed || !ClientEndpoint || !network::IsLoopbackTransportEndpoint(*ClientEndpoint))) {
+			std::cerr << "[Spatial:Package] Packaged spatial sessions require a distributed Player and a loopback endpoint.\n";
+			return 7;
+		}
+		if (NetworkTerrain && (Payload->Inspection.Configuration != PackageConfiguration::Development ||
+			!network::IsLoopbackTransportEndpoint(*ClientEndpoint))) {
+			std::cerr << "[Terrain:Network] Terrain delivery currently requires a loopback Development package.\n";
+			ReportFarmResult(7, "terrain_policy");
+			return 7;
+		}
+		if (Distributed && !ClientEndpoint) {
+			std::cerr << "[Package:Audience] Direct startup needs a multiplayer connection.\n";
+			return 3;
 		}
 		if (!Distributed && !PackagedWorld) PackagedWorld = LoadPackageWorld();
 		std::shared_ptr<DataModel> World;
@@ -294,7 +347,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			Session = std::make_unique<network::GameSession>(
 				ClientTransport,
 				ConfigurePackagedClient(*Payload, PackagedWorld, *ClientEndpoint, NetworkTerrain,
-					FarmEnabled ? FarmClientNonce : 0, AllowInsecureDevelopmentNetwork)
+					FarmEnabled ? FarmClientNonce : 0, AllowInsecureDevelopmentNetwork, Admission)
 			);
 			if (FarmScaleWorkload && !network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(*Session, false))
 				throw std::runtime_error("[Network:OrdinaryService] Client bootstrap source scope failed");

@@ -1,4 +1,5 @@
 #pragma once
+#include "JoinProof.hpp"
 #include <filesystem>
 
 namespace gargantuan {
@@ -6,7 +7,13 @@ namespace gargantuan {
 	class BaseRenderer;
 	struct RuntimePackagePayload;
 	namespace host {
+		struct PrivateServerPackage { std::filesystem::path Root; std::string Manifest; };
+		struct PlayerAdmission {
+			network::TransportEndpoint Endpoint;
+			detail::PlayerJoinProof Proof;
+			std::optional<network::TransportServerPublicKey> ServerKey;
+		};
 		int RunStandalonePlayer(ApplicationPresentation &App, BaseRenderer &Device,
-			const RuntimePackagePayload &Package, const std::filesystem::path &Root, const std::filesystem::path &Profile, int MaximumFrames);
+			const RuntimePackagePayload &Package, const std::filesystem::path &Root, const std::filesystem::path &Profile, int MaximumFrames, std::optional<PlayerAdmission> Admission = {}, std::optional<PrivateServerPackage> PrivateServer = {}, bool TracePresentation = false);
 	}
 }

@@ -24,6 +24,7 @@ namespace gargantuan {
 		std::string ProfileId;
 		LocalPersistenceLimits Limits;
 		bool CreateIfMissing = true;
+		bool RecordWorldWrites = false;
 	};
 
 	[[nodiscard]] bool SupportsDurableLocalPersistence() noexcept;

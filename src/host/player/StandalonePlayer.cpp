@@ -3,14 +3,16 @@
 #include "StandalonePlayer.hpp"
 #include "gargantuan/render/ApplicationDisplay.hpp"
 #include "PackagedClient.hpp"
+#include "PrivateServerProcess.hpp"
 #include "host/common/PackagedHost.hpp"
 #if defined(GARGANTUAN_WITH_GNS)
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
 #endif
-#include "WorldWriter.hpp"
+#include "runtime/WorldWriter.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/persistence/LocalPersistenceProvider.hpp"
 #include "gargantuan/services/WorldSaveService.hpp"
+#include "gargantuan/services/InputService.hpp"
 #include "gargantuan/persistence/PersistenceRuntime.hpp"
 #include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/render/SDLRenderer.hpp"
@@ -23,7 +25,8 @@
 namespace gargantuan::host {
 
 	int RunStandalonePlayer(ApplicationPresentation &App, BaseRenderer &Device,
-		const RuntimePackagePayload &Package, const std::filesystem::path &Root, const std::filesystem::path &Profile, int MaximumFrames) {
+		const RuntimePackagePayload &Package, const std::filesystem::path &Root, const std::filesystem::path &Profile, int MaximumFrames, std::optional<PlayerAdmission> Admission, std::optional<PrivateServerPackage> PrivateServer, bool TracePresentation) {
+		const bool PinnedLaunch = Admission.has_value();
 		SDLHost Platform;
 		RenderPublisher AppPublisher;
 		ApplicationDisplay Display;
@@ -39,6 +42,11 @@ namespace gargantuan::host {
 		std::shared_ptr<DataModel> ClientSources;
 		std::unique_ptr<network::GameSession> Connection;
 		std::uint64_t HandshakeTick = 0;
+		std::unique_ptr<PrivateServerProcess> OwnedServer, RetiringServer;
+		bool ChangingHold = false, LostControl = false;
+		std::optional<PlayerAdmission> PrivateGrant;
+		std::shared_future<std::shared_ptr<PrivateServerSnapshot>> PrivatePackageReady;
+		PackageCancellationToken PackageCopy;
 		const auto StopConnection = [&] {
 			if (Connection) Connection->Stop();
 			Connection.reset();
@@ -46,9 +54,14 @@ namespace gargantuan::host {
 			HandshakeTick = 0;
 		};
 		std::shared_ptr<PersistenceHandle> StorageAdmission;
-		std::optional<std::vector<std::shared_ptr<PersistenceHandle>>> ClosingWrites;
-		bool UncertainWrite = false;
+		bool Draining = false;
+		const auto Drain = [&](Engine *World) {
+			const auto Storage = World ? World->Script->GetPersistenceRuntime() : nullptr;
+			return Storage ? Storage->PollWriteDrain(Writer != nullptr) : PersistenceStatus::Ok;
+		};
 		const auto DiscardStart = [&] {
+			PrivateGrant.reset();
+			if (OwnedServer) RetiringServer = std::move(OwnedServer);
 			StopConnection();
 			PreparingSession.reset();
 			StorageAdmission.reset();
@@ -66,11 +79,24 @@ namespace gargantuan::host {
 		};
 		auto Last = std::chrono::steady_clock::now();
 		std::cout << "[Lifecycle:Player] Application entry registered its title\n";
-		for (std::uint64_t Frame = 0; !MaximumFrames || Frame < static_cast<std::uint64_t>(MaximumFrames); ++Frame) {
+		int ExitCode = 0;
+		for (std::uint64_t Frame = 0;; ++Frame) {
+			if (RetiringServer) {
+				try {
+					if (RetiringServer->Exited() || RetiringServer->Close()) RetiringServer.reset();
+				} catch (SessionAdmissionFailure) {
+					RetiringServer.reset();
+				}
+			}
+			if (MaximumFrames && Frame == static_cast<std::uint64_t>(MaximumFrames)) {
+				std::cout << "[Lifecycle:Player] Reached requested frame limit\n";
+				App.QuitRequested = true;
+			}
 			HostEvent Event;
 			std::uint64_t EventTime = 0;
 			while (Platform.PollEvent(Event, &EventTime)) {
-				if (std::holds_alternative<WindowCloseEvent>(Event)) return 0;
+				if (std::holds_alternative<WindowCloseEvent>(Event)) App.QuitRequested = true;
+				if (App.QuitRequested) break;
 				if (auto *Size = std::get_if<WindowResizeEvent>(&Event)) {
 					if (!Size->Width || !Size->Height) continue;
 					Device.Resize(Size->Width, Size->Height);
@@ -80,6 +106,11 @@ namespace gargantuan::host {
 					Displayed = {};
 				} else {
 					const bool Stale = EventTime < DisplayedSince && !std::holds_alternative<FocusEvent>(Event);
+					if (TracePresentation) {
+						if (const auto *Button = std::get_if<PointerButtonEvent>(&Event))
+							std::clog << "[Lifecycle:PresentationInput] Button=" << static_cast<int>(Button->State) << " Position="
+								<< Button->Position.X << "," << Button->Position.Y << " Stale=" << Stale << std::endl;
+					}
 					if (Stale) {
 						const bool Release = std::visit([](const auto &Value) {
 							if constexpr (requires { Value.State; }) return Value.State == ButtonState::Released;
@@ -90,7 +121,7 @@ namespace gargantuan::host {
 						}, Event);
 						if (Release) {
 							(void)App.ProcessEvent(Event, {});
-							if (Session) {
+							if (Session && !ChangingHold && !App.Sessions.IsPaused() && !App.Sessions.IsLeaving()) {
 								// Retire physical state without dispatching a click to a newer GUI.
 								if (Session->Gui) Session->Gui->ClearTransientState();
 								(void)Session->UserInputService->ProcessEvent(Event);
@@ -101,12 +132,32 @@ namespace gargantuan::host {
 					}
 					const bool Consumed = App.ProcessEvent(Event, Displayed);
 					if (App.GameplayInputReleasePending) ReleaseGameplayInput();
-					if (Session && !Consumed && App.GameplayInputEnabled && !App.Sessions.IsPaused() && !App.Sessions.IsLeaving()) {
+					if (Session && !Consumed && App.GameplayInputEnabled && !ChangingHold && !App.Sessions.IsPaused() && !App.Sessions.IsLeaving()) {
 						const auto Result = Session->ProcessEvent(Event);
 						if (Result.Command) Platform.Apply(*Result.Command);
 					}
 				}
-				if (App.QuitRequested) return 0;
+				if (App.QuitRequested) break;
+			}
+			if (App.QuitRequested) {
+				PackageCopy.Cancel();
+				if (PrivatePackageReady.valid() && PrivatePackageReady.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+					SDL_Delay(2); continue;
+				}
+				if (RetiringServer) { SDL_Delay(2); continue; }
+				if (OwnedServer) {
+					try {
+						if (!OwnedServer->Close()) { SDL_Delay(2); continue; }
+					} catch (SessionAdmissionFailure) { ExitCode = 8; }
+					OwnedServer.reset();
+				}
+				const auto Status = Drain(Session ? Session.get() : PreparingSession.get());
+				if (Status == PersistenceStatus::Pending) { SDL_Delay(2); continue; }
+				if (Status != PersistenceStatus::Ok) {
+					std::cerr << "[Lifecycle:Storage] Closing with write status " << GetPersistenceStatusName(Status) << '\n';
+					return 8;
+				}
+				return ExitCode;
 			}
 			const auto [Width, Height] = Device.GetViewportSize();
 			App.Gui.SetViewport({Width, Height, 1.0f, {}});
@@ -115,12 +166,33 @@ namespace gargantuan::host {
 			App.Sessions.PumpCatalog(App);
 			if (App.GameplayInputReleasePending) ReleaseGameplayInput();
 			Last = Now;
-			if (App.QuitRequested) return 0;
+			if (App.QuitRequested) continue;
+			if (Session && (LostControl || (OwnedServer && OwnedServer->Exited() && !App.Sessions.IsLeaving()) ||
+				((!OwnedServer || !OwnedServer->IsClosing()) && Connection && (Connection->GetStatus() == network::GameSessionStatus::Failed ||
+					Connection->GetStatus() == network::GameSessionStatus::Closed)))) {
+				if (Connection) std::clog << "[Lifecycle:Connection] Connection retired: " << Connection->GetFailure() << std::endl;
+				LostControl = ChangingHold = false;
+				ReleaseGameplayInput();
+				StopConnection();
+				Session.reset();
+				Surface.reset();
+				Clock.reset();
+				if (OwnedServer) RetiringServer = std::move(OwnedServer);
+				App.Sessions.RetireDisconnected();
+				App.ReturnToMenu();
+				AppPublisher.RequestFullResync();
+			}
 			App.Sessions.Commit(App, [&](SessionCommand Command) {
 				switch (Command) {
 				case SessionCommand::Join:
 				case SessionCommand::StartLocal: {
-					const bool Joining = Command == SessionCommand::Join;
+					const bool Private = App.Sessions.StartingPrivateServer();
+					if (Command == SessionCommand::Join && Package.Inspection.Target &&
+						Package.Inspection.Audience != PackageAudience::DistributedPlayer)
+						throw SessionAdmissionFailure::UnsupportedTopology;
+					const bool Joining = Command == SessionCommand::Join || Private;
+					if (Private && RetiringServer) return false;
+					if (Private && !PrivateServer) throw SessionAdmissionFailure::UnsupportedTopology;
 					if (PreparingSession) {
 						if (StorageAdmission) {
 							PreparingSession->Script->GetPersistenceRuntime()->Pump();
@@ -140,31 +212,64 @@ namespace gargantuan::host {
 						if (Joining) {
 #if defined(GARGANTUAN_WITH_GNS)
 							if (!Connection) {
-								const auto Endpoint = ParseEndpoint(App.Sessions.GetJoinAddress());
+								if (Private) {
+									if (!PrivatePackageReady.valid())
+										PrivatePackageReady = std::async(std::launch::async, &PrivateServerSnapshot::Stage,
+											PrivateServer->Root, PrivateServer->Manifest, Package.Inspection, Profile, PackageCopy).share();
+									if (!OwnedServer) {
+										if (PrivatePackageReady.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return false;
+										std::shared_ptr<PrivateServerSnapshot> Snapshot;
+										try { Snapshot = PrivatePackageReady.get(); }
+										catch (const std::exception &) { PrivatePackageReady = {}; throw SessionAdmissionFailure::NotAuthorized; }
+										OwnedServer = std::make_unique<PrivateServerProcess>(std::move(Snapshot), *PrivateServer, Profile, App.Sessions.GetStartingSlot());
+									}
+									PrivateGrant = OwnedServer->PollListening();
+									if (!PrivateGrant) return false;
+								}
+								const auto Endpoint = Private ? std::optional(PrivateGrant->Endpoint) : ParseEndpoint(App.Sessions.GetJoinAddress());
 								if (!Endpoint) throw SessionAdmissionFailure::InvalidOptions;
-								if (Package.Inspection.Configuration != PackageConfiguration::Development ||
-									!network::IsLoopbackTransportEndpoint(*Endpoint) || Package.SpatialContent)
+								if (!Private && PinnedLaunch) {
+									if (!Admission || App.Sessions.InvitationExpired() || Endpoint->Host != Admission->Endpoint.Host || Endpoint->Port != Admission->Endpoint.Port)
+										throw SessionAdmissionFailure::NotAuthorized;
+								} else if (!Private && (Package.Inspection.Configuration != PackageConfiguration::Development ||
+									!network::IsLoopbackTransportEndpoint(*Endpoint))) throw SessionAdmissionFailure::UnsupportedTopology;
+								if (Package.SpatialContent || (PinnedLaunch && !Package.TerrainArtifacts.empty()))
 									throw SessionAdmissionFailure::UnsupportedTopology;
-								ClientSources = PackageBuilder::LoadWorld(Package, Root);
+								if (Package.Inspection.Audience != PackageAudience::DistributedPlayer)
+									ClientSources = PackageBuilder::LoadWorld(Package, Root);
 								Connection = std::make_unique<network::GameSession>(std::make_shared<network::GameNetworkingSocketsTransport>(),
-									ConfigurePackagedClient(Package, ClientSources, *Endpoint, !Package.TerrainArtifacts.empty()));
-								if (!Connection->Start().Succeeded()) throw SessionAdmissionFailure::Disconnected;
+									ConfigurePackagedClient(Package, ClientSources, *Endpoint, !Package.TerrainArtifacts.empty(), 0, false, Private ? PrivateGrant : Admission));
+								if (Private) PrivateGrant.reset();
+								else { Admission.reset(); App.Sessions.ConsumeInvitation(); }
+								if (!Connection->Start().Succeeded()) {
+									std::clog << "[Lifecycle:Connection] Transport startup failed\n";
+									throw SessionAdmissionFailure::Disconnected;
+								}
 							}
 							(void)Connection->Poll();
 							Connection->Step(++HandshakeTick);
-							if (Connection->GetStatus() == network::GameSessionStatus::Failed) throw SessionAdmissionFailure::Disconnected;
+							if (Connection->GetStatus() == network::GameSessionStatus::Failed) {
+								std::clog << "[Lifecycle:Connection] Admission failed: " << Connection->GetFailure() << '\n';
+								throw SessionAdmissionFailure::Disconnected;
+							}
 							if (HandshakeTick >= network::DefaultGameSessionHandshakeTimeoutTicks) throw SessionAdmissionFailure::TimedOut;
 							PreparingWorld = Connection->GetClientDataModel();
 							if (!PreparingWorld) return false;
 							auto Assets = std::dynamic_pointer_cast<AssetService>(PreparingWorld->GetService("AssetService"));
 							Assets->LoadRuntimeAssetSnapshot(Package.Assets);
-							(void)PackageBuilder::HydrateClientCode(ClientSources, PreparingWorld);
+							if (Package.Inspection.Audience == PackageAudience::DistributedPlayer)
+								(void)PackageBuilder::HydrateDistributedClientCode(Package, PreparingWorld);
+							else (void)PackageBuilder::HydrateClientCode(ClientSources, PreparingWorld);
 							ClientSources.reset();
 #else
 							throw SessionAdmissionFailure::UnsupportedTopology;
 #endif
-						} else PreparingWorld = PackageBuilder::LoadWorld(Package, Root);
-						if (const auto *Slot = App.Sessions.GetStartingSlot()) {
+						} else {
+							if (Package.Inspection.Audience == PackageAudience::DistributedPlayer)
+								throw SessionAdmissionFailure::UnsupportedTopology;
+							PreparingWorld = PackageBuilder::LoadWorld(Package, Root);
+						}
+						if (const auto *Slot = App.Sessions.GetStartingSlot(); Slot && !Joining) {
 							Writer = std::make_unique<WorldWriter>(Profile,
 								*ProjectId::Parse(Slot->SaveId));
 							auto Service = std::dynamic_pointer_cast<WorldSaveService>(PreparingWorld->GetService("WorldSaveService"));
@@ -182,15 +287,16 @@ namespace gargantuan::host {
 					Providers.DeferStartup = true;
 					Providers.Mode = Joining ? RuntimeMode::NetworkClient : RuntimeMode::Offline;
 					Providers.AdmitNetworkTerrain = Joining && !Package.TerrainArtifacts.empty();
-					if (const auto *Slot = App.Sessions.GetStartingSlot()) {
+					if (const auto *Slot = App.Sessions.GetStartingSlot(); Slot && !Joining) {
 						Providers.Persistence = MakeDurableLocalPersistenceProvider({
 							.Path = Profile / (Slot->SaveId + ".sqlite"),
-							.ProfileId = Package.Inspection.Identity.ToString() + "/" + Slot->WorldId, .CreateIfMissing = false});
+							.ProfileId = Package.Inspection.Identity.ToString() + "/" + Slot->WorldId, .CreateIfMissing = false, .RecordWorldWrites = true});
 						if (!Providers.Persistence) throw std::runtime_error("[Lifecycle:Storage] World writer unavailable");
 					}
 					if (!Joining) Providers.Content = PackageBuilder::GetLocalContentConfiguration(Package, Root, ContentResidencyMode::FullyResident);
 					auto NewSession = std::make_unique<Engine>(PreparingWorld, NewSurface.get(), nullptr, std::move(Providers));
-					if (App.Sessions.GetStartingSlot()) StorageAdmission = NewSession->Script->GetPersistenceRuntime()->Submit({
+					if (const auto Storage = NewSession->Script->GetPersistenceRuntime()) Storage->TrackSessionWrites();
+					if (!Joining && App.Sessions.GetStartingSlot()) StorageAdmission = NewSession->Script->GetPersistenceRuntime()->Submit({
 						.Store = "WorldAdmission", .Key = "Profile"});
 					NewSession->SetDevelopmentClock([NewClock] { return NewClock->Now(); });
 					Surface = std::move(NewSurface);
@@ -200,23 +306,16 @@ namespace gargantuan::host {
 					return false;
 				}
 				case SessionCommand::Leave: {
-					if (UncertainWrite) throw SessionAdmissionFailure::UnknownOutcome;
-					if (const auto Storage = Session->Script->GetPersistenceRuntime()) {
-						if (!ClosingWrites) ClosingWrites = Storage->GetPendingWrites();
-						Storage->Pump();
-						bool Failed = false;
-						for (const auto &Write : *ClosingWrites) {
-							const auto Status = Write->Poll().Status;
-							if (Status == PersistenceStatus::Pending) return false;
-							UncertainWrite |= Status == PersistenceStatus::UnknownOutcome;
-							Failed |= Status != PersistenceStatus::Ok;
-						}
-						if (UncertainWrite) throw SessionAdmissionFailure::UnknownOutcome;
-						if (Failed) throw SessionAdmissionFailure::SaveFailed;
-					}
+					Draining = true;
+					const auto Status = Drain(Session.get());
+					if (Status == PersistenceStatus::Pending) return false;
+					if (Status == PersistenceStatus::UnknownOutcome) throw SessionAdmissionFailure::UnknownOutcome;
+					if (Status != PersistenceStatus::Ok) throw SessionAdmissionFailure::SaveFailed;
+					if (OwnedServer && !OwnedServer->Leave()) return false;
 					ReleaseGameplayInput();
 					StopConnection();
 					Session.reset();
+					OwnedServer.reset();
 					Writer.reset();
 					Surface.reset();
 					Clock.reset();
@@ -226,6 +325,21 @@ namespace gargantuan::host {
 				}
 				case SessionCommand::Pause:
 				case SessionCommand::Resume:
+					if (OwnedServer) {
+						if (!ChangingHold) {
+							ReleaseGameplayInput();
+							Clock->SetHeld(SimulationTimeline::Hold::Gameplay, true);
+							Session->Audio->SetPlaybackHeld(true);
+							ChangingHold = true;
+						}
+						try {
+							if (!OwnedServer->ApplyHold(Command == SessionCommand::Pause)) return false;
+						} catch (SessionAdmissionFailure) {
+							LostControl = true;
+							return false;
+						}
+						ChangingHold = false;
+					}
 					if (Command == SessionCommand::Pause && !App.Sessions.IsPaused())
 						ReleaseGameplayInput();
 					Clock->SetHeld(SimulationTimeline::Hold::Gameplay, Command == SessionCommand::Pause);
@@ -234,17 +348,17 @@ namespace gargantuan::host {
 				}
 				return true;
 			}, DiscardStart);
-			if (ClosingWrites && Session && Clock) {
+			if (Draining && Session && Clock) {
 				const bool Held = App.Sessions.IsPaused() || App.Sessions.IsLeaving();
 				Clock->SetHeld(SimulationTimeline::Hold::Gameplay, Held);
 				Session->Audio->SetPlaybackHeld(Held);
 			}
-			if (!App.Sessions.IsLeaving()) ClosingWrites.reset();
+			if (!App.Sessions.IsLeaving()) Draining = false;
 			if (App.GameplayInputReleasePending) ReleaseGameplayInput();
-			if (App.QuitRequested) return 0;
+			if (App.QuitRequested) continue;
 			RenderPublicationPtr Gameplay;
 			App.FlushPresentation();
-			if (Session && !App.Sessions.IsPaused() && !App.Sessions.IsLeaving()) {
+			if (Session && !ChangingHold && !App.Sessions.IsPaused() && !App.Sessions.IsLeaving()) {
 				if (Connection) (void)Connection->Poll();
 				const auto Closed = [&] {
 					return Connection && (Connection->GetStatus() == network::GameSessionStatus::Closed ||
@@ -258,31 +372,34 @@ namespace gargantuan::host {
 						ReleaseGameplayInput();
 						StopConnection();
 						Session.reset(); Surface.reset(); Clock.reset();
+						if (OwnedServer) RetiringServer = std::move(OwnedServer);
 						App.Sessions.RetireDisconnected();
 						App.ReturnToMenu();
 						AppPublisher.RequestFullResync();
 					continue;
 				}
 				Gameplay = Surface->TakeLastPublication();
-				if (!Session->ProcessService->Alive) return Session->ProcessService->ExitCode;
+				if (!Session->ProcessService->Alive) {
+					ExitCode = Session->ProcessService->ExitCode;
+					App.QuitRequested = true;
+				}
 			} else if (Session) {
-				if (Session->Content) Session->Content->Step();
+				if (OwnedServer && Connection) (void)Connection->PollPrivateHold();
+				if (Session->Content) Session->Content->Step(false);
 				if (const auto Storage = Session->Script->GetPersistenceRuntime()) Storage->Pump();
 			}
 			if (Gameplay && Gameplay->FullResync) AppPublisher.RequestFullResync();
 			if (const auto Command = App.Gui.SynchronizeTextInput()) Platform.Apply(*Command);
 			App.Gui.Publish(AppPublisher);
 			const auto AppFrame = AppPublisher.PublishPresentation(Width, Height);
-			const auto Submitted = Graphics ? Graphics->GetMetrics().FramesSubmitted : 0;
+			const auto Submitted = Graphics ? Graphics->GetSubmittedFrames() : 0;
 			Device.Draw(Display.Compose(Gameplay, *AppFrame, Session != nullptr));
 			const auto Receipt = App.Gui.GetApplicationFrame();
-			if ((!Graphics || Graphics->GetMetrics().FramesSubmitted != Submitted) && App.Gui.AcknowledgeApplicationFrame(Receipt)) {
+			if ((!Graphics || Graphics->GetSubmittedFrames() != Submitted) && App.Gui.AcknowledgeApplicationFrame(Receipt)) {
 				if (Receipt != Displayed) DisplayedSince = SDL_GetTicksNS();
 				Displayed = Receipt;
 			}
 			SDL_Delay(16);
 		}
-		std::cout << "[Lifecycle:Player] Reached requested frame limit\n";
-		return 0;
 	}
 }

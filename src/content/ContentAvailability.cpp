@@ -1228,6 +1228,10 @@ namespace gargantuan {
 	ContentAvailabilityService::~ContentAvailabilityService() { Stop(); }
 
 	void ContentAvailabilityService::Step() {
+		Step(true);
+	}
+
+	void ContentAvailabilityService::Step(bool AllowWorldPublication) {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::ContentStep);
 		if (!State || State->Stopped) return;
 		DurationScope StepDuration(State->Metrics.Timing.Step);
@@ -1335,7 +1339,7 @@ namespace gargantuan {
 		Completed.clear();
 
 		State->StartRequests();
-		if (!State->Manifest) return;
+		if (!State->Manifest || !AllowWorldPublication) return;
 		std::size_t Units = 0;
 		std::size_t Objects = 0;
 		std::size_t Bytes = 0;

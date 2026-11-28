@@ -1173,7 +1173,7 @@ namespace gargantuan {
 			return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t *>(Root.get())));
 		}
 
-		std::shared_ptr<IPersistenceProvider> OpenPersistentPlayStorage(const Project &ProjectValue, bool Create) {
+		DurableLocalPersistenceConfiguration GetPlayStorageConfiguration(const Project &ProjectValue, bool Create) {
 			const auto CanonicalProjectRoot = std::filesystem::canonical(ProjectValue.Root);
 			const auto ProjectRoot = Paths::ToUtf8(CanonicalProjectRoot);
 			const auto Identity = ProjectValue.Identity.ToString();
@@ -1190,12 +1190,44 @@ namespace gargantuan {
 			if (Create) std::filesystem::create_directory(Directory);
 			else if (!std::filesystem::exists(std::filesystem::symlink_status(Directory))) return {};
 			RequirePlainPlayStorageDirectory(Directory);
-			return MakeDurableLocalPersistenceProvider({
+			return {
 				.Path = Directory / (Identity + "-" + Digest + ".sqlite3"),
 				.ProfileId = Identity + ":" + ProjectRoot,
 				.Limits = {},
 				.CreateIfMissing = Create,
-			});
+			};
+		}
+
+		std::shared_ptr<IPersistenceProvider> OpenPersistentPlayStorage(const Project &ProjectValue, bool Create) {
+			return MakeDurableLocalPersistenceProvider(GetPlayStorageConfiguration(ProjectValue, Create));
+		}
+
+		PlaySession::WorldStorage GetPlayWorldStorage(const Project &ProjectValue, const std::string &Mode) {
+			PlaySession::WorldStorage Storage;
+			if (Mode == "Disposable") {
+				using Providers = std::map<std::string, std::shared_ptr<IPersistenceProvider>>;
+				Storage.Catalog = MakeMemoryPersistenceProvider();
+				Storage.Open = [Slots = std::make_shared<Providers>()](const WorldSlot &Slot, bool Create) {
+					auto Found = Slots->find(Slot.WorldId);
+					if (Found != Slots->end()) return Found->second;
+					if (!Create) return std::shared_ptr<IPersistenceProvider>{};
+					return Slots->emplace(Slot.WorldId, MakeMemoryPersistenceProvider()).first->second;
+				};
+			} else if (Mode == "Persistent") {
+				auto Config = GetPlayStorageConfiguration(ProjectValue, true);
+				auto Directory = Config.Path;
+				Directory.replace_extension(".worlds");
+				std::filesystem::create_directory(Directory);
+				RequirePlainPlayStorageDirectory(Directory);
+				Storage.Directory = Directory;
+				Config.Path = Directory / "catalog.sqlite";
+				Storage.Catalog = MakeDurableLocalPersistenceProvider(Config);
+				Storage.Open = [Directory, Identity = ProjectValue.Identity.ToString()](const WorldSlot &Slot, bool Create) {
+					return MakeDurableLocalPersistenceProvider({.Path = Directory / (Slot.SaveId + ".sqlite"),
+						.ProfileId = Identity + "/" + Slot.WorldId, .CreateIfMissing = Create, .RecordWorldWrites = true});
+				};
+			}
+			return Storage;
 		}
 
 		Json EncodePlayStorageDocument(const PersistenceDocumentValue &Value) {
@@ -2354,7 +2386,8 @@ namespace gargantuan {
 					const auto Open = [Snapshot, Id, Format = CurrentProject->InstanceFileFormat, Root = CurrentProject->Root,
 						ProjectIdentity = CurrentProject->Identity, EnableAudio = AudioEnabled && !DebugSourceId,
 						ScriptSources = std::move(ScriptSources), Persistence, Lifecycle = !Entry.empty()]
-						(std::uint32_t Width, std::uint32_t Height, std::shared_ptr<IAudioOutput> Output) {
+						(std::uint32_t Width, std::uint32_t Height, std::shared_ptr<IAudioOutput> Output, const WorldSlot *Slot,
+						 std::shared_ptr<IPersistenceProvider> Selected) {
 						const auto Reader = terrain::BudgetDocumentTerrainReads(
 							[Snapshot](const terrain::TerrainArtifactId &Artifact, std::size_t Maximum) {
 								const auto Artifacts = Snapshot->Terrain ? std::span<const terrain::TerrainArtifact>(Snapshot->Terrain->Artifacts)
@@ -2373,18 +2406,24 @@ namespace gargantuan {
 							Id, Lifecycle ? Snapshot->Contents : std::move(Snapshot->Contents), Format,
 							Root, Width,
 							Height, Snapshot->Revision, Lifecycle ? Snapshot->Assets : std::move(Snapshot->Assets),
-							EnableAudio, Persistence, AdmitTerrain, ScriptSources, AdmitDomains,&Snapshot->GridSegments, std::move(Output), Lifecycle
+							EnableAudio, Slot ? Selected : Persistence, AdmitTerrain, ScriptSources, AdmitDomains,&Snapshot->GridSegments, std::move(Output), Lifecycle, Slot
 						);
 					};
 					const auto Width = ViewportWidth ? ViewportWidth : 720;
 					const auto Height = ViewportHeight ? ViewportHeight : 540;
 					std::unique_ptr<PlaySession> NewPlaySession;
-					if (Entry.empty()) NewPlaySession = Open(Width, Height, {});
+					if (Entry.empty()) NewPlaySession = Open(Width, Height, {}, nullptr, {});
 					else {
 						auto Template = application_template::Extract(Snapshot->Contents, Entry);
+						auto Storage = GetPlayWorldStorage(*CurrentProject, PersistenceMode);
+						const auto Hash = [](const std::string &Bytes) {
+							return AssetContentId::Hash(std::span(reinterpret_cast<const std::uint8_t *>(Bytes.data()), Bytes.size())).ToString();
+						};
+						Storage.Baseline = Hash(Snapshot->Contents) + "/" + Hash(Snapshot->Assets.CatalogJson) +
+							"/" + Hash(ActivePreRunSource.value_or(""));
 						auto Assets = std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
 						NewPlaySession = std::make_unique<PlaySession>(Id, Snapshot->Revision, Width, Height,
-							std::move(Template), Assets->CaptureRuntimeAssets(), AudioEnabled, Open);
+							std::move(Template), Assets->CaptureRuntimeAssets(), AudioEnabled, Open, std::move(Storage));
 					}
 					AdvanceViewportGeneration();
 					ActivePlaySession = std::move(NewPlaySession);
@@ -2497,6 +2536,16 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PlaySessionId is invalid"));
 				if (!ActivePlaySession || ActivePlaySession->GetId().Value != Id->Value)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "StalePlaySession", "PlaySessionId is not the active owned session"));
+				// The caller already waits for Stop asynchronously. Bound this final
+				// local commit and keep the sandbox/writer alive on an uncertain result.
+				const auto Deadline = PersistenceClock::now() + PersistenceRuntime::MaximumDeadline;
+				auto Save = ActivePlaySession->PrepareStop();
+				while (Save == PersistenceStatus::Pending && PersistenceClock::now() < Deadline) {
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+					Save = ActivePlaySession->PrepareStop();
+				}
+				if (Save != PersistenceStatus::Ok)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySaveIncomplete", GetPersistenceStatusName(Save)));
 				ActivePlaySession->Stop();
 				auto Diagnostics = ActivePlaySession->DrainDiagnostics();
 				LastPlaySessionId = *Id;

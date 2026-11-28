@@ -5,6 +5,7 @@
 #pragma once
 
 #include "gargantuan/Engine.hpp"
+#include "gargantuan/runtime/WorldCatalog.hpp"
 #include "gargantuan/assets/AssetTypes.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/filesystem/ProjectIdentity.hpp"
@@ -105,12 +106,19 @@ namespace gargantuan {
 			const InstanceSerialization::DomainTerrainAdmission &AdmitDomains = {},
 			const blockgrid::SegmentMap* GridSegments=nullptr,
 			std::shared_ptr<IAudioOutput> SharedAudio = {},
-			bool ApplicationChild = false
+			bool ApplicationChild = false, const WorldSlot *Slot = nullptr
 		);
 		using WorldFactory = std::function<std::unique_ptr<PlaySession>(
-			std::uint32_t, std::uint32_t, std::shared_ptr<IAudioOutput>)>;
+			std::uint32_t, std::uint32_t, std::shared_ptr<IAudioOutput>, const WorldSlot *,
+			std::shared_ptr<IPersistenceProvider>)>;
+		struct WorldStorage {
+			std::shared_ptr<IPersistenceProvider> Catalog;
+			WorldCatalog::SlotProvider Open;
+			std::string Baseline;
+			std::filesystem::path Directory;
+		};
 		PlaySession(PlaySessionId Id, std::uint64_t Revision, std::uint32_t Width, std::uint32_t Height,
-			std::string Template, AssetRuntimeSnapshot Assets, bool AudioEnabled, WorldFactory Open);
+			std::string Template, AssetRuntimeSnapshot Assets, bool AudioEnabled, WorldFactory Open, WorldStorage Storage);
 		void AcknowledgePresentation(RenderPublicationId Publication);
 		[[nodiscard]] const ApplicationPresentation *GetApplication() const;
 		~PlaySession();
@@ -121,6 +129,7 @@ namespace gargantuan {
 		void Step();
 		void Resize(std::uint32_t Width, std::uint32_t Height);
 		[[nodiscard]] HostEventResult ProcessEvent(const HostEvent &Event);
+		[[nodiscard]] PersistenceStatus PrepareStop();
 		void Stop();
 		[[nodiscard]] std::vector<PlayDiagnostic> DrainDiagnostics();
 		[[nodiscard]] std::vector<RenderPublicationPtr> TakeRenderPublications();

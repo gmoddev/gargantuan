@@ -49,6 +49,10 @@ namespace gargantuan {
 			std::chrono::milliseconds Timeout = DefaultDeadline);
 		void Pump();
 		[[nodiscard]] std::vector<std::shared_ptr<PersistenceHandle>> GetPendingWrites() const;
+		// Suspend authored ticks while polling. Only an exclusive local writer
+		// may use a read-back of the requested postcondition for recovery.
+		[[nodiscard]] PersistenceStatus PollWriteDrain(bool ExclusiveLocal = false);
+		void TrackSessionWrites();
 		void Shutdown();
 
 	private:

@@ -137,6 +137,7 @@ namespace gargantuan {
 
 	[[nodiscard]] bool IsRuntimePackageCryptoAvailable() noexcept;
 	[[nodiscard]] RuntimePackageCryptoStatus GenerateRuntimePackageReleaseSalt(std::array<unsigned char, 32> &Output);
+	[[nodiscard]] RuntimePackageCryptoStatus GenerateSecureRandomBytes(std::array<unsigned char, 32> &Output);
 	[[nodiscard]] RuntimePackageCryptoStatus
 	GetRuntimePackagePublicKey(const RuntimePackageSecret &Seed, RuntimePackagePublicKey &Output);
 	[[nodiscard]] RuntimePackageCryptoStatus SignRuntimePackageManifest(

@@ -6,6 +6,8 @@
 #include "gargantuan/runtime/SimulationTimeline.hpp"
 #include "gargantuan/runtime/ApplicationPresentation.hpp"
 #include "gargantuan/render/ApplicationDisplay.hpp"
+#include "gargantuan/services/WorldSaveService.hpp"
+#include "runtime/WorldWriter.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
 #include "packaging/ApplicationTemplate.hpp"
 
@@ -60,6 +62,12 @@ namespace gargantuan {
 	struct PlaySession::PlayApplication {
 		std::unique_ptr<ApplicationPresentation> Presentation;
 		WorldFactory Open;
+		WorldStorage Storage;
+		std::weak_ptr<DataModel> Graph;
+		std::unique_ptr<host::WorldWriter> Writer;
+		std::shared_ptr<IPersistenceProvider> Selected;
+		std::unique_ptr<PersistenceRuntime> Opening;
+		std::shared_ptr<PersistenceHandle> Admission;
 		std::unique_ptr<PlaySession> Child;
 		RenderPublisher Publisher;
 		ApplicationDisplay Display;
@@ -71,7 +79,7 @@ namespace gargantuan {
 	};
 
 	PlaySession::PlaySession(PlaySessionId SessionId, std::uint64_t Revision, std::uint32_t Width, std::uint32_t Height,
-		std::string Template, AssetRuntimeSnapshot Assets, bool AudioEnabled, WorldFactory Open)
+		std::string Template, AssetRuntimeSnapshot Assets, bool AudioEnabled, WorldFactory Open, WorldStorage Storage)
 		: Id(SessionId), State(PlaySessionState::Starting), LaunchAuthoringRevision(Revision) {
 		auto Graph = application_template::Load(Template);
 		auto Service = std::dynamic_pointer_cast<AssetService>(Graph.World->GetService("AssetService"));
@@ -79,15 +87,19 @@ namespace gargantuan {
 		Application = std::make_unique<PlayApplication>();
 		auto &App = *Application;
 		App.Open = std::move(Open);
+		App.Storage = std::move(Storage);
+		App.Graph = Graph.World;
 		App.Width = Width;
 		App.Height = Height;
 		App.Presentation = std::make_unique<ApplicationPresentation>(Graph.World, Graph.Entry,
 			Paths::GetExecutableDirectory() / "runtime" / "GargantuanSans.ttf",
 			[this](std::string Level, std::string Message) { AddDiagnostic(std::move(Level), "Application", std::move(Message)); },
-			AudioEnabled);
+			AudioEnabled, [&App, World = Graph.World](ApplicationSession &Sessions) {
+				if (App.Storage.Open) Sessions.ConfigureCatalog(App.Storage.Catalog, World, App.Storage.Baseline, App.Storage.Open);
+			});
 		if (!App.Presentation->HasMainMenu()) {
 			App.Presentation.reset();
-			App.Child = App.Open(Width, Height, {});
+			App.Child = App.Open(Width, Height, {}, nullptr, {});
 		}
 		State = PlaySessionState::Running;
 		Step();
@@ -109,17 +121,53 @@ namespace gargantuan {
 			const auto Now = std::chrono::steady_clock::now();
 			Menu->Step(std::chrono::duration<float>(Now - App.Last).count());
 			App.Last = Now;
-			if (Menu->QuitRequested) { Stop(); return; }
+			if (Menu->QuitRequested) {
+				const auto Result = PrepareStop();
+				if (Result == PersistenceStatus::Ok) Stop();
+				else if (Result != PersistenceStatus::Pending) {
+					Menu->QuitRequested = false;
+					AddDiagnostic("Error", "Application", std::string("World save during Quit: ") + GetPersistenceStatusName(Result));
+				}
+				return;
+			}
 			Menu->Sessions.PumpCatalog(*Menu);
 			Menu->Sessions.Commit(*Menu, [&](SessionCommand Command) {
 				switch (Command) {
-				case SessionCommand::StartLocal:
+				case SessionCommand::StartLocal: {
+					if (Menu->Sessions.StartingPrivateServer()) throw SessionAdmissionFailure::UnsupportedTopology;
 					if (!std::exchange(App.Preparing, true)) return false;
-					App.Child = App.Open(App.Width, App.Height, Menu->GetAudioOutput());
+					const auto *Slot = Menu->Sessions.GetStartingSlot();
+					if (Slot && !App.Selected) {
+						if (!App.Storage.Directory.empty()) App.Writer = std::make_unique<host::WorldWriter>(
+							App.Storage.Directory, *ProjectId::Parse(Slot->SaveId));
+						App.Selected = App.Storage.Open(*Slot, false);
+						if (!App.Selected) throw SessionAdmissionFailure::Unavailable;
+						App.Opening = std::make_unique<PersistenceRuntime>(App.Selected, App.Graph);
+						App.Admission = App.Opening->Submit({.Store = "WorldAdmission", .Key = "Profile"});
+					}
+					if (App.Admission) {
+						App.Opening->Pump();
+						const auto Status = App.Admission->Poll().Status;
+						if (Status == PersistenceStatus::Pending) return false;
+						if (Status != PersistenceStatus::Ok && Status != PersistenceStatus::Missing)
+							throw SessionAdmissionFailure::Unavailable;
+						App.Admission.reset();
+						App.Opening.reset();
+					}
+					App.Child = App.Open(App.Width, App.Height, Menu->GetAudioOutput(), Slot, App.Selected);
 					App.Preparing = false;
 					break;
+				}
 				case SessionCommand::Leave:
+					if (auto Storage = App.Child->RuntimeEngine->Script->GetPersistenceRuntime()) {
+						const auto Status = Storage->PollWriteDrain(App.Selected != nullptr);
+						if (Status == PersistenceStatus::Pending) return false;
+						if (Status == PersistenceStatus::UnknownOutcome) throw SessionAdmissionFailure::UnknownOutcome;
+						if (Status != PersistenceStatus::Ok) throw SessionAdmissionFailure::SaveFailed;
+					}
 					App.Child.reset();
+					App.Selected.reset();
+					App.Writer.reset();
 					Menu->ReturnToMenu();
 					App.Publisher.RequestFullResync();
 					break;
@@ -135,17 +183,25 @@ namespace gargantuan {
 				case SessionCommand::Join: throw SessionAdmissionFailure::UnsupportedTopology;
 				}
 				return true;
-			}, [&] { App.Preparing = false; App.Child.reset(); });
+			}, [&] {
+				App.Preparing = false;
+				App.Admission.reset();
+				App.Opening.reset();
+				App.Child.reset();
+				App.Selected.reset();
+				App.Writer.reset();
+			});
 			if (Menu->GameplayInputReleasePending) {
 				if (App.Child) (void)App.Child->ProcessEvent(FocusEvent{false});
 				Menu->GameplayInputReleasePending = false;
 			}
-			if (Menu->QuitRequested) { Stop(); return; }
+			if (Menu->QuitRequested) return;
 		}
+		if (Menu) Menu->FlushPresentation();
 		bool PublishedGame = false;
 		if (App.Child) {
 			auto &Child = *App.Child;
-			if (!Menu || !Menu->Sessions.IsPaused()) Child.Step();
+			if (!Menu || (!Menu->Sessions.IsPaused() && !Menu->Sessions.IsLeaving())) Child.Step();
 			else if (auto Storage = Child.RuntimeEngine->Script->GetPersistenceRuntime()) Storage->Pump();
 			for (auto &Diagnostic : Child.DrainDiagnostics())
 				AddDiagnostic(std::move(Diagnostic.Severity), std::move(Diagnostic.Category),
@@ -162,7 +218,6 @@ namespace gargantuan {
 			}
 		}
 		if (!Menu) return;
-		Menu->FlushPresentation();
 		if (!PublishedGame) {
 			Menu->Gui.Publish(App.Publisher);
 			QueuePublication(App.Display.Compose({}, *App.Publisher.PublishPresentation(App.Width, App.Height), App.Child != nullptr));
@@ -239,7 +294,7 @@ namespace gargantuan {
 		const InstanceSerialization::TerrainSceneAdmission &AdmitTerrain,
 		PlayScriptSources Sources,
 		const InstanceSerialization::DomainTerrainAdmission &AdmitDomains,const blockgrid::SegmentMap* GridSegments,
-		std::shared_ptr<IAudioOutput> SharedAudio, bool ApplicationChild
+		std::shared_ptr<IAudioOutput> SharedAudio, bool ApplicationChild, const WorldSlot *Slot
 	) : Id(SessionId), State(PlaySessionState::Starting), LaunchAuthoringRevision(AuthoringRevision) {
 		if (Id.Value == 0 || AuthoringRevision == 0) throw std::invalid_argument("Play session identity and revision must be nonzero");
 		std::istringstream Input(std::move(LaunchContents));
@@ -278,6 +333,7 @@ namespace gargantuan {
 				}
 			}
 		}
+		if (Slot) std::dynamic_pointer_cast<WorldSaveService>(RuntimeWorld->GetService("WorldSaveService"))->BindSlot(*Slot);
 		RuntimeWorld->MarkPersistenceSubtreeArchivable();
 		RuntimeWorld->Root = std::move(ProjectRoot);
 		auto RuntimeAssets = std::dynamic_pointer_cast<AssetService>(RuntimeWorld->GetService("AssetService"));
@@ -304,6 +360,9 @@ namespace gargantuan {
 		if (Sources.DebugSourceId) {
 			if (!DebugTarget || !RuntimeEngine->Script->ArmRootScriptDebug(DebugTarget))
 				throw std::invalid_argument("[Editor:PlayDebugger] Script cannot start as a managed local root");
+		}
+		if (ApplicationChild) {
+			if (auto Storage = RuntimeEngine->Script->GetPersistenceRuntime()) Storage->TrackSessionWrites();
 		}
 		if (ApplicationChild || Sources.DebugSourceId) {
 			DebugClock = std::make_shared<SimulationTimeline>();
@@ -448,6 +507,12 @@ namespace gargantuan {
 			DebugPendingResize = WindowResizeEvent{Width, Height};
 		} else (void)ProcessEvent(WindowResizeEvent{Width, Height});
 		RequestRenderFullResync();
+	}
+
+	PersistenceStatus PlaySession::PrepareStop() {
+		if (!Application || !Application->Child || !Application->Child->RuntimeEngine) return PersistenceStatus::Ok;
+		const auto Storage = Application->Child->RuntimeEngine->Script->GetPersistenceRuntime();
+		return Storage ? Storage->PollWriteDrain(Application->Selected != nullptr) : PersistenceStatus::Ok;
 	}
 
 	void PlaySession::Stop() {

@@ -18,16 +18,31 @@ namespace gargantuan {
 	class IPersistenceProvider;
 	enum class SessionCommand { StartLocal, Join, Leave, Pause, Resume };
 	enum class SessionAdmissionFailure { UnsupportedTopology, Unavailable, Disconnected, TimedOut, InvalidOptions,
-		SaveFailed, UnknownOutcome };
+		SaveFailed, UnknownOutcome, Incompatible, NotAuthorized };
 	struct WorldInUse final : std::runtime_error {
 		WorldInUse() : std::runtime_error("Another session owns this world") {}
 	};
 
+	struct SessionInvitation {
+		std::string Source, Id, Name, Address;
+		std::chrono::steady_clock::time_point Expires;
+	};
+
 	class ApplicationSession final {
 	  public:
+		using CatalogSetup = std::function<void(ApplicationSession &)>;
+		explicit ApplicationSession(CatalogSetup Setup = {}) : Setup(std::move(Setup)) {}
+		[[nodiscard]] bool HasCurrentInvitation() const {
+			return Invitation && !InvitationConsumed && std::chrono::steady_clock::now() < Invitation->Expires;
+		}
+		void SetInvitation(std::optional<SessionInvitation> Value) { Invitation = std::move(Value); }
+		[[nodiscard]] bool InvitationExpired() const { return Invitation && !HasCurrentInvitation(); }
+		void ConsumeInvitation() { InvitationConsumed = true; }
+		static int FindServers(lua_State *L, Instance *Receiver);
 		using Executor = std::function<bool(SessionCommand)>;
 		[[nodiscard]] bool IsActive() const { return Active; }
 		[[nodiscard]] bool IsPaused() const { return Active && Paused; }
+		[[nodiscard]] bool StartingPrivateServer() const;
 		[[nodiscard]] bool IsLeaving() const;
 		[[nodiscard]] const WorldSlot *GetStartingSlot() const;
 		[[nodiscard]] std::string_view GetJoinAddress() const;
@@ -41,7 +56,11 @@ namespace gargantuan {
 			std::string Baseline, WorldCatalog::SlotProvider Open);
 		void PumpCatalog(ApplicationPresentation &App);
 	  private:
+		bool OpenCatalog();
+		CatalogSetup Setup;
 		struct Operation;
+		std::optional<SessionInvitation> Invitation;
+		bool InvitationConsumed = false;
 		std::shared_ptr<Operation> Pending;
 		std::shared_ptr<WorldCatalog> Catalog;
 		std::shared_ptr<Operation> CatalogOperation;
@@ -49,6 +68,7 @@ namespace gargantuan {
 		std::uint64_t Generation = 0;
 		bool Active = false;
 		bool Remote = false;
+		bool Private = false;
 		bool Disconnected = false;
 		std::string LastEndpoint;
 		bool Paused = false;

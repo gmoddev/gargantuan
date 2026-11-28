@@ -18,6 +18,7 @@ namespace gargantuan {
 
 	namespace {
 		struct WorkerResult final {
+			PersistenceRequest Request;
 			PersistenceResult Result;
 			std::atomic_bool Ready = false;
 		};
@@ -69,6 +70,13 @@ namespace gargantuan {
 		std::weak_ptr<DataModel> World;
 		JobSystem Workers{2, JobSystem::StartPolicy::OnFirstSubmission};
 		std::vector<Entry> Entries;
+		struct UncertainWrite {
+			std::shared_ptr<const PersistenceRequest> Request;
+			std::shared_ptr<WorkerResult> Read;
+		};
+		std::vector<UncertainWrite> Uncertain;
+		std::optional<std::vector<std::shared_ptr<PersistenceHandle>>> Drain;
+		bool Tracking = false;
 		std::string RequestPrefix;
 		std::uint64_t Sequence = 0;
 		bool Stopping = false;
@@ -121,6 +129,8 @@ namespace gargantuan {
 		if (Timeout <= std::chrono::milliseconds::zero() || Timeout > MaximumDeadline ||
 			!IsPersistenceRequestValid(Request)) return Reject(PersistenceStatus::Invalid);
 		if (Runtime->Stopping) return Reject(PersistenceStatus::Cancelled);
+		if (IsPersistenceMutation(Request.Operation) && (Runtime->Drain || !Runtime->Uncertain.empty()))
+			return Reject(PersistenceStatus::Busy);
 		if (!Runtime->Provider) return Reject(PersistenceStatus::Unavailable);
 		const auto Features = Capabilities();
 		if ((Request.Kind == PersistenceStoreKind::KeyValue && !Features.KeyValue) ||
@@ -154,10 +164,10 @@ namespace gargantuan {
 		Request.RequestId = Runtime->RequestPrefix + "-" + std::to_string(++Runtime->Sequence);
 		auto Work = std::make_shared<WorkerResult>();
 		const bool Mutation = IsPersistenceMutation(Request.Operation);
+		Work->Request = std::move(Request);
 		try {
-			Runtime->Workers.Submit([Provider = Runtime->Provider, Work, Request = std::move(Request),
-				Stop = Handle->Stop.get_token()] {
-				Work->Result = ExecuteRequest(*Provider, Request, Stop);
+			Runtime->Workers.Submit([Provider = Runtime->Provider, Work, Stop = Handle->Stop.get_token()] {
+				Work->Result = ExecuteRequest(*Provider, Work->Request, Stop);
 				Work->Ready.store(true, std::memory_order_release);
 			});
 		} catch (...) {
@@ -173,6 +183,48 @@ namespace gargantuan {
 		std::vector<std::shared_ptr<PersistenceHandle>> Pending;
 		for (const auto &Entry : Runtime->Entries) if (Entry.Mutation) Pending.push_back(Entry.Handle);
 		return Pending;
+	}
+
+	void PersistenceRuntime::TrackSessionWrites() {
+		RequireMain();
+		Runtime->Tracking = true;
+	}
+
+	PersistenceStatus PersistenceRuntime::PollWriteDrain(bool ExclusiveLocal) {
+		RequireMain();
+		if (!Runtime->Drain) Runtime->Drain = GetPendingWrites();
+		Pump();
+		bool Failed = false;
+		for (const auto &Write : *Runtime->Drain) {
+			const auto Status = Write->Poll().Status;
+			if (Status == PersistenceStatus::Pending) return Status;
+			Failed |= Status != PersistenceStatus::Ok && Status != PersistenceStatus::UnknownOutcome;
+		}
+		while (ExclusiveLocal && !Runtime->Uncertain.empty()) {
+			auto &Entry = Runtime->Uncertain.back();
+			auto Provider = std::dynamic_pointer_cast<ILocalMutationReceipts>(Runtime->Provider);
+			if (!Provider) break;
+			if (!Entry.Read) {
+				auto Work = std::make_shared<WorkerResult>();
+				auto Id = Entry.Request->RequestId;
+				const auto Deadline = PersistenceClock::now() + MaximumDeadline;
+				Runtime->Workers.Submit([Work, Provider, Id = std::move(Id), Deadline] {
+					try { Work->Result.Status = Provider->ReadCommitReceipt(Id, Deadline); }
+					catch (...) { Work->Result.Status = PersistenceStatus::UnknownOutcome; }
+					Work->Ready.store(true, std::memory_order_release);
+				});
+				Entry.Read = std::move(Work);
+			}
+			if (!Entry.Read->Ready.load(std::memory_order_acquire)) return PersistenceStatus::Pending;
+			if (Entry.Read->Result.Status != PersistenceStatus::Ok) {
+				Entry.Read.reset();
+				break;
+			}
+			Runtime->Uncertain.pop_back();
+		}
+		Runtime->Drain.reset();
+		if (!Runtime->Uncertain.empty()) return PersistenceStatus::UnknownOutcome;
+		return Failed ? PersistenceStatus::Unavailable : PersistenceStatus::Ok;
 	}
 
 	void PersistenceRuntime::Pump() {
@@ -192,6 +244,8 @@ namespace gargantuan {
 			if (Published >= MaximumCompletionsPerStep || !Entry.Work->Ready.load(std::memory_order_acquire))
 				return false;
 			Entry.Handle->Result = std::move(Entry.Work->Result);
+			if (Runtime->Tracking && Entry.Mutation && Entry.Handle->Result.Status == PersistenceStatus::UnknownOutcome)
+				Runtime->Uncertain.push_back({std::shared_ptr<const PersistenceRequest>(Entry.Work, &Entry.Work->Request), {}});
 			if (Entry.Handle->Result.Status != PersistenceStatus::Ok) Entry.Handle->ReleaseReservation();
 			++Published;
 			return true;

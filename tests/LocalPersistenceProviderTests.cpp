@@ -248,10 +248,32 @@ namespace {
 			if (Winner.Record) BeforeRestart = Winner.Record->Revision;
 		}
 
+		// Upgrade an existing populated v1 database inside the verified open.
+		// Receipts distinguish equal payloads and survive destruction of the provider.
+		Configuration.RecordWorldWrites = true;
+		{
+			auto Tracked = MakeDurableLocalPersistenceProvider(Configuration);
+			auto Put = RequestFor(PersistenceOperation::Put, "receipt");
+			Put.RequestId = "world-operation-1";
+			Expect(*Tracked, Put, PersistenceStatus::Ok, "record a world transaction receipt");
+			Put.RequestId = "world-operation-conflict";
+			Put.ExpectedRevision = 0;
+			Expect(*Tracked, Put, PersistenceStatus::Conflict, "identical prior value did not commit this write");
+			auto Delete = RequestFor(PersistenceOperation::Delete, "receipt");
+			Delete.RequestId = "world-operation-2";
+			Expect(*Tracked, Delete, PersistenceStatus::Ok, "record deletion in the same transaction");
+		}
 		Configuration.CreateIfMissing = false;
 		auto Reopened = MakeDurableLocalPersistenceProvider(Configuration);
 		const auto Get = RequestFor(PersistenceOperation::Get, "player", PersistenceStoreKind::Document);
 		CheckDocumentRecord(Expect(*Reopened, Get, PersistenceStatus::Ok, "document survived provider restart"), 2);
+		auto Receipts = std::dynamic_pointer_cast<ILocalMutationReceipts>(Reopened);
+		const auto Deadline = PersistenceClock::now() + std::chrono::seconds(2);
+		Check(Receipts && Receipts->ReadCommitReceipt("world-operation-1", Deadline) == PersistenceStatus::Ok &&
+			Receipts->ReadCommitReceipt("world-operation-2", Deadline) == PersistenceStatus::Ok &&
+			Receipts->ReadCommitReceipt("world-operation-conflict", Deadline) == PersistenceStatus::UnknownOutcome,
+			"reopened transaction receipts identify the committed operations independently of current value");
+
 		const auto Later = Expect(*Reopened, RequestFor(PersistenceOperation::Put, "new"), PersistenceStatus::Ok,
 			"write after restart");
 		Check(Later.Revision > BeforeRestart, "revision is durable across reopen, including deleted records");

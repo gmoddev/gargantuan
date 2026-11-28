@@ -8,6 +8,8 @@
 #include "gargantuan/render/Renderer.hpp"
 
 #include <memory>
+#include <array>
+#include <functional>
 #include <cstdint>
 #include <string>
 
@@ -26,6 +28,9 @@ namespace gargantuan {
 		bool EnableInstancing = false;
 		bool EnableSceneEnvelope = false;
 		bool UseContiguousInstancing = false;
+		// Qualification callback for the pixel at (24,24) of the image submitted
+		// to a real swapchain. Enabling it adds a transfer and GPU fence.
+		std::function<void(std::array<std::uint8_t, 3>)> PresentedPixel;
 	};
 
 	struct SDLRendererMetrics {
@@ -191,6 +196,7 @@ namespace gargantuan {
 		[[nodiscard]] RendererCapabilities GetCapabilities() const override { return {true, true}; }
 		[[nodiscard]] RenderAnimationVisibilityFeedback GetAnimationVisibilityFeedback() const override;
 		[[nodiscard]] std::string GetDriverName() const;
+		[[nodiscard]] std::uint64_t GetSubmittedFrames() const;
 		[[nodiscard]] SDLRendererMetrics GetMetrics() const;
 		void WaitForIdle();
 		[[nodiscard]] std::pair<std::uint32_t, std::uint32_t> GetViewportSize() const override;

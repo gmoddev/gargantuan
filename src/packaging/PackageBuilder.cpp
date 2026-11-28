@@ -23,6 +23,7 @@
 #include "assets/PreparedInstanceSerialization.hpp"
 #include "serialization/JsonCodec.hpp"
 #include "ApplicationTemplate.hpp"
+#include "PrivateServerSnapshot.hpp"
 #include "terrain/ScenePersistence.hpp"
 #include "terrain/TerrainProfile.hpp"
 
@@ -666,10 +667,11 @@ namespace gargantuan {
 					!(*Parsed)["Content"].is_array())
 					throw std::runtime_error("Package manifest shape is invalid");
 				const auto FormatVersion = (*Parsed)["PackageFormatVersion"].get<std::uint64_t>();
-				const bool Managed = FormatVersion == RuntimeDistributionPackageFormatVersion;
-				const bool Standalone = FormatVersion == StandalonePackageFormatVersion;
+				const bool Managed = FormatVersion == RuntimeDistributionPackageFormatVersion || FormatVersion == ManagedApplicationPackageFormatVersion;
+				const bool Standalone = FormatVersion == StandalonePackageFormatVersion || FormatVersion == ManagedApplicationPackageFormatVersion ||
+					FormatVersion == DistributedApplicationPackageFormatVersion;
 				if (Managed) (void)runtime_distribution::ParseStrictJson(Raw, MaximumManifestBytes);
-				const bool Distributed = FormatVersion == DistributedPlayerPackageFormatVersion ||
+				const bool Distributed = FormatVersion == DistributedPlayerPackageFormatVersion || FormatVersion == DistributedApplicationPackageFormatVersion ||
 					(Managed && Parsed->contains("Audience"));
 				if (FormatVersion != 1 && FormatVersion != GamePackageFormatVersion && !Distributed && !Managed && !Standalone)
 					throw std::runtime_error("Package format version is unsupported");
@@ -694,8 +696,11 @@ namespace gargantuan {
 					DisplayName.size() > MaximumDisplayNameBytes || !IsSafeRelativePath(Player) ||
 					!Startup.contains("AssetCatalog") || !Startup["AssetCatalog"].is_string())
 					throw std::runtime_error("Package startup metadata is invalid");
+				if (Standalone && (!IsPlayerExecutable(Player) || !Startup.contains("Application") ||
+					Startup["Application"] != std::string(application_template::Path)))
+					throw std::runtime_error("Application startup binding is invalid");
 				if (Distributed) {
-					if (!IsPlayerExecutable(Player) || Startup.size() != 2 || !Startup.contains("ClientCode") ||
+					if (!IsPlayerExecutable(Player) || Startup.size() != (Standalone ? 3 : 2) || !Startup.contains("ClientCode") ||
 						!Startup["ClientCode"].is_string() ||
 						Startup["ClientCode"].get_ref<const std::string &>() != client_package::CodePath ||
 						Startup["AssetCatalog"].get_ref<const std::string &>() != client_package::CatalogPath)
@@ -802,7 +807,8 @@ namespace gargantuan {
 						 Entry.Category != "Shader" && Entry.Category != "Notice"))
 						throw std::runtime_error("Package content record identity or bounds are invalid");
 					if (Distributed) {
-						const bool ProjectCode = Entry.Path == client_package::CodePath && Entry.Category == "Project";
+						const bool ProjectCode = Entry.Category == "Project" && (Entry.Path == client_package::CodePath ||
+							(Standalone && Entry.Path == application_template::Path));
 						const bool Catalog = Entry.Path == client_package::CatalogPath && Entry.Category == "Asset";
 						const bool Artifact = std::string_view(Entry.Path).starts_with("content/assets/artifacts/") &&
 							Entry.Category == "Asset";
@@ -1638,7 +1644,9 @@ namespace gargantuan {
 		std::vector<std::shared_ptr<LuaSourceContainer>> Objects;
 		std::vector<std::string> Path;
 		std::size_t Nodes = 0;
-		const auto Walk = [&](auto &Self, const std::shared_ptr<Instance> &Object, bool Authored) -> void {
+		const auto *Application = application_template::FindFolder(*World);
+		const auto Walk = [&](auto &Self, const std::shared_ptr<Instance> &Object, bool Authored, bool InApplication) -> void {
+			InApplication |= Object.get() == Application;
 			if (++Nodes > MaximumPersistenceObjects || Path.size() == MaximumProtocolJsonDepth)
 				throw RuntimeDistributionError("InvalidPolicy", "The script capture exceeds its object or depth bound.");
 			Authored = Authored && Object->GetArchivable();
@@ -1647,15 +1655,16 @@ namespace gargantuan {
 				if (Plan.Scripts.size() == 4096)
 					throw RuntimeDistributionError("InvalidPolicy", "The script catalog exceeds its entry bound.");
 				auto Id = Script->GetSourceId();
-				const bool Eligible = Authored && (!Distributed || Public.contains(Id));
+				const bool Eligible = Authored && (InApplication ? Request.Target != RuntimeDistributionTarget::DedicatedServer :
+					!Distributed || Public.contains(Id));
 				Plan.Scripts.push_back({.SourceId = std::move(Id), .Path = Path,
 					.Class = std::string(Object->GetClassName()), .Eligible = Eligible});
 				Objects.push_back(std::move(Script));
 			}
-			for (const auto &Child : Object->Children) Self(Self, Child, Authored);
+			for (const auto &Child : Object->Children) Self(Self, Child, Authored, InApplication);
 			Path.pop_back();
 		};
-		for (const auto &Child : World->Children) Walk(Walk, Child, true);
+		for (const auto &Child : World->Children) Walk(Walk, Child, true, false);
 		DiskFilesystem Filesystem(ProjectValue.Root);
 		ResolveRuntimeDistributionPolicy(Filesystem, Plan);
 		std::size_t SourceBytes = 0;
@@ -1685,8 +1694,7 @@ namespace gargantuan {
 		const bool ManagedMultiplayer = RuntimeDistribution &&
 			RuntimeDistribution->Target != RuntimeDistributionTarget::OfflinePlayer;
 		const auto ApplicationEntry = World->GetApplicationEntry();
-		if (!ApplicationEntry.empty() && (Audience != PackageAudience::Trusted || RuntimeDistribution))
-			throw RuntimeDistributionError("UnsupportedAudience", "This application template requires a trusted offline Player.");
+
 		bool SpatialContent = false;
 		if (ManagedMultiplayer) {
 			for (const auto &Node : World->GetDescendants())
@@ -1779,6 +1787,16 @@ namespace gargantuan {
 				})))
 				throw RuntimeDistributionError("UnsupportedRuntime", "Compiled and protected packages currently require native schema without PreRun.");
 		}
+		blockgrid::SegmentCapture Grids;
+		if (Audience == PackageAudience::Trusted || !ApplicationEntry.empty()) {
+			std::shared_ptr<Instance> Root = World;
+			Result.ProjectJson = InstanceSerialization::Serialize(ProjectValue.InstanceFileFormat, Root, TerrainManifest, DomainBindings, &Grids);
+			if (!ApplicationEntry.empty()) {
+				auto Template = application_template::Extract(Result.ProjectJson, ApplicationEntry);
+				if (!RuntimeDistribution || RuntimeDistribution->Target != RuntimeDistributionTarget::DedicatedServer)
+					Result.ApplicationTemplate = std::move(Template);
+			}
+		}
 		if (Audience == PackageAudience::DistributedPlayer) {
 			if (!World->Filesystem || World->Root != ProjectValue.Root || !Result.SchemaSnapshot)
 				throw std::invalid_argument("Distributed Player capture requires the loaded project origin");
@@ -1791,17 +1809,18 @@ namespace gargantuan {
 				const auto SharedAssets = client_package::ReadSharedAssets(*World->Filesystem);
 				SharedSnapshot = Assets->CaptureRuntimeAssets(std::span<const AssetId>(SharedAssets));
 			}
+			if (Result.ApplicationTemplate)
+				(void)application_template::SelectAssets(*Result.ApplicationTemplate, *SharedSnapshot);
+			Result.ProjectJson.clear();
 			Result.DistributedPlayer = std::shared_ptr<const DistributedPlayerCapture>(new DistributedPlayerCapture(
-				Result.Identity, Result.AuthoritativeRevision, client_package::CaptureCode(*World),
+				Result.Identity, Result.AuthoritativeRevision, client_package::CaptureCode(*World,
+					RuntimeDistribution ? client_package::GuiProjection::ManagedCatalog : Result.ApplicationTemplate ?
+					client_package::GuiProjection::SourceBindings : client_package::GuiProjection::Omit),
 				std::move(*SharedSnapshot)
 			));
 			return Result;
 		}
 		if (Audience != PackageAudience::Trusted) throw std::invalid_argument("Unknown package audience");
-		auto Root = std::static_pointer_cast<Instance>(World);
-		blockgrid::SegmentCapture Grids;
-		Result.ProjectJson = InstanceSerialization::Serialize(ProjectValue.InstanceFileFormat,Root,TerrainManifest,DomainBindings,&Grids);
-		if (!ApplicationEntry.empty()) Result.ApplicationTemplate = application_template::Extract(Result.ProjectJson, ApplicationEntry);
 		Result.GridSegments=std::move(Grids.Parts);
 		if (Result.ProjectJson.size() > MaximumProjectSnapshotBytes)
 			throw std::length_error("Project snapshot exceeds the package byte limit");
@@ -1854,7 +1873,6 @@ namespace gargantuan {
 			RunPhase(PackagePhase::Snapshot, [&] {
 				InjectFailure(Request.FailurePoint, PackageFailurePoint::Snapshot);
 				if (Request.Payload.ApplicationTemplate) {
-					if (Distributed || Plan) throw std::invalid_argument("Application template requires a trusted offline package");
 					application_template::Validate(*Request.Payload.ApplicationTemplate);
 				}
 				if (!Request.Payload.SchemaSnapshot || !Request.Payload.Identity.IsValid() ||
@@ -2057,15 +2075,41 @@ namespace gargantuan {
 						});
 					AddText(std::string(runtime_distribution::CodeCatalogPath), "Project", Index);
 				}
+				std::optional<RuntimeDistributionPlan> Gameplay;
+				const auto *WorldPlan = Plan ? &*Plan : nullptr;
+				if (Request.Payload.ApplicationTemplate && !IsServerExecutable(Distribution->Player)) {
+					auto Template = *Request.Payload.ApplicationTemplate;
+					if (Plan) {
+						const auto Bindings = application_template::GetBindings(Template);
+						RuntimeDistributionPlan Application;
+						Gameplay.emplace();
+						for (const auto &Script : Plan->Scripts) {
+							const auto Match = Bindings.find(Script.SourceId);
+							if (Match == Bindings.end()) Gameplay->Scripts.push_back(Script);
+							else {
+								if (!Script.Eligible || Match->second.Path != Script.Path || Match->second.Class != Script.Class ||
+									Match->second.Source != Script.Source)
+									throw RuntimeDistributionError("AudienceViolation", "Application script projection disagrees with the policy.");
+								Application.Scripts.push_back(Script);
+							}
+						}
+						if (Application.Scripts.size() != Bindings.size())
+							throw RuntimeDistributionError("AudienceViolation", "Application script policy is incomplete.");
+						auto Document = Json::parse(Template);
+						Document["Template"] = Json::parse(runtime_distribution::RemoveCompiledSource(
+							Document.at("Template").dump(), Application, false));
+						Template = Document.dump();
+						WorldPlan = &*Gameplay;
+					}
+					AddText(std::string(application_template::Path), "Project", Template);
+				}
 				if (Distributed) {
 					AddText(std::string(client_package::CodePath), "Project",
-						Plan ? runtime_distribution::RemoveCompiledSource(Client->Code, *Plan, true) : Client->Code);
+						WorldPlan ? runtime_distribution::RemoveCompiledSource(Client->Code, *WorldPlan, true) : Client->Code);
 				} else {
-					AddText("content/game.instance.json", "Project", Plan ?
-						runtime_distribution::RemoveCompiledSource(Request.Payload.ProjectJson, *Plan, false) :
+					AddText("content/game.instance.json", "Project", WorldPlan ?
+						runtime_distribution::RemoveCompiledSource(Request.Payload.ProjectJson, *WorldPlan, false) :
 						Request.Payload.ProjectJson);
-					if (Request.Payload.ApplicationTemplate)
-						AddText(std::string(application_template::Path), "Project", *Request.Payload.ApplicationTemplate);
 					PackageContentManifest ContentManifest{
 						.Package = {Request.Payload.Identity, Request.Payload.AuthoritativeRevision},
 						.InstanceSchemaVersion = Request.Payload.ContentInstanceSchemaVersion,
@@ -2134,12 +2178,13 @@ namespace gargantuan {
 					{"AssetCatalog", "content/assets/catalog.json"},
 					{"PreRun", Request.Payload.PreRunSource ? Json("content/prerun.luau") : Json(nullptr)},
 				};
-				if (Request.Payload.ApplicationTemplate) Startup["Application"] = application_template::Path;
+				const bool WithApplication = Request.Payload.ApplicationTemplate && !IsServerExecutable(Distribution->Player);
+				if (WithApplication) Startup["Application"] = application_template::Path;
 				Json Manifest{
 					{"Format", PackageFormat},
-					{"PackageFormatVersion", Plan ? RuntimeDistributionPackageFormatVersion :
-						(Distributed ? DistributedPlayerPackageFormatVersion :
-							Request.Payload.ApplicationTemplate ? StandalonePackageFormatVersion : GamePackageFormatVersion)},
+					{"PackageFormatVersion", WithApplication ?
+						(Plan ? ManagedApplicationPackageFormatVersion : Distributed ? DistributedApplicationPackageFormatVersion : StandalonePackageFormatVersion) :
+						(Plan ? RuntimeDistributionPackageFormatVersion : Distributed ? DistributedPlayerPackageFormatVersion : GamePackageFormatVersion)},
 					{"RuntimeCompatibility", RuntimeCompatibilityVersion},
 					{"ProjectId", Request.Payload.Identity.ToString()},
 					{"DisplayName", Request.Payload.DisplayName},
@@ -2386,13 +2431,22 @@ namespace gargantuan {
 		for (const auto &Entry : Manifest.Content)
 			if (std::string_view(Entry.Path).starts_with("content/scripts/") && !Links.contains(Entry.Path))
 				throw RuntimeDistributionError("InvalidScriptCatalog", "The package contains an unexpected runtime script artifact.");
+		const auto Application = Manifest.HasApplication ? application_template::GetBindings(ReadPinnedPackageFile(
+			PackageRoot, Manifest, application_template::Path, application_template::MaximumBytes)) : application_template::Bindings{};
+		for (const auto &[Id, Binding] : Application) {
+			const auto Found = Catalog.Scripts.find(Id);
+			if (Found == Catalog.Scripts.end() || Found->second.Class != Binding.Class || Found->second.Path != Binding.Path ||
+				(Found->second.Representation != RuntimeDistributionRepresentation::Source && !Binding.Source.empty()))
+				throw RuntimeDistributionError("AudienceViolation", "Application code differs from its authorized catalog.");
+		}
 		if (Manifest.Inspection.Audience == PackageAudience::DistributedPlayer) {
 			const auto Projection = client_package::DecodeCode(ReadPinnedPackageFile(PackageRoot, Manifest,
 				Manifest.ProjectPath, client_package::MaximumCodeBytes));
 			std::set<client_package::CodeKey> Bound;
-			if (Projection.size() != Catalog.Scripts.size())
+			if (Projection.size() + Application.size() != Catalog.Scripts.size())
 				throw RuntimeDistributionError("AudienceViolation", "The script catalog and audience projection disagree.");
 			for (const auto &[Id, Script] : Catalog.Scripts) {
+				if (Application.contains(Id)) continue;
 				auto Key = client_package::CodeKey{Script.Path, Script.Class};
 				const auto Found = Projection.find(Key);
 				if (Found == Projection.end() || !Bound.insert(std::move(Key)).second ||
@@ -2452,12 +2506,13 @@ namespace gargantuan {
 		terrain::DomainTerrainBindings DomainBindings;
 		blockgrid::SegmentRequirements GridRequirements;
 		try {
+			if (Manifest->HasApplication)
+				application_template::Validate(ReadPinnedPackageFile(PackageRoot, *Manifest, application_template::Path, application_template::MaximumBytes));
 			if (Distributed) {
 				client_package::ValidateCode(ReadPinnedPackageFile(
 					PackageRoot, *Manifest, Manifest->ProjectPath, client_package::MaximumCodeBytes));
 			} else {
-				if (Manifest->HasApplication)
-					application_template::Validate(ReadPinnedText(PackageRoot, *Manifest, application_template::Path, application_template::MaximumBytes));
+
 				const auto ProjectText = ReadPinnedText(PackageRoot, *Manifest, Manifest->ProjectPath, MaximumProjectSnapshotBytes);
 				auto ProjectJson = JsonCodec::Parse(ProjectText, MaximumProjectSnapshotBytes, "packaged project snapshot");
 				if (!ProjectJson || !ProjectJson->is_object() || !ProjectJson->contains("Version") ||
@@ -2609,6 +2664,44 @@ namespace gargantuan {
 		return Diagnostics;
 	}
 
+	PrivateServerSnapshot::~PrivateServerSnapshot() {
+		std::error_code Error;
+		std::filesystem::remove_all(Root, Error);
+	}
+
+	std::shared_ptr<PrivateServerSnapshot> PrivateServerSnapshot::Stage(const std::filesystem::path &Source,
+		const std::string &ExpectedManifest, const PackageInspection &Client, const std::filesystem::path &Profile, PackageCancellationToken Token) {
+		std::vector<PackageDiagnostic> Diagnostics;
+		auto Manifest = ParseManifest(Source, Diagnostics, false);
+		if (!Manifest || Manifest->Inspection.ManifestSha256 != ExpectedManifest ||
+			Manifest->Inspection.Identity != Client.Identity || Manifest->Inspection.Revision != Client.Revision ||
+			!IsServerExecutable(Manifest->Inspection.PlayerExecutable.filename().string()) ||
+			Manifest->Inspection.Audience != PackageAudience::Trusted ||
+			(Manifest->Inspection.Target && *Manifest->Inspection.Target != RuntimeDistributionTarget::DedicatedServer))
+			throw std::invalid_argument("Invalid paired server package");
+		const auto Directory = Profile / (".server-" + ProjectId::New().ToString());
+		if (IsReparseOrLink(Profile) || !std::filesystem::create_directory(Directory))
+			throw std::runtime_error("Cannot create private paired server snapshot");
+		auto Snapshot = std::shared_ptr<PrivateServerSnapshot>(new PrivateServerSnapshot(Directory));
+		std::filesystem::permissions(Directory, std::filesystem::perms::owner_all);
+		const auto Copy = [&](const std::string &Relative) {
+			const auto From = ResolvePackageFile(Source, Relative, true);
+			if (!From) throw std::runtime_error("Paired server file is unavailable");
+			return CopyAndHash(*From, Directory / Relative, Relative, {}, Token);
+		};
+		if (Copy("game.package.json").Sha256 != ExpectedManifest) throw std::runtime_error("Server manifest changed");
+		if (Manifest->RuntimeDistribution && !Manifest->RuntimeDistribution->SigningKeyId.empty())
+			Copy(std::string(runtime_distribution::SignaturePath));
+		for (const auto &Item : Manifest->Content) {
+			const auto Staged = Copy(Item.Path);
+			if (Staged.Size != Item.Size || Staged.Sha256 != Item.Sha256)
+				throw std::runtime_error("Server package changed during admission");
+		}
+		if (HasErrors(PackageBuilder::Validate(Directory, PackageAudience::Trusted, {.ExpectedManifestSha256 = ExpectedManifest})))
+			throw std::runtime_error("Staged server failed admission");
+		return Snapshot;
+	}
+
 	std::vector<PackageDiagnostic> PackageBuilder::Validate(const std::filesystem::path &PackageRoot,
 		std::optional<PackageAudience> ExpectedAudience, const RuntimeDistributionAdmission &Admission) {
 		return ValidatePackageRoot(PackageRoot, nullptr, ExpectedAudience, Admission);
@@ -2650,6 +2743,15 @@ namespace gargantuan {
 				auto Catalog = std::move(*Manifest->ScriptCatalog);
 				runtime_distribution::AdmitCatalog(Catalog, *Manifest->RuntimeDistribution,
 					Result.Inspection.Identity.ToString(), Manifest->DistributionSecurity, Manifest->TrustedCompiler, ReadPinned);
+				if (Result.ApplicationTemplate) {
+					auto AppCatalog = std::make_shared<RuntimeDistributionCodeCatalog>();
+					for (const auto &[Id, Binding] : application_template::GetBindings(*Result.ApplicationTemplate)) {
+						auto Node = Catalog.Scripts.extract(Id);
+						if (Node.empty()) throw RuntimeDistributionError("InvalidScriptCatalog", "Application binding is missing.");
+						AppCatalog->Scripts.insert(std::move(Node));
+					}
+					Result.ApplicationCode = std::move(AppCatalog);
+				}
 				Result.RuntimeCode = std::make_shared<RuntimeDistributionCodeCatalog>(std::move(Catalog));
 			}
 			Result.ContentManifestReference = Manifest->ContentManifestPath;
@@ -2847,8 +2949,27 @@ namespace gargantuan {
 
 	std::function<bool(const std::shared_ptr<LuaSourceContainer> &)>
 	PackageBuilder::MakeDistributedPlayerGuiCodeHydrator(const RuntimePackagePayload &Payload) {
-		if (!Payload.RuntimeCode || !Payload.ClientCodeJson) return {};
-		auto Projection = client_package::DecodeCode(*Payload.ClientCodeJson);
+		if (!Payload.ClientCodeJson) return {};
+		std::map<std::string, client_package::CodeKey> Gui;
+		auto Projection = client_package::DecodeCode(*Payload.ClientCodeJson, &Gui);
+		if (!Payload.RuntimeCode) {
+			if (Gui.empty()) return {};
+			struct Binding { std::string Class, Source, Digest; };
+			std::map<std::string, Binding> Sources;
+			for (const auto &[Id, Key] : Gui) {
+				auto &Source = Projection.at(Key);
+				const auto Digest = AssetContentId::Hash(std::span(
+					reinterpret_cast<const std::uint8_t *>(Source.data()), Source.size())).ToString();
+				Sources.emplace(Id, Binding{Key.second, std::move(Source), Digest});
+			}
+			return [Sources = std::move(Sources)](const std::shared_ptr<LuaSourceContainer> &Target) {
+				if (!Target || !IsClientPlayerGuiSource(*Target)) return false;
+				const auto Found = Sources.find(Target->GetGuiTemplateSourceId());
+				return Found != Sources.end() && Found->second.Class == (Target->GetClassName)() &&
+					Found->second.Digest == Target->GetGuiTemplateSourceDigest() &&
+					Target->HydrateGuiTemplateSource(Found->second.Source);
+			};
+		}
 		auto Catalog = Payload.RuntimeCode;
 		return [Catalog = std::move(Catalog), Projection = std::move(Projection), Identity = Payload.ClientCodeIdentity](
 			const std::shared_ptr<LuaSourceContainer> &Target

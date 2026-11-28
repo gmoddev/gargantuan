@@ -129,10 +129,13 @@ warn('{ServerProof}')
         World["Children"].append(Starter)
     GuiScript = CodeNode("RD1GuiScript", "Script", f"""
 local Procedural = require('@game/ReplicatedStorage/RD1Procedural')
-assert(Procedural.Value == 42)
+assert(Procedural.Value == require('./RD1GuiModule').Answer)
 warn('{GuiProof}')
 """, "Client")
-    Starter["Children"].append(Node("RD1Gui", "ScreenGui", Children=[GuiScript]))
+    Starter["Children"].append(Node("PrivateGuiFolder", "Folder", Children=[
+        CodeNode("PrivateGuiModule", "ModuleScript", f"-- {PrivateMarker}\nreturn '{PrivateLiteral}'")]))
+    Starter["Children"].append(Node("RD1Gui", "ScreenGui", Children=[
+        GuiScript, CodeNode("RD1GuiModule", "ModuleScript", "return {Answer = 42}")]))
     for Index in range(ExtraScripts):
         GameScripts["Children"].append(CodeNode(f"RD1Controller{Index:04}", "Script", f"""
 local State = {Index}
@@ -159,7 +162,7 @@ def WritePolicy(File, SessionIdentity, Mixed):
     if Mixed:
         AuthoringPolicy.update({
             "Groups": {"ReadableSamples": {"Members": [ResourceId("RD1Craft")], "Representation": "Source"},
-                       "HotGameplay": {"Members": [ResourceId("RD1Controller"), ResourceId("RD1GuiScript")],
+                       "HotGameplay": {"Members": [ResourceId("RD1Controller"), ResourceId("RD1GuiScript"), ResourceId("RD1GuiModule")],
                                        "Representation": "Compiled"}},
             "Overrides": {ResourceId("RD1Procedural"): {"Representation": "Protected", "Diagnostics": "PrivateSymbols"}},
         })
@@ -252,6 +255,8 @@ def Build(Options, Name, Target, Preset, Project, Output, PolicyFile, Reports, E
         Receipt = next((json.loads(Line) for Line in OutputText.splitlines()
                         if Line.startswith(b"{") and b'"ManifestSha256"' in Line), None)
         Require(Receipt and Receipt["Ok"] and Receipt["ManifestSha256"] == Hash, f"Missing exact package receipt for {Name}")
+        if "PrivateDiagnosticsPath" in Receipt:
+            Timing["PrivateDiagnosticsPath"] = Receipt["PrivateDiagnosticsPath"]
     Timing.update({"ManifestSha256": Hash, "PackageBytes": sum(File.stat().st_size for File in Output.rglob("*") if File.is_file()),
                    "ExecutableSha256": Digest(PackageExecutable(Output))})
     return Timing, OutputText
@@ -285,7 +290,7 @@ def CheckPackage(Output, Preset, Signed, Legacy=False, Distributed=False):
         Require(Manifest["PackageFormatVersion"] == 4, "Managed package is not format 4")
         Catalog = ReadJson(Output / "content" / "runtime-scripts.json")
         ById = {Row["Id"]: Row for Row in Catalog["Scripts"]}
-        Expected = {"RD1Craft": "Source", "RD1Controller": "Compiled", "RD1Procedural": "Protected", "RD1GuiScript": "Compiled"}
+        Expected = {"RD1Craft": "Source", "RD1Controller": "Compiled", "RD1Procedural": "Protected", "RD1GuiScript": "Compiled", "RD1GuiModule": "Compiled"}
         for Name, MixedRepresentation in Expected.items():
             Id = ResourceId(Name)
             Desired = MixedRepresentation if Preset == "Hybrid" else "Source" if Preset == "Open" else Preset
@@ -296,7 +301,10 @@ def CheckPackage(Output, Preset, Signed, Legacy=False, Distributed=False):
                 with Artifact.open("rb") as Stream:
                     Require(Stream.read(len(Prefix)) == Prefix, f"Wrong actual artifact for {Name}")
         if Distributed:
-            for Name in ("RD1AuthoritativeInventory", "RD1InventoryRules"):
+            for Name in ("RD1AuthoritativeInventory", "RD1InventoryRules", "PrivateGuiModule"):
+                for Suffix in (".luac", ".gse"):
+                    Require(not (Output / "content" / "scripts" / (ResourceId(Name) + Suffix)).exists(),
+                            f"Private artifact for {Name} entered the distributed package")
                 Require(ResourceId(Name) not in ById, "Private script identity entered the distributed catalog")
         Require((Output / "game.package.sig").is_file() == Signed, "Signature file does not match publisher policy")
     return Found
@@ -409,13 +417,76 @@ def Main():
                 f"Determinism or randomized protection contract failed for {Label}")
         MarkersFound = CheckPackage(Output, Preset, Signed, Legacy)
         if Preset == "Hybrid":
-            Symbols = Reports / f"gargantuan-private-symbols-{Samples[-1]['Build']['ManifestSha256']}.json"
-            Require(Symbols.is_file() and ResourceId("RD1Procedural") in Symbols.read_text(encoding="utf-8"),
-                    "Private diagnostic index was not exported separately")
+            LastBuild = Samples[-1]["Build"]
+            Symbols = Path(LastBuild["PrivateDiagnosticsPath"]).resolve()
+            Require(Symbols.parent == Reports and Symbols.is_file(), "Private symbols are outside the expected sibling directory")
+            Index = ReadJson(Symbols)
+            Nodes = [ReadJson(Document)]
+            Source = None
+            while Nodes:
+                CurrentNode = Nodes.pop()
+                if CurrentNode["Properties"].get("SourceId", {}).get("String") == ResourceId("RD1Procedural"):
+                    Source = CurrentNode["Properties"]["Source"]["String"]
+                Nodes.extend(CurrentNode["Children"])
+            Require(Source is not None and Index["ManifestSha256"] == LastBuild["ManifestSha256"] and
+                    any(Row["Id"] == ResourceId("RD1Procedural") and Row["SourceSha256"] == hashlib.sha256(Source.encode()).hexdigest()
+                        for Row in Index["Scripts"]), "Private symbol identity differs from the captured script")
         Evidence["Profiles"][Label] = {"Runs": Samples, "Markers": MarkersFound,
             "BuildMedianMs": statistics.median(RunValue["Build"]["WallMs"] for RunValue in Samples),
             "StartupMedianMs": statistics.median(RunValue["Startup"]["EngineStartupMs"] for RunValue in Samples)}
-        WriteJson(Reports / "Qualification.json", Evidence)
+    # The normal matrix above retains the direct-start controls. This second
+    # projection uses the same policy/enrollment and an optional authored menu.
+    DirectDocument = Document.read_bytes()
+    World = ReadJson(Document)
+    Entry = CodeNode("TitleController", "Script", """
+-- application-source-only-marker
+local Title = Instance.new("ScreenGui")
+Title.Parent = script.Parent
+assert(require('./TitleText') == "Ready")
+assert(game:SetMainMenu(Title).Ok)
+task.defer(function()
+    print("[Lifecycle:SignedPackage] Title ready")
+    assert(game:GetService("ApplicationService"):Quit().Ok)
+end)
+""", "Client")
+    Entry["Properties"]["Enabled"] = {"Bool": True}
+    Entry["Properties"]["RunContext"]["EnumItem"][0] = next(
+        Item["Properties"]["RunContext"]["EnumItem"][0] for Item, _ in WalkNodes(World)
+        if "RunContext" in Item["Properties"])
+    Module = CodeNode("TitleText", "ModuleScript", "-- application-module-only-marker\nreturn 'Ready'")
+    World["Children"].append(Node("StandaloneTitle", "Folder", Children=[Entry, Module]))
+    World["Properties"]["ApplicationEntry"] = Entry["Properties"]["SourceId"]
+    WriteJson(Document, World)
+    WritePolicy(AuthoringPolicy, SessionIdentity, False)
+    Evidence["Application"] = {}
+    Roles = ["OfflinePlayer", "DedicatedServer"] + (["DistributedPlayer"] if Options.Loopback else [])
+    for Role in Roles:
+        Label = "Application-" + Role
+        Output = Reports / Label
+        IsServer = Role == "DedicatedServer"
+        Enrollment, Env = (HostBuild, HostEnv) if IsServer else (LocalBuild, LocalEnv)
+        Receipt, _ = Build(Options, Label + "-build", Role, "Protected", Project, Output,
+                           Policy, Reports, Enrollment, Signed=True, Protected=True)
+        Trust = ["--require-package-publisher"]
+        Validate(Options.Packager, Output, Label, Reports, Env, Trust)
+        Manifest = ReadJson(Output / "game.package.json")
+        Catalog = ReadJson(Output / "content" / "runtime-scripts.json")
+        Ids = {Row["Id"] for Row in Catalog["Scripts"]}
+        AppIds = {ResourceId("TitleText"), ResourceId("TitleController")}
+        Require((Ids.isdisjoint(AppIds) if IsServer else AppIds <= Ids), "Wrong application script audience")
+        File = Output / "content" / "application.json"
+        Require(File.exists() != IsServer, "Wrong application template audience")
+        if not IsServer:
+            Require(Manifest["PackageFormatVersion"] == 6, "Unexpected managed application package version")
+            Raw = File.read_bytes()
+            Require(b"application-source-only-marker" not in Raw and b"application-module-only-marker" not in Raw,
+                    "Protected application source survived projection")
+            _, Log = Run([PackageExecutable(Output), "--headless", "--max-frames", "100", *Trust],
+                         Label + "-startup", Output, Reports, Env)
+            Require(b"[Lifecycle:SignedPackage] Title ready" in Log, "Compiled menu or sibling module failed to run")
+        Evidence["Application"][Role] = Receipt
+    Document.write_bytes(DirectDocument)
+    WriteJson(Reports / "Qualification.json", Evidence)
 
     def Reject(Name, Package, Env):
         Timing, _ = Validate(Options.Packager, Package, Name, Reports, Env, Deny=True)
@@ -425,6 +496,26 @@ def Main():
     Reject("unenrolled-signed-compiled", Reports / "SignedCompiled-Package", Environment())
     Reject("protected-missing-key", Reports / "Protected-Package", Environment(Runtime=TrustOnly))
     Reject("protected-wrong-key", Reports / "Protected-Package", Environment(Runtime=WrongKey))
+    ProtectedTitle = Reports / "Application-OfflinePlayer"
+    def RejectTitle(Name, Env):
+        Label = "application-" + Name
+        Reject(Label, ProtectedTitle, Env)
+        StartupDenied, Log = Run([PackageExecutable(ProtectedTitle), "--headless", "--max-frames", "30",
+                                 "--require-package-publisher"], Label + "-startup", ProtectedTitle, Reports, Env, Deny=True)
+        Require(b"[Lifecycle:SignedPackage] Title ready" not in Log, "Rejected package executed the application")
+        Evidence["Denials"][Label + "-startup"] = StartupDenied
+
+    for Name, Env in (("untrusted-signer", Environment()), ("missing-key", Environment(Runtime=TrustOnly)),
+                      ("wrong-key", Environment(Runtime=WrongKey))):
+        RejectTitle(Name, Env)
+    for Name, Artifact in (("template", ProtectedTitle / "content" / "application.json"),
+                           ("module", ProtectedTitle / "content" / "scripts" / (ResourceId("TitleText") + ".gse"))):
+        Original = Artifact.read_bytes()
+        try:
+            Artifact.write_bytes(Original[:-1] + bytes([Original[-1] ^ 1]))
+            RejectTitle("tampered-" + Name, LocalEnv)
+        finally:
+            Artifact.write_bytes(Original)
     ProtectedPackage = Reports / "Protected-Package"
     Artifact = ProtectedPackage / "content" / "scripts" / (ResourceId("RD1Procedural") + ".gse")
     Original = Artifact.read_bytes()

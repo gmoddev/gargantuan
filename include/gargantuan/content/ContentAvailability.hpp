@@ -362,6 +362,8 @@ namespace gargantuan {
 		~ContentAvailabilityService();
 
 		void Step();
+		// Continue bounded provider work while deferring world mutations.
+		void Step(bool AllowWorldPublication);
 		void Stop();
 		[[nodiscard]] bool RequestContent(std::string_view Key);
 		[[nodiscard]] bool ReleaseContent(std::string_view Key);

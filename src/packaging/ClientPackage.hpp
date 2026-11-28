@@ -22,10 +22,11 @@ namespace gargantuan {
 		using CodeMap = std::map<CodeKey, std::string>;
 
 		[[nodiscard]] std::vector<AssetId> ReadSharedAssets(BaseFilesystem &Filesystem);
-		[[nodiscard]] std::string CaptureCode(const DataModel &World);
+		enum class GuiProjection { Omit, ManagedCatalog, SourceBindings };
+		[[nodiscard]] std::string CaptureCode(const DataModel &World, GuiProjection Gui = GuiProjection::ManagedCatalog);
 		[[nodiscard]] std::vector<RuntimeDistributionScript> CaptureEligibleScripts(const DataModel &World);
 		[[nodiscard]] bool ValidCodePathSegment(std::string_view Value);
-		[[nodiscard]] CodeMap DecodeCode(std::string_view Bytes);
+		[[nodiscard]] CodeMap DecodeCode(std::string_view Bytes, std::map<std::string, CodeKey> *GuiBindings = nullptr);
 		void ValidateCode(std::string_view Bytes);
 		[[nodiscard]] std::size_t HydrateCode(std::string_view Bytes, const DataModel &World);
 	}

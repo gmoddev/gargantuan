@@ -26,7 +26,8 @@ namespace gargantuan {
 		[[nodiscard]] static std::shared_ptr<DataModel> CreateGraph();
 		[[nodiscard]] static bool SupportsClass(std::string_view Name);
 		ApplicationPresentation(std::shared_ptr<DataModel> Graph, const std::shared_ptr<Script> &Entry,
-			std::filesystem::path Font, std::function<void(std::string, std::string)> Diagnostic = {}, bool AudioEnabled = false);
+			std::filesystem::path Font, std::function<void(std::string, std::string)> Diagnostic = {}, bool AudioEnabled = false,
+			ApplicationSession::CatalogSetup Setup = {}, std::optional<SessionInvitation> Invitation = {});
 		~ApplicationPresentation();
 		ApplicationPresentation(const ApplicationPresentation &) = delete;
 		ApplicationPresentation &operator=(const ApplicationPresentation &) = delete;

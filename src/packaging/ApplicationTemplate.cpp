@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Team Fireworks
 // SPDX-License-Identifier: MPL-2.0
 #include "ApplicationTemplate.hpp"
+#include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/assets/AssetTypes.hpp"
 #include "gargantuan/classes/Script.hpp"
@@ -14,6 +15,14 @@
 #include <unordered_set>
 
 namespace gargantuan::application_template {
+	std::string WorldBaseline(const RuntimePackagePayload &Package) {
+		const auto Digest = [](const std::string &Value) {
+			return AssetContentId::Hash(std::span(reinterpret_cast<const std::uint8_t *>(Value.data()), Value.size())).ToString();
+		};
+		return Digest(Package.ProjectJson) + "/" + Digest(Package.Assets.CatalogJson) + "/" +
+			Package.ContentManifestDigest.ToString() + "/" + Digest(Package.PreRunSource.value_or(""));
+	}
+
 	namespace {
 		using Json = JsonCodec::Json;
 		[[noreturn]] void Invalid(const char *Reason) { throw std::invalid_argument(std::string("[Package:Application] ") + Reason); }
@@ -70,6 +79,43 @@ namespace gargantuan::application_template {
 			for (const auto Target : Targets) if (!Ids.contains(Target)) Invalid("Application reference leaves the template");
 			return std::move(*Parsed);
 		}
+	}
+
+	const Instance *FindFolder(const DataModel &World) {
+		const auto &Id = World.GetApplicationEntry();
+		if (Id.empty()) return nullptr;
+		const Instance *Found = nullptr;
+		for (const auto &Child : World.Children) {
+			if (Child->GetClassName() != "Folder") continue;
+			for (const auto &Node : Child->Children) {
+				const auto Entry = std::dynamic_pointer_cast<Script>(Node);
+				if (!Entry || Entry->GetSourceId() != Id) continue;
+				if (Found) Invalid("Application entry is ambiguous");
+				Found = Child.get();
+			}
+		}
+		if (!Found) Invalid("Application entry has no direct Folder");
+		return Found;
+	}
+
+	Bindings GetBindings(std::string_view Template) {
+		const auto Document = Admit(Template);
+		Bindings Result;
+		std::vector<std::string> Path;
+		const auto Visit = [&](auto &Self, const Json &Node) -> void {
+			Path.push_back(Node.at("Name").get<std::string>());
+			const auto Class = Node.at("ClassName").get<std::string>();
+			if (Class == "Script" || Class == "ModuleScript") {
+				const auto &Properties = Node.at("Properties");
+				const auto Id = Properties.at("SourceId").at("String").get<std::string>();
+				const auto Source = Properties.contains("Source") ? Properties.at("Source").at("String").get<std::string>() : std::string{};
+				Result.emplace(Id, SourceBinding{Path, Class, Source});
+			}
+			for (const auto &Child : Node.at("Children")) Self(Self, Child);
+			Path.pop_back();
+		};
+		Visit(Visit, Document.at("Template"));
+		return Result;
 	}
 
 	std::string Extract(std::string &Project, std::string_view SourceId) {

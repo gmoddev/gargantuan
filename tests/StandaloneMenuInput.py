@@ -24,7 +24,7 @@ Entry = """
 local Menu = Instance.new("ScreenGui")
 Menu.Parent = script.Parent
 local Button = Instance.new("TextButton")
-Button.Size = UDim2.fromOffset(128,96)
+Button.Size = UDim2.fromScale(1,1)
 Button.BackgroundTransparency = 0
 Button.BackgroundColor3 = Color3.new(1,0,0)
 Button.Text = ""
@@ -88,9 +88,8 @@ def Studio(Engine, Project):
         Host.Call("StopPlaySession", PlaySessionId=Session)
 
 
-def PlayerWindow(Process):
+def PlayerWindow(Process, LogPath):
     User = ctypes.WinDLL("user32", use_last_error=True)
-    Gdi = ctypes.WinDLL("gdi32", use_last_error=True)
     Handle = wintypes.HANDLE
     def Bind(Library, Method, Return, *Args):
         Function = getattr(Library, Method)
@@ -100,9 +99,7 @@ def PlayerWindow(Process):
     Enumerate = Bind(User, "EnumWindows", wintypes.BOOL, Callback, wintypes.LPARAM)
     ProcessId = Bind(User, "GetWindowThreadProcessId", wintypes.DWORD, Handle, ctypes.POINTER(wintypes.DWORD))
     GetRect = Bind(User, "GetClientRect", wintypes.BOOL, Handle, ctypes.POINTER(wintypes.RECT))
-    GetDC = Bind(User, "GetDC", Handle, Handle)
-    Release = Bind(User, "ReleaseDC", ctypes.c_int, Handle, Handle)
-    Read = Bind(Gdi, "GetPixel", wintypes.DWORD, Handle, ctypes.c_int, ctypes.c_int)
+    GetTitle = Bind(User, "GetWindowTextW", ctypes.c_int, Handle, wintypes.LPWSTR, ctypes.c_int)
     Post = Bind(User, "PostMessageW", wintypes.BOOL, Handle, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
     Window = None
     @Callback
@@ -110,7 +107,9 @@ def PlayerWindow(Process):
         nonlocal Window
         Pid, Rect = wintypes.DWORD(), wintypes.RECT()
         ProcessId(Current, ctypes.byref(Pid))
-        if Pid.value == Process.pid and GetRect(Current, ctypes.byref(Rect)) and Rect.right >= 300 and Rect.bottom >= 200:
+        Title = ctypes.create_unicode_buffer(128)
+        if (Pid.value == Process.pid and GetTitle(Current, Title, len(Title)) and Title.value == "Gargantuan" and
+                GetRect(Current, ctypes.byref(Rect)) and Rect.right >= 300 and Rect.bottom >= 200):
             Window = Current
             return False
         return True
@@ -121,12 +120,10 @@ def PlayerWindow(Process):
             Enumerate(Visit, 0)
             if not Window:
                 return None
-        Dc = GetDC(Window)
-        try:
-            Value = Read(Dc, 24, 24)
-            return tuple((Value >> Shift) & 255 for Shift in (0, 8, 16))
-        finally:
-            Release(Window, Dc)
+        for Line in reversed(LogPath.read_text(errors="replace").splitlines()):
+            if Line.startswith("[Lifecycle:PresentedPixel] "):
+                return tuple(map(int, Line.split()[1:]))
+        return None
     for Channel in range(3):
         AwaitPixel(Pixel, Channel)
         Point = 24 | (24 << 16)
@@ -163,10 +160,13 @@ def Main():
             Env = ManagedEnvironment()
             Env.pop("SDL_AUDIODRIVER", None)
             with (Root / "Player.log").open("w+b") as Log:
-                Process = subprocess.Popen([Installed / "GargantuanPlayer.exe", "--profile-root", Root, "--max-frames", "2400"],
+                Process = subprocess.Popen([Installed / "GargantuanPlayer.exe", "--sample-presented-pixel", "--profile-root", Root, "--max-frames", "2400"],
                                            cwd=Root, env=Env, stdout=Log, stderr=subprocess.STDOUT, **ConsoleCapture())
                 try:
-                    PlayerWindow(Process)
+                    try:
+                        PlayerWindow(Process, Root / "Player.log")
+                    except RuntimeError as Error:
+                        raise RuntimeError(str(Error) + "\n" + (Root / "Player.log").read_text(errors="replace")[-4500:]) from Error
                     assert Process.wait(timeout=6) == 0
                     Log.seek(0)
                     assert b"[Lifecycle:Input] Graphical title and suspended gameplay accepted pointer input" in Log.read()

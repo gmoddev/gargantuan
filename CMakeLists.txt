@@ -497,7 +497,7 @@ add_library(gargantuan_runtime_host STATIC "src/host/common/PackagedHost.cpp")
 target_link_libraries(gargantuan_runtime_host PUBLIC gargantuan_core)
 target_include_directories(gargantuan_runtime_host PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>")
 add_library(gargantuan_player_host STATIC "src/host/player/PlayerHost.cpp" "src/host/player/StandalonePlayer.cpp")
-target_link_libraries(gargantuan_player_host PUBLIC gargantuan_runtime_host)
+target_link_libraries(gargantuan_player_host PUBLIC gargantuan_runtime_host PRIVATE nlohmann_json)
 add_executable(gargantuan_player "src/player/PlayerMain.cpp")
 set_target_properties(gargantuan_player PROPERTIES OUTPUT_NAME "GargantuanPlayer")
 if(APPLE)
@@ -864,6 +864,11 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+	add_executable(gargantuan_player_join_proof_tests "tests/PlayerJoinProofTests.cpp")
+	target_compile_features(gargantuan_player_join_proof_tests PRIVATE cxx_std_23)
+	target_include_directories(gargantuan_player_join_proof_tests PRIVATE "include" "src")
+	add_test(NAME gargantuan_player_join_proof COMMAND gargantuan_player_join_proof_tests)
+	set_tests_properties(gargantuan_player_join_proof PROPERTIES LABELS "runtime;host;admission;security" TIMEOUT 10)
 	if(GargantuanSanitizerAliasDirectory AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
 		add_test(NAME gargantuan_clang_sanitizer_paths COMMAND "${GargantuanSanitizerPython}"
 			"${CMAKE_CURRENT_SOURCE_DIR}/tests/ClangSanitizerPaths.py"
@@ -1785,6 +1790,9 @@ if(BUILD_TESTING)
 			gargantuan_gns_transport
 		)
 		add_executable(gargantuan_game_session_real_transport_tests "tests/GameSessionGnsTests.cpp")
+		add_executable(gargantuan_gns_server_identity_tests "tests/GnsServerIdentityTests.cpp")
+		target_link_libraries(gargantuan_gns_server_identity_tests PRIVATE
+			gargantuan_core gargantuan_gns_transport)
 		# Manual physical Phase 1 probe. Only its socket-free self-test is CTest.
 		add_executable(gargantuan_physical_gns_funding_probe "tests/PhysicalGnsFundingProbe.cpp")
 		target_link_libraries(gargantuan_physical_gns_funding_probe PRIVATE gargantuan_core gargantuan_gns_transport)
@@ -2056,6 +2064,7 @@ if(BUILD_TESTING)
 				gargantuan_remote_real_transport_tests
 				gargantuan_character_real_transport_tests
 				gargantuan_game_session_real_transport_tests
+				gargantuan_gns_server_identity_tests
 				gargantuan_physical_gns_funding_probe
 			)
 			set(GARGANTUAN_PROTOBUF_RUNTIMES "")
@@ -2090,6 +2099,11 @@ if(BUILD_TESTING)
 					COMMAND ${CMAKE_COMMAND} -E copy_if_different
 						"${GARGANTUAN_PROTOBUF_RUNTIME}"
 						"$<TARGET_FILE_DIR:gargantuan_game_session_real_transport_tests>"
+				)
+				add_custom_command(TARGET gargantuan_gns_server_identity_tests POST_BUILD
+					COMMAND ${CMAKE_COMMAND} -E copy_if_different
+						"${GARGANTUAN_PROTOBUF_RUNTIME}"
+						"$<TARGET_FILE_DIR:gargantuan_gns_server_identity_tests>"
 				)
 				add_custom_command(TARGET gargantuan_physical_gns_funding_probe POST_BUILD
 					COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -2211,6 +2225,11 @@ if(BUILD_TESTING)
 		endif()
 		set_tests_properties(gargantuan_lifecycle_offline_package PROPERTIES LABELS "lifecycle;packaging;headless" TIMEOUT 240)
 		if(GARGANTUAN_RUN_GRAPHICAL_PACKAGE_SMOKE)
+			add_test(NAME gargantuan_lifecycle_packaged_audio COMMAND "${GARGANTUAN_LIFECYCLE_TEST_PYTHON}" -B
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/StandalonePackageAudio.py" --engine $<TARGET_FILE:gargantuan>
+				--packager $<TARGET_FILE:gargantuan_packager> --runtime $<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
+				--project "${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame")
+			set_tests_properties(gargantuan_lifecycle_packaged_audio PROPERTIES LABELS "lifecycle;audio;packaging" TIMEOUT 90)
 			add_test(NAME gargantuan_lifecycle_viewport_input COMMAND ${LifecycleInputTest})
 			set_tests_properties(gargantuan_lifecycle_viewport_input PROPERTIES LABELS "lifecycle;graphics;editor" TIMEOUT 90)
 			if(WIN32)
@@ -2399,6 +2418,14 @@ if(BUILD_TESTING)
 		add_test(NAME gargantuan_remote_real_transport COMMAND gargantuan_remote_real_transport_tests)
 		add_test(NAME gargantuan_character_real_transport COMMAND gargantuan_character_real_transport_tests)
 		add_test(NAME gargantuan_game_session_real_transport COMMAND gargantuan_game_session_real_transport_tests)
+		if(WIN32)
+			add_test(NAME gargantuan_gns_server_identity
+				COMMAND powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass
+					-File "${CMAKE_CURRENT_SOURCE_DIR}/tests/GnsServerIdentityTests.ps1"
+					-Executable "$<TARGET_FILE:gargantuan_gns_server_identity_tests>")
+			set_tests_properties(gargantuan_gns_server_identity PROPERTIES
+				LABELS "networking;transport;identity" TIMEOUT 60 RUN_SERIAL TRUE)
+		endif()
 		add_test(NAME gargantuan_pooled_feedback_refresh
 			COMMAND gargantuan_game_session_real_transport_tests --pooled-feedback-refresh)
 		set_tests_properties(gargantuan_pooled_feedback_refresh PROPERTIES
@@ -2409,6 +2436,22 @@ if(BUILD_TESTING)
 			PROPERTIES LABELS "networking;headless;optional" TIMEOUT 10)
 		set_tests_properties(gargantuan_physical_gns_probe_invalid_arguments PROPERTIES WILL_FAIL TRUE)
 		if(WIN32)
+			add_executable(gargantuan_managed_server_host_tests "tests/ManagedServerHostTests.cpp")
+			target_compile_features(gargantuan_managed_server_host_tests PRIVATE cxx_std_23)
+			target_include_directories(gargantuan_managed_server_host_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+			target_link_libraries(gargantuan_managed_server_host_tests PRIVATE
+				gargantuan_server_host gargantuan_core ${CMAKE_DL_LIBS})
+			add_dependencies(gargantuan_managed_server_host_tests gargantuan_server_runtime_distribution)
+			add_test(NAME gargantuan_managed_server_host
+				COMMAND powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+					-File "${CMAKE_CURRENT_SOURCE_DIR}/tests/ManagedServerHostTests.ps1"
+					-Packager "$<TARGET_FILE:gargantuan_packager>"
+					-ServerRuntimeDistribution "$<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution"
+					-ProjectRoot "${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
+					-ManagedHostTests "$<TARGET_FILE:gargantuan_managed_server_host_tests>"
+			)
+			set_tests_properties(gargantuan_managed_server_host PROPERTIES
+				LABELS "networking;transport;packaging;managed;optional" TIMEOUT 120 RUN_SERIAL TRUE)
 			add_test(NAME gargantuan_packaged_game_session
 				COMMAND powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
 					-File "${CMAKE_CURRENT_SOURCE_DIR}/tests/PackagedGameSession.ps1"

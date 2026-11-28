@@ -48,6 +48,8 @@ namespace gargantuan::network {
 		std::size_t PollEvents(std::span<TransportEvent> Output) override;
 		[[nodiscard]] std::optional<std::size_t> GetAvailableDatagramBytes(ConnectionId Connection) const override;
 		[[nodiscard]] std::optional<NetworkStatistics> GetStatistics(ConnectionId Connection) const override;
+		[[nodiscard]] std::optional<TransportServerPublicKey> LocalServerPublicKey() const override;
+		[[nodiscard]] std::optional<TransportServerPublicKey> AuthenticatedServerPublicKey(ConnectionId Connection) const override;
 
 	  private:
 		friend struct detail::ReliableServiceFeedbackAccess;

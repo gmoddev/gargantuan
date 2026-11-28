@@ -30,11 +30,13 @@ namespace gargantuan {
 		using Array = std::vector<PersistenceDocumentValue>;
 		using Object = std::vector<PersistenceDocumentField>;
 		std::variant<std::monostate, bool, double, std::string, Array, Object> Data;
+		bool operator==(const PersistenceDocumentValue &) const = default;
 	};
 
 	struct PersistenceDocumentField final {
 		std::string Name;
 		PersistenceDocumentValue Value;
+		bool operator==(const PersistenceDocumentField &) const = default;
 	};
 
 	using PersistenceBytes = std::vector<std::byte>;
@@ -98,6 +100,14 @@ namespace gargantuan {
 	inline constexpr std::size_t PersistenceMaxFilters = 8;
 	inline constexpr std::size_t PersistenceMaxOrder = 4;
 	inline constexpr std::size_t PersistenceMaxPathDepth = 8;
+
+	// Optional native capability of an exclusively owned local world store.
+	// A receipt identifies the original transaction even after subsequent writes.
+	class ILocalMutationReceipts {
+	public:
+		virtual ~ILocalMutationReceipts() = default;
+		virtual PersistenceStatus ReadCommitReceipt(const std::string& RequestId, PersistenceClock::time_point Deadline) = 0;
+	};
 
 	class IPersistenceProvider {
 	public:

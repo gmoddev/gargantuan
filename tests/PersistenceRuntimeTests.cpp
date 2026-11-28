@@ -77,20 +77,26 @@ namespace {
 		}
 	};
 
-	class LostAcknowledgementProvider final : public IPersistenceProvider {
+	class LostAcknowledgementProvider final : public IPersistenceProvider, public ILocalMutationReceipts {
 	public:
 		PersistenceCapabilities Capabilities() const noexcept override { return Memory->Capabilities(); }
 
 		PersistenceResult Execute(const PersistenceRequest& Request, std::stop_token Stop) override {
 			auto Result = Memory->Execute(Request, Stop);
-			if (Request.Operation == Operation::Put && Result.Status == Status::Ok && !Lost.exchange(true))
+			if (Request.Operation == Operation::Put && Result.Status == Status::Ok && !Lost.exchange(true)) {
+				Committed = Request.RequestId;
 				return {.Status = Status::UnknownOutcome};
+			}
 			return Result;
 		}
 
 	private:
 		std::shared_ptr<IPersistenceProvider> Memory = MakeMemoryPersistenceProvider();
 		std::atomic_bool Lost = false;
+		std::string Committed;
+		PersistenceStatus ReadCommitReceipt(const std::string& Id, PersistenceClock::time_point) override {
+			return Id == Committed ? Status::Ok : Status::UnknownOutcome;
+		}
 	};
 
 	class DelayedProvider final : public IPersistenceProvider {
@@ -157,6 +163,29 @@ namespace {
 			return ScriptValue->Status == ScriptStatus::Finished;
 		}, "Luau persistence script did not finish");
 		ScriptValue->Destroy();
+	}
+
+	void CheckSessionWriteRecovery() {
+		auto World = std::make_shared<DataModel>();
+		PersistenceRuntime Runtime(std::make_shared<LostAcknowledgementProvider>(), World);
+		Runtime.TrackSessionWrites();
+		auto Mutation = Request("owned-slot", Operation::Put);
+		Mutation.Payload = PersistenceBytes{std::byte{41}};
+		auto Write = Runtime.Submit(Mutation);
+		WaitFor([&] {
+			Runtime.Pump();
+			return Write->Poll().Status != Status::Pending;
+		}, "lost acknowledgement did not complete");
+		Require(Write->Poll().Status == Status::UnknownOutcome, "gameplay must observe the lost acknowledgement");
+		Write.reset();
+		Require(Runtime.PollWriteDrain() == Status::UnknownOutcome, "uncertainty was lost after handle retirement");
+		Require(Runtime.Submit(Mutation)->Poll().Status == Status::Busy, "new mutation raced unresolved outcome");
+		Status Final;
+		WaitFor([&] {
+			Final = Runtime.PollWriteDrain(true);
+			return Final != Status::Pending;
+		}, "exclusive read-back did not finish");
+		Require(Final == Status::Ok, "exclusive writer failed to reconcile the committed value");
 	}
 
 	void CheckRuntimeBounds() {
@@ -430,6 +459,7 @@ int main(int ArgumentCount, char** Arguments) {
 		}
 #endif
 		CheckRuntimeBounds();
+		CheckSessionWriteRecovery();
 		CheckResultRetention();
 		CheckLuauContracts();
 		CheckSample(gargantuan::MakeMemoryPersistenceProvider(), "test-explorer");

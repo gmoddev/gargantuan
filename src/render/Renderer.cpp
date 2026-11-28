@@ -74,6 +74,7 @@ namespace gargantuan {
 		bool UseSolidShadowDepth = true;
 		bool WindowClaimed = false;
 		SDL_GPUTexture *ColorTexture = nullptr;
+		SDL_GPUTransferBuffer *PixelDownload = nullptr;
 		SDL_GPUTexture *HdrSceneTexture = nullptr;
 		bool HdrSceneEnabled = false;
 		SDL_GPUTexture *DepthTexture = nullptr;
@@ -139,6 +140,13 @@ namespace gargantuan {
 				State->WindowClaimed = true;
 				State->SwapchainFormat = SDL_GetGPUSwapchainTextureFormat(State->Gpu, State->Window);
 			} else State->SwapchainFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+			if (Options.PresentedPixel) {
+				if (Options.Offscreen) throw std::invalid_argument("Presented pixel sampling requires a window");
+				const SDL_GPUTransferBufferCreateInfo Transfer{.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, .size = 256};
+				State->PixelDownload = SDL_CreateGPUTransferBuffer(State->Gpu, &Transfer);
+				if (!State->PixelDownload) throw std::runtime_error(SDL_GetError());
+			}
+
 			State->HdrSceneEnabled = Options.EnableHdrScene && SupportsSDLHdrScene(State->Gpu);
 			if (Options.EnableInstancing) {
 				const auto SceneFormat = State->HdrSceneEnabled ? SDLHdrSceneFormat : State->SwapchainFormat;
@@ -232,6 +240,7 @@ namespace gargantuan {
 		State->RenderPasses.clear();
 		if (State->Gpu) State->ShadowResources.Destroy(State->Gpu);
 		if (State->Gpu) State->MaterialSamplers.Destroy(State->Gpu);
+		if (State->PixelDownload && State->Gpu) SDL_ReleaseGPUTransferBuffer(State->Gpu, State->PixelDownload);
 		if (State->ColorTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->ColorTexture);
 		if (State->HdrSceneTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->HdrSceneTexture);
 		if (State->DepthTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->DepthTexture);
@@ -421,6 +430,9 @@ namespace gargantuan {
 			LOG_TRACE(App, "[Render:SDL] RenderPublication viewport does not match the acquired target");
 			return;
 		}
+		const bool CapturePixel = State->PixelDownload && Frame.Width > 24 && Frame.Height > 24;
+		auto *PresentationTarget = Frame.SwapchainTexture;
+		if (CapturePixel) Frame.SwapchainTexture = State->ColorTexture;
 		try {
 			State->ShadowResources.PrepareFrame(State->Gpu, Frame, State->SpotShadowAtlas);
 			if (Frame.EnableInstancing) {
@@ -454,6 +466,19 @@ namespace gargantuan {
 					case SDLPassPhase::Gui: State->Metrics.LastGuiRecordingNanoseconds += Elapsed; break;
 				}
 			}
+			if (CapturePixel) {
+				auto *Copy = SDL_BeginGPUCopyPass(Frame.Commands);
+				if (!Copy) throw std::runtime_error(SDL_GetError());
+				const SDL_GPUTextureRegion Region{.texture = State->ColorTexture, .x = 24, .y = 24, .w = 1, .h = 1, .d = 1};
+				const SDL_GPUTextureTransferInfo Destination{.transfer_buffer = State->PixelDownload, .pixels_per_row = 64, .rows_per_layer = 1};
+				SDL_DownloadFromGPUTexture(Copy, &Region, &Destination);
+				SDL_EndGPUCopyPass(Copy);
+				const SDL_GPUBlitInfo Blit{
+					.source = {.texture = State->ColorTexture, .w = Frame.Width, .h = Frame.Height},
+					.destination = {.texture = PresentationTarget, .w = Frame.Width, .h = Frame.Height},
+					.load_op = SDL_GPU_LOADOP_DONT_CARE, .filter = SDL_GPU_FILTER_NEAREST};
+				SDL_BlitGPUTexture(Frame.Commands, &Blit);
+			}
 		} catch (...) {
 			if (State->InstanceResources) State->InstanceResources->OnFrameAborted();
 			State->Viewports.OnFrameAborted();
@@ -462,7 +487,7 @@ namespace gargantuan {
 			else SDL_SubmitGPUCommandBuffer(Frame.Commands);
 			throw;
 		}
-		if (State->Options.WaitForGpuCompletion) {
+		if (State->Options.WaitForGpuCompletion || CapturePixel) {
 			const auto SubmitStart = Clock::now();
 			auto *Fence = SDL_SubmitGPUCommandBufferAndAcquireFence(Frame.Commands);
 			State->Metrics.LastGpuSubmitNanoseconds = Nanoseconds(Clock::now() - SubmitStart);
@@ -485,6 +510,15 @@ namespace gargantuan {
 			State->Metrics.LastGpuCompletionWaitNanoseconds = Nanoseconds(Clock::now() - WaitStart);
 			State->Metrics.GpuCompletionWaitNanoseconds += State->Metrics.LastGpuCompletionWaitNanoseconds;
 			SDL_ReleaseGPUFence(State->Gpu, Fence);
+			if (CapturePixel) {
+				const auto *Bytes = static_cast<const std::uint8_t *>(SDL_MapGPUTransferBuffer(State->Gpu, State->PixelDownload, false));
+				if (!Bytes) throw std::runtime_error(SDL_GetError());
+				std::array<std::uint8_t, 3> Color{Bytes[0], Bytes[1], Bytes[2]};
+				if (State->SwapchainFormat == SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM ||
+					State->SwapchainFormat == SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM_SRGB) std::swap(Color[0], Color[2]);
+				SDL_UnmapGPUTransferBuffer(State->Gpu, State->PixelDownload);
+				State->Options.PresentedPixel(Color);
+			}
 		} else {
 			const auto SubmitStart = Clock::now();
 			if (!SDL_SubmitGPUCommandBuffer(Frame.Commands)) {
@@ -517,7 +551,7 @@ namespace gargantuan {
 			State->Gpu, State->Window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, SDL_GPU_PRESENTMODE_VSYNC
 		)) throw std::runtime_error(std::format("Failed to configure renderer swapchain: {}", SDL_GetError()));
 		SDL_GPUTexture *ReplacementColor = nullptr;
-		if (State->Options.Offscreen) {
+		if (State->Options.Offscreen || State->PixelDownload) {
 			SDL_GPUTextureCreateInfo ColorInfo{
 				.type = SDL_GPU_TEXTURETYPE_2D,
 				.format = State->SwapchainFormat,
@@ -564,6 +598,8 @@ namespace gargantuan {
 		const auto *Driver = SDL_GetGPUDeviceDriver(State->Gpu);
 		return Driver ? Driver : "unknown";
 	}
+
+	std::uint64_t SDLRenderer::GetSubmittedFrames() const { return State->Metrics.FramesSubmitted; }
 
 	SDLRendererMetrics SDLRenderer::GetMetrics() const {
 		if (!State) return {};

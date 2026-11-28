@@ -1,9 +1,13 @@
 #include "ClientPackage.hpp"
+#include "ApplicationTemplate.hpp"
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/FileLink.hpp"
 #include "gargantuan/classes/ModuleScript.hpp"
 #include "gargantuan/classes/Script.hpp"
+#include "gargantuan/classes/ScreenGui.hpp"
+#include "gargantuan/services/StarterGui.hpp"
+#include "gargantuan/gui/PlayerGuiScope.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
@@ -20,10 +24,10 @@ namespace gargantuan::client_package {
 		static_assert(MaximumCodeSourceBytes == MaximumScriptSourceBytes);
 
 		template <typename Visit>
-		void VisitClientCode(const DataModel &World, bool Authored, Visit &&Read) {
+		void VisitClientCode(const DataModel &World, bool Authored, bool IncludeTemplates, Visit &&Read) {
 			std::vector<std::string> Path;
 			std::size_t Nodes = 0;
-			const auto Walk = [&](const auto &Self, const std::shared_ptr<Instance> &Object, bool Shared) -> void {
+			const auto Walk = [&](const auto &Self, const std::shared_ptr<Instance> &Object, bool Shared, bool Template) -> void {
 				if (++Nodes > MaximumPersistenceObjects || Path.size() == MaximumProtocolJsonDepth)
 					throw std::length_error("Distributed Player code hierarchy exceeds its bound");
 				if ((Authored && !Object->GetArchivable()) || dynamic_cast<FileLink *>(Object.get())) return;
@@ -34,14 +38,25 @@ namespace gargantuan::client_package {
 				const auto ScriptValue = std::dynamic_pointer_cast<Script>(Object);
 				const auto Module = std::dynamic_pointer_cast<ModuleScript>(Object);
 				if (ScriptValue && ScriptValue->GetRunContext() != Enums::RunContext::Client) return;
-				if (Module && !Shared) return;
+				if (Module && !Shared && !Template) return;
 				Path.push_back(Object->GetName());
-				if (ScriptValue && !Shared) Read(Path, "Script", ScriptValue);
+				if (ScriptValue && (!Shared || Template)) Read(Path, "Script", ScriptValue);
 				if (Module) Read(Path, "ModuleScript", Module);
-				for (const auto &Child : Object->Children) Self(Self, Child, Shared);
+				for (const auto &Child : Object->Children) Self(Self, Child, Shared, Template);
 				Path.pop_back();
 			};
-			for (const auto &Child : World.Children) Walk(Walk, Child, false);
+			const auto *Application = Authored ? application_template::FindFolder(World) : nullptr;
+			for (const auto &Child : World.Children) {
+				if (Child.get() == Application) continue;
+				if (Authored && IncludeTemplates && dynamic_cast<StarterGui *>(Child.get())) {
+					// Only code belonging to provisioned ScreenGui clones is public.
+					// Other children of this server-only service never enter the catalog.
+					Path.push_back(Child->GetName());
+					for (const auto &Gui : GetStarterGuiTemplates(Child, false))
+						Walk(Walk, Gui.Root, false, true);
+					Path.pop_back();
+				} else Walk(Walk, Child, false, false);
+			}
 		}
 
 	}
@@ -66,14 +81,17 @@ namespace gargantuan::client_package {
 		return {Shared.begin(), Shared.end()};
 	}
 
-	std::string CaptureCode(const DataModel &World) {
+	std::string CaptureCode(const DataModel &World, GuiProjection Gui) {
 		CodeMap Code;
+		std::map<CodeKey, std::string> GuiIds;
 		std::size_t RawBytes = 0;
-		VisitClientCode(World, true, [&](const auto &Path, std::string_view Class, const auto &ScriptValue) {
+		VisitClientCode(World, true, Gui != GuiProjection::Omit, [&](const auto &Path, std::string_view Class, const auto &ScriptValue) {
 			for (const auto &Segment : Path) {
 				if (!ValidCodePathSegment(Segment)) throw std::runtime_error("Distributed Player code path is invalid");
 				RawBytes += Segment.size();
 			}
+			if (Gui == GuiProjection::SourceBindings && IsStarterGuiTemplate(*ScriptValue))
+				GuiIds.emplace(CodeKey{Path, std::string(Class)}, ScriptValue->GetSourceId());
 			const auto Source = ScriptValue->GetSource();
 			RawBytes += Source.size();
 			if (RawBytes > MaximumCodeBytes || Source.size() > MaximumScriptSourceBytes)
@@ -82,16 +100,19 @@ namespace gargantuan::client_package {
 				throw std::runtime_error("Distributed Player code path is ambiguous");
 		});
 		Json Entries = Json::array();
-		for (const auto &[Key, Source] : Code)
-			Entries.push_back({{"Path", Key.first}, {"Class", Key.second}, {"Source", Source}});
-		auto Bytes = Json({{"Version", 1}, {"Code", std::move(Entries)}}).dump();
+		for (const auto &[Key, Source] : Code) {
+			Json Row{{"Path", Key.first}, {"Class", Key.second}, {"Source", Source}};
+			if (const auto Id = GuiIds.find(Key); Id != GuiIds.end()) Row["GuiSourceId"] = Id->second;
+			Entries.push_back(std::move(Row));
+		}
+		auto Bytes = Json({{"Version", GuiIds.empty() ? 1 : 2}, {"Code", std::move(Entries)}}).dump();
 		if (Bytes.size() > MaximumCodeBytes) throw std::length_error("Distributed Player code exceeds its byte limit");
 		return Bytes;
 	}
 
 	std::vector<RuntimeDistributionScript> CaptureEligibleScripts(const DataModel &World) {
 		std::vector<RuntimeDistributionScript> Scripts;
-		VisitClientCode(World, true, [&](const auto &Path, std::string_view Class, const auto &Script) {
+		VisitClientCode(World, true, true, [&](const auto &Path, std::string_view Class, const auto &Script) {
 			Scripts.push_back({.SourceId = Script->GetSourceId(), .Path = Path, .Class = std::string(Class),
 				.Eligible = true});
 		});
@@ -101,7 +122,7 @@ namespace gargantuan::client_package {
 	std::size_t HydrateCode(std::string_view Bytes, const DataModel &World) {
 		const auto Code = DecodeCode(Bytes);
 		std::map<CodeKey, std::shared_ptr<LuaSourceContainer>> Targets;
-		VisitClientCode(World, false, [&](const auto &Path, std::string_view Class, const auto &ScriptValue) {
+		VisitClientCode(World, false, false, [&](const auto &Path, std::string_view Class, const auto &ScriptValue) {
 			CodeKey Key{Path, std::string(Class)};
 			if (!Code.contains(Key)) return;
 			if (!Targets.emplace(std::move(Key), ScriptValue).second)

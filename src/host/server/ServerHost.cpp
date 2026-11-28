@@ -1,4 +1,9 @@
 #include "host/server/ServerHost.hpp"
+#include "gargantuan/runtime/SimulationTimeline.hpp"
+#include "runtime/WorldWriter.hpp"
+#include "packaging/ApplicationTemplate.hpp"
+#include "gargantuan/services/WorldSaveService.hpp"
+#include "gargantuan/persistence/PersistenceRuntime.hpp"
 #include "host/server/PhysicalScaleQualification.hpp"
 #include "host/server/FarmAdmissionEvidence.hpp"
 #include "host/common/FarmPublicationEvidence.hpp"
@@ -63,6 +68,9 @@
 #include "gargantuan/persistence/LocalPersistenceProvider.hpp"
 
 namespace gargantuan::host {
+	std::uint32_t GetManagedHostLifecycleContractVersion() noexcept {
+		return ManagedHostLifecycleContractVersion;
+	}
 	namespace {
 		struct FarmExecutionFaultContext {
 			detail::FarmD03FirstFault *Evidence = nullptr;
@@ -103,6 +111,10 @@ namespace gargantuan::host {
 			std::size_t PollEvents(std::span<network::TransportEvent> Output) override { return Delegate->PollEvents(Output); }
 			std::optional<std::size_t> GetAvailableDatagramBytes(network::ConnectionId Connection) const override { return Delegate->GetAvailableDatagramBytes(Connection); }
 			std::optional<network::NetworkStatistics> GetStatistics(network::ConnectionId Connection) const override { return Delegate->GetStatistics(Connection); }
+			std::optional<network::TransportServerPublicKey> LocalServerPublicKey() const override { return Delegate->LocalServerPublicKey(); }
+			std::optional<network::TransportServerPublicKey> AuthenticatedServerPublicKey(network::ConnectionId Connection) const override {
+				return Delegate->AuthenticatedServerPublicKey(Connection);
+			}
 			network::TransportOperationResult Send(const network::NetworkMessageIntent &Message) override {
 				const bool Structural = Message.Traffic() == network::TrafficClass::StructuralReplication;
 				const bool Application = Message.Traffic() == network::TrafficClass::ReliableApplication;
@@ -210,6 +222,15 @@ namespace gargantuan::host {
 		char *Arguments[],
 		ServerHostConfiguration HostConfiguration
 	) {
+		const auto ManagedStarted = std::chrono::steady_clock::now();
+		const bool Managed = static_cast<bool>(HostConfiguration.ManagedLifecycle);
+		const auto ManagedDeadline = ManagedStarted + HostConfiguration.ManagedStartupTimeout;
+		if (Managed != static_cast<bool>(HostConfiguration.AdmissionProvider) ||
+			(Managed && (HostConfiguration.ManagedStartupTimeout <= std::chrono::milliseconds::zero() ||
+				HostConfiguration.ManagedStartupTimeout > std::chrono::milliseconds{6'000}))) {
+			std::cerr << "[Runtime:ManagedServer] Invalid trusted lifecycle configuration.\n";
+			return 2;
+		}
 		argparse::ArgumentParser Program("GargantuanServer");
 		Program.add_description("Gargantuan authoritative headless packaged server");
 		Program.add_argument("--bind").default_value(std::string()).help("host:port for the authoritative game server");
@@ -502,7 +523,8 @@ namespace gargantuan::host {
 		if ((!BindText.empty() && !BindEndpoint) ||
 			(!BindEndpoint && !StartupSmoke && StopInFlightKey.empty()) || (SessionSmoke && !BindEndpoint) ||
 			(BindEndpoint && !network::IsLoopbackTransportEndpoint(*BindEndpoint) &&
-			 !AllowInsecureDevelopmentNetwork)) {
+			 !AllowInsecureDevelopmentNetwork && !Managed) ||
+			(Managed && (!BindEndpoint || AllowInsecureDevelopmentNetwork || StartupSmoke || SessionSmoke || FarmMode))) {
 			std::cerr << "GargantuanServer bind arguments are invalid.\n";
 			return 2;
 		}
@@ -547,6 +569,7 @@ namespace gargantuan::host {
 
 		// These owners also outlive the catch handler. Engine::Destroy borrows
 		// Renderer, and GameSession::Stop borrows Engine during exception cleanup.
+		std::unique_ptr<WorldWriter> Writer;
 		std::unique_ptr<HeadlessRenderer> Renderer;
 		std::unique_ptr<Engine> Runtime;
 		const auto *ExecutionCaptureValue = std::getenv("GARGANTUAN_FARM_EXECUTION_CAPTURE");
@@ -565,6 +588,29 @@ namespace gargantuan::host {
 		std::unique_ptr<detail::FarmF1Evidence> F1Evidence;
 		bool F1EvidenceWritten = false;
 		std::unique_ptr<network::GameSession> Session;
+		bool ManagedListening = false;
+		bool SessionEvidencePublished = false;
+		auto StopSession = [&]() {
+			if (!Session) return;
+			Session->Stop();
+			if (ManagedListening && !SessionEvidencePublished) {
+				const auto Metrics = Session->GetLifecycleCounts();
+				SessionEvidencePublished = true;
+				HostConfiguration.ManagedLifecycle->OnSessionStopped({
+					.AcceptedPeers = Metrics.AcceptedPeers,
+					.PlayersCreated = Metrics.PlayersCreated,
+					.PlayersRemoved = Metrics.PlayersRemoved,
+				});
+			}
+		};
+		bool ManagedDraining = false;
+		bool ManagedAuthorityLost = false;
+		auto RequestManagedDrain = [&]() noexcept {
+			if (ManagedListening && !ManagedDraining) {
+				ManagedDraining = true;
+				HostConfiguration.ManagedLifecycle->OnDraining();
+			}
+		};
 #if defined(GARGANTUAN_WITH_GNS)
 		std::shared_ptr<network::GameNetworkingSocketsTransport> FarmTransport;
 #endif
@@ -593,6 +639,22 @@ namespace gargantuan::host {
 			const auto HostStartupUnixMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
 				std::chrono::system_clock::now().time_since_epoch()).count();
 			auto World = PackageBuilder::LoadWorld(*Payload, PackageRoot);
+			const auto PrivateControl = dynamic_cast<IPrivateGameplayControl *>(HostConfiguration.ManagedLifecycle.get());
+			if (PrivateControl && PrivateControl->GetWorldSlot()) {
+				const auto &Slot = *PrivateControl->GetWorldSlot();
+				const auto &Profile = PrivateControl->GetProfile();
+				if (application_template::WorldBaseline(*Payload) != Slot.Baseline) return 28;
+				Writer = std::make_unique<WorldWriter>(Profile, *ProjectId::Parse(Slot.SaveId));
+				auto Storage = MakeDurableLocalPersistenceProvider({.Path = Profile / (Slot.SaveId + ".sqlite"),
+					.ProfileId = Payload->Inspection.Identity.ToString() + "/" + Slot.WorldId, .CreateIfMissing = false, .RecordWorldWrites = true});
+				if (!Storage) throw std::runtime_error("[Lifecycle:Storage] Private writer is unavailable");
+				const auto Open = Storage->Execute({.Store = "WorldAdmission", .Key = "Profile",
+					.Deadline = PersistenceClock::now() + PersistenceRuntime::MaximumDeadline}, {});
+				if (Open.Status != PersistenceStatus::Ok && Open.Status != PersistenceStatus::Missing)
+					throw std::runtime_error("[Lifecycle:Storage] Private world profile was rejected");
+				HostConfiguration.Persistence = std::move(Storage);
+				std::dynamic_pointer_cast<WorldSaveService>(World->GetService("WorldSaveService"))->BindSlot(Slot);
+			}
 			Renderer = std::make_unique<HeadlessRenderer>(Vector2(320, 180));
 			std::optional<ContentAvailabilityConfiguration> Content;
 			const bool IsNodeProvider = std::holds_alternative<NodeServerContentConfiguration>(HostConfiguration.Content);
@@ -695,6 +757,9 @@ namespace gargantuan::host {
 					.AdmitSpatialContent = SpatialContent,
 				}
 			);
+			if (dynamic_cast<IPrivateGameplayControl *>(HostConfiguration.ManagedLifecycle.get())) {
+				if (auto Storage = Runtime->Script->GetPersistenceRuntime()) Storage->TrackSessionWrites();
+			}
 #if defined(GARGANTUAN_WITH_GNS)
 			std::unique_ptr<FarmClockCalibration> ClockCalibration;
 			if (FarmScaleWorkload) {
@@ -709,6 +774,7 @@ namespace gargantuan::host {
 				const auto Deadline = ContentBootstrapStarted + NodeBootstrapDeadline;
 				while (!Availability || !Availability->IsBootstrapComplete()) {
 					if (!Availability || std::chrono::steady_clock::now() >= Deadline ||
+						(Managed && std::chrono::steady_clock::now() >= ManagedDeadline) ||
 						(Availability->GetActiveRequestCount() == 0 && !Availability->IsBootstrapComplete()))
 						throw std::runtime_error("Node content bootstrap failed");
 					Availability->Step();
@@ -752,6 +818,8 @@ namespace gargantuan::host {
 			}
 #if defined(GARGANTUAN_WITH_GNS)
 			if (BindEndpoint) {
+				if (Managed && std::chrono::steady_clock::now() >= ManagedDeadline)
+					throw std::runtime_error("managed server startup deadline expired");
 				network::GameNetworkingSocketsTransportConfiguration TransportConfiguration;
 				if (HostConfiguration.ReliableService) {
 					TransportConfiguration.MaximumConnections = HostConfiguration.ReliableService->MaximumConnections;
@@ -772,6 +840,10 @@ namespace gargantuan::host {
 						.Endpoint = *BindEndpoint,
 						.Limits = network::GameSessionConfiguration::DefaultLimits(),
 						.AllowInsecureDevelopmentNetwork = AllowInsecureDevelopmentNetwork,
+						.AdmissionMode = Managed ? network::GameSessionAdmissionMode::Authenticated :
+							network::GameSessionAdmissionMode::DevelopmentLocal,
+						.AdmissionProvider = HostConfiguration.AdmissionProvider,
+						.RequireServerIdentity = Managed,
 						.ReliableService = HostConfiguration.ReliableService,
 						.TerrainBootstrap = SpatialContent && NetworkTerrain ? network::MakeWorkspaceTerrainSender(
 							Payload->Inspection.Identity, Payload->Inspection.Revision, Payload->TerrainArtifacts,
@@ -786,6 +858,26 @@ namespace gargantuan::host {
 				);
 				if (!Session->Start().Succeeded())
 					throw std::runtime_error("server game-session endpoint failed to start");
+				if (Managed) {
+					ManagedListening = true;
+					if (std::chrono::steady_clock::now() >= ManagedDeadline)
+						throw std::runtime_error("managed server startup deadline expired");
+					if (Session->GetStatus() != network::GameSessionStatus::Listening ||
+						!Payload->ContentManifestDigest.IsValid())
+						throw std::runtime_error("managed server listener or package content is unavailable");
+					const auto ServerPublicKey = NativeTransport->LocalServerPublicKey();
+					if (!ServerPublicKey)
+						throw std::runtime_error("managed server identity is unavailable");
+					const auto Before = HostConfiguration.ManagedLifecycle->Snapshot();
+					if (!Before.AuthorityCurrent || Before.ReadyAcknowledged || Before.DrainRequested)
+						throw std::runtime_error("managed server authority was invalid before listening");
+					HostConfiguration.ManagedLifecycle->OnListening({
+						.Package = {Payload->Inspection.Identity, Payload->Inspection.Revision},
+						.ContentManifestDigest = Payload->ContentManifestDigest,
+						.Endpoint = *BindEndpoint,
+						.ServerPublicKey = *ServerPublicKey,
+					});
+				}
 			}
 #endif
 			Runtime->ProcessService->Alive = true;
@@ -816,7 +908,7 @@ namespace gargantuan::host {
 			const auto RequestedTicks = Program.get<int>("--max-ticks");
 			const auto MaximumTicks = RequestedTicks > 0 ? RequestedTicks
 				: (StartupSmoke ? 12 : (!StopInFlightKey.empty() ? 180 : 0));
-			int Ticks = 0;
+			std::uint64_t Ticks = 0;
 			enum class ContentSmokeStage : std::uint8_t {
 				WaitingForPeer,
 				WaitingForFirstResident,
@@ -837,7 +929,7 @@ namespace gargantuan::host {
 					BootstrapWorkspaceObjects.insert(Child->GetObjectId());
 			std::shared_ptr<Instance> FirstContentRoot;
 			ObjectId FirstContentObjectId;
-			int ContentStageTick = 0;
+			std::uint64_t ContentStageTick = 0;
 			int CompletedContentCycles = 0;
 			bool StopRequestSubmitted = false;
 			std::optional<std::chrono::steady_clock::time_point> StopRequestObserved;
@@ -889,7 +981,53 @@ namespace gargantuan::host {
 #if defined(GARGANTUAN_WORK_TRACE)
 			runtime_detail::HostWorkTrace WorkTrace;
 #endif
+			if (Managed) {
+				for (;;) {
+					const auto Current = HostConfiguration.ManagedLifecycle->Snapshot();
+					if (!Current.AuthorityCurrent || Current.DrainRequested || StopRequested != 0 ||
+						std::chrono::steady_clock::now() >= ManagedDeadline)
+						throw std::runtime_error("managed server authority or readiness expired");
+					if (Current.ReadyAcknowledged) break;
+					std::this_thread::sleep_for(std::chrono::milliseconds{1});
+				}
+			}
+			if (PrivateControl && Runtime->Script->GetPersistenceRuntime()) Runtime->Script->GetPersistenceRuntime()->TrackSessionWrites();
+			bool LeavePrepared = false;
+			std::uint64_t LastRequest = 0;
+			auto ManagedClock = PrivateControl ? std::make_shared<SimulationTimeline>() : nullptr;
+			if (ManagedClock) Runtime->SetDevelopmentClock([ManagedClock] { return ManagedClock->Now(); });
 			while (Runtime->ProcessService->Alive && StopRequested == 0) {
+				if (Managed) {
+					const auto Current = HostConfiguration.ManagedLifecycle->Snapshot();
+					if (!Current.AuthorityCurrent || !Current.ReadyAcknowledged || Current.DrainRequested) {
+						ManagedAuthorityLost = !Current.AuthorityCurrent || !Current.ReadyAcknowledged;
+						RequestManagedDrain();
+						break;
+					}
+					const auto Request = PrivateControl ? PrivateControl->GetHoldRequest() : 0;
+					const bool PreparingLeave = PrivateControl && PrivateControl->IsPreparingLeave();
+					const bool Held = (Request & 1) != 0 || PreparingLeave;
+					if (ManagedClock) ManagedClock->SetHeld(SimulationTimeline::Hold::Gameplay, Held);
+					if (PreparingLeave && !LeavePrepared) {
+						const auto Storage = Runtime->Script->GetPersistenceRuntime();
+						const auto Status = Storage ? Storage->PollWriteDrain(Writer != nullptr) : PersistenceStatus::Ok;
+						if (Status != PersistenceStatus::Pending) {
+							LeavePrepared = Status == PersistenceStatus::Ok;
+							PrivateControl->ReportLeave(LeavePrepared ? 'S' : Status == PersistenceStatus::UnknownOutcome ? 'U' : 'F');
+						}
+					}
+					if (LastRequest != Request) {
+						LastRequest = Request;
+						PrivateControl->AcknowledgeHold(Request);
+					}
+					if (Held) {
+						if (Session) (void)Session->PollPrivateHold();
+						if (Runtime->Content) Runtime->Content->Step(false);
+						if (const auto Storage = Runtime->Script->GetPersistenceRuntime()) Storage->Pump();
+						std::this_thread::sleep_for(std::chrono::milliseconds(2));
+						continue;
+					}
+				}
 				if (DiagnosticStop.Requested()) {
 					std::cout << "[Qualification:Server] event=diagnostic_stop run=" << FarmRunId << '\n';
 					break;
@@ -1043,7 +1181,7 @@ namespace gargantuan::host {
 				}
 				PreviousTickStarted = TickStarted;
 				if (!ContentLifecycleKey.empty()) {
-					const int ContentHoldTicks = ContentChurnCycles == 0 || CompletedContentCycles <= 1 ? 45 : 6;
+					const std::uint64_t ContentHoldTicks = ContentChurnCycles == 0 || CompletedContentCycles <= 1 ? 45 : 6;
 					switch (ContentStage) {
 					case ContentSmokeStage::WaitingForPeer:
 						if (!Session || Session->GetMetrics().ReadyPeers >= 1) {
@@ -1227,7 +1365,9 @@ namespace gargantuan::host {
 						std::chrono::steady_clock::now() - *StopRequestObserved >= std::chrono::milliseconds(250))
 						Runtime->ProcessService->MarkExit(0);
 				}
-				if (MaximumTicks > 0 && ++Ticks >= MaximumTicks) {
+				// Lifecycle deadlines advance even when this host has no tick limit.
+				++Ticks;
+				if (MaximumTicks > 0 && Ticks >= static_cast<std::uint64_t>(MaximumTicks)) {
 					const bool ContentIncomplete = !ContentLifecycleKey.empty() && ContentStage != ContentSmokeStage::Complete;
 					const bool FarmIncomplete = FarmMode && (FarmReadyHighWater != static_cast<std::size_t>(FarmPeers) ||
 						FarmIdentities.size() != static_cast<std::size_t>(FarmPeers) || FarmIdentityConflict ||
@@ -1251,6 +1391,12 @@ namespace gargantuan::host {
 					std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
 
+			// A managed exit closes the native listener before any post-loop
+			// accounting, and before Engine or content-provider teardown.
+			if (Managed) {
+				RequestManagedDrain();
+				StopSession();
+			}
 			if (ScaleQualification) ScaleQualification->DumpRecoveryEvidence();
 			if (AdmissionEvidence) AdmissionEvidence->Dump();
 			if (PublicationEvidence) PublicationEvidence->Dump();
@@ -1368,10 +1514,25 @@ namespace gargantuan::host {
 			const auto ShutdownStarted = std::chrono::steady_clock::now();
 			detail::FarmLifecycleEvidence Lifecycle;
 			LOG_INFO(App, "[Runtime:Server] Stopping peer acceptance and game session");
-			if (Session) Session->Stop();
+			RequestManagedDrain();
+			StopSession();
 			if (FarmScaleWorkload && Session) Lifecycle.ObserveSession(*Session);
 			Session.reset();
 			LOG_INFO(App, "[Runtime:Server] Stopping authoritative runtime and content provider");
+			if (PrivateControl) {
+				if (const auto Storage = Runtime->Script->GetPersistenceRuntime()) {
+					auto Status = Storage->PollWriteDrain(Writer != nullptr);
+					const auto Deadline = std::chrono::steady_clock::now() + PersistenceRuntime::MaximumDeadline + std::chrono::seconds(1);
+					while (Status == PersistenceStatus::Pending && std::chrono::steady_clock::now() < Deadline) {
+						std::this_thread::sleep_for(std::chrono::milliseconds(2));
+						Status = Storage->PollWriteDrain(Writer != nullptr);
+					}
+					if (Status != PersistenceStatus::Ok) {
+						std::cerr << "[Lifecycle:Storage] Private server drain " << GetPersistenceStatusName(Status) << '\n';
+						ExitCode = 8;
+					}
+				}
+			}
 			Runtime->Destroy();
 			if (FarmScaleWorkload) {
 				Lifecycle.ObserveContent(Runtime->Content.get());
@@ -1379,6 +1540,14 @@ namespace gargantuan::host {
 				if (!Lifecycle.Valid() || !Lifecycle.ContentPresent) ExitCode = 18;
 			}
 			Runtime.reset();
+			if (ManagedListening) {
+				HostConfiguration.ManagedLifecycle->OnStopped();
+				ManagedListening = false;
+			}
+			if (ManagedAuthorityLost && ExitCode == 0) {
+				std::cerr << "[Runtime:ManagedServer] reason=authority-lost\n";
+				ExitCode = 7;
+			}
 #if defined(GARGANTUAN_WITH_GNS)
 			if (ServiceTimingEvidence) {
 				FarmTransport.reset(); // Last transport owner: native shutdown/join.
@@ -1414,10 +1583,15 @@ namespace gargantuan::host {
 				}
 			}
 			F1Evidence.reset(); // Restore the borrowed previous sink before teardown.
-			if (Session) Session->Stop();
+			RequestManagedDrain();
+			StopSession();
 			Session.reset();
 			if (Runtime) Runtime->Destroy();
 			Runtime.reset();
+			if (ManagedListening) {
+				HostConfiguration.ManagedLifecycle->OnStopped();
+				ManagedListening = false;
+			}
 #if defined(GARGANTUAN_WITH_GNS)
 			if (ServiceTimingEvidence) {
 				FarmTransport.reset();
@@ -1431,7 +1605,7 @@ namespace gargantuan::host {
 #endif
 			if (CapturedExecutionFault)
 				std::cerr << "GargantuanServer stopped because packaged runtime startup failed: " << Error.what() << '\n';
-			return 7;
+			return dynamic_cast<const WorldInUse *>(&Error) ? 27 : 7;
 		}
 	}
 }

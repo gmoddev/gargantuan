@@ -78,23 +78,30 @@ namespace gargantuan::network {
 		GameBinaryWriter Output(MaximumGameSessionFrameBytes);
 		Output.Integer(GameSessionMagic);
 		const auto RuntimeDistribution = std::visit([](const auto &Value) -> std::string_view {
-			using Type = std::decay_t<decltype(Value)>;
-			if constexpr (std::is_same_v<Type, GameSessionClientReady>) return {};
+			if constexpr (!requires { Value.RuntimeDistributionIdentity; }) return {};
 			else return Value.RuntimeDistributionIdentity;
 		}, Message);
 		if (!RuntimeDistribution.empty() && !IsGameSessionDistributionIdentity(RuntimeDistribution))
 			return SerializationFailure(SerializationErrorCode::InvalidValue, "Game session distribution identity is invalid");
-		const bool Terrain = std::visit([](const auto &Value) { return Value.TerrainBinding.IsValid(); }, Message);
-		const bool Spatial = std::visit([](const auto &Value) { return Value.SpatialContent; }, Message);
+		const bool Terrain = std::visit([](const auto &Value) { if constexpr (requires { Value.TerrainBinding; }) return Value.TerrainBinding.IsValid(); else return false; }, Message);
+		const bool Spatial = std::visit([](const auto &Value) { if constexpr (requires { Value.SpatialContent; }) return Value.SpatialContent; else return false; }, Message);
 		if (Terrain && !Spatial && !RuntimeDistribution.empty())
 			return SerializationFailure(SerializationErrorCode::InvalidValue, "Terrain cannot use a managed game session");
-		Output.Integer(Spatial && !RuntimeDistribution.empty() ? GameSessionManagedSpatialProtocolVersion :
+		const bool Authenticated = std::visit([](const auto &Value) {
+			if constexpr (requires { Value.Version; }) return Value.Version == AuthenticatedGameSessionProtocolVersion;
+			else return std::is_same_v<std::decay_t<decltype(Value)>, GameSessionAuthenticatedClientHello>;
+		}, Message);
+		if (Authenticated && (Terrain || Spatial))
+			return SerializationFailure(SerializationErrorCode::InvalidValue, "Unsupported authenticated content profile");
+		const auto HostedVersion = RuntimeDistribution.empty() ? AuthenticatedGameSessionProtocolVersion : AuthenticatedDistributionProtocolVersion;
+		Output.Integer(Authenticated ? HostedVersion : Spatial && !RuntimeDistribution.empty() ? GameSessionManagedSpatialProtocolVersion :
 			Spatial ? GameSessionSpatialProtocolVersion : Terrain ? GameSessionTerrainProtocolVersion : RuntimeDistribution.empty()
 			? GameSessionProtocolVersion : GameSessionDistributionProtocolVersion);
 		const auto Kind = std::visit(
 			[](const auto &Value) {
 				using ValueType = std::decay_t<decltype(Value)>;
-				if constexpr (std::is_same_v<ValueType, GameSessionClientHello>)
+				if constexpr (std::is_same_v<ValueType, GameSessionClientHello> ||
+					std::is_same_v<ValueType, GameSessionAuthenticatedClientHello>)
 					return GameSessionMessageKind::ClientHello;
 				if constexpr (std::is_same_v<ValueType, GameSessionServerAccepted>)
 					return GameSessionMessageKind::ServerAccepted;
@@ -113,6 +120,11 @@ namespace gargantuan::network {
 					const auto ValidLimits = WriteLimits(Output, Value.AdvertisedLimits);
 					if (Terrain || Spatial) Output.Append(std::as_bytes(std::span(Value.TerrainBinding.Bytes)));
 					return Value.Nonce != 0 && ValidLimits;
+				} else if constexpr (std::is_same_v<ValueType, GameSessionAuthenticatedClientHello>) {
+					Output.Integer(Value.Nonce);
+					const bool LimitsValid = WriteLimits(Output, Value.AdvertisedLimits);
+					Output.Append(std::span<const std::byte>(Value.Proof));
+					return Value.Nonce != 0 && LimitsValid;
 				} else if constexpr (std::is_same_v<ValueType, GameSessionServerAccepted>) {
 					Output.Integer(Value.Nonce);
 					Output.Integer(Value.SessionEpoch);
@@ -131,7 +143,7 @@ namespace gargantuan::network {
 					} else if (Value.AuthorizedSpatialRegion != ObjectId{}) return false;
 					return Value.Nonce != 0 && Value.SessionEpoch != 0 && Value.Replication.IsValid() &&
 						   Value.Player.IsValid() && Value.PlayerId != 0 &&
-						   Value.Identity == SessionIdentityKind::DevelopmentLocal &&
+						   Value.Identity == (Authenticated ? SessionIdentityKind::Authenticated : SessionIdentityKind::DevelopmentLocal) &&
 						   ValidLimits;
 				} else {
 					Output.Integer(Value.SessionEpoch);
@@ -161,11 +173,13 @@ namespace gargantuan::network {
 			return SerializationFailure(ErrorCode(Input), Input.Error);
 		if (Magic != GameSessionMagic)
 			return SerializationFailure(SerializationErrorCode::InvalidSyntax, "Game session magic is invalid");
-		const bool Distribution = Version == GameSessionDistributionProtocolVersion;
+		const bool HostedDistribution = Version == AuthenticatedDistributionProtocolVersion;
+		const bool Authenticated = HostedDistribution || Version == AuthenticatedGameSessionProtocolVersion;
+		const bool Distribution = HostedDistribution || Version == GameSessionDistributionProtocolVersion;
 		const bool Terrain = Version == GameSessionTerrainProtocolVersion;
 		const bool ManagedSpatial = Version == GameSessionManagedSpatialProtocolVersion;
 		const bool Spatial = Version == GameSessionSpatialProtocolVersion || ManagedSpatial;
-		if (Version != GameSessionProtocolVersion && !Distribution && !Terrain && !Spatial)
+		if (Version != GameSessionProtocolVersion && !Authenticated && !Distribution && !Terrain && !Spatial)
 			return SerializationFailure(
 				SerializationErrorCode::UnsupportedVersion, "Game session version is unsupported"
 			);
@@ -181,10 +195,23 @@ namespace gargantuan::network {
 				return SerializationFailure(
 					ErrorCode(Input), Input.Error.empty() ? "Game session client hello is invalid" : Input.Error
 				);
-			if (Distribution && (!Input.String(Value.RuntimeDistributionIdentity, 64) ||
-				!IsGameSessionDistributionIdentity(Value.RuntimeDistributionIdentity)))
-				return SerializationFailure(SerializationErrorCode::InvalidValue, "Game session client distribution identity is invalid");
-			Result = std::move(Value);
+			if (Authenticated) {
+				GameSessionAuthenticatedClientHello Hosted{Value.Nonce, Value.AdvertisedLimits};
+				for (auto &Byte : Hosted.Proof) {
+					std::uint8_t Encoded;
+					if (!Input.Integer(Encoded)) return SerializationFailure(ErrorCode(Input), Input.Error);
+					Byte = static_cast<std::byte>(Encoded);
+				}
+				if (HostedDistribution && (!Input.String(Hosted.RuntimeDistributionIdentity, 64) ||
+					!IsGameSessionDistributionIdentity(Hosted.RuntimeDistributionIdentity)))
+					return SerializationFailure(SerializationErrorCode::InvalidValue, "Authenticated package identity is invalid");
+				Result = std::move(Hosted);
+			} else {
+				if (Distribution && (!Input.String(Value.RuntimeDistributionIdentity, 64) ||
+					!IsGameSessionDistributionIdentity(Value.RuntimeDistributionIdentity)))
+					return SerializationFailure(SerializationErrorCode::InvalidValue, "Game session client distribution identity is invalid");
+				Result = std::move(Value);
+			}
 		} else if (KindValue == static_cast<std::uint8_t>(GameSessionMessageKind::ServerAccepted)) {
 			GameSessionServerAccepted Value;
 			std::uint64_t Replication;
@@ -198,9 +225,12 @@ namespace gargantuan::network {
 				return SerializationFailure(ErrorCode(Input), Input.Error);
 			Value.Replication = ReplicationEpoch(Replication);
 			Value.Identity = static_cast<SessionIdentityKind>(Identity);
+			Value.Version = Authenticated ? AuthenticatedGameSessionProtocolVersion : GameSessionProtocolVersion;
 			if (Value.Nonce == 0 || Value.SessionEpoch == 0 || !Value.Replication.IsValid() ||
 				!Value.Player.IsValid() || Value.PlayerId == 0 ||
-				Value.Identity != SessionIdentityKind::DevelopmentLocal || Reserved8 != 0 || Reserved16 != 0)
+				!((!Authenticated && Value.Identity == SessionIdentityKind::DevelopmentLocal) ||
+				  (Authenticated && Value.Identity == SessionIdentityKind::Authenticated)) ||
+				Reserved8 != 0 || Reserved16 != 0)
 				return SerializationFailure(SerializationErrorCode::InvalidValue, "Game session acceptance is invalid");
 			if (Distribution && (!Input.String(Value.RuntimeDistributionIdentity, 64) ||
 				!IsGameSessionDistributionIdentity(Value.RuntimeDistributionIdentity)))
@@ -215,6 +245,7 @@ namespace gargantuan::network {
 				!ReadBinaryObjectId(Input, Value.Player))
 				return SerializationFailure(ErrorCode(Input), Input.Error);
 			Value.Replication = ReplicationEpoch(Replication);
+			Value.Version = Authenticated ? AuthenticatedGameSessionProtocolVersion : GameSessionProtocolVersion;
 			if (Value.SessionEpoch == 0 || !Value.Replication.IsValid() || !Value.Player.IsValid())
 				return SerializationFailure(SerializationErrorCode::InvalidValue, "Game session readiness is invalid");
 			Result = Value;
@@ -222,10 +253,13 @@ namespace gargantuan::network {
 			return SerializationFailure(SerializationErrorCode::InvalidType, "Game session message kind is unknown");
 		}
 		if (Terrain && !std::visit([&](auto &Value) {
-			return ReadTerrainBinding(Input, Value.TerrainBinding) && Value.TerrainBinding.IsValid();
+			if constexpr (requires { Value.TerrainBinding; }) return ReadTerrainBinding(Input, Value.TerrainBinding) && Value.TerrainBinding.IsValid();
+			else return false;
 		}, Result))
 			return SerializationFailure(SerializationErrorCode::InvalidValue, "Game session terrain binding is invalid");
 		if (Spatial && !std::visit([&](auto &Value) {
+			if constexpr (!requires { Value.SpatialContent; }) return false;
+			else {
 			Value.SpatialContent = true;
 			if (!ReadTerrainBinding(Input, Value.TerrainBinding)) return false;
 			if constexpr (std::is_same_v<std::decay_t<decltype(Value)>, GameSessionServerAccepted>) {
@@ -234,9 +268,10 @@ namespace gargantuan::network {
 				return Value.AuthorizedSpatialRegion.IsValid() || Value.AuthorizedSpatialRegion == ObjectId{};
 			}
 			return true;
+			}
 		}, Result)) return SerializationFailure(SerializationErrorCode::InvalidValue, "Invalid spatial audience binding");
 		if (ManagedSpatial && !std::visit([&](auto &Value) {
-			if constexpr (std::is_same_v<std::decay_t<decltype(Value)>, GameSessionClientReady>) return false;
+			if constexpr (!requires { Value.RuntimeDistributionIdentity; }) return false;
 			else return Input.String(Value.RuntimeDistributionIdentity,64) &&
 				IsGameSessionDistributionIdentity(Value.RuntimeDistributionIdentity);
 		},Result)) return SerializationFailure(SerializationErrorCode::InvalidValue,"Invalid spatial package identity");

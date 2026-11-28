@@ -157,6 +157,8 @@ namespace gargantuan {
 			}
 			return WorldCatalogResult{.Items = {*Found}};
 		}
+		// Interrupted creates remain discoverable by their original identity.
+		// Selecting an Initializing slot reopens the reservation before publishing it.
 		std::size_t Offset = 0;
 		if (!Argument.empty()) {
 			const auto Prefix = std::to_string(Revision) + "/";

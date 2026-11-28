@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
 #include <memory>
 #include <optional>
 #include <span>
@@ -30,12 +31,15 @@ namespace gargantuan::network {
 	};
 
 	[[nodiscard]] bool IsLoopbackTransportEndpoint(const TransportEndpoint &Endpoint);
+	using TransportServerPublicKey = std::array<std::byte, 32>;
 
 	struct TransportStartConfiguration {
 		TransportRole Role = TransportRole::Client;
 		TransportEndpoint Endpoint;
 		NetworkLimits AdvertisedLimits;
 		std::vector<std::byte> OpaqueHandshakeMaterial;
+		bool RequireServerIdentity = false;
+		std::optional<TransportServerPublicKey> ExpectedServerPublicKey;
 
 		[[nodiscard]] bool IsValid() const;
 	};
@@ -80,6 +84,9 @@ namespace gargantuan::network {
 		virtual std::size_t PollEvents(std::span<TransportEvent> Output) = 0;
 		[[nodiscard]] virtual std::optional<std::size_t> GetAvailableDatagramBytes(ConnectionId Connection) const = 0;
 		[[nodiscard]] virtual std::optional<NetworkStatistics> GetStatistics(ConnectionId Connection) const = 0;
+		// Transport-authenticated key evidence. Default providers have no such capability.
+		[[nodiscard]] virtual std::optional<TransportServerPublicKey> LocalServerPublicKey() const;
+		[[nodiscard]] virtual std::optional<TransportServerPublicKey> AuthenticatedServerPublicKey(ConnectionId Connection) const;
 	  private:
 		friend struct detail::ReliableServiceFeedbackAccess;
 		virtual bool SetOrdinaryServicePolicy(ConnectionId Connection, std::shared_ptr<detail::OrdinaryServicePolicy> Policy);

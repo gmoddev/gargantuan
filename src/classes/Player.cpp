@@ -7,15 +7,12 @@
 #include "gargantuan/classes/LuaSourceContainer.hpp"
 #include "gargantuan/classes/PlayerGui.hpp"
 #include "gargantuan/classes/ScreenGui.hpp"
-#include "gargantuan/gui/GuiLimits.hpp"
 #include "gargantuan/gui/PlayerGuiScope.hpp"
-#include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "gargantuan/services/Players.hpp"
 
 #include <exception>
 #include <stdexcept>
-#include <unordered_set>
 #include <utility>
 
 namespace gargantuan {
@@ -61,47 +58,11 @@ namespace gargantuan {
 		std::vector<std::shared_ptr<ScreenGui>> PrepareGuiTemplates(
 			const std::shared_ptr<DataModel> &World, bool ResetOnly
 		) {
-			constexpr std::size_t MaximumTemplateObjects = 1024;
 			std::vector<std::shared_ptr<ScreenGui>> Roots;
 			const auto Starter = World ? World->FindFirstChildOfClass("StarterGui", false) : nullptr;
-			if (!Starter || Starter->GetDestroyed() || Starter->IsDestroying()) return Roots;
-			std::vector<std::pair<std::shared_ptr<ScreenGui>, std::vector<std::shared_ptr<Instance>>>> Templates;
-			std::size_t TotalObjects = 0;
-			for (const auto &Child : Starter->GetChildren()) {
-				const auto Root = std::dynamic_pointer_cast<ScreenGui>(Child);
-				if (!Root || !Root->GetArchivable() || Root->GetDestroyed() || Root->IsDestroying() ||
-					(ResetOnly && !Root->GetResetOnSpawn())) continue;
-				if (Templates.size() == GuiLimits::MaximumRoots || TotalObjects == MaximumTemplateObjects)
-					throw std::length_error("StarterGui exceeds the template root or object limit");
-				std::vector<std::shared_ptr<Instance>> Nodes;
-				std::vector<std::shared_ptr<Instance>> Pending{Root};
-				while (!Pending.empty()) {
-					auto Node = std::move(Pending.back());
-					Pending.pop_back();
-					const auto Children = Node->GetChildren();
-					++TotalObjects;
-					if (Children.size() + Pending.size() > MaximumTemplateObjects - TotalObjects)
-						throw std::length_error("StarterGui exceeds the template object limit");
-					if (Node != Root) Nodes.push_back(Node);
-					Pending.insert(Pending.end(), Children.rbegin(), Children.rend());
-				}
-				Templates.emplace_back(Root, std::move(Nodes));
-			}
+			const auto Templates = GetStarterGuiTemplates(Starter, ResetOnly);
 			Roots.reserve(Templates.size());
 			for (const auto &[Root, SourceNodes] : Templates) {
-				std::unordered_set<Instance *> Members{Root.get()};
-				for (const auto &Node : SourceNodes) Members.insert(Node.get());
-				for (auto *Node : Members) {
-					const auto *Definition = InstanceClassRegistry::GetDefinition(Node);
-					if (!Definition) throw std::invalid_argument("StarterGui template has missing class metadata");
-					for (const auto &[Name, Property] : Definition->AllProperties) {
-						if (Name == "Parent" || !Property->ReadObjectReference) continue;
-						const auto Target = Property->ReadObjectReference(Node);
-						if (Target && !Members.contains(Target.get()) &&
-							(Target == Starter || IsStarterGuiTemplate(*Target)))
-							throw std::invalid_argument("StarterGui references must stay within one ScreenGui template");
-					}
-				}
 				auto Copy = std::static_pointer_cast<ScreenGui>(Root->Clone());
 				const auto CloneNodes = Copy->GetDescendants();
 				if (CloneNodes.size() != SourceNodes.size())

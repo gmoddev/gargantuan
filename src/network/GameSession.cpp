@@ -53,9 +53,11 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -69,6 +71,17 @@ namespace gargantuan::network {
 		constexpr std::size_t MaximumGameSessionPollEventsPerCall = 128;
 		constexpr std::size_t MaximumPossessionPosesPerPeer = 16;
 		constexpr std::uint64_t PossessionPoseIntervalTicks = 3;
+		std::atomic<std::uint64_t> NextGameAdmissionRequestId{1};
+
+		std::uint64_t AllocateGameAdmissionRequestId() {
+			auto Current = NextGameAdmissionRequestId.load(std::memory_order_relaxed);
+			while (Current != 0) {
+				const auto Next = Current == std::numeric_limits<std::uint64_t>::max() ? 0 : Current + 1;
+				if (NextGameAdmissionRequestId.compare_exchange_weak(Current, Next,
+					std::memory_order_relaxed)) return Current;
+			}
+			return 0;
+		}
 
 		enum class PeerPhase : std::uint8_t { TransportConnected, BootstrapPending, Accepted, Ready };
 
@@ -161,6 +174,17 @@ namespace gargantuan::network {
 	}
 
 	bool GameSessionConfiguration::IsValid() const {
+		const bool AdmissionValid = AdmissionMode == GameSessionAdmissionMode::DevelopmentLocal
+			? !AdmissionProvider && !AdmissionProof && !RequireServerIdentity && !ExpectedServerPublicKey &&
+			  (AllowInsecureDevelopmentNetwork || IsLoopbackTransportEndpoint(Endpoint))
+			: AdmissionMode == GameSessionAdmissionMode::Authenticated && !AllowInsecureDevelopmentNetwork &&
+			  (IsLoopbackTransportEndpoint(Endpoint) ||
+				(Role == GameSessionRole::Server ? RequireServerIdentity : ExpectedServerPublicKey.has_value())) &&
+			  (Role == GameSessionRole::Server ? static_cast<bool>(AdmissionProvider) && !AdmissionProof
+											   && !ExpectedServerPublicKey
+											   : !AdmissionProvider && AdmissionProof.has_value() && !RequireServerIdentity &&
+												 (!ExpectedServerPublicKey || std::any_of(ExpectedServerPublicKey->begin(),
+													 ExpectedServerPublicKey->end(), [](std::byte Value) { return Value != std::byte{}; })));
 		return Endpoint.IsValid() && Limits.IsValid() && HandshakeTimeoutTicks > 0 &&
 			   HandshakeTimeoutTicks <= DefaultGameSessionHandshakeTimeoutTicks * 10 && Relevance.IsValid() &&
 			   StructuralReplication.IsValid() &&
@@ -177,7 +201,8 @@ namespace gargantuan::network {
 				(Role == GameSessionRole::Server ? TerrainBootstrap->Source.size() == TerrainBootstrap->Directory.Chunks.size()
 												 : TerrainBootstrap->Source.empty()))) &&
 			   (RuntimeDistributionIdentity.empty() || IsGameSessionDistributionIdentity(RuntimeDistributionIdentity)) &&
-			   (AllowInsecureDevelopmentNetwork || IsLoopbackTransportEndpoint(Endpoint));
+			   AdmissionValid && (AdmissionMode != GameSessionAdmissionMode::Authenticated ||
+				(!SpatialContent && !TerrainBootstrap));
 	}
 
 	NetworkLimits GameSessionConfiguration::DefaultLimits() {
@@ -194,6 +219,12 @@ namespace gargantuan::network {
 	}
 
 	struct GameSession::Implementation {
+		struct AdmissionSlot {
+			std::mutex Mutex;
+			std::optional<std::optional<PlayerIdentity>> Result;
+			bool Closed = false;
+		};
+
 		struct PresentedAction {
 			CharacterActionState Action;
 			std::shared_ptr<AnimationTrack> Track;
@@ -290,6 +321,9 @@ namespace gargantuan::network {
 			std::uint64_t ConnectedTick = 0;
 			std::uint64_t Nonce = 0;
 			std::uint64_t SessionEpoch = 0;
+			std::uint16_t ProtocolVersion = GameSessionProtocolVersion;
+			std::uint64_t AdmissionRequestId = 0;
+			std::shared_ptr<AdmissionSlot> Admission;
 			ReplicationEpoch Replication;
 			NetworkLimits Limits;
 			ObjectId PlayerObject;
@@ -784,7 +818,16 @@ namespace gargantuan::network {
 				.Role = Configuration.Role == GameSessionRole::Server ? TransportRole::Server : TransportRole::Client,
 				.Endpoint = Configuration.Endpoint,
 				.AdvertisedLimits = Configuration.Limits,
+				.RequireServerIdentity = Configuration.RequireServerIdentity,
+				.ExpectedServerPublicKey = Configuration.ExpectedServerPublicKey,
 			});
+			if (Result.Succeeded() && Configuration.RequireServerIdentity &&
+				!Transport->LocalServerPublicKey()) {
+				FailSession({DisconnectReason::TransportFailure, "Server transport identity unavailable"});
+				return {.Status = TransportOperationStatus::TransportFailure,
+					.TerminalDisconnect = DisconnectInfo{DisconnectReason::TransportFailure,
+						"Server transport identity unavailable"}};
+			}
 			if (Result.Succeeded() && InjectFailure(detail::GameSessionFailurePoint::TransportStart)) {
 				FailSession({DisconnectReason::ResourceExhaustion, "Injected transport-start acquisition failure"});
 				return {
@@ -1472,6 +1515,11 @@ namespace gargantuan::network {
 		}
 
 		void OnConnected(ConnectionId Connection) {
+			if (Configuration.Role == GameSessionRole::Client && Configuration.ExpectedServerPublicKey &&
+				Transport->AuthenticatedServerPublicKey(Connection) != Configuration.ExpectedServerPublicKey) {
+				Reject(Connection, DisconnectReason::ProtocolViolation, "Server transport identity differs");
+				return;
+			}
 			if (!Connection.IsValid() || Peers.size() >= MaximumGameSessionPeers ||
 				(Configuration.ReliableService && Peers.size() >= Configuration.ReliableService->MaximumConnections)) {
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Game session peer capacity reached");
@@ -1505,62 +1553,23 @@ namespace gargantuan::network {
 			PeerValue.Nonce = Configuration.ClientNonce != 0
 								  ? Configuration.ClientNonce
 								  : (static_cast<std::uint64_t>(Connection.Generation) << 32) | Connection.Slot;
-			if (!QueueSession(
-					Connection, GameSessionClientHello{PeerValue.Nonce, Configuration.Limits,
-						GetTerrainBinding(), Configuration.RuntimeDistributionIdentity, Configuration.SpatialContent}, Configuration.Limits
-				))
+			const GameSessionMessage Hello = Configuration.AdmissionMode == GameSessionAdmissionMode::Authenticated
+				? GameSessionMessage(GameSessionAuthenticatedClientHello{
+					PeerValue.Nonce, Configuration.Limits, *Configuration.AdmissionProof, Configuration.RuntimeDistributionIdentity})
+				: GameSessionMessage(GameSessionClientHello{PeerValue.Nonce, Configuration.Limits, GetTerrainBinding(),
+					Configuration.RuntimeDistributionIdentity, Configuration.SpatialContent});
+			if (!QueueSession(Connection, Hello, Configuration.Limits))
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Client hello could not be queued");
 		}
 
-		void AcceptServerPeer(ConnectionId Connection, const GameSessionClientHello &Hello) {
+		void FinishServerPeer(ConnectionId Connection, PlayerIdentity Identity) {
 			const auto AcceptanceStarted = std::chrono::steady_clock::now();
 			auto Iterator = Peers.find(Connection);
-			if (Iterator == Peers.end() || Iterator->second.Phase != PeerPhase::TransportConnected) {
-				++Metrics.RejectedHandshakes;
-				Reject(Connection, DisconnectReason::ProtocolViolation, "Duplicate or out-of-order client hello");
-				return;
-			}
-			if (Hello.SpatialContent != Configuration.SpatialContent || Hello.TerrainBinding != GetTerrainBinding()) {
-				++Metrics.RejectedHandshakes;
-				Reject(Connection, DisconnectReason::IncompatibleVersion, "Client native content profile differs from the server");
-				return;
-			}
-			if (Hello.RuntimeDistributionIdentity != Configuration.RuntimeDistributionIdentity) {
-				++Metrics.RejectedHandshakes;
-				Reject(Connection, DisconnectReason::ProtocolViolation, "Client runtime distribution identity is incompatible");
-				return;
-			}
-			auto Limits = NegotiateNetworkLimits(Configuration.Limits, Hello.AdvertisedLimits);
-			if (Configuration.SpatialContent && (!Limits || Limits->MaximumReliableMessageBytes < MaximumGridStreamFragment + 128 ||
-				std::ranges::count_if(Peers, [](const auto &Entry) { return bool(Entry.second.Grids); }) >= 8)) {
-				Reject(Connection, DisconnectReason::ResourceExhaustion, "Spatial delivery capacity is unavailable");
-				return;
-			}
-			if (Configuration.TerrainBootstrap && (!Limits ||
-				Limits->MaximumReliableMessageBytes < TerrainFragmentHeaderBytes + MaximumTerrainFragmentBytes ||
-				std::ranges::count_if(Peers, [](const auto &Entry) { return Entry.second.TerrainPending.has_value(); })
-					>= MaximumTerrainBootstrapPeers)) {
-				++Metrics.RejectedHandshakes;
-				Reject(Connection, DisconnectReason::ResourceExhaustion, "Terrain bootstrap capacity is unavailable");
-				return;
-			}
-			if (!Limits || !Scheduler.RegisterConnection(Connection, *Limits) || NextSessionEpoch == 0 ||
-				NextReplicationEpoch == 0) {
-				++Metrics.RejectedHandshakes;
-				Reject(Connection, DisconnectReason::ResourceExhaustion, "Game session negotiation failed");
-				return;
-			}
+			if (Iterator == Peers.end() || Iterator->second.Phase != PeerPhase::TransportConnected) return;
 			auto &PeerValue = Iterator->second;
-			PeerValue.Nonce = Hello.Nonce;
-			PeerValue.SessionEpoch = NextSessionEpoch++;
-			PeerValue.Replication = ReplicationEpoch(NextReplicationEpoch++);
-			PeerValue.Limits = *Limits;
 			const auto PlayerCreationStarted = std::chrono::steady_clock::now();
 			try {
-				PeerValue.PlayerValue = Runtime->Players->CreateSessionPlayer({
-					"session-development",
-					"peer-" + std::to_string(PeerValue.SessionEpoch),
-				});
+				PeerValue.PlayerValue = Runtime->Players->CreateSessionPlayer(std::move(Identity));
 				PeerValue.PlayerObject = PeerValue.PlayerValue->GetObjectId();
 				ConnectionsByPlayer.emplace(PeerValue.PlayerObject, Connection);
 				if (Configuration.SpatialContent) {
@@ -1603,9 +1612,7 @@ namespace gargantuan::network {
 			Metrics.RelevanceInitializationCpuNanoseconds += static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(
 					std::chrono::steady_clock::now() - RelevanceStarted
-				)
-					.count()
-			);
+				).count());
 			const auto *Selection = Relevance->GetSelection(Connection);
 			if (!Selection) {
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Server relevance selection is unavailable");
@@ -1620,16 +1627,134 @@ namespace gargantuan::network {
 			Metrics.SessionAcceptanceCpuNanoseconds += static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(
 					std::chrono::steady_clock::now() - AcceptanceStarted
-				)
-					.count()
-			);
+				).count());
+		}
+
+		void AcceptServerPeer(ConnectionId Connection, const GameSessionClientHello &Hello, std::uint16_t ProtocolVersion,
+			const std::array<std::byte, GameAdmissionProofBytes> *Proof = nullptr) {
+			auto Iterator = Peers.find(Connection);
+			if (Iterator == Peers.end() || Iterator->second.Phase != PeerPhase::TransportConnected ||
+				Iterator->second.Admission) {
+				++Metrics.RejectedHandshakes;
+				Reject(Connection, DisconnectReason::ProtocolViolation, "Duplicate or out-of-order client hello");
+				return;
+			}
+			const bool Authenticated = Configuration.AdmissionMode == GameSessionAdmissionMode::Authenticated;
+			if (Authenticated != (ProtocolVersion == AuthenticatedGameSessionProtocolVersion) ||
+				Authenticated != (Proof != nullptr)) {
+				++Metrics.RejectedHandshakes;
+				Reject(Connection, DisconnectReason::IncompatibleVersion, "Game session admission mode does not match");
+				return;
+			}
+			if (Hello.SpatialContent != Configuration.SpatialContent || Hello.TerrainBinding != GetTerrainBinding()) {
+				++Metrics.RejectedHandshakes;
+				Reject(Connection, DisconnectReason::IncompatibleVersion, "Client native content profile differs from the server");
+				return;
+			}
+			if (Hello.RuntimeDistributionIdentity != Configuration.RuntimeDistributionIdentity) {
+				++Metrics.RejectedHandshakes;
+				Reject(Connection, DisconnectReason::ProtocolViolation, "Client runtime distribution identity is incompatible");
+				return;
+			}
+			auto Limits = NegotiateNetworkLimits(Configuration.Limits, Hello.AdvertisedLimits);
+			if (Configuration.SpatialContent && (!Limits || Limits->MaximumReliableMessageBytes < MaximumGridStreamFragment + 128 ||
+				std::ranges::count_if(Peers, [](const auto &Entry) { return bool(Entry.second.Grids); }) >= 8)) {
+				Reject(Connection, DisconnectReason::ResourceExhaustion, "Spatial delivery capacity is unavailable");
+				return;
+			}
+			if (Configuration.TerrainBootstrap && (!Limits ||
+				Limits->MaximumReliableMessageBytes < TerrainFragmentHeaderBytes + MaximumTerrainFragmentBytes ||
+				std::ranges::count_if(Peers, [](const auto &Entry) { return Entry.second.TerrainPending.has_value(); })
+					>= MaximumTerrainBootstrapPeers)) {
+				++Metrics.RejectedHandshakes;
+				Reject(Connection, DisconnectReason::ResourceExhaustion, "Terrain bootstrap capacity is unavailable");
+				return;
+			}
+			if (!Limits || !Scheduler.RegisterConnection(Connection, *Limits) || NextSessionEpoch == 0 ||
+				NextReplicationEpoch == 0) {
+				++Metrics.RejectedHandshakes;
+				Reject(Connection, DisconnectReason::ResourceExhaustion, "Game session negotiation failed");
+				return;
+			}
+			auto &PeerValue = Iterator->second;
+			PeerValue.Nonce = Hello.Nonce;
+			PeerValue.SessionEpoch = NextSessionEpoch++;
+			PeerValue.Replication = ReplicationEpoch(NextReplicationEpoch++);
+			PeerValue.Limits = *Limits;
+			PeerValue.ProtocolVersion = ProtocolVersion;
+			if (!Authenticated) {
+				FinishServerPeer(Connection, {"session-development", "peer-" + std::to_string(PeerValue.SessionEpoch)});
+				return;
+			}
+			std::size_t Pending = 0;
+			for (const auto &[OtherConnection, OtherPeer] : Peers) {
+				(void)OtherConnection;
+				Pending += OtherPeer.Admission != nullptr;
+			}
+			const auto RequestId = Pending < MaximumPendingGameAdmissions ? AllocateGameAdmissionRequestId() : 0;
+			if (RequestId == 0) {
+				++Metrics.RejectedHandshakes;
+				Reject(Connection, DisconnectReason::ResourceExhaustion, "Game admission capacity reached");
+				return;
+			}
+			PeerValue.AdmissionRequestId = RequestId;
+			PeerValue.Admission = std::make_shared<AdmissionSlot>();
+			std::weak_ptr<AdmissionSlot> WeakSlot = PeerValue.Admission;
+			const GameAdmissionRequest Request{PeerValue.AdmissionRequestId, Connection, Hello.Nonce, *Proof};
+			bool Started = false;
+			try {
+				Started = Configuration.AdmissionProvider->Begin(Request, [WeakSlot](std::optional<PlayerIdentity> Identity) {
+					if (auto Slot = WeakSlot.lock()) {
+						std::scoped_lock Lock(Slot->Mutex);
+						if (!Slot->Closed && !Slot->Result) Slot->Result.emplace(std::move(Identity));
+					}
+				});
+			} catch (...) {
+				Started = false;
+			}
+			if (!Started) {
+				++Metrics.RejectedHandshakes;
+				Reject(Connection, DisconnectReason::AuthenticationFailure, "Game admission provider unavailable");
+			}
+		}
+
+		void ProcessPendingAdmissions() {
+			std::vector<std::pair<ConnectionId, std::optional<PlayerIdentity>>> Completed;
+			for (auto &[Connection, PeerValue] : Peers) {
+				if (!PeerValue.Admission) continue;
+				std::scoped_lock Lock(PeerValue.Admission->Mutex);
+				if (PeerValue.Admission->Closed || !PeerValue.Admission->Result) continue;
+				Completed.emplace_back(Connection, std::move(*PeerValue.Admission->Result));
+				PeerValue.Admission->Closed = true;
+			}
+			for (auto &[Connection, Identity] : Completed) {
+				auto Iterator = Peers.find(Connection);
+				if (Iterator == Peers.end() || !Iterator->second.Admission ||
+					Iterator->second.Phase != PeerPhase::TransportConnected) continue;
+				Iterator->second.Admission.reset();
+				if (!Identity) {
+					++Metrics.RejectedHandshakes;
+					Reject(Connection, DisconnectReason::AuthenticationFailure, "Game admission denied");
+					continue;
+				}
+				try {
+					ValidatePlayerIdentity(*Identity);
+				} catch (const std::exception &) {
+					++Metrics.RejectedHandshakes;
+					Reject(Connection, DisconnectReason::AuthenticationFailure, "Game admission identity invalid");
+					continue;
+				}
+				FinishServerPeer(Connection, std::move(*Identity));
+			}
 		}
 
 		void AcceptClientSession(ConnectionId Connection, const GameSessionServerAccepted &Accepted) {
 			auto Iterator = Peers.find(Connection);
 			if (Iterator == Peers.end() || Iterator->second.Phase != PeerPhase::TransportConnected ||
 				Accepted.Nonce != Iterator->second.Nonce || Accepted.TerrainBinding != GetTerrainBinding() ||
-				Accepted.SpatialContent != Configuration.SpatialContent) {
+				Accepted.SpatialContent != Configuration.SpatialContent ||
+				Accepted.Version != (Configuration.AdmissionMode == GameSessionAdmissionMode::Authenticated ?
+					AuthenticatedGameSessionProtocolVersion : GameSessionProtocolVersion)) {
 				++Metrics.RejectedHandshakes;
 				Reject(
 					Connection, DisconnectReason::ProtocolViolation, "Server acceptance does not match the client hello"
@@ -1656,6 +1781,7 @@ namespace gargantuan::network {
 			}
 			auto &PeerValue = Iterator->second;
 			PeerValue.Phase = PeerPhase::Accepted;
+			PeerValue.ProtocolVersion = Accepted.Version;
 			PeerValue.SessionEpoch = Accepted.SessionEpoch;
 			PeerValue.AuthorizedSpatialRegion = Accepted.AuthorizedSpatialRegion;
 			if (Configuration.SpatialContent)
@@ -1964,6 +2090,7 @@ namespace gargantuan::network {
 			const auto RegistrationStarted = std::chrono::steady_clock::now();
 			auto Iterator = Peers.find(Connection);
 			if (Iterator == Peers.end() || Iterator->second.Phase != PeerPhase::Accepted ||
+				Ready.Version != Iterator->second.ProtocolVersion ||
 				Ready.SessionEpoch != Iterator->second.SessionEpoch ||
 				Ready.Replication != Iterator->second.Replication || Ready.Player != Iterator->second.PlayerObject ||
 				Ready.TerrainBinding != GetTerrainBinding() || Ready.SpatialContent != Configuration.SpatialContent ||
@@ -2039,7 +2166,10 @@ namespace gargantuan::network {
 			}
 			if (Configuration.Role == GameSessionRole::Server) {
 				if (const auto *Hello = std::get_if<GameSessionClientHello>(&*Decoded))
-					AcceptServerPeer(Connection, *Hello);
+					AcceptServerPeer(Connection, *Hello, GameSessionProtocolVersion);
+				else if (const auto *Hello = std::get_if<GameSessionAuthenticatedClientHello>(&*Decoded))
+					AcceptServerPeer(Connection, {Hello->Nonce, Hello->AdvertisedLimits, {}, Hello->RuntimeDistributionIdentity},
+						AuthenticatedGameSessionProtocolVersion, &Hello->Proof);
 				else if (const auto *Ready = std::get_if<GameSessionClientReady>(&*Decoded))
 					ReadyServerPeer(Connection, *Ready);
 				else
@@ -2151,10 +2281,21 @@ namespace gargantuan::network {
 			}
 		}
 
-		std::size_t Poll() {
+		std::vector<ReceivedMessageEvent> HeldBaseline;
+		std::size_t HeldBaselineBytes = 0;
+
+		std::size_t Poll(bool PrivateHold = false) {
 			if (Dispatching || Status==GameSessionStatus::Closing || Status==GameSessionStatus::Closed || Status==GameSessionStatus::Failed) return 0;
 			DispatchScope Dispatch(Dispatching);
 			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::SessionPoll);
+			if (!PrivateHold && !HeldBaseline.empty()) {
+				for (const auto &Message : HeldBaseline) {
+					if (Status == GameSessionStatus::Failed || Status == GameSessionStatus::Closed) break;
+					HandleReceived(Message);
+				}
+				HeldBaseline.clear();
+				HeldBaselineBytes = 0;
+			}
 			std::array<TransportEvent, MaximumGameSessionPollEventsPerCall> Buffer;
 			const auto Count = runtime_detail::MeasureWork(runtime_detail::WorkPhase::TransportPoll,
 				[&] { return Transport->PollEvents(Buffer); });
@@ -2162,8 +2303,10 @@ namespace gargantuan::network {
 			for (std::size_t Index = 0; Index < Count; ++Index) {
 				auto Event = std::move(Buffer[Index]);
 				if (const auto *Changed = std::get_if<ConnectionStateEvent>(&Event)) {
-					if (Changed->Current == ConnectionState::Connected)
-						OnConnected(Changed->Connection);
+					if (Changed->Current == ConnectionState::Connected) {
+						if (PrivateHold) Reject(Changed->Connection, DisconnectReason::ResourceExhaustion, "Private session is held");
+						else OnConnected(Changed->Connection);
+					}
 					else if (Changed->Current == ConnectionState::Closed) {
 						if (Configuration.Role == GameSessionRole::Client)
 							FailSession({DisconnectReason::RemoteShutdown, "Game server connection closed"});
@@ -2171,7 +2314,18 @@ namespace gargantuan::network {
 							TearDownPeer(Changed->Connection);
 					}
 				} else if (const auto *Received = std::get_if<ReceivedMessageEvent>(&Event)) {
-					HandleReceived(*Received);
+					if (!PrivateHold) HandleReceived(*Received);
+					else if (Configuration.Role == GameSessionRole::Client && Received->Delivery == DeliveryMode::ReliableOrdered &&
+						FrameMagic(Received->Payload) != RemoteMagic && !IsGameplayInputFrame(Received->Payload)) {
+						// Preserve already ordered authoritative baseline traffic for the next
+						// live poll. Transient samples and authored calls expire at the hold.
+						if (HeldBaseline.size() >= 128 || Received->Payload.size() > 1024 * 1024 - HeldBaselineBytes)
+							FailSession({DisconnectReason::ResourceExhaustion, "Private baseline backlog exceeded"});
+						else {
+							HeldBaselineBytes += Received->Payload.size();
+							HeldBaseline.push_back(std::move(std::get<ReceivedMessageEvent>(Event)));
+						}
+					}
 				} else if (const auto *Disconnected = std::get_if<DisconnectedEvent>(&Event)) {
 					if (Configuration.Role == GameSessionRole::Client)
 						FailSession(Disconnected->Information);
@@ -2783,6 +2937,13 @@ namespace gargantuan::network {
 		void TearDownPeer(ConnectionId Connection) {
 			RecordPooledLifecycle(detail::PooledLifecyclePoint::PeerTeardown, Connection, DisconnectReason::LocalShutdown);
 			auto Iterator = Peers.find(Connection);
+			if (Iterator != Peers.end() && Iterator->second.AdmissionRequestId != 0) {
+				if (Iterator->second.Admission) {
+					std::scoped_lock Lock(Iterator->second.Admission->Mutex);
+					Iterator->second.Admission->Closed = true;
+					Iterator->second.Admission->Result.reset();
+				}
+			}
 			if (IsPooled()) {
 				// Closing is not a release. Purge first, reconcile the immutable
 				// old-generation receipt, cancel unsent work, then release the slot.
@@ -2878,6 +3039,8 @@ namespace gargantuan::network {
 				// These observers run after local slot retirement. Finish the session teardown even if one throws.
 				(void)detail::DispatchReplicaNotifications(*GridRetirements, "peer retirement");
 			}
+			if (PeerValue.AdmissionRequestId != 0)
+				Configuration.AdmissionProvider->Release(PeerValue.AdmissionRequestId);
 		}
 
 		void ObserveOrdinaryQueue(ConnectionId Connection, Peer &PeerValue, std::uint64_t Now) {
@@ -2988,6 +3151,7 @@ namespace gargantuan::network {
 				++Metrics.HandshakeTimeouts;
 				Reject(Connection, DisconnectReason::Timeout, "Game session handshake timed out");
 			}
+			if (Configuration.Role == GameSessionRole::Server) ProcessPendingAdmissions();
 
 			if (Configuration.Role == GameSessionRole::Server) {
 				for (auto &[Connection, PeerValue] : Peers) {
@@ -3463,12 +3627,14 @@ namespace gargantuan::network {
 											.Replication = Peer->second.Replication,
 											.Player = Peer->second.PlayerObject,
 											.PlayerId = Peer->second.PlayerId,
-											.Identity = SessionIdentityKind::DevelopmentLocal,
+											.Identity = Peer->second.ProtocolVersion == AuthenticatedGameSessionProtocolVersion
+												? SessionIdentityKind::Authenticated : SessionIdentityKind::DevelopmentLocal,
 											.NegotiatedLimits = Peer->second.Limits,
 											.TerrainBinding = GetTerrainBinding(),
 											.RuntimeDistributionIdentity = Configuration.RuntimeDistributionIdentity,
 											.SpatialContent = Configuration.SpatialContent,
 											.AuthorizedSpatialRegion = Peer->second.AuthorizedSpatialRegion,
+											.Version = Peer->second.ProtocolVersion,
 										},
 										Peer->second.Limits
 									)) {
@@ -3781,6 +3947,7 @@ namespace gargantuan::network {
 									   PeerValue.PlayerObject,
 									   GetTerrainBinding(),
 									   Configuration.SpatialContent,
+									   PeerValue.ProtocolVersion,
 								   }
 							   );
 			auto ReadyIntent = Ready ? MakeNetworkMessageIntent(
@@ -3845,6 +4012,16 @@ namespace gargantuan::network {
 	std::size_t GameSession::Poll() {
 		return State->Poll();
 	}
+	std::size_t GameSession::PollPrivateHold() {
+		// The sole owner is already admitted. Close other handshakes at the
+		// boundary so no admission can be parked behind a frozen simulation.
+		std::vector<ConnectionId> Pending;
+		for (const auto &[Id, Peer] : State->Peers)
+			if (Peer.Phase != PeerPhase::Ready) Pending.push_back(Id);
+		for (const auto Id : Pending)
+			State->Reject(Id, DisconnectReason::ResourceExhaustion, "Private session is held");
+		return State->Poll(true);
+	}
 	void GameSession::Step(std::uint64_t SimulationTick) {
 		State->Step(SimulationTick);
 	}
@@ -3859,6 +4036,13 @@ namespace gargantuan::network {
 	}
 	const std::string &GameSession::GetFailure() const {
 		return State->Failure;
+	}
+	GameSessionLifecycleCounts GameSession::GetLifecycleCounts() const noexcept {
+		return {
+			.AcceptedPeers = State->Metrics.AcceptedPeers,
+			.PlayersCreated = State->Metrics.PlayersCreated,
+			.PlayersRemoved = State->Metrics.PlayersRemoved,
+		};
 	}
 	GameSessionMetrics GameSession::GetMetrics() const {
 		// Bounded aggregates only; no peer labels or retained per-message history.

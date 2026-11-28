@@ -319,7 +319,8 @@ namespace gargantuan {
 
 #if defined(GARGANTUAN_WITH_LOCAL_SQLITE) && GARGANTUAN_WITH_LOCAL_SQLITE
 		constexpr int LocalApplicationId = 0x47445331; // GDS1
-		constexpr int LocalSchemaVersion = 1;
+		constexpr char CreateReceipts[] =
+			"CREATE TABLE receipts (slot INTEGER PRIMARY KEY CHECK (slot BETWEEN 0 AND 63), request TEXT NOT NULL) STRICT";
 		constexpr int FilePageSize = 4096;
 		constexpr int FilePageCeiling = 32'768;
 		constexpr auto FileByteCeiling = static_cast<std::uintmax_t>(FilePageSize) * FilePageCeiling;
@@ -527,9 +528,11 @@ namespace gargantuan {
 		}
 
 		bool VerifyDatabase(sqlite3* Database, const DurableLocalPersistenceConfiguration& Configuration) {
-			if (SqlInteger(Database, "PRAGMA user_version") != LocalSchemaVersion) return false;
+			const auto Version = SqlInteger(Database, "PRAGMA user_version");
+			if (Version != 1 && Version != 2) return false;
 			const SqlStatement Schema(Database, "SELECT sql FROM sqlite_schema ORDER BY name");
 			if (Schema.Step() != SQLITE_ROW || Schema.Text(0) != CreateProfile
+				|| (Version == 2 && (Schema.Step() != SQLITE_ROW || Schema.Text(0) != CreateReceipts))
 				|| Schema.Step() != SQLITE_ROW || Schema.Text(0) != CreateRecords || Schema.Step() != SQLITE_DONE)
 				return false;
 			const SqlStatement Profile(Database, "SELECT identity, maximum_records, maximum_payload_bytes FROM profile WHERE id=1");
@@ -590,8 +593,13 @@ namespace gargantuan {
 			} else if (AppId != LocalApplicationId) {
 				return SqlFailure(sqlite3_errcode(RawDatabase), Context);
 			}
-			if (!VerifyDatabase(RawDatabase, Configuration))
-				return SqlFailure(sqlite3_errcode(RawDatabase), Context);
+			if (!VerifyDatabase(RawDatabase, Configuration)) return PersistenceStatus::Unavailable;
+			if (Configuration.RecordWorldWrites && SqlInteger(RawDatabase, "PRAGMA user_version") == 1) {
+				// Upgrade a verified v1 slot and its receipt schema in this opening transaction.
+				if (SqlExec(RawDatabase, CreateReceipts) != SQLITE_OK ||
+					SqlExec(RawDatabase, "PRAGMA user_version=2") != SQLITE_OK)
+					return SqlFailure(sqlite3_errcode(RawDatabase), Context);
+			}
 			if (const auto Interrupted = Context.Interruption()) return *Interrupted;
 			const int Commit = Initialize.Commit();
 			if (Commit != SQLITE_OK) return SqlFailure(Commit, Context);
@@ -671,7 +679,7 @@ namespace gargantuan {
 		}
 
 		PersistenceResult DurableMutation(sqlite3* Database, const PersistenceRequest& Request, const Execution& Context,
-			const LocalPersistenceLimits& Limits, const PersistenceBytes& Encoded) {
+			const LocalPersistenceLimits& Limits, const PersistenceBytes& Encoded, bool RecordReceipt) {
 			const SqlTransaction Transaction(Database);
 			if (Transaction.BeginCode() != SQLITE_OK) return Status(SqlFailure(Transaction.BeginCode(), Context));
 			std::optional<RecordMetadata> Existing;
@@ -713,6 +721,13 @@ namespace gargantuan {
 				if (Updated != SQLITE_DONE) return Status(SqlFailure(Updated, Context));
 			}
 			if (const auto Interrupted = Context.Interruption()) return Status(*Interrupted);
+			if (RecordReceipt && !Request.RequestId.empty()) {
+				SqlStatement Receipt(Database, "INSERT OR REPLACE INTO receipts VALUES (?1, ?2)");
+				Receipt.BindInteger(1, Usage->Revision % 64);
+				Receipt.BindText(2, Request.RequestId);
+				const int Written = Receipt.Step();
+				if (Written != SQLITE_DONE) return Status(SqlFailure(Written, Context));
+			}
 			const int Committed = Transaction.Commit();
 			if (Committed == SQLITE_OK) return MutationResult(Usage->Revision);
 			if (((Committed & 0xff) == SQLITE_BUSY || (Committed & 0xff) == SQLITE_LOCKED) && !sqlite3_get_autocommit(Database))
@@ -720,7 +735,7 @@ namespace gargantuan {
 			return Status(PersistenceStatus::UnknownOutcome);
 		}
 
-		class DurableLocalPersistenceProvider final : public IPersistenceProvider {
+		class DurableLocalPersistenceProvider final : public IPersistenceProvider, public ILocalMutationReceipts {
 		public:
 			explicit DurableLocalPersistenceProvider(DurableLocalPersistenceConfiguration Configuration)
 				: Configuration(std::move(Configuration)) {}
@@ -741,7 +756,18 @@ namespace gargantuan {
 				if (const auto Interrupted = Context.Interruption()) return Status(*Interrupted);
 				const SqlCancellation Cancellation(Database.get(), Context);
 				if (Request.Operation == PersistenceOperation::Get) return DurableGet(Database.get(), Request, Context);
-				return DurableMutation(Database.get(), Request, Context, Configuration.Limits, Encoded);
+				return DurableMutation(Database.get(), Request, Context, Configuration.Limits, Encoded, Configuration.RecordWorldWrites);
+			}
+
+			PersistenceStatus ReadCommitReceipt(const std::string& RequestId, PersistenceClock::time_point Deadline) override {
+				const Execution Context{{}, Deadline};
+				auto Guard = Context.Lock(Mutex);
+				if (Context.Interruption() || !Configuration.RecordWorldWrites || !Database || RequestId.empty())
+					return PersistenceStatus::UnknownOutcome;
+				const SqlCancellation Cancellation(Database.get(), Context);
+				SqlStatement Read(Database.get(), "SELECT 1 FROM receipts WHERE request=?1 LIMIT 1");
+				Read.BindText(1, RequestId);
+				return Read.Step() == SQLITE_ROW ? PersistenceStatus::Ok : PersistenceStatus::UnknownOutcome;
 			}
 
 		private:

@@ -1,6 +1,6 @@
 const c, t, p = require("@tools/classes").unpack()
 const PauseResult = "{ Ok: true, Value: boolean } | { Ok: false, Code: string, Message: string }"
-const PauseOperation = "{ Await: (self: any) -> (" .. PauseResult .. "), GetResult: (self: any) -> (" .. PauseResult .. ")?, GetState: (self: any) -> string, Cancel: (self: any) -> boolean, Completed: Signal }"
+const PauseOperation = "{ Await: (self: any) -> (" .. PauseResult .. "), GetResult: (self: any) -> (" .. PauseResult .. ")?, GetState: (self: any) -> string, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
 
 return c({
 	name = "RunService",

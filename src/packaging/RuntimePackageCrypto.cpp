@@ -180,6 +180,10 @@ namespace gargantuan {
 	}
 
 	Status GenerateRuntimePackageReleaseSalt(std::array<unsigned char, 32> &Output) {
+		return GenerateSecureRandomBytes(Output);
+	}
+
+	Status GenerateSecureRandomBytes(std::array<unsigned char, 32> &Output) {
 		Output.fill(0);
 #if defined(GARGANTUAN_RUNTIME_PACKAGE_OPENSSL) && GARGANTUAN_RUNTIME_PACKAGE_OPENSSL
 		const PreserveOpenSslErrors Errors;

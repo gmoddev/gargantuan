@@ -32,6 +32,8 @@ namespace gargantuan {
 	inline constexpr std::uint32_t DistributedPlayerPackageFormatVersion = 3;
 	inline constexpr std::uint32_t RuntimeDistributionPackageFormatVersion = 4;
 	inline constexpr std::uint32_t StandalonePackageFormatVersion = 5;
+	inline constexpr std::uint32_t ManagedApplicationPackageFormatVersion = 6;
+	inline constexpr std::uint32_t DistributedApplicationPackageFormatVersion = 7;
 	inline constexpr std::uint32_t RuntimeCompatibilityVersion = 1;
 
 	enum class PackageConfiguration : std::uint8_t { Development, Release };
@@ -196,6 +198,7 @@ namespace gargantuan {
 		PackageRuntimeLoadMode LoadMode = PackageRuntimeLoadMode::Complete;
 		std::optional<std::string> ClientCodeJson;
 		std::shared_ptr<const RuntimeDistributionCodeCatalog> RuntimeCode;
+		std::shared_ptr<const RuntimeDistributionCodeCatalog> ApplicationCode;
 		std::string ClientCodeIdentity;
 	};
 

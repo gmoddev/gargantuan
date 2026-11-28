@@ -1,6 +1,7 @@
 #pragma once
 #include "gargantuan/blockgrid/AssetAudience.hpp"
 
+#include "gargantuan/network/GameAdmission.hpp"
 #include "gargantuan/network/Limits.hpp"
 #include "gargantuan/network/GameplayInput.hpp"
 #include "gargantuan/network/Outcome.hpp"
@@ -39,6 +40,7 @@ namespace gargantuan::network {
 	inline constexpr std::size_t MaximumGameSessionPeers = 512;
 
 	enum class GameSessionRole : std::uint8_t { Server, Client };
+	enum class GameSessionAdmissionMode : std::uint8_t { DevelopmentLocal, Authenticated };
 	enum class GameSessionStatus : std::uint8_t {
 		Created,
 		Starting,
@@ -60,6 +62,14 @@ namespace gargantuan::network {
 		ReplicationRelevanceConfiguration Relevance;
 		StructuralReplicationConfiguration StructuralReplication;
 		bool AllowInsecureDevelopmentNetwork = false;
+		GameSessionAdmissionMode AdmissionMode = GameSessionAdmissionMode::DevelopmentLocal;
+		// Startup-only trusted server dependency. Never sourced from a client frame.
+		std::shared_ptr<IGameAdmissionProvider> AdmissionProvider;
+		// The client presents an opaque v2 proof; Engine never interprets it.
+		std::optional<std::array<std::byte, GameAdmissionProofBytes>> AdmissionProof;
+		// Remote authenticated admission requires actual native transport identity.
+		bool RequireServerIdentity = false;
+		std::optional<TransportServerPublicKey> ExpectedServerPublicKey;
 		// Trusted startup-only server input; absent means legacy/unqualified.
 		std::optional<ReliableServiceProfile> ReliableService;
 		// Trusted startup-only client declaration of the canonical ordinary source
@@ -285,6 +295,12 @@ namespace gargantuan::network {
 		std::uint64_t CharacterMaximumCurrentPublicationAgeTicks = 0;
 	};
 
+	struct GameSessionLifecycleCounts final {
+		std::uint64_t AcceptedPeers = 0;
+		std::uint64_t PlayersCreated = 0;
+		std::uint64_t PlayersRemoved = 0;
+	};
+
 	class GameSession final {
 	  public:
 		GameSession(
@@ -299,6 +315,7 @@ namespace gargantuan::network {
 		[[nodiscard]] TransportOperationResult Start();
 		void Stop();
 		std::size_t Poll();
+		[[nodiscard]] std::size_t PollPrivateHold();
 		void Step(std::uint64_t SimulationTick);
 		bool AttachClientRuntime(Engine &Runtime);
 
@@ -306,6 +323,8 @@ namespace gargantuan::network {
 		[[nodiscard]] GameSessionStatus GetStatus() const;
 		[[nodiscard]] const std::string &GetFailure() const;
 		[[nodiscard]] GameSessionMetrics GetMetrics() const;
+		// Stored counters only: safe to sample after Stop during host cleanup.
+		[[nodiscard]] GameSessionLifecycleCounts GetLifecycleCounts() const noexcept;
 		[[nodiscard]] std::shared_ptr<DataModel> GetClientDataModel() const;
 		[[nodiscard]] std::optional<ConnectionId> GetPrimaryConnection() const;
 		[[nodiscard]] std::shared_ptr<Player> GetAcceptedPlayer(ConnectionId Connection) const;

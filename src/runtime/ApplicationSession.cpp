@@ -22,18 +22,20 @@ namespace gargantuan {
 			StringField(L, "Name", Slot.Name.c_str());
 			if (!Slot.Seed.empty()) StringField(L, "Seed", Slot.Seed.c_str());
 			StringField(L, "Revision", "1");
-			StringField(L, "Compatibility", Slot.Compatible ? "Compatible" : "RequiresMigration");
+			StringField(L, "Compatibility", Slot.Initializing ? "Initializing" : Slot.Compatible ? "Compatible" : "RequiresMigration");
 			lua_setreadonly(L, -1, true);
 		}
 
 	namespace {
 		void PushSession(lua_State *L, bool Active, std::uint64_t Generation, const char *State, const WorldSlot *Slot = nullptr,
-			bool Remote = false, bool Disconnected = false) {
+			bool Remote = false, bool Disconnected = false, bool Private = false) {
 			lua_createtable(L, 0, 4);
 			StringField(L, "State", State);
 			StringField(L, "Generation", std::to_string(Generation).c_str());
-			StringField(L, "World", Active ? "Ready" : std::string_view(State) == "Starting" ? "Preparing" : "Absent");
-			if (Active) StringField(L, "Mode", Remote ? "Remote" : "Offline");
+			const std::string_view Phase(State);
+			StringField(L, "World", Phase == "Leaving" ? "Retiring" : Active ? "Ready" :
+				Phase == "Starting" || Phase == "Connecting" ? "Preparing" : "Absent");
+			if (Active) StringField(L, "Mode", Private ? "PrivateHost" : Remote ? "Remote" : "Offline");
 			if (Disconnected) {
 				lua_createtable(L, 0, 3);
 				lua_pushboolean(L, false); lua_setfield(L, -2, "Ok");
@@ -58,6 +60,9 @@ namespace gargantuan {
 			bool Page = false;
 			std::optional<WorldSlot> Slot;
 			bool Remote = false;
+			bool Private = false;
+			bool ListingPage = false;
+			std::string ListingId, ListingName;
 
 			bool Succeeded() const { return !Code && (!Catalog || Catalog->Code.empty()); }
 
@@ -68,6 +73,20 @@ namespace gargantuan {
 				if (Code) {
 					StringField(L, "Code", Code);
 					StringField(L, "Message", Message);
+				} else if (ListingPage) {
+					lua_createtable(L, 0, 1);
+					lua_createtable(L, ListingId.empty() ? 0 : 1, 0);
+					if (!ListingId.empty()) {
+						lua_createtable(L, 0, 2);
+						StringField(L, "Id", ListingId.c_str());
+						StringField(L, "Name", ListingName.c_str());
+						lua_setreadonly(L, -1, true);
+						lua_rawseti(L, -2, 1);
+					}
+					lua_setreadonly(L, -1, true);
+					lua_setfield(L, -2, "Items");
+					lua_setreadonly(L, -1, true);
+					lua_setfield(L, -2, "Value");
 				} else if (Catalog && !Catalog->Code.empty()) {
 					StringField(L, "Code", Catalog->Code.c_str());
 					StringField(L, "Message", "World storage could not complete the requested operation.");
@@ -85,11 +104,26 @@ namespace gargantuan {
 					} else PushWorldSlot(L, Catalog->Items.at(0));
 					lua_setfield(L, -2, "Value");
 				} else {
-					if (Session) PushSession(L, Active, Generation, Active ? "Active" : "Idle", Slot ? &*Slot : nullptr, Remote);
+					if (Session) PushSession(L, Active, Generation, Active ? "Active" : "Idle", Slot ? &*Slot : nullptr, Remote, false, Private);
 					else lua_pushboolean(L, Paused);
 					lua_setfield(L, -2, "Value");
 				}
 				lua_setreadonly(L, -1, true);
+				return 1;
+			}
+		};
+
+		void PushProgress(lua_State *L, const char *Phase) {
+			lua_createtable(L, 0, 1);
+			StringField(L, "Phase", Phase);
+			lua_setreadonly(L, -1, true);
+		}
+
+		class ProgressSignal final : public BaseSignal {
+		  public:
+			Enums::SignalType GetSignalType() override { return Enums::SignalType::Engine; }
+			int LPushArgument(lua_State *L, std::any Value) override {
+				PushProgress(L, std::any_cast<const char *>(Value));
 				return 1;
 			}
 		};
@@ -111,6 +145,7 @@ namespace gargantuan {
 		SessionCommand Command{};
 		std::uint64_t OwnerGeneration = 0;
 		ObjectId Owner;
+		bool PrivateServer = false;
 		bool CancelRequested = false;
 		bool Irreversible = false;
 		bool Started = false;
@@ -121,6 +156,23 @@ namespace gargantuan {
 		bool Page = false;
 		std::optional<Reply> Result;
 		std::shared_ptr<Completion> Completed = std::make_shared<Completion>();
+		std::shared_ptr<ProgressSignal> ProgressChanged = std::make_shared<ProgressSignal>();
+		const char *Phase = "Validating";
+
+		void Progress(const char *Next) {
+			if (std::string_view(Phase) == Next) return;
+			Phase = Next;
+			ProgressChanged->Fire(Phase);
+		}
+
+		void Finish(Reply Outcome) {
+			Result = std::move(Outcome);
+			if (Result->Succeeded()) Progress("Ready");
+			ProgressChanged->DisconnectAll();
+			Completed->Fire(*Result);
+			Completed->DisconnectAll();
+		}
+
 		using Reference = std::shared_ptr<Operation>;
 
 		static Operation &Bound(lua_State *L) {
@@ -128,7 +180,9 @@ namespace gargantuan {
 		}
 
 		static int Push(lua_State *L, Reference Value) {
-			lua_createtable(L, 0, 5);
+			lua_createtable(L, 0, 7);
+			StackValue<std::shared_ptr<ProgressSignal>>::Push(L, Value->ProgressChanged);
+			lua_setfield(L, -2, "ProgressChanged");
 			StackValue<std::shared_ptr<Completion>>::Push(L, Value->Completed);
 			lua_setfield(L, -2, "Completed");
 			new (lua_newuserdatadtor(L, sizeof(Reference), [](void *Data) {
@@ -147,6 +201,12 @@ namespace gargantuan {
 				auto &Op = Bound(L);
 				if (Op.Result) return Op.Result->Push(L);
 				lua_pushnil(L);
+				return 1;
+			});
+			Method("GetProgress", [](lua_State *L) {
+				const auto &Op = Bound(L);
+				if (Op.Result && !Op.Result->Succeeded()) lua_pushnil(L);
+				else PushProgress(L, Op.Result ? "Ready" : Op.Phase);
 				return 1;
 			});
 			Method("GetState", [](lua_State *L) {
@@ -169,6 +229,27 @@ namespace gargantuan {
 		}
 	};
 
+	int ApplicationSession::FindServers(lua_State *L, Instance *Receiver) {
+		const auto *App = Caller(L, Receiver);
+		auto Op = std::make_shared<Operation>();
+		const std::string_view Source = lua_type(L, 2) == LUA_TSTRING ? std::string_view(lua_tostring(L, 2), lua_objlen(L, 2)) : std::string_view{};
+		Reply Page;
+		if (!App) Page = {"NotAuthorized", "The local application owns session discovery."};
+		else if ((Source != "Node" && Source != "LAN") || !lua_isnoneornil(L, 3) || lua_gettop(L) > 3)
+			Page = {"InvalidOptions", "Invalid session source or cursor."};
+		else if (!App->Sessions.Invitation || App->Sessions.Invitation->Source != Source)
+			Page = {"Unavailable", "The launcher has no directory for this source."};
+		else {
+			Page.ListingPage = true;
+			if (App->Sessions.HasCurrentInvitation()) {
+				Page.ListingId = App->Sessions.Invitation->Id;
+				Page.ListingName = App->Sessions.Invitation->Name;
+			}
+		}
+		Op->Result = std::move(Page);
+		return Operation::Push(L, std::move(Op));
+	}
+
 	int ApplicationSession::RequestReconnect(lua_State *L, Instance *Receiver) {
 		auto *App = Caller(L, Receiver);
 		if (!App || !App->Sessions.Disconnected || App->Sessions.LastEndpoint.empty() || lua_gettop(L) != 1) {
@@ -190,8 +271,8 @@ namespace gargantuan {
 		Op->OwnerGeneration = GetCurrentScriptSecurityContext().ExecutionGeneration;
 		Op->Owner = GetCurrentScriptSecurityContext().IssuingScript;
 		if (!App) Op->Result = Reply{"NotAuthorized", "The local application owns this operation."};
-		else if (lua_gettop(L) > 1 && !lua_isnoneornil(L, 2) &&
-			((Command != SessionCommand::StartLocal && Command != SessionCommand::Join) || !lua_istable(L, 2)))
+		else if (lua_gettop(L) > 2 || (lua_gettop(L) > 1 && !lua_isnoneornil(L, 2) &&
+			((Command != SessionCommand::StartLocal && Command != SessionCommand::Join) || !lua_istable(L, 2))))
 			Op->Result = Reply{"InvalidOptions", "Invalid offline operation options."};
 		else if (App->Sessions.Pending) Op->Result = Reply{"Busy", "Another session operation is pending."};
 		else if ((Command == SessionCommand::StartLocal || Command == SessionCommand::Join) && App->Sessions.Active)
@@ -205,11 +286,19 @@ namespace gargantuan {
 				if (!lua_istable(L, 2)) Op->Result = Reply{"InvalidOptions", "A direct target is required."};
 				else {
 					lua_rawgetfield(L, 2, "Kind");
-					const bool Direct = lua_type(L, -1) == LUA_TSTRING && std::string_view(lua_tostring(L, -1)) == "Direct";
+					const std::string_view Kind = lua_type(L, -1) == LUA_TSTRING ?
+						std::string_view(lua_tostring(L, -1), lua_objlen(L, -1)) : std::string_view{};
+					const bool Direct = Kind == "Direct", Listing = Kind == "Listing";
 					lua_pop(L, 1);
-					lua_rawgetfield(L, 2, "Address");
-					if (!Direct || lua_type(L, -1) != LUA_TSTRING || lua_objlen(L, -1) > 255)
-						Op->Result = Reply{"InvalidOptions", "Expected a bounded direct connection target."};
+					lua_rawgetfield(L, 2, Listing ? "Id" : "Address");
+					if ((!Direct && !Listing) || lua_type(L, -1) != LUA_TSTRING || !lua_objlen(L, -1) || lua_objlen(L, -1) > 255)
+						Op->Result = Reply{"InvalidOptions", "Expected a direct address or listing identity."};
+					else if (Listing) {
+						if (!App->Sessions.HasCurrentInvitation() || App->Sessions.Invitation->Id !=
+								std::string_view(lua_tostring(L, -1), lua_objlen(L, -1)))
+							Op->Result = Reply{"NotFound", "This session invitation is no longer available."};
+						else Op->Address = App->Sessions.Invitation->Address;
+					}
 					else Op->Address.assign(lua_tostring(L, -1), lua_objlen(L, -1));
 					lua_pop(L, 1);
 				}
@@ -224,15 +313,24 @@ namespace gargantuan {
 						if (Length == 32) Op->SaveId.assign(Id, Length);
 						else Op->Result = Reply{"InvalidOptions", "Invalid world slot identity."};
 					} else if (Key && std::string_view(Key) == "PrivateServer" && lua_isboolean(L, -1)) {
-						if (lua_toboolean(L, -1)) Op->Result = Reply{"UnsupportedTopology", "Private Server is unavailable."};
+						Op->PrivateServer = lua_toboolean(L, -1);
 					} else Op->Result = Reply{"InvalidOptions", "Unknown world selection option."};
 					lua_pop(L, 1);
 				}
 			}
+			if (!Op->SaveId.empty() && !App->Sessions.OpenCatalog()) Op->Result = Reply{"Unavailable", "World storage is unavailable."};
 			if (!Op->SaveId.empty() && App->Sessions.CatalogOperation) Op->Result = Reply{"Busy", "World selection is busy."};
 			if (!Op->Result) App->Sessions.Pending = Op;
 		}
 		return Operation::Push(L, std::move(Op));
+	}
+
+	bool ApplicationSession::OpenCatalog() {
+		if (!Catalog && Setup) {
+			try { Setup(*this); }
+			catch (const std::exception &) { return false; }
+		}
+		return Catalog != nullptr;
 	}
 
 	void ApplicationSession::ConfigureCatalog(std::shared_ptr<IPersistenceProvider> Provider, std::shared_ptr<DataModel> Graph,
@@ -244,7 +342,7 @@ namespace gargantuan {
 		auto *App = Caller(L, Receiver);
 		auto Op = std::make_shared<Operation>();
 		if (!App) Op->Result = Reply{"NotAuthorized", "The local application owns world selection."};
-		else if (!App->Sessions.Catalog) Op->Result = Reply{"Unavailable", "World storage is unavailable."};
+		else if (!App->Sessions.OpenCatalog()) Op->Result = Reply{"Unavailable", "World storage is unavailable."};
 		else if (App->Sessions.CatalogOperation || (App->Sessions.Pending && !App->Sessions.Pending->SaveId.empty()))
 			Op->Result = Reply{"Busy", "A world catalog operation is pending."};
 		else {
@@ -280,6 +378,7 @@ namespace gargantuan {
 		if (!CatalogOperation) return;
 		auto Op = CatalogOperation;
 		if (Op->CancelRequested || !App.IsOwnerCurrent(Op->Owner, Op->OwnerGeneration)) Catalog->Cancel();
+		Op->Progress("OpeningSave");
 		auto Result = Catalog->Poll();
 		Op->Irreversible = !Catalog->CanCancel();
 		if (!Result) return;
@@ -287,9 +386,7 @@ namespace gargantuan {
 		Reply Outcome;
 		Outcome.Page = Op->Page;
 		Outcome.Catalog = std::make_shared<WorldCatalogResult>(std::move(*Result));
-		Op->Result = Outcome;
-		Op->Completed->Fire(Outcome);
-		Op->Completed->DisconnectAll();
+		Op->Finish(std::move(Outcome));
 	}
 
 	int ApplicationSession::GetInfo(lua_State *L, Instance *Receiver) {
@@ -302,9 +399,11 @@ namespace gargantuan {
 		if (Pending && Pending->Command == SessionCommand::Join) State = "Connecting";
 		if (Pending && Pending->Command == SessionCommand::Leave) State = "Leaving";
 		PushSession(L, Sessions.Active, Sessions.Generation, State, Sessions.ActiveSlot ? &*Sessions.ActiveSlot : nullptr,
-			Sessions.Remote, Sessions.Disconnected);
+			Sessions.Remote, Sessions.Disconnected, Sessions.Private);
 		return 1;
 	}
+
+	bool ApplicationSession::StartingPrivateServer() const { return Pending && Pending->PrivateServer; }
 
 	std::string_view ApplicationSession::GetJoinAddress() const { return Pending ? std::string_view(Pending->Address) : std::string_view{}; }
 
@@ -313,9 +412,14 @@ namespace gargantuan {
 	}
 
 	void ApplicationSession::RetireDisconnected() {
-		Active = Remote = Paused = false;
+		Active = Remote = Private = Paused = false;
 		Disconnected = true;
+		ActiveSlot.reset();
 		PauseOwners.clear();
+		if (auto Op = std::exchange(Pending, {})) {
+			Reply Outcome{"Disconnected", "The connection closed during the session operation."};
+			Op->Finish(std::move(Outcome));
+		}
 	}
 
 	const WorldSlot *ApplicationSession::GetStartingSlot() const {
@@ -323,9 +427,9 @@ namespace gargantuan {
 	}
 
 	void ApplicationSession::Commit(ApplicationPresentation &App, const Executor &Execute, const std::function<void()> &DiscardStart) {
-		if (std::erase_if(PauseOwners, [&](const auto &Item) { return !App.IsOwnerCurrent(Item.first, Item.second); }) &&
-			PauseOwners.empty() && Active && Paused) {
-			(void)Execute(SessionCommand::Resume);
+		std::erase_if(PauseOwners, [&](const auto &Item) { return !App.IsOwnerCurrent(Item.first, Item.second); });
+		if (PauseOwners.empty() && Active && Paused) {
+			if (!Execute(SessionCommand::Resume)) return;
 			Paused = false;
 			App.NotifyPause(false);
 		}
@@ -336,6 +440,7 @@ namespace gargantuan {
 		if (!Op->SaveId.empty() && !Op->Slot && (!Op->CancelRequested || Op->ReadingSlot) && Catalog) {
 			try {
 				if (!Op->ReadingSlot) {
+					Op->Progress("OpeningSave");
 					Catalog->Begin(WorldCatalogAction::Resolve, Op->SaveId);
 					Op->ReadingSlot = true;
 				}
@@ -349,7 +454,7 @@ namespace gargantuan {
 			} catch (const std::invalid_argument &) { Outcome = {"InvalidOptions", "Invalid world slot identity."}; }
 		}
 		if (Op->CancelRequested) Outcome = {"Cancelled", "Session operation was cancelled."};
-		else if (!App.IsOwnerCurrent(Op->Owner, Op->OwnerGeneration)) Outcome = {"Retired", "Session owner retired."};
+		else if (!Op->Irreversible && !App.IsOwnerCurrent(Op->Owner, Op->OwnerGeneration)) Outcome = {"Retired", "Session owner retired."};
 		else if (!Op->SaveId.empty() && !Catalog) Outcome = {"Unavailable", "World storage is unavailable."};
 		else if (Outcome.Succeeded()) {
 			try {
@@ -363,23 +468,41 @@ namespace gargantuan {
 				const bool ChangeHold = Hold || Op->Command == SessionCommand::Resume;
 				if (ChangeHold) {
 					const bool Effective = Hold || PauseOwners.size() > PauseOwners.count(Op->Owner);
-					if (Effective != Paused) (void)Execute(Effective ? SessionCommand::Pause : SessionCommand::Resume);
+					if (Effective != Paused) {
+						Op->Irreversible = true;
+						if (!Execute(Effective ? SessionCommand::Pause : SessionCommand::Resume)) return;
+					}
 					if (Hold) PauseOwners[Op->Owner] = Op->OwnerGeneration;
 					else PauseOwners.erase(Op->Owner);
 					Paused = Effective;
-				} else if (!Execute(Op->Command)) return;
+				} else {
+					if (Op->Command == SessionCommand::Leave) {
+						Op->Irreversible = true;
+						Op->Progress("Retiring");
+					} else Op->Progress(Op->Command == SessionCommand::Join ? "Connecting" :
+						Op->PrivateServer ? "StartingHost" : "Loading");
+					if (Op->CancelRequested) {
+						Outcome = {"Cancelled", "Session operation was cancelled."};
+						Pending.reset();
+						if (Starting) DiscardStart();
+						Op->Finish(std::move(Outcome));
+						return;
+					}
+					if (!Execute(Op->Command)) return;
+				}
 				switch (Op->Command) {
 				case SessionCommand::StartLocal: case SessionCommand::Join:
-					Active = true; Paused = false; ActiveSlot = Op->Slot; Remote = Op->Command == SessionCommand::Join;
+					Active = true; Paused = false; ActiveSlot = Op->Slot; Private = Op->PrivateServer; Remote = Op->Command == SessionCommand::Join;
 					LastEndpoint = Remote ? Op->Address : std::string{};
 					Disconnected = false; break;
-				case SessionCommand::Leave: Active = Remote = Paused = false; PauseOwners.clear(); ActiveSlot.reset(); break;
+				case SessionCommand::Leave: Active = Remote = Private = Paused = false; PauseOwners.clear(); ActiveSlot.reset(); break;
 				case SessionCommand::Pause: case SessionCommand::Resume: break;
 				}
 				Outcome = {nullptr, nullptr, Starting || Op->Command == SessionCommand::Leave,
 					Active, Paused, Generation};
 				Outcome.Slot = ActiveSlot;
 				Outcome.Remote = Remote;
+				Outcome.Private = Private;
 			} catch (const WorldInUse &) {
 				Outcome = {"SaveInUse", "Another session owns the selected world."};
 			} catch (SessionAdmissionFailure Failure) {
@@ -388,7 +511,9 @@ namespace gargantuan {
 				case SessionAdmissionFailure::Unavailable: Outcome = {"Unavailable", "The selected world provider is unavailable."}; break;
 				case SessionAdmissionFailure::Disconnected: Outcome = {"Disconnected", "The connection closed before the session was ready."}; break;
 				case SessionAdmissionFailure::TimedOut: Outcome = {"TimedOut", "The connection did not become ready in time."}; break;
+				case SessionAdmissionFailure::Incompatible: Outcome = {"Incompatible", "The server world baseline differs from the selected save."}; break;
 				case SessionAdmissionFailure::InvalidOptions: Outcome = {"InvalidOptions", "The direct connection target is invalid."}; break;
+				case SessionAdmissionFailure::NotAuthorized: Outcome = {"NotAuthorized", "A fresh native grant for this destination is required."}; break;
 				case SessionAdmissionFailure::SaveFailed: Outcome = {"SaveFailed", "A pending world write failed while leaving."}; break;
 				case SessionAdmissionFailure::UnknownOutcome: Outcome = {"UnknownOutcome", "A world write requires reconciliation."}; break;
 				}
@@ -396,9 +521,7 @@ namespace gargantuan {
 		}
 		Pending.reset();
 		if (!Outcome.Succeeded() && (Op->Command == SessionCommand::StartLocal || Op->Command == SessionCommand::Join)) DiscardStart();
-		Op->Result = Outcome;
 		if (PreviouslyPaused != Paused) App.NotifyPause(Paused);
-		Op->Completed->Fire(Outcome);
-		Op->Completed->DisconnectAll();
+		Op->Finish(std::move(Outcome));
 	}
 }

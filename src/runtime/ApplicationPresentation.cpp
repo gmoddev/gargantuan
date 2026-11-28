@@ -28,8 +28,8 @@ namespace gargantuan {
 
 	ApplicationPresentation::ApplicationPresentation(std::shared_ptr<DataModel> Graph,
 		const std::shared_ptr<Script> &Entry, std::filesystem::path Font,
-		std::function<void(std::string, std::string)> Diagnostic, bool AudioEnabled)
-		: Gui(Graph, std::move(Font), GuiRuntimeMode::Application),
+		std::function<void(std::string, std::string)> Diagnostic, bool AudioEnabled, ApplicationSession::CatalogSetup Setup, std::optional<SessionInvitation> Invitation)
+		: Sessions(std::move(Setup)), Gui(Graph, std::move(Font), GuiRuntimeMode::Application),
 		  VM(std::make_shared<ScriptEngine>(Graph, std::move(Diagnostic), RuntimeMode::NetworkClient)), EntryScript(Entry) {
 		if (!Graph->ApplicationGraph)
 			throw std::invalid_argument("[Lifecycle:Application] Expected a private presentation graph");
@@ -40,6 +40,7 @@ namespace gargantuan {
 			throw std::invalid_argument("[Lifecycle:Application] Expected an enabled client entry in the application folder");
 		Run = std::dynamic_pointer_cast<RunService>(Graph->GetService("RunService"));
 		Input = std::dynamic_pointer_cast<InputService>(Graph->GetService("InputService"));
+		Sessions.SetInvitation(std::move(Invitation));
 		VM->Application = this;
 		try {
 			(void)Entry->GetObjectId();

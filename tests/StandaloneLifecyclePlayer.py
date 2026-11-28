@@ -30,7 +30,14 @@ task.defer(function()
     assert(Sessions:GetSession().State == "Idle")
     local Previous = Sessions:GetSession().Generation
     for Cycle = 1, CYCLES do
-        local Started = Sessions:StartLocal():Await()
+        local Operation = Sessions:StartLocal()
+        assert(Operation:GetProgress().Phase == "Validating")
+        local SawLoad = false
+        Operation.ProgressChanged:Connect(function(Progress)
+            if Progress.Phase == "Loading" then SawLoad = true end
+        end)
+        local Started = Operation:Await()
+        assert(Operation:GetProgress().Phase == "Ready" and SawLoad)
         assert(Started.Ok and Started.Value.State == "Active")
         assert(Started.Value.Generation ~= Previous)
         Previous = Started.Value.Generation
