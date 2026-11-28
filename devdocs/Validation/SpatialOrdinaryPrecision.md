@@ -17,3 +17,16 @@ For each process compute the nearest-rank p95. For each block subtract the mean 
 Missing-step bounds insert all omitted ticks below or above every observed duration within each process. To bound the one-sided interval, form every block's minimum and maximum compatible log ratio, take the mean of its upper endpoints and bound the sample standard deviation using the furthest endpoint of every block from the overall center of the intervals. The 2% criterion requires the upper bound to stay below 1.02 after this sensitivity.
 
 An excluded same-binary method pilot used two four-process blocks of 384 measured ticks to verify the affinity, window boundaries and polling cadence. A second excluded four-process smoke verified six bodies actually moved. Neither pilot compared the historical and current binaries.
+
+## Reproduction
+
+Use the respective retained Windows Release executable and adjacent runtime for each revision. On this Windows 11 Pro build 26300 host the three adjacent OpenSSL and Protobuf DLLs are identical across packages. SDL3 differs, with SHA-256 `26f3c5ae065de7f04016d4849fbeae280d8730945f2778099f84373b02348f1c` historically and `93a5c07a190c8e01352a34894ecbc70d39bc9f1ed5bb7cb81e61a15dcb2c5beb` currently. The comparison measures the complete shipped configurations. Acquisition requires two distinct cache groups and fresh output directories. The affinity arguments default to the controller's topology. Run the two scenes sequentially.
+
+```powershell
+python -B tests/SpatialConstructionPrecision.py --current $Current --baseline $Historical --output $Ordinary --scene ordinary --blocks 64 --frames 1024 --warmup 192
+python -B tests/SpatialConstructionPrecision.py --current $Current --baseline $Historical --output $Rigid --scene rigid --blocks 16 --frames 768 --warmup 192
+python -B tests/SpatialConstructionPrecisionAnalysis.py --input $Ordinary --input $Rigid --output $Receipt
+python -B tests/SpatialConstructionPrecisionAnalysis.py --verify devdocs/Validation/SpatialOrdinaryPrecision
+```
+
+The analysis validates source hashes, scheduled order, native nanosecond sums, omitted group positions and rank calculations. `Processes.csv` holds the per-process native counters and percentiles. `Blocks.csv` holds the paired effects, with natural-log ratios and arithmetic differences in microseconds. Each `Ticks.csv.gz` row contains the exact samples, in chronological order, plus zero-based positions, counts and aggregate durations for multi-step observations. The setup, warmup and intervals between disabled and enabled counter windows are outside the measurement. The replay requires only Python's standard library and the repository's existing measurement helpers.
