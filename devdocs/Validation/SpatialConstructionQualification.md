@@ -109,9 +109,9 @@ At `d28a2ad74f59dd65d80c66aed924cb2dd10ff476`, the build-directory and staged Pl
 
 The exported Linux archive held 108 files including the authoring packager, Player and Server, occupied 94,218,240 bytes and had SHA-256 `9b3d5c1bb1fe6b371b19bd9c2d36167abe8e6a239857dfb3d3bf99f4cf0cdad0`. Neither runtime distribution contained the configured source, build or GNS fetch prefix. The build-tree authoring packager retained its SDL build-library path. In a separate container with the archive and no build tree, it required `LD_LIBRARY_PATH` pointing at the extracted `RuntimeDistribution` to resolve SDL. It built and validated a 35,476,054-byte FirstCompleteGame, including a second validation after moving it. The moved Player ran with a private `XDG_DATA_HOME`, system PATH and no library-path override, reporting 164 ms startup. The Windows 149-file all-products archive occupied 47,067,847 bytes with SHA-256 `2b492fefad40331ee9b1b4c3dfc33fd0ca68aad737259c064d928985128757b3`. The Windows Player and Server each went from one Engine source path and 39 external GNS source references to zero. Their prebuilt OpenSSL and Protobuf DLLs retained the byte-identical hashes of the qualified `284443879` baseline. The runtime check is scoped to the known authoring, Engine, build and GNS directories. [Package validation](../../tests/PackagingTests.cpp)
 
-### Final platform totals
+### Platform totals at the original delivery
 
-The final source was `d28a2ad74f59dd65d80c66aed924cb2dd10ff476`. The ledger counts each CTest execution, including deliberate reruns under multiple groups. [Full observations by source, configuration and test](SpatialConstructionPlatformTests.csv)
+The original delivered source was `d28a2ad74f59dd65d80c66aed924cb2dd10ff476`. The ledger counts each CTest execution, including deliberate reruns under multiple groups. [Full observations by source, configuration and test](SpatialConstructionPlatformTests.csv)
 
 | Configuration | Passed / executed | Package and behavior evidence |
 | --- | ---: | --- |
@@ -122,6 +122,32 @@ The final source was `d28a2ad74f59dd65d80c66aed924cb2dd10ff476`. The ledger coun
 The instrumented Linux failure identified the actual NUL-terminated `/src/include/gargantuan/datatypes/Signal.hpp` in the ELF read-only data section. The Server contained the same spelling at byte 62,026,701. The instrumented SDL retained `/src/vendor/sdl/src/SDL.c` at byte 8,658,944. Both ordinary Release distributions passed the same whole-file privacy check. Full Foundation took 8.93 s in the focused sanitizer run. Direct replication and the two signed transfer transports took 0.68, 1.10 and 2.04 s. The two-Player Yard and a fresh SQLite Server passed in 21.04 s. [Package boundary](../../tests/PackagingTests.cpp) · [Two independent client runtimes](../../tests/SpatialSessionTransferTests.cpp)
 
 The final three lighting checks used two coincident authored domains. The Windows worker changed 331 selected-domain pixels when it toggled the caster's shadow and 14,543 when it added the local lamp. The separate Windows controller changed 332 and 14,522. Linux lavapipe changed 331 and 14,542. Every run preserved the foreign-domain image byte for byte. The worker's native grid viewport changed 874 visible pixels, 1,771 pixels on translation and 528 on the sparse edit, with zero residuals after hide, deletion or full mesh reconstruction. The paired viewport fixture rendered 3,844 red and 3,844 blue pixels, then zero retired pixels. The instrumented Linux renderer reproduced every grid and paired-view count with the private Mesa ICD resident and full leak detection enabled. The isolated SDL empty-device control again reported 256 bytes in two allocations only when it unloaded the driver. [Light and shadow fixture](../../tests/SpatialDomainLighting.py) · [Grid viewport](../../tests/SpatialConstructionIntegrationTests.cpp) · [Paired viewports](../../tests/ViewportFrameTests.cpp)
+
+### Linux Clang instrumented package follow-up
+
+At `eea1649e0f6309dbac3a5fca34a01aa7a38d6e31`, the unchanged `gargantuan_packaging` test completed in 120.46 s. The staged Player distribution contained 54 files and 199,699,489 bytes. The Server distribution contained 53 files and 201,113,716 bytes. Every file cleared a separate scan for the distinctive external GameNetworkingSockets and SQLite checkout names. The relocated FirstCompleteGame Player passed in 8.20 s and the dedicated Server passed in 5.04 s. The build retained Clang 19.1.1, `-O2 -gline-tables-only`, ASan, UBSan, frame pointers and nonrecovering checks. Leak detection stayed enabled. The two pre-existing GNS exclusions applied only to its upstream target. [Original package test](../../tests/PackagingTests.cpp) · [Compiler setup](../../cmake/ClangSanitizerPaths.cmake)
+
+| Instrumented ELF | Bytes | Earlier absolute source / build tokens | Current absolute source / build tokens | Location from a detached symbol file |
+| --- | ---: | ---: | ---: | --- |
+| GargantuanPlayer | 170,417,112 | 8,618 / 203 | 0 / 0 | `src/player/PlayerMain.cpp:3` |
+| GargantuanServer | 171,831,448 | 8,650 / 203 | 0 / 0 | `src/server/ServerMain.cpp:3` |
+| libSDL3.so.0 | 14,326,440 | 166 / 0 | 0 / 0 | `vendor/sdl/src/SDL.c:585` |
+
+The earlier counts came from `d28a2ad74`. The full-file counts require a path boundary before `/src` or `/build`. The detached debug files also contained zero protected root tokens. Extracting their DWARF preserved the SHA-256 of each built ELF. The separately stored `InstrumentedDistributions.tar` was 400,906,240 bytes with SHA-256 `ee130da7c8b3d99cd63ab9ca0164b69fb43fa3072704ea02e59d1a0f03abbef9`. The receiving host verified the digest of every one of its 107 files. `InstrumentedSymbols.tar` was 178,227,200 bytes with SHA-256 `dc5c6681e321d3b68468774c5cf605cc77df516b98e9382f584f1d69057f8318`.
+
+A relocated diagnostic fixture emitted a symbolized ASan error at `Probe.cpp:4:53` and a terminating UBSan error at `Arithmetic.hpp:1:53`. It exercised disjoint, nested and in-source builds, response files, an existing compiler launcher, forced header lookup and updates to both external and generated headers. The private directory marker was absent from each complete object and executable. Two ordinary Linux Release configurations with GNS and SQLite produced identical sets of 1,478 compile commands and 992 package build commands across the correction. [Diagnostic regression](../../tests/ClangSanitizerPaths.py)
+
+An earlier instrumented run at `c6942f9e1` passed the full-file scans and then exhausted the 5,600 MiB shared build filesystem while copying the `CaseCollision` negative fixture. The final run used a separate 7,000 MiB Linux temporary filesystem for package copies. All original corruption and validation cases ran.
+
+With a configured Linux Clang sanitizer build, build the normal
+`gargantuan_packaging_tests`, `gargantuan_runtime_distribution` and
+`gargantuan_server_runtime_distribution` targets. Run
+`ctest --test-dir <build> --output-on-failure -R '^gargantuan_(clang_sanitizer_paths|packaging)$'`
+with `TMPDIR` and `TEMP` on a filesystem large enough for the instrumented package copies.
+
+The final group passed all 46 selected CTests on one normal runtime layout. Full Foundation took 8.03 s, the simulated and real-GNS transfers took 0.60 and 1.55 s, and the two-Player Yard with fresh SQLite recovery took 19.24 s. The package boundary also passed in this group in 120.82 s. A prior cache-layout attempt passed 38 of 46. Seven Play cases could not find their adjacent runtime modules, and the authoring packager could not resolve its adjacent distribution. Restoring the original compiled executables to their normal paths with the same resources resolved all eight. The source and product bytes were identical. The per-test ledger preserves both attempts. [Structured results](SpatialConstructionPlatformTests.csv)
+
+With the Mesa lavapipe ICD kept resident and leak detection active, the final offscreen tests changed 331 selected-domain shadow pixels and 14,542 lamp pixels. The other domain had zero differences. The grid produced 874 visible pixels, 1,771 changed pixels on movement, and 528 removed and restored pixels. Hide, deletion and full mesh reconstruction left zero residuals. The two viewports rendered 3,844 red and 3,844 blue pixels and zero after retirement. [Lighting](../../tests/SpatialDomainLighting.py) · [Grid projection](../../tests/SpatialConstructionIntegrationTests.cpp) · [Viewport isolation](../../tests/ViewportFrameTests.cpp)
 
 ## Production construction costs
 
