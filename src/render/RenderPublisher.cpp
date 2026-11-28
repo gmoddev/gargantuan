@@ -1519,8 +1519,9 @@ namespace gargantuan {
 			for (const auto &[Texture, State] : OrderedTextures)
 				Result->TextureCreates.push_back({Texture, State.Revision, State.Width, State.Height, State.Format, State.Pixels});
 			const auto Limit = Dirty->GetLimits().MaximumPublicationBytes;
-			auto Grids = World.HasBlockGrids() ? PrepareBlockGrids(World, *Result,
-				Limit - std::min(Limit, EstimatePublicationBytes(*Result))) : GridMeshes{};
+			GridMeshes Grids;
+			if (World.HasBlockGrids()) PrepareBlockGrids(World, *Result,
+				Limit - std::min(Limit, EstimatePublicationBytes(*Result)), Grids);
 			for (const auto &[Object, Grid] : Grids) Replacement.emplace(Object, Grid.Item);
 			auto Terrain = PrepareTerrain(*Result);
 			if (!Terrain) {
@@ -1897,9 +1898,11 @@ namespace gargantuan {
 		Result->TextureCreates = PendingTextureCreates;
 		Result->TextureUpdates = PendingTextureUpdates;
 		Result->TextureRemoves = PendingTextureRemoves;
-		const auto Limit = Dirty->GetLimits().MaximumPublicationBytes;
-		auto Grids = World.HasBlockGrids() || !PublishedGrids.empty() ? PrepareBlockGrids(World, *Result,
-			Limit - std::min(Limit, EstimatePublicationBytes(*Result))) : GridMeshes{};
+		std::optional<GridMeshes> Grids;
+		if (World.HasBlockGrids() || !PublishedGrids.empty()) {
+			const auto Limit = Dirty->GetLimits().MaximumPublicationBytes;
+			PrepareBlockGrids(World, *Result, Limit - std::min(Limit, EstimatePublicationBytes(*Result)), Grids.emplace());
+		}
 		auto Terrain = PrepareTerrain(*Result);
 		if (!Terrain) {
 			Dirty->RequestFullResync(Scope, "Incremental render publication exceeds its byte limit");
@@ -1914,7 +1917,7 @@ namespace gargantuan {
 			for (const auto &Remove : Result->Removes) PublishedItems.erase(Remove.Object);
 			for (const auto &Create : Result->Creates) PublishedItems.emplace(Create.Item.Object, Create.Item);
 			for (const auto &Update : Result->Updates) PublishedItems.at(Update.Object) = Update.Item;
-			PublishedGrids = std::move(Grids);
+			if (Grids) PublishedGrids = std::move(*Grids);
 			for (const auto Object : DeformableCacheRemoves) PublishedDeformables.erase(Object);
 			for (const auto &[Object, State] : DeformableCacheUpdates)
 				PublishedDeformables.insert_or_assign(Object, State);

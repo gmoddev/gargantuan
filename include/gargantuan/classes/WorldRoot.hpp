@@ -154,6 +154,7 @@ namespace gargantuan {
 			std::uint64_t Nanoseconds = 0;
 		};
 		bool ProfileCFrameDirtyCallback = false;
+		std::uint32_t TrackedMeshPartCount = 0;
 		CFrameDirtyCallbackProfile CFrameDirtyProfile;
 		std::unordered_set<ObjectId> FailedMeshUpdatesLogged;
 		std::unordered_set<ObjectId> DirtyDeformables;

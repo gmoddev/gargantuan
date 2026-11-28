@@ -229,6 +229,34 @@ def PackageExecutable(Package):
     raise RuntimeError(f"Packaged native executable missing for format {Manifest['PackageFormatVersion']}")
 
 
+def CheckPrivateSymbols(Receipt, Project, Package):
+    Reported = Receipt.get("PrivateDiagnosticsPath")
+    Require(isinstance(Reported, str) and bool(Reported), "Hybrid publication omitted its private diagnostic receipt")
+    Symbols = Path(Reported)
+    Require(Symbols.is_absolute() and Symbols.is_file() and not Symbols.is_symlink() and
+            Symbols.resolve().parent == Package.resolve().parent, "Private symbols must be a separate sibling file")
+    Manifest = ReadJson(Package / "game.package.json")
+    Distribution = Manifest["RuntimeDistribution"]
+    Index = ReadJson(Symbols)
+    Require(Index["Format"] == "GargantuanPrivateScriptSymbols" and Index["Version"] == 1 and
+            Index["ManifestSha256"] == Receipt["ManifestSha256"] and Index["ProjectId"] == Manifest["ProjectId"] and
+            Index["Revision"] == Manifest["Revision"] and Index["ReleaseId"] == Distribution["ReleaseId"] and
+            Index["Compiler"] == Distribution["Compiler"], "Private symbols identify a different package or compiler")
+    Id = ResourceId("RD1Procedural")
+    World = ReadJson(Project / ".gargantuan" / "project.instance.json")
+    NodeValue, NodePath = next((NodeValue, NodePath) for NodeValue, NodePath in WalkNodes(World)
+                               if NodeValue["Properties"].get("SourceId", {}).get("String") == Id)
+    Source = NodeValue["Properties"]["Source"]["String"].encode("utf-8")
+    Require(Index["Scripts"] == [{"Id": Id, "Path": list(NodePath), "Class": NodeValue["ClassName"],
+                                  "SourceSha256": hashlib.sha256(Source).hexdigest()}],
+            "Private symbols do not identify the exact authored procedural script")
+    Hash, Size = Digest(Symbols), Symbols.stat().st_size
+    Require(not any(File.is_file() and (File.name == Symbols.name or
+                    (File.stat().st_size == Size and Digest(File) == Hash)) for File in Package.rglob("*")),
+            "Private symbols entered the delivered package")
+    return Hash
+
+
 def Build(Options, Name, Target, Preset, Project, Output, PolicyFile, Reports, Enrollment,
           Signed=False, Protected=False, Legacy=False, Deny=False):
     Distribution = Options.ServerDistribution if Target == "DedicatedServer" else Options.PlayerDistribution
@@ -252,6 +280,8 @@ def Build(Options, Name, Target, Preset, Project, Output, PolicyFile, Reports, E
         Receipt = next((json.loads(Line) for Line in OutputText.splitlines()
                         if Line.startswith(b"{") and b'"ManifestSha256"' in Line), None)
         Require(Receipt and Receipt["Ok"] and Receipt["ManifestSha256"] == Hash, f"Missing exact package receipt for {Name}")
+        if Preset == "Hybrid":
+            Timing["PrivateDiagnosticsSha256"] = CheckPrivateSymbols(Receipt, Project, Output)
     Timing.update({"ManifestSha256": Hash, "PackageBytes": sum(File.stat().st_size for File in Output.rglob("*") if File.is_file()),
                    "ExecutableSha256": Digest(PackageExecutable(Output))})
     return Timing, OutputText
@@ -408,10 +438,6 @@ def Main():
         Require(len(Manifests) == (Options.Repeats if Protected else 1),
                 f"Determinism or randomized protection contract failed for {Label}")
         MarkersFound = CheckPackage(Output, Preset, Signed, Legacy)
-        if Preset == "Hybrid":
-            Symbols = Reports / f"gargantuan-private-symbols-{Samples[-1]['Build']['ManifestSha256']}.json"
-            Require(Symbols.is_file() and ResourceId("RD1Procedural") in Symbols.read_text(encoding="utf-8"),
-                    "Private diagnostic index was not exported separately")
         Evidence["Profiles"][Label] = {"Runs": Samples, "Markers": MarkersFound,
             "BuildMedianMs": statistics.median(RunValue["Build"]["WallMs"] for RunValue in Samples),
             "StartupMedianMs": statistics.median(RunValue["Startup"]["EngineStartupMs"] for RunValue in Samples)}

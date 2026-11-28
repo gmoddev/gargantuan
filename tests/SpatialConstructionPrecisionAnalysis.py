@@ -103,7 +103,7 @@ def SummedGroupRanks(Ticks, Groups, Unknown, Fraction, Minimum=1):
     return FirstRank(False),FirstRank(True)
 
 
-def VerifyScene(Scene, Processes, Raw):
+def VerifyScene(Scene, Processes, Raw, CandidateHash=None):
     if len(Raw) != len(Processes) or not Processes:
         raise ValueError("Process and raw tick receipts differ in length")
     Expected = {"ordinary": (64,1024), "rigid": (16,768)}
@@ -113,7 +113,7 @@ def VerifyScene(Scene, Processes, Raw):
     Starts = ["baseline","current"]*(Blocks//2)
     random.Random(20261127).shuffle(Starts)
     Hashes = {"baseline":"0f43758828929e453d054689e81524a662e75c9e26d8ec4d4a4089396795d4aa",
-              "current":"ec39cd5036d6569985af9b07f5e8fb48dfc43bab051d8a513b787ec9b34d48b4"}
+              "current":CandidateHash or "ec39cd5036d6569985af9b07f5e8fb48dfc43bab051d8a513b787ec9b34d48b4"}
     for Index,(Process,Sample) in enumerate(zip(Processes,Raw)):
         First = Starts[Index//4]
         Second = "baseline" if First=="current" else "current"
@@ -259,7 +259,10 @@ def Main():
     Source.add_argument("--input",type=Path,action="append",help="Acquisition directory, once for each scene")
     Source.add_argument("--verify",type=Path,help="Recompute results and compare the archived Blocks.csv")
     Parser.add_argument("--output",type=Path,help="New directory for the combined receipt when using --input")
+    Parser.add_argument("--candidate-sha256",help="Expected hash for a new candidate compared to the original fixed historical Engine")
     Args=Parser.parse_args()
+    if Args.candidate_sha256 and (len(Args.candidate_sha256)!=64 or any(C not in "0123456789abcdef" for C in Args.candidate_sha256)):
+        Parser.error("--candidate-sha256 must be 64 lowercase hexadecimal digits")
     if bool(Args.input)!=bool(Args.output):
         Parser.error("--output goes with --input")
     AllProcesses,AllRaw,AllBlocks,Reports=[],[],[],{}
@@ -272,7 +275,7 @@ def Main():
     for Scene in ("ordinary","rigid"):
         Processes=[Row for Row in AllProcesses if Row["Scene"]==Scene]
         Raw=[Row for Row in AllRaw if Row["Scene"]==Scene]
-        VerifyScene(Scene,Processes,Raw)
+        VerifyScene(Scene,Processes,Raw,Args.candidate_sha256)
         Blocks,Reports[Scene]=Analyze(Processes)
         AllBlocks.extend(Blocks)
     if Args.verify:

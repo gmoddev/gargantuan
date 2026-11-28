@@ -164,7 +164,7 @@ namespace gargantuan {
 		};
 		using GridMeshes = std::unordered_map<ObjectId, PublishedGrid>;
 		GridMeshes PublishedGrids;
-		GridMeshes PrepareBlockGrids(const WorldRoot &World, RenderPublication &Result, std::size_t Budget) const;
+		void PrepareBlockGrids(const WorldRoot &World, RenderPublication &Result, std::size_t Budget, GridMeshes &Next) const;
 		struct PublishedTexture {
 			std::uint64_t Revision = 0;
 			std::uint32_t Width = 0;

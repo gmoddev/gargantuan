@@ -88,6 +88,7 @@ namespace gargantuan::terrain {
             std::optional<Revision> ExpectedRevision = std::nullopt);
         [[nodiscard]] bool Cancel(EditTicket Ticket) noexcept;
         [[nodiscard]] std::vector<EditReceipt> Poll(CohortPublisher &Publisher);
+        [[nodiscard]] bool NeedsPoll() const noexcept;
         [[nodiscard]] std::size_t GetPendingCount() const noexcept;
         [[nodiscard]] std::size_t GetActiveCount() const noexcept;
 

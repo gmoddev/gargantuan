@@ -83,6 +83,7 @@ namespace gargantuan {
 		[[nodiscard]] bool HasActiveRegistry() const { return static_cast<bool>(ActiveRegistry); }
 		[[nodiscard]] bool HasCandidate() const { return static_cast<bool>(CandidateRegistry); }
 		[[nodiscard]] std::shared_ptr<const RuntimeSchemaRegistry> GetActiveRegistry() const;
+		[[nodiscard]] const RuntimeSchemaRegistry &GetActiveRegistryReference() const;
 		void RequireRuntimeReady(std::string_view operation) const;
 
 	  private:

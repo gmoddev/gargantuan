@@ -14,6 +14,7 @@
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
+#include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
 
@@ -41,6 +42,8 @@ namespace gargantuan {
 		static std::size_t BodyCount(const WorldRoot &World) { return World.PartBodies.size(); }
 		static std::size_t PartCount(const WorldRoot &World) { return World.Parts.size(); }
 		static std::size_t PartMembershipCount(const WorldRoot &World) { return World.PartMembership.size(); }
+		static std::size_t MeshPartCount(const WorldRoot &World) { return World.TrackedMeshPartCount; }
+		static std::uint64_t CollisionAssetCursor(const WorldRoot &World) { return World.CollisionAssetChangeSequence; }
 		static std::size_t DirtyPartCount(const WorldRoot &World) { return World.DirtyBodies.size(); }
 		static bool FullPartScanNeeded(const WorldRoot &World) { return World.FullPartScanNeeded; }
 		static void ForceFullPartScan(WorldRoot &World) { World.FullPartScanNeeded = true; }
@@ -964,6 +967,44 @@ namespace {
 		Check(WorldRootTestAccess::PartCount(*Workspace) == 1 &&
 			WorldRootTestAccess::PartMembershipCount(*Workspace) == 1,
 			"destruction retires Part membership before slot reuse");
+	}
+
+	void TestCollisionAssetObservationLifecycle() {
+		const auto Game = std::make_shared<DataModel>();
+		const auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		World->StepPhysics(0., std::nullopt);
+		const auto Original = Game->FindService("AssetService").value();
+		Original->SetParent(nullptr);
+		World->StepPhysics(0., std::nullopt);
+		const auto Replacement = Game->FindService("AssetService").value();
+		Check(Replacement != Original && WorldRootTestAccess::MeshPartCount(*World) == 0,
+			"world of primitives still materializes and replaces the canonical asset service");
+		const auto Assets = std::dynamic_pointer_cast<AssetService>(Replacement);
+		const auto PublishPixel = [&](const char *Name) {
+			(void)Assets->RegisterMemoryImage(Name, 1, 1, std::array<std::uint8_t, 4>{1, 2, 3, 255});
+			return Assets->ReadChanges(0).NextSequence;
+		};
+		const auto BeforeAdmission = PublishPixel("Before first mesh");
+		const auto Mesh = std::make_shared<MeshPart>();
+		Mesh->SetAnchored(true);
+		Mesh->SetCollisionMode(Enums::MeshCollisionMode::StaticMesh);
+		Mesh->SetParent(World);
+		Check(WorldRootTestAccess::MeshPartCount(*World) == 1 && !WorldRootTestAccess::Body(*World, *Mesh).IsValid(),
+			"a mesh awaiting its first collision body still observes asset changes");
+		Check(WorldRootTestAccess::CollisionAssetCursor(*World) == BeforeAdmission,
+			"first mesh resumes at its initial asset snapshot without replaying unrelated older changes");
+		const auto AfterAdmission = PublishPixel("After first mesh");
+		World->StepPhysics(0., std::nullopt);
+		Check(AfterAdmission > BeforeAdmission && WorldRootTestAccess::CollisionAssetCursor(*World) == AfterAdmission,
+			"safe point observes subsequent changes while a mesh waits for collision");
+		Mesh->SetParent(nullptr);
+		Check(WorldRootTestAccess::MeshPartCount(*World) == 0, "detach retires the last mesh observer");
+		Mesh->SetParent(World);
+		World->StepPhysics(0., std::nullopt);
+		Check(WorldRootTestAccess::MeshPartCount(*World) == 1, "readmission restores a single observer");
+		Mesh->Destroy();
+		Check(WorldRootTestAccess::MeshPartCount(*World) == 0, "destroy retires the mesh observer");
+		Game->Destroy();
 	}
 
 	void TestMeshPartCollisionFallback() {
@@ -2848,6 +2889,7 @@ int main() {
 	TestKinematicWorldQueries();
 	TestCommittedBodyUpdates();
 	TestPartAdmissionMembership();
+	TestCollisionAssetObservationLifecycle();
 	TestMeshPartCollisionFallback();
 	TestConstraintAndPendingDestroy();
 	TestAuthoredJointLifecycle();

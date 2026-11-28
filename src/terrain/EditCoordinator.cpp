@@ -651,6 +651,13 @@ namespace gargantuan::terrain {
         return Ready;
     }
 
+    bool EditCoordinator::NeedsPoll() const noexcept {
+        // An empty chunk retains its version while a reader holds a snapshot.
+        // Poll must keep attempting bounded retirement after the last edit completes.
+        const auto Stats = State->Storage.GetStats();
+        return !State->Pending.empty() || Stats.Entries > Stats.MaterializedPages;
+    }
+
     std::size_t EditCoordinator::GetPendingCount() const noexcept { return State->Pending.size(); }
     std::size_t EditCoordinator::GetActiveCount() const noexcept { return State->Active.GetCount(); }
 }

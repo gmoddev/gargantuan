@@ -1,0 +1,92 @@
+{
+  "Variant": "Final",
+  "Unit": "src/reflection/RuntimeSchemaLifecycle.cpp",
+  "ObjectSize": 3142139,
+  "ObjectSha256": "5ed687ed0a7fbef0dde8d5653b6707ef2d02a13c034eb54fdd65c2053b18962a",
+  "Blocks": [
+    [
+      "GetActiveRuntimeSchemaRegistry",
+      "?GetActiveRuntimeSchemaRegistry@gargantuan@@YAAEBVRuntimeSchemaRegistry@1@XZ (class gargantuan::RuntimeSchemaRegistry const & __cdecl gargantuan::GetActiveRuntimeSchemaRegistry(void)):",
+      [
+        "  0000000000000000: sub         rsp,28h",
+        "  0000000000000004: call        ?GetMutableRuntimeSchemaLifecycle@?A0xda160074@gargantuan@@YAAEAVRuntimeSchemaLifecycle@2@XZ",
+        "  0000000000000009: mov         rcx,rax",
+        "  000000000000000C: add         rsp,28h",
+        "  0000000000000010: jmp         ?GetActiveRegistryReference@RuntimeSchemaLifecycle@gargantuan@@QEBAAEBVRuntimeSchemaRegistry@2@XZ"
+      ]
+    ],
+    [
+      "GetActiveRegistryReference",
+      "?GetActiveRegistryReference@RuntimeSchemaLifecycle@gargantuan@@QEBAAEBVRuntimeSchemaRegistry@2@XZ (public: class gargantuan::RuntimeSchemaRegistry const & __cdecl gargantuan::RuntimeSchemaLifecycle::GetActiveRegistryReference(void)const ):",
+      [
+        "  0000000000000000: mov         qword ptr [rsp+10h],rbx",
+        "  0000000000000005: push        rdi",
+        "  0000000000000006: sub         rsp,0A0h",
+        "  000000000000000D: mov         rax,qword ptr [__security_cookie]",
+        "  0000000000000014: xor         rax,rsp",
+        "  0000000000000017: mov         qword ptr [rsp+90h],rax",
+        "  000000000000001F: mov         rdi,rcx",
+        "  0000000000000022: mov         rax,qword ptr [rcx+20h]",
+        "  0000000000000026: test        rax,rax",
+        "  0000000000000029: je          000000000000004C",
+        "  000000000000002B: mov         rcx,qword ptr [rsp+90h]",
+        "  0000000000000033: xor         rcx,rsp",
+        "  0000000000000036: call        __security_check_cookie",
+        "  000000000000003B: mov         rbx,qword ptr [rsp+0B8h]",
+        "  0000000000000043: add         rsp,0A0h",
+        "  000000000000004A: pop         rdi",
+        "  000000000000004B: ret",
+        "  000000000000004C: lea         rcx,[rsp+20h]",
+        "  0000000000000051: call        ??0?$allocator@D@std@@QEAA@XZ",
+        "  0000000000000056: mov         rbx,rax",
+        "  0000000000000059: movzx       edx,byte ptr [rdi]",
+        "  000000000000005C: lea         rcx,[rsp+40h]",
+        "  0000000000000061: call        ?GetRuntimeSchemaLifecyclePhaseName@gargantuan@@YA?AV?$basic_string_view@DU?$char_traits@D@std@@@std@@W4RuntimeSchemaLifecyclePhase@1@@Z",
+        "  0000000000000066: mov         rdx,rax",
+        "  0000000000000069: mov         r8,rbx",
+        "  000000000000006C: lea         rcx,[rsp+50h]",
+        "  0000000000000071: call        ??$?0V?$basic_string_view@DU?$char_traits@D@std@@@std@@$0A@@?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QEAA@AEBV?$basic_string_view@DU?$char_traits@D@std@@@1@AEBV?$allocator@D@1@@Z",
+        "  0000000000000076: nop",
+        "  0000000000000077: mov         r8,rax",
+        "  000000000000007A: lea         rdx,[??_C@_0DI@ICOHFBNO@Runtime?5schema?5lifecycle?5has?5no?5@]",
+        "  0000000000000081: lea         rcx,[rsp+70h]",
+        "  0000000000000086: call        ??$?HDU?$char_traits@D@std@@V?$allocator@D@1@@std@@YA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@0@QEBD$$QEAV10@@Z",
+        "  000000000000008B: nop",
+        "  000000000000008C: mov         rdx,rax",
+        "  000000000000008F: lea         rcx,[rsp+28h]",
+        "  0000000000000094: call        ??0logic_error@std@@QEAA@AEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@1@@Z",
+        "  0000000000000099: lea         rdx,[_TI2?AVlogic_error@std@@]",
+        "  00000000000000A0: lea         rcx,[rsp+28h]",
+        "  00000000000000A5: call        _CxxThrowException",
+        "  00000000000000AA: int         3"
+      ]
+    ],
+    [
+      "GetActiveRegistry",
+      "?GetActiveRegistry@RuntimeSchemaLifecycle@gargantuan@@QEBA?AV?$shared_ptr@$$CBVRuntimeSchemaRegistry@gargantuan@@@std@@XZ (public: class std::shared_ptr<class gargantuan::RuntimeSchemaRegistry const > __cdecl gargantuan::RuntimeSchemaLifecycle::GetActiveRegistry(void)const ):",
+      [
+        "  0000000000000000: mov         qword ptr [rsp+8],rbx",
+        "  0000000000000005: push        rdi",
+        "  0000000000000006: sub         rsp,30h",
+        "  000000000000000A: mov         rbx,rdx",
+        "  000000000000000D: mov         rdi,rcx",
+        "  0000000000000010: call        ?GetActiveRegistryReference@RuntimeSchemaLifecycle@gargantuan@@QEBAAEBVRuntimeSchemaRegistry@2@XZ",
+        "  0000000000000015: mov         rax,qword ptr [rdi+28h]",
+        "  0000000000000019: mov         qword ptr [rbx],0",
+        "  0000000000000020: mov         qword ptr [rbx+8],0",
+        "  0000000000000028: test        rax,rax",
+        "  000000000000002B: je          0000000000000031",
+        "  000000000000002D: lock inc    dword ptr [rax+8]",
+        "  0000000000000031: mov         rax,qword ptr [rdi+20h]",
+        "  0000000000000035: mov         qword ptr [rbx],rax",
+        "  0000000000000038: mov         rax,qword ptr [rdi+28h]",
+        "  000000000000003C: mov         qword ptr [rbx+8],rax",
+        "  0000000000000040: mov         rax,rbx",
+        "  0000000000000043: mov         rbx,qword ptr [rsp+40h]",
+        "  0000000000000048: add         rsp,30h",
+        "  000000000000004C: pop         rdi",
+        "  000000000000004D: ret"
+      ]
+    ]
+  ]
+}

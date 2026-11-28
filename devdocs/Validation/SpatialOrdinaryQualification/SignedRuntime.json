@@ -1,0 +1,709 @@
+{
+  "Fixture": "tests/RuntimeDistributionQualification.py",
+  "IndependentCloneObserver": {
+    "Client": {
+      "ROLE_NAME": "Client",
+      "WHICH_PLAYER": "People.LocalPlayer"
+    },
+    "Placement": "Appended after the original unchanged proof code in the fixture's RD1Controller and RD1AuthoritativeInventory. RD1GuiScript itself remained byte-identical.",
+    "Server": {
+      "ROLE_NAME": "Server",
+      "WHICH_PLAYER": "People:FindFirstChildOfClass('Player')"
+    },
+    "Template": "\nlocal People = game:GetService('Players')\nlocal Updates = 0\nlocal Last = ''\ngame:GetService('RunService').PostSimulation:Connect(function()\n    Updates += 1\n    local Player = WHICH_PLAYER\n    local Container = Player and Player:FindFirstChildOfClass('PlayerGui')\n    local Screen = Container and Container:FindFirstChild('RD1Gui')\n    local Code = Screen and Screen:FindFirstChild('RD1GuiScript')\n    local State = 'player=' .. tostring(Player ~= nil) .. ' ownerGui=' .. tostring(Container ~= nil and Container.Parent == Player) .. ' screen=' .. tostring(Screen ~= nil and Screen.Parent == Container) .. ' script=' .. tostring(Code ~= nil and Code:IsA('Script') and Code.Parent == Screen)\n    if State ~= Last or Updates == 100 then\n        warn('[Ordinary:OwnedGui] ROLE_NAME ' .. State .. ' tick=' .. tostring(Updates))\n        Last = State\n    end\nend)\n"
+  },
+  "MutationChecks": [
+    {
+      "Accepted": true,
+      "Case": "matched fixture"
+    },
+    {
+      "Accepted": false,
+      "Case": "wrong ProjectId"
+    },
+    {
+      "Accepted": false,
+      "Case": "wrong ManifestSha256"
+    },
+    {
+      "Accepted": false,
+      "Case": "wrong ReleaseId"
+    },
+    {
+      "Accepted": false,
+      "Case": "wrong Compiler"
+    },
+    {
+      "Accepted": false,
+      "Case": "wrong Revision"
+    },
+    {
+      "Accepted": false,
+      "Case": "wrong Format"
+    },
+    {
+      "Accepted": false,
+      "Case": "wrong Version"
+    },
+    {
+      "Accepted": false,
+      "Case": "wrong script Id"
+    },
+    {
+      "Accepted": false,
+      "Case": "wrong script SourceSha256"
+    },
+    {
+      "Accepted": false,
+      "Case": "wrong script Class"
+    },
+    {
+      "Accepted": false,
+      "Case": "wrong script Path"
+    },
+    {
+      "Accepted": false,
+      "Case": "different filename in delivered closure"
+    },
+    {
+      "Accepted": false,
+      "Case": "receipt points inside package"
+    },
+    {
+      "Accepted": false,
+      "Case": "missing reported file"
+    }
+  ],
+  "OriginalAndRepeatedWindowsCases": {
+    "OriginalCase": {
+      "ActualFileExists": true,
+      "ActualReceiptPath": "gargantuan-private-symbols-e1725a609aca3044-999684d6a1fac927ee2e66604830bdda28a6ac49a5b08fc6e66ca873e6328a55.json",
+      "FailedAssertion": "Private diagnostic index was not exported separately",
+      "ManifestSha256": "999684d6a1fac927ee2e66604830bdda28a6ac49a5b08fc6e66ca873e6328a55",
+      "OldAssumedFileExists": false,
+      "OldAssumedName": "gargantuan-private-symbols-999684d6a1fac927ee2e66604830bdda28a6ac49a5b08fc6e66ca873e6328a55.json",
+      "SidecarSha256": "f0ab6c3324fb7f9fbd5f405ac89726e66a86fc2d70e6be3f976c61aada7519ed"
+    },
+    "RepeatedBuilds": [
+      {
+        "AfterRejectedBuildManifest": "f9ab51d4a6a9c7e4e2ec2eaeb746166e4d5ccd02b002caab07f9d21e2bc1cc6c",
+        "BuildError": "[error][Package:Packaging] BuildFailed: The package build failed; the previous valid destination was preserved. (Finalize: Access is denied.)",
+        "EvidenceLogSha256": "98c09f487e4e1642d6a864b7af87cc73a0fd418b6d5595a1f2d7887235078f14",
+        "ExpectedFailureReceiptOk": false,
+        "FirstManifest": "f9ab51d4a6a9c7e4e2ec2eaeb746166e4d5ccd02b002caab07f9d21e2bc1cc6c",
+        "PreviousPreserved": true,
+        "Profile": "Compiled",
+        "Regime": "frozen"
+      },
+      {
+        "AfterRejectedBuildManifest": "599b2f5fbfe9fcada13ec794c9392f0b00d9b243ac5200b127d8157d5d906b19",
+        "BuildError": "[error][Package:Packaging] BuildFailed: The package build failed; the previous valid destination was preserved. (Finalize: Access is denied.)",
+        "EvidenceLogSha256": "c7b096327a4a090a2a1ea341a4b157d2e238b014c740bb274c59b17f43e3929b",
+        "ExpectedFailureReceiptOk": false,
+        "FirstManifest": "599b2f5fbfe9fcada13ec794c9392f0b00d9b243ac5200b127d8157d5d906b19",
+        "PreviousPreserved": true,
+        "Profile": "Open",
+        "Regime": "frozen"
+      },
+      {
+        "AfterRejectedBuildManifest": "9e2e219e6acbec396bf5bfdb1059ac733d8ba0eab6647d6451c738d5fede1f64",
+        "BuildError": "[error][Package:Packaging] BuildFailed: The package build failed; the previous valid destination was preserved. (Finalize: Access is denied.)",
+        "EvidenceLogSha256": "e172ca822673a0073309a66e6e1be0c96ebae4306f71afc3b72640da1cf50a74",
+        "ExpectedFailureReceiptOk": false,
+        "FirstManifest": "9e2e219e6acbec396bf5bfdb1059ac733d8ba0eab6647d6451c738d5fede1f64",
+        "PreviousPreserved": true,
+        "Profile": "Protected",
+        "Regime": "stock"
+      }
+    ]
+  },
+  "ProductSource": "4af419f004b94aa85379c163ccc23f27d68311c0",
+  "ReceiptDrivenFixture": "f355b746a557cdf2e36d6f8c62a98ec2d702b94d",
+  "StandaloneAndServer": {
+    "Linux": {
+      "OriginalDenials": [
+        "untrusted-unsigned-compiled",
+        "unenrolled-signed-compiled",
+        "protected-missing-key",
+        "protected-wrong-key",
+        "protected-tampered-ciphertext",
+        "rollback-compile-failure"
+      ],
+      "PackagerSha256": "b1fc59af53ba7990e6e41bcde7ffe57b8581cc7e77cb689d3ba9c06ad0abb9ba",
+      "Profiles": {
+        "Compiled": {
+          "Builds": [
+            {
+              "ExecutableSha256": "524070021d175836af772249663fc241bd3ee16a5e95e64d2a85bfac02cc6515",
+              "ManifestSha256": "285f04677d2adfbfee780d70c63280f686dca35cc8916cb59844e5874961f504",
+              "PackageBytes": 35483454
+            },
+            {
+              "ExecutableSha256": "524070021d175836af772249663fc241bd3ee16a5e95e64d2a85bfac02cc6515",
+              "ManifestSha256": "285f04677d2adfbfee780d70c63280f686dca35cc8916cb59844e5874961f504",
+              "PackageBytes": 35483454
+            }
+          ],
+          "SourceMarkerScan": {
+            "rd1_authoring_intermediate_c7a8": [],
+            "rd1_client_procedural_impl_df85": [
+              "content/scripts/9f795a52a9b4fdcf2597889aae3b49b5.luac"
+            ],
+            "rd1_private_inventory_runtime_0d3a": [
+              "content/scripts/49a06a29aa99a63a68e10f0331db6c6b.luac",
+              "content/scripts/9052a72c7099882ce84d143c12477006.luac"
+            ],
+            "rd1_server_private_inventory_a312": [],
+            "rd1_source_only_controller_07a0": [],
+            "rd1_source_only_crafting_c3de": [],
+            "rd1_source_only_procedural_fb51": []
+          }
+        },
+        "Hybrid": {
+          "Builds": [
+            {
+              "ExecutableSha256": "524070021d175836af772249663fc241bd3ee16a5e95e64d2a85bfac02cc6515",
+              "ManifestSha256": "db6eb8f72e1076a3739404f8d4eceab58f2b72891a8745c4b79cf7341dd81860",
+              "PackageBytes": 35483494,
+              "PrivateDiagnosticsSha256": "980e40bbb432134d95893b610845b3dd0f9421016468b2a0281afad6fe92fcfd"
+            },
+            {
+              "ExecutableSha256": "524070021d175836af772249663fc241bd3ee16a5e95e64d2a85bfac02cc6515",
+              "ManifestSha256": "df2113a06eb5c8f267d1fd7ff54c7529ac8c1f46a6ab6a5c345f415322590af7",
+              "PackageBytes": 35483494,
+              "PrivateDiagnosticsSha256": "597ce082a0dde68aa8bdcfdb4e5dca1f48923661b457335d8c131a0f46cd65b2"
+            }
+          ],
+          "SourceMarkerScan": {
+            "rd1_authoring_intermediate_c7a8": [],
+            "rd1_client_procedural_impl_df85": [],
+            "rd1_private_inventory_runtime_0d3a": [
+              "content/scripts/49a06a29aa99a63a68e10f0331db6c6b.luac",
+              "content/scripts/9052a72c7099882ce84d143c12477006.luac"
+            ],
+            "rd1_server_private_inventory_a312": [],
+            "rd1_source_only_controller_07a0": [],
+            "rd1_source_only_crafting_c3de": [
+              "content/game.instance.json"
+            ],
+            "rd1_source_only_procedural_fb51": []
+          }
+        },
+        "LegacySource": {
+          "Builds": [
+            {
+              "ExecutableSha256": "524070021d175836af772249663fc241bd3ee16a5e95e64d2a85bfac02cc6515",
+              "ManifestSha256": "5193f886f22f97f8ad57b13ea7af274309546def0feef95f055197f33e9afc6e",
+              "PackageBytes": 35480856
+            },
+            {
+              "ExecutableSha256": "524070021d175836af772249663fc241bd3ee16a5e95e64d2a85bfac02cc6515",
+              "ManifestSha256": "5193f886f22f97f8ad57b13ea7af274309546def0feef95f055197f33e9afc6e",
+              "PackageBytes": 35480856
+            }
+          ],
+          "SourceMarkerScan": {
+            "rd1_authoring_intermediate_c7a8": [],
+            "rd1_client_procedural_impl_df85": [
+              "content/game.instance.json"
+            ],
+            "rd1_private_inventory_runtime_0d3a": [
+              "content/game.instance.json"
+            ],
+            "rd1_server_private_inventory_a312": [
+              "content/game.instance.json"
+            ],
+            "rd1_source_only_controller_07a0": [
+              "content/game.instance.json"
+            ],
+            "rd1_source_only_crafting_c3de": [
+              "content/game.instance.json"
+            ],
+            "rd1_source_only_procedural_fb51": [
+              "content/game.instance.json"
+            ]
+          }
+        },
+        "Open": {
+          "Builds": [
+            {
+              "ExecutableSha256": "524070021d175836af772249663fc241bd3ee16a5e95e64d2a85bfac02cc6515",
+              "ManifestSha256": "77c36e0a6615ae611355b1ec051d79618b0a5cb3bc2d3dcff49dd160588292ae",
+              "PackageBytes": 35482865
+            },
+            {
+              "ExecutableSha256": "524070021d175836af772249663fc241bd3ee16a5e95e64d2a85bfac02cc6515",
+              "ManifestSha256": "77c36e0a6615ae611355b1ec051d79618b0a5cb3bc2d3dcff49dd160588292ae",
+              "PackageBytes": 35482865
+            }
+          ],
+          "SourceMarkerScan": {
+            "rd1_authoring_intermediate_c7a8": [],
+            "rd1_client_procedural_impl_df85": [
+              "content/game.instance.json"
+            ],
+            "rd1_private_inventory_runtime_0d3a": [
+              "content/game.instance.json"
+            ],
+            "rd1_server_private_inventory_a312": [
+              "content/game.instance.json"
+            ],
+            "rd1_source_only_controller_07a0": [
+              "content/game.instance.json"
+            ],
+            "rd1_source_only_crafting_c3de": [
+              "content/game.instance.json"
+            ],
+            "rd1_source_only_procedural_fb51": [
+              "content/game.instance.json"
+            ]
+          }
+        },
+        "Protected": {
+          "Builds": [
+            {
+              "ExecutableSha256": "524070021d175836af772249663fc241bd3ee16a5e95e64d2a85bfac02cc6515",
+              "ManifestSha256": "88aeb1e86de8f8d9ed2346b7c95dbe79e6efdf64d74caa027b9accfc28f65aeb",
+              "PackageBytes": 35484168
+            },
+            {
+              "ExecutableSha256": "524070021d175836af772249663fc241bd3ee16a5e95e64d2a85bfac02cc6515",
+              "ManifestSha256": "8c08329699490355c3a16b42e21746b6294bb81d82e68837b7c6c09c7daffa93",
+              "PackageBytes": 35484168
+            }
+          ],
+          "SourceMarkerScan": {
+            "rd1_authoring_intermediate_c7a8": [],
+            "rd1_client_procedural_impl_df85": [],
+            "rd1_private_inventory_runtime_0d3a": [],
+            "rd1_server_private_inventory_a312": [],
+            "rd1_source_only_controller_07a0": [],
+            "rd1_source_only_crafting_c3de": [],
+            "rd1_source_only_procedural_fb51": []
+          }
+        },
+        "SignedCompiled": {
+          "Builds": [
+            {
+              "ExecutableSha256": "524070021d175836af772249663fc241bd3ee16a5e95e64d2a85bfac02cc6515",
+              "ManifestSha256": "b980f14257c7f8ba688fb54c1a4d22588d686d6bdcb75901c3366a5c7d195111",
+              "PackageBytes": 35483531
+            },
+            {
+              "ExecutableSha256": "524070021d175836af772249663fc241bd3ee16a5e95e64d2a85bfac02cc6515",
+              "ManifestSha256": "b980f14257c7f8ba688fb54c1a4d22588d686d6bdcb75901c3366a5c7d195111",
+              "PackageBytes": 35483531
+            }
+          ],
+          "SourceMarkerScan": {
+            "rd1_authoring_intermediate_c7a8": [],
+            "rd1_client_procedural_impl_df85": [
+              "content/scripts/9f795a52a9b4fdcf2597889aae3b49b5.luac"
+            ],
+            "rd1_private_inventory_runtime_0d3a": [
+              "content/scripts/49a06a29aa99a63a68e10f0331db6c6b.luac",
+              "content/scripts/9052a72c7099882ce84d143c12477006.luac"
+            ],
+            "rd1_server_private_inventory_a312": [],
+            "rd1_source_only_controller_07a0": [],
+            "rd1_source_only_crafting_c3de": [],
+            "rd1_source_only_procedural_fb51": []
+          }
+        }
+      },
+      "SignedArchiveSha256": "8fe163cb5a7fbdc72f6413f8791cf5bbd15d143e2035fc5ae2b96bd538b7a9e1",
+      "SignedServer": {
+        "ExecutableSha256": "f2fc0b5d077d79be067f0f393a4b83d3f79b48e58950a792eddd1f28b5365dea",
+        "ManifestSha256": "d46fb1cbf74812d6c9c589c97ed56c423cce77b471a59571bc122f61b5bc3813",
+        "PackageBytes": 35718191,
+        "PrivateDiagnosticsSha256": "5b6252a6dfc0001d7c73679a274e26ed61f1c9fd9e4f3e17450c92fabf262475"
+      },
+      "SourceReceiptSha256": "7962fecaecc2b1267a06e367067d257a2408efdf22f490853bf8306188061d73"
+    },
+    "Windows": {
+      "OriginalDenials": [
+        "untrusted-unsigned-compiled",
+        "unenrolled-signed-compiled",
+        "protected-missing-key",
+        "protected-wrong-key",
+        "protected-tampered-ciphertext",
+        "rollback-compile-failure"
+      ],
+      "PackagerSha256": "25b3414730b176ec20981ced33d3ae9484a78bc7787c1cad0b874fa9be58d79c",
+      "Profiles": {
+        "Compiled": {
+          "Builds": [
+            {
+              "ExecutableSha256": "38a96686d9b009e6e5775d9e2e367761f22d397e85bfe09445e7100482aa55fa",
+              "ManifestSha256": "f9ab51d4a6a9c7e4e2ec2eaeb746166e4d5ccd02b002caab07f9d21e2bc1cc6c",
+              "PackageBytes": 27169792
+            }
+          ],
+          "SourceMarkerScan": {
+            "rd1_authoring_intermediate_c7a8": [],
+            "rd1_client_procedural_impl_df85": [
+              "content/scripts/9f795a52a9b4fdcf2597889aae3b49b5.luac"
+            ],
+            "rd1_private_inventory_runtime_0d3a": [
+              "content/scripts/49a06a29aa99a63a68e10f0331db6c6b.luac",
+              "content/scripts/9052a72c7099882ce84d143c12477006.luac"
+            ],
+            "rd1_server_private_inventory_a312": [],
+            "rd1_source_only_controller_07a0": [],
+            "rd1_source_only_crafting_c3de": [],
+            "rd1_source_only_procedural_fb51": []
+          }
+        },
+        "Hybrid": {
+          "Builds": [
+            {
+              "ExecutableSha256": "38a96686d9b009e6e5775d9e2e367761f22d397e85bfe09445e7100482aa55fa",
+              "ManifestSha256": "48b55e51cca362537ba90652d7ed6f3e09de8137d3be1fdd5b988f1a16756df3",
+              "PackageBytes": 27169832,
+              "PrivateDiagnosticsSha256": "61a7037a4165d897d1c5c5aebd346bec3781c165f09581e09c254cef4e27e8b3"
+            }
+          ],
+          "SourceMarkerScan": {
+            "rd1_authoring_intermediate_c7a8": [],
+            "rd1_client_procedural_impl_df85": [],
+            "rd1_private_inventory_runtime_0d3a": [
+              "content/scripts/49a06a29aa99a63a68e10f0331db6c6b.luac",
+              "content/scripts/9052a72c7099882ce84d143c12477006.luac"
+            ],
+            "rd1_server_private_inventory_a312": [],
+            "rd1_source_only_controller_07a0": [],
+            "rd1_source_only_crafting_c3de": [
+              "content/game.instance.json"
+            ],
+            "rd1_source_only_procedural_fb51": []
+          }
+        },
+        "LegacySource": {
+          "Builds": [
+            {
+              "ExecutableSha256": "38a96686d9b009e6e5775d9e2e367761f22d397e85bfe09445e7100482aa55fa",
+              "ManifestSha256": "602556b48550d0dbc4ab079e38ea456a13cf820af0955041dd65183f70529ea2",
+              "PackageBytes": 27167194
+            }
+          ],
+          "SourceMarkerScan": {
+            "rd1_authoring_intermediate_c7a8": [],
+            "rd1_client_procedural_impl_df85": [
+              "content/game.instance.json"
+            ],
+            "rd1_private_inventory_runtime_0d3a": [
+              "content/game.instance.json"
+            ],
+            "rd1_server_private_inventory_a312": [
+              "content/game.instance.json"
+            ],
+            "rd1_source_only_controller_07a0": [
+              "content/game.instance.json"
+            ],
+            "rd1_source_only_crafting_c3de": [
+              "content/game.instance.json"
+            ],
+            "rd1_source_only_procedural_fb51": [
+              "content/game.instance.json"
+            ]
+          }
+        },
+        "Open": {
+          "Builds": [
+            {
+              "ExecutableSha256": "38a96686d9b009e6e5775d9e2e367761f22d397e85bfe09445e7100482aa55fa",
+              "ManifestSha256": "599b2f5fbfe9fcada13ec794c9392f0b00d9b243ac5200b127d8157d5d906b19",
+              "PackageBytes": 27169203
+            }
+          ],
+          "SourceMarkerScan": {
+            "rd1_authoring_intermediate_c7a8": [],
+            "rd1_client_procedural_impl_df85": [
+              "content/game.instance.json"
+            ],
+            "rd1_private_inventory_runtime_0d3a": [
+              "content/game.instance.json"
+            ],
+            "rd1_server_private_inventory_a312": [
+              "content/game.instance.json"
+            ],
+            "rd1_source_only_controller_07a0": [
+              "content/game.instance.json"
+            ],
+            "rd1_source_only_crafting_c3de": [
+              "content/game.instance.json"
+            ],
+            "rd1_source_only_procedural_fb51": [
+              "content/game.instance.json"
+            ]
+          }
+        },
+        "Protected": {
+          "Builds": [
+            {
+              "ExecutableSha256": "38a96686d9b009e6e5775d9e2e367761f22d397e85bfe09445e7100482aa55fa",
+              "ManifestSha256": "f8f49691c27933b4bfa716ccfda9a247ef09ce7ab53bb19eee6b43038c7c1a16",
+              "PackageBytes": 27170506
+            }
+          ],
+          "SourceMarkerScan": {
+            "rd1_authoring_intermediate_c7a8": [],
+            "rd1_client_procedural_impl_df85": [],
+            "rd1_private_inventory_runtime_0d3a": [],
+            "rd1_server_private_inventory_a312": [],
+            "rd1_source_only_controller_07a0": [],
+            "rd1_source_only_crafting_c3de": [],
+            "rd1_source_only_procedural_fb51": []
+          }
+        },
+        "SignedCompiled": {
+          "Builds": [
+            {
+              "ExecutableSha256": "38a96686d9b009e6e5775d9e2e367761f22d397e85bfe09445e7100482aa55fa",
+              "ManifestSha256": "dca5d09129edbc816b53fb34a76f4441666f05eeeac8a2d1fc41f383d7a417de",
+              "PackageBytes": 27169869
+            }
+          ],
+          "SourceMarkerScan": {
+            "rd1_authoring_intermediate_c7a8": [],
+            "rd1_client_procedural_impl_df85": [
+              "content/scripts/9f795a52a9b4fdcf2597889aae3b49b5.luac"
+            ],
+            "rd1_private_inventory_runtime_0d3a": [
+              "content/scripts/49a06a29aa99a63a68e10f0331db6c6b.luac",
+              "content/scripts/9052a72c7099882ce84d143c12477006.luac"
+            ],
+            "rd1_server_private_inventory_a312": [],
+            "rd1_source_only_controller_07a0": [],
+            "rd1_source_only_crafting_c3de": [],
+            "rd1_source_only_procedural_fb51": []
+          }
+        }
+      },
+      "SignedArchiveSha256": "e23038bd15f66661168c404e38c696374ea4045ab02fb98ea509fef387deb17a",
+      "SignedServer": {
+        "ExecutableSha256": "9dcd9cbf6045dd6cf40c018a73e728cbc9021058eaf5ea6fdab5aec561faae6d",
+        "ManifestSha256": "9883d59fc3569efdfc9dd279427a5a69200a12f2bee4543e72799dae68661742",
+        "PackageBytes": 27046505,
+        "PrivateDiagnosticsSha256": "6c0dded832979ee649c27f3a506a1716f07efc1251c8ef45732fdae9baa9d4c1"
+      },
+      "SourceReceiptSha256": "67ea826a2f75bdde72f24b96f9ed8f6d82d0f02d90945faccaa3799bc2c4b9b0"
+    }
+  },
+  "WindowsDistributedJoin": {
+    "Final": {
+      "Distributed": {
+        "AuthoredSnapshotPresent": false,
+        "CompiledGuiArtifactPresent": false,
+        "ExecutableSha256": "38a96686d9b009e6e5775d9e2e367761f22d397e85bfe09445e7100482aa55fa",
+        "GuiRecords": [],
+        "ManifestSha256": "41c5ec7f3c4bb16c6e20a22e7d53f5863b94df3b1c48452eb97414c2fadf2b6f"
+      },
+      "ExpectedGuiId": "d303fd5fb32f6d92ce8de000d88a062b",
+      "ExtraAuthoredObserver": {
+        "GuiSourceId": "d303fd5fb32f6d92ce8de000d88a062b",
+        "Oracle": "Distributed Player did not execute package-backed Controller and GUI scripts on join",
+        "Packages": {
+          "DedicatedServer": "082ff8e860d2d15902633b6342b3cfbc9d036bbc62f0bf7a0e3fad0c004893da",
+          "DistributedPlayer": "3af263d04c7d56c5fb23f1aace1e924bed045e4b47c158266a6dea553d67161b"
+        },
+        "Roles": {
+          "Client": {
+            "ClientProof": true,
+            "GuiProof": false,
+            "LogSha256": "5034309a2f381496b4f42ccdf2b18ff7fd71d71508e7a3d9b84969d759b19f03",
+            "Observer": [
+              "WARNING: [Runtime:Luau] [Ordinary:OwnedGui] Client player=true ownerGui=true screen=true script=true tick=1",
+              "[Runtime:Diagnostic] [Warning] [Ordinary:OwnedGui] Client player=true ownerGui=true screen=true script=true tick=1",
+              "WARNING: [Runtime:Luau] [Ordinary:OwnedGui] Client player=true ownerGui=true screen=true script=true tick=100",
+              "[Runtime:Diagnostic] [Warning] [Ordinary:OwnedGui] Client player=true ownerGui=true screen=true script=true tick=100"
+            ],
+            "PrivateMarker": false,
+            "ServerProof": false
+          },
+          "Server": {
+            "ClientProof": false,
+            "GuiProof": false,
+            "LogSha256": "af1fa1e28399ed925fd657e9f2a3495f50521ad5c5c443d0dc88b99e367fbbdf",
+            "Observer": [
+              "WARNING: [Runtime:Luau] [Ordinary:OwnedGui] Server player=false ownerGui=false screen=false script=false tick=1",
+              "[Runtime:Server] [Warning] [Ordinary:OwnedGui] Server player=false ownerGui=false screen=false script=false tick=1",
+              "WARNING: [Runtime:Luau] [Ordinary:OwnedGui] Server player=true ownerGui=true screen=true script=true tick=15",
+              "[Runtime:Server] [Warning] [Ordinary:OwnedGui] Server player=true ownerGui=true screen=true script=true tick=15",
+              "WARNING: [Runtime:Luau] [Ordinary:OwnedGui] Server player=true ownerGui=true screen=true script=true tick=100",
+              "[Runtime:Server] [Warning] [Ordinary:OwnedGui] Server player=true ownerGui=true screen=true script=true tick=100",
+              "WARNING: [Runtime:Luau] [Ordinary:OwnedGui] Server player=false ownerGui=false screen=false script=false tick=203",
+              "[Runtime:Server] [Warning] [Ordinary:OwnedGui] Server player=false ownerGui=false screen=false script=false tick=203"
+            ],
+            "PrivateMarker": false,
+            "ServerProof": true
+          }
+        }
+      },
+      "Failure": "Distributed Player did not execute package-backed Controller and GUI scripts on join",
+      "Offline": {
+        "AuthoredSnapshotPresent": true,
+        "CompiledGuiArtifactPresent": true,
+        "ExecutableSha256": "38a96686d9b009e6e5775d9e2e367761f22d397e85bfe09445e7100482aa55fa",
+        "GuiRecords": [
+          {
+            "Id": "d303fd5fb32f6d92ce8de000d88a062b",
+            "Path": [
+              "StarterGui",
+              "RD1Gui",
+              "RD1GuiScript"
+            ],
+            "Representation": "Compiled"
+          }
+        ],
+        "ManifestSha256": "c8d2e00348b7446710be377039aa20d6016a6c230d366e87201317aff1f7c7d1"
+      },
+      "Passed": false,
+      "RealProcesses": {
+        "hybrid-loopback-player-join.log": {
+          "Bytes": 1225,
+          "ClientProof": true,
+          "GuiProof": false,
+          "PrivateModuleLiteral": false,
+          "PrivateModuleSourceMarker": false,
+          "ServerProof": false,
+          "Sha256": "77f425cd441218a7b84721a144aa723ed476c857158f822bafd7a81842c50f94"
+        },
+        "hybrid-loopback-server.log": {
+          "Bytes": 1281,
+          "ClientProof": false,
+          "GuiProof": false,
+          "PrivateModuleLiteral": false,
+          "PrivateModuleSourceMarker": false,
+          "ServerProof": true,
+          "Sha256": "b0d77d9cc772a8cbc2569c623026e33ef5fdacf9ce9b8625bb3e076666ccae64"
+        }
+      },
+      "Server": {
+        "AuthoredSnapshotPresent": true,
+        "CompiledGuiArtifactPresent": true,
+        "ExecutableSha256": "9dcd9cbf6045dd6cf40c018a73e728cbc9021058eaf5ea6fdab5aec561faae6d",
+        "GuiRecords": [
+          {
+            "Id": "d303fd5fb32f6d92ce8de000d88a062b",
+            "Path": [
+              "StarterGui",
+              "RD1Gui",
+              "RD1GuiScript"
+            ],
+            "Representation": "Compiled"
+          }
+        ],
+        "ManifestSha256": "d0fab77637b11dd9ee064c06ba27b6d2fbfe64a2334e98ab7a9d964e1ff7f179"
+      },
+      "StockSourceRef": "4af419f004b94aa85379c163ccc23f27d68311c0"
+    },
+    "Stock": {
+      "Distributed": {
+        "AuthoredSnapshotPresent": false,
+        "CompiledGuiArtifactPresent": false,
+        "ExecutableSha256": "cc03bcda5d706f1f62ea92da8e2208078801b665cff0cb12288f43478f30213c",
+        "GuiRecords": [],
+        "ManifestSha256": "81ecbf2d528c1027dd83d3f7d0b2091b22ce97e0ce36a101bb55bb0e8f309d90"
+      },
+      "ExpectedGuiId": "d303fd5fb32f6d92ce8de000d88a062b",
+      "ExtraAuthoredObserver": {
+        "GuiSourceId": "d303fd5fb32f6d92ce8de000d88a062b",
+        "Oracle": "Distributed Player did not execute package-backed Controller and GUI scripts on join",
+        "Packages": {
+          "DedicatedServer": "090ff3805a2ed5ef14fe6ffbf8f997a1997b9c1f36af2966c17a93eb2796b56c",
+          "DistributedPlayer": "4f52b1de0f9b9dc96db98c7f32d6cf9c37de751b65331d2bb4b752547c211027"
+        },
+        "Roles": {
+          "Client": {
+            "ClientProof": true,
+            "GuiProof": false,
+            "LogSha256": "5bf5df1e6ae8f8474f9ac5793957a45f979a3d0d0b197c0eeedd468d7fe7db14",
+            "Observer": [
+              "WARNING: [Runtime:Luau] [Ordinary:OwnedGui] Client player=true ownerGui=true screen=true script=true tick=1",
+              "[Runtime:Diagnostic] [Warning] [Ordinary:OwnedGui] Client player=true ownerGui=true screen=true script=true tick=1",
+              "WARNING: [Runtime:Luau] [Ordinary:OwnedGui] Client player=true ownerGui=true screen=true script=true tick=100",
+              "[Runtime:Diagnostic] [Warning] [Ordinary:OwnedGui] Client player=true ownerGui=true screen=true script=true tick=100"
+            ],
+            "PrivateMarker": false,
+            "ServerProof": false
+          },
+          "Server": {
+            "ClientProof": false,
+            "GuiProof": false,
+            "LogSha256": "637a04ef6fc5757647f28d6484ce5e0f275f62f960b854c960ad406bfcb66306",
+            "Observer": [
+              "WARNING: [Runtime:Luau] [Ordinary:OwnedGui] Server player=false ownerGui=false screen=false script=false tick=1",
+              "[Runtime:Server] [Warning] [Ordinary:OwnedGui] Server player=false ownerGui=false screen=false script=false tick=1",
+              "WARNING: [Runtime:Luau] [Ordinary:OwnedGui] Server player=true ownerGui=true screen=true script=true tick=16",
+              "[Runtime:Server] [Warning] [Ordinary:OwnedGui] Server player=true ownerGui=true screen=true script=true tick=16",
+              "WARNING: [Runtime:Luau] [Ordinary:OwnedGui] Server player=true ownerGui=true screen=true script=true tick=100",
+              "[Runtime:Server] [Warning] [Ordinary:OwnedGui] Server player=true ownerGui=true screen=true script=true tick=100",
+              "WARNING: [Runtime:Luau] [Ordinary:OwnedGui] Server player=false ownerGui=false screen=false script=false tick=203",
+              "[Runtime:Server] [Warning] [Ordinary:OwnedGui] Server player=false ownerGui=false screen=false script=false tick=203"
+            ],
+            "PrivateMarker": false,
+            "ServerProof": true
+          }
+        }
+      },
+      "Failure": "Distributed Player did not execute package-backed Controller and GUI scripts on join",
+      "Offline": {
+        "AuthoredSnapshotPresent": true,
+        "CompiledGuiArtifactPresent": true,
+        "ExecutableSha256": "cc03bcda5d706f1f62ea92da8e2208078801b665cff0cb12288f43478f30213c",
+        "GuiRecords": [
+          {
+            "Id": "d303fd5fb32f6d92ce8de000d88a062b",
+            "Path": [
+              "StarterGui",
+              "RD1Gui",
+              "RD1GuiScript"
+            ],
+            "Representation": "Compiled"
+          }
+        ],
+        "ManifestSha256": "080d0c4f62dc5cf75a85fbc0297157915d3d125a0b1e628993feb46a2d4570ba"
+      },
+      "Passed": false,
+      "RealProcesses": {
+        "hybrid-loopback-player-join.log": {
+          "Bytes": 1225,
+          "ClientProof": true,
+          "GuiProof": false,
+          "PrivateModuleLiteral": false,
+          "PrivateModuleSourceMarker": false,
+          "ServerProof": false,
+          "Sha256": "2188a6d00e03c47f1eecf1bc951b90a8d493659275827ce2dbe743af8d3094bb"
+        },
+        "hybrid-loopback-server.log": {
+          "Bytes": 1281,
+          "ClientProof": false,
+          "GuiProof": false,
+          "PrivateModuleLiteral": false,
+          "PrivateModuleSourceMarker": false,
+          "ServerProof": true,
+          "Sha256": "5ff7c221fd854d62f0116459ef6ea707682254e6a8549e420784b3b56a3c4ea5"
+        }
+      },
+      "Server": {
+        "AuthoredSnapshotPresent": true,
+        "CompiledGuiArtifactPresent": true,
+        "ExecutableSha256": "f7ae1d9042c710ac4192b11f88c8f97b41662b68c892a440733b2c345f4f54e2",
+        "GuiRecords": [
+          {
+            "Id": "d303fd5fb32f6d92ce8de000d88a062b",
+            "Path": [
+              "StarterGui",
+              "RD1Gui",
+              "RD1GuiScript"
+            ],
+            "Representation": "Compiled"
+          }
+        ],
+        "ManifestSha256": "97dc9d9678cb9dfa3b2eccb20738e799d13ef3587dbdf0afaab946e315c50e88"
+      },
+      "StockSourceRef": "d28a2ad74f59dd65d80c66aed924cb2dd10ff476"
+    }
+  }
+}

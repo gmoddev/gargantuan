@@ -1,0 +1,51 @@
+{
+  "PrefixPositions": 148,
+  "SuffixPositions": 108,
+  "TotalPositions": 256,
+  "Files": {
+    "Processes.csv": {
+      "PrefixSha256": "387db2ff086462921611e4a94c6b2a5408851c5c3707467ec7e267ff4d492d88",
+      "SuffixSha256": "1faf7de4e509d707d7a5b2a0d5c4d2e473e55a725ff54affa4c819b3cee91671",
+      "CombinedAcquisitionSha256": "4b9dbba49cf653c8643bed832ac3dd11fd0df0dcdff7b3b6374e6f799751f4b9",
+      "PrefixCreatedUtc": "2026-11-28T03:37:18.685452+00:00",
+      "PrefixLastWriteUtc": "2026-11-28T04:06:08.259235+00:00"
+    },
+    "Ticks.csv.gz": {
+      "PrefixSha256": "04a10a63ef1834cfe7f24efe99fc1835d45908620cb1e6e4d07f033d17164264",
+      "SuffixSha256": "68b61bfc4ed21eb9aa7d23a41b2c83e4b4f0b7049fc490cae51a315ebe0c0a0a",
+      "CombinedAcquisitionSha256": "3fb11e034df849f1829ffd0a14427e4b0f905adf436261efc1f59fdababbe9cd",
+      "PrefixCreatedUtc": "2026-11-28T03:37:18.687452+00:00",
+      "PrefixLastWriteUtc": "2026-11-28T04:06:08.535729+00:00"
+    }
+  },
+  "FirstRecoveredPosition": {
+    "Block": 38,
+    "Run": 1,
+    "Profile": "baseline"
+  },
+  "Events": [
+    {
+      "Utc": "2026-11-28T04:08:01.086632+00:00",
+      "Event": "Resume",
+      "Prefix": 148,
+      "PriorFiles": {
+        "Processes.csv": "387db2ff086462921611e4a94c6b2a5408851c5c3707467ec7e267ff4d492d88",
+        "Ticks.csv.gz": "04a10a63ef1834cfe7f24efe99fc1835d45908620cb1e6e4d07f033d17164264"
+      }
+    },
+    {
+      "Utc": "2026-11-28T04:08:01.678054+00:00",
+      "Event": "FirstUnsampledPosition",
+      "Ordinal": 149,
+      "Position": "B38R1",
+      "Product": "gargantuan.exe",
+      "OriginalParent": "C:/Users/aiden/AppData/Local/Temp"
+    },
+    {
+      "Utc": "2026-11-28T04:29:01.939659+00:00",
+      "Event": "Complete",
+      "Positions": 256
+    }
+  ],
+  "PacketSha256": "29a98b018f529e4647b4890394220b15df80aa38f0a8f262f3fd92ca826df811"
+}
