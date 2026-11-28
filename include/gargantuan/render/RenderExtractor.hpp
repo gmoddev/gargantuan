@@ -95,6 +95,7 @@ namespace gargantuan {
 			std::uint32_t ViewportHeight
 		);
 		void RequestFullResync() { FullResyncRequested = true; }
+		[[nodiscard]] RenderPublicationPtr PublishPresentation(std::uint32_t Width, std::uint32_t Height);
 		void SetUiFrame(RenderUiFrame UiFrame, ObjectId Source = {}, std::uint64_t SourceGeneration = 0);
 		void SetUiFrame(
 			std::shared_ptr<const RenderUiFrame> UiFrame,

@@ -1,5 +1,6 @@
 #include "gargantuan/scripting/ExecutionBudget.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
+#include "gargantuan/runtime/ApplicationPresentation.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -55,8 +56,12 @@ namespace gargantuan {
 		template <typename Function>
 		int RunGameplay(lua_State *State, Function Call, GameplayResumeBudget *Retained = nullptr) {
 			const ActiveGameplayScope Active(State);
-			if (lua_callbacks(State)->interrupt == BudgetScope::Interrupt) return Call();
 			auto *Engine = ScriptEngine::Get(State);
+			if (auto *App = Engine->GetApplicationPresentation(); App && !App->IsCallerCurrent(*Engine->DataModel)) {
+				lua_pushliteral(State, "[Lifecycle:Application] Application execution retired");
+				return LUA_ERRRUN;
+			}
+			if (lua_callbacks(State)->interrupt == BudgetScope::Interrupt) return Call();
 			const auto Configured = std::min(Engine->GameplayExecutionBudget, std::chrono::milliseconds(86'400'000));
 			if (!Retained && Configured.count() <= 0) return Call();
 			const auto Duration = Retained ? Retained->Remaining : Clock::duration(Configured);

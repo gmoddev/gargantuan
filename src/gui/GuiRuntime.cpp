@@ -2040,7 +2040,8 @@ namespace gargantuan {
 		: State(std::make_unique<Impl>(std::move(World), std::move(DefaultFontPath), Mode)) {
 		if (Mode == GuiRuntimeMode::AuthoringPreview) return;
 		std::scoped_lock Lock(RuntimeRegistryMutex);
-		RuntimeRegistry.emplace(State->World.get(), this);
+		if (!RuntimeRegistry.emplace(State->World.get(), this).second)
+			throw std::logic_error("[GUI:Runtime] A runtime already owns this graph");
 	}
 
 	GuiRuntime::~GuiRuntime() {
@@ -2293,12 +2294,6 @@ namespace gargantuan {
 	bool GuiRuntime::ProcessPointer(const GuiPointerInput &Input) { return ProcessPointer(Input, {}); }
 
 	bool GuiRuntime::ProcessEvent(const HostEvent &Event, GuiApplicationFrame Frame) {
-		if (!State->AcceptsInput() || (State->Mode == GuiRuntimeMode::Application && Frame != State->DisplayedFrame)) {
-			if (State->Mode == GuiRuntimeMode::Application) {
-				if (const auto *Focus = std::get_if<FocusEvent>(&Event); Focus && !Focus->Focused) ClearTransientState();
-			}
-			return false;
-		}
 		if (const auto *Move = std::get_if<PointerMoveEvent>(&Event)) {
 			return ProcessPointer({static_cast<int>(Move->Device.Value), Enums::GuiPointerType::Mouse,
 				Enums::GuiPointerButton::None, GuiPointerAction::Move, {Move->Position.X, Move->Position.Y}}, Frame);
@@ -2314,6 +2309,15 @@ namespace gargantuan {
 				Touch->Action == TouchPointerAction::Up ? GuiPointerAction::Up : GuiPointerAction::Cancel;
 			return ProcessPointer({static_cast<int>(Touch->Pointer.Value), Enums::GuiPointerType::Touch,
 				Enums::GuiPointerButton::Primary, Action, {Touch->Position.X, Touch->Position.Y}}, Frame);
+		}
+		if (!State->AcceptsInput() || (State->Mode == GuiRuntimeMode::Application && Frame != State->DisplayedFrame)) {
+			if (State->Mode == GuiRuntimeMode::Application) {
+				if (const auto *Focus = std::get_if<FocusEvent>(&Event); Focus && !Focus->Focused) ClearTransientState();
+				if (const auto *Key = std::get_if<KeyEvent>(&Event); Key && Key->State == ButtonState::Released &&
+					(Key->Logical == LogicalKey::Space || Key->Logical == LogicalKey::Return))
+					State->RefreshInteraction(std::exchange(State->KeyboardPressed, ObjectId{}));
+			}
+			return false;
 		}
 		if (const auto *Wheel = std::get_if<WheelEvent>(&Event)) {
 			const Vector2 Logical{Wheel->Position.X / State->Viewport.DpiScale, Wheel->Position.Y / State->Viewport.DpiScale};
@@ -2380,8 +2384,16 @@ namespace gargantuan {
 	}
 
 	bool GuiRuntime::ProcessPointer(const GuiPointerInput &Input, GuiApplicationFrame Frame) {
-		if (!State->AcceptsInput() || (State->Mode == GuiRuntimeMode::Application && Frame != State->DisplayedFrame))
+		if (!State->AcceptsInput() || (State->Mode == GuiRuntimeMode::Application && Frame != State->DisplayedFrame)) {
+			if (State->Mode == GuiRuntimeMode::Application &&
+				(Input.Action == GuiPointerAction::Up || Input.Action == GuiPointerAction::Cancel)) {
+				State->Captured.erase(Input.PointerId);
+				State->ScrollGestures.erase(Input.PointerId);
+				if (const auto Pressed = State->Pressed.extract(Input.PointerId); !Pressed.empty())
+					State->RefreshInteraction(Pressed.mapped());
+			}
 			return false;
+		}
 		if (Input.PointerId < 0 || !std::isfinite(Input.PhysicalPosition.GetX()) ||
 			!std::isfinite(Input.PhysicalPosition.GetY())) return false;
 		const Vector2 Logical = Input.PhysicalPosition / State->Viewport.DpiScale;

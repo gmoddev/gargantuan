@@ -164,6 +164,10 @@ namespace {
 		(void)Runtime.ProcessPointer(Up, FirstFrame);
 		Check(Activations == 1, "displayed application button accepts a click without a Player");
 		(void)Runtime.ProcessPointer(Down, FirstFrame);
+		(void)Runtime.ProcessPointer(Up, ForeignFrame);
+		(void)Runtime.ProcessPointer(Up, FirstFrame);
+		Check(Activations == 1, "a release during a presentation gap retires its press");
+		(void)Runtime.ProcessPointer(Down, FirstFrame);
 		Check(Runtime.SetApplicationMenu(Second.Root, true), "replace menu with a live successor");
 		Check(!Runtime.ProcessPointer(Up, FirstFrame) && Activations == 1, "replacing menu cancels pending press");
 		(void)Runtime.Reconcile();
@@ -189,7 +193,7 @@ namespace {
 
 	void TestApplicationBindings() {
 		using namespace gargantuan;
-		auto Graph = std::make_shared<DataModel>();
+		auto Graph = ApplicationPresentation::CreateGraph();
 		auto FolderValue = std::make_shared<Folder>();
 		FolderValue->SetParent(Graph);
 		auto Entry = std::make_shared<Script>();
@@ -200,6 +204,8 @@ namespace {
 			Menu.Parent = script.Parent
 			assert(game:SetMainMenu(Menu).Ok and game:IsMainMenuVisible())
 			assert(game:SetMainMenu(script).Code == "InvalidMenu")
+			assert(not pcall(function() game:GetService("Workspace") end))
+			assert(not pcall(function() Instance.new("FileLink") end))
 			local Frame = 0
 			game:GetService("RunService").PreRender:Connect(function()
 				Frame += 1

@@ -629,7 +629,7 @@ namespace gargantuan {
 		}
 
 		bool CanDeferTerrain(const ParsedPackageManifest &Manifest, PackageRuntimeLoadMode Mode) {
-			return Mode == PackageRuntimeLoadMode::LoopbackDevelopmentClient &&
+			return !Manifest.HasApplication && Mode == PackageRuntimeLoadMode::LoopbackDevelopmentClient &&
 				Manifest.Inspection.Configuration == PackageConfiguration::Development &&
 				Manifest.Inspection.Audience == PackageAudience::Trusted && !Manifest.Inspection.Target;
 		}
@@ -701,7 +701,7 @@ namespace gargantuan {
 						Startup["AssetCatalog"].get_ref<const std::string &>() != client_package::CatalogPath)
 						throw std::runtime_error("Distributed Player startup metadata is invalid");
 				} else if (Startup.size() != (FormatVersion == 1 ? 3 : Standalone ? 5 : 4) ||
-					(Standalone && (!Startup.contains("Application") || Startup["Application"] != application_template::Path)) ||
+					(Standalone && (!Startup.contains("Application") || Startup["Application"] != std::string(application_template::Path))) ||
 					!Startup.contains("Project") || !Startup["Project"].is_string() ||
 					!Startup.contains("PreRun") || (!Startup["PreRun"].is_null() && !Startup["PreRun"].is_string()) ||
 					(FormatVersion != 1 && (!Startup.contains("ContentManifest") || !Startup["ContentManifest"].is_string()))) {

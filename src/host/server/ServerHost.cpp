@@ -528,6 +528,10 @@ namespace gargantuan::host {
 			.RequirePublisher = Program.is_used("--require-package-publisher"),
 		});
 		if (!Payload) return BootstrapExitCode;
+		if (Payload->ApplicationTemplate) {
+			std::cerr << "[Package:Audience] This standalone package requires the offline Player.\n";
+			return 3;
+		}
 		const bool SpatialContent = Payload->SpatialContent;
 		const bool NetworkTerrain = SpatialContent ? !Payload->WorkspaceTerrainManifest.empty() : !Payload->TerrainArtifacts.empty();
 		if (SpatialContent && (Payload->Inspection.Target != RuntimeDistributionTarget::DedicatedServer || !BindEndpoint ||

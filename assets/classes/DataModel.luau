@@ -19,6 +19,11 @@ return c({
 		},
 	},
 	methods = {
+		SetGameplayInputEnabled = {
+			description = "Controls local input delivery to the active gameplay session.",
+			asLuau = true,
+			luauSignature = "(self: DataModel, Enabled: boolean) -> " .. MenuResult,
+		},
 		SetMainMenu = {
 			description = "Registers the application's ScreenGui. Pass nil to clear the selection.",
 			asLuau = true,

@@ -567,6 +567,12 @@ int main() {
 			"non-spatial stereo playback preserves authored left/right channels"
 		);
 		const auto PositionBeforePause = UiSound->GetTimePosition();
+		const auto SubmissionsBeforeHold = Backend->SubmissionCount;
+		Runtime.SetPlaybackHeld(true);
+		Runtime.Step(CFrame());
+		Check(Backend->SubmissionCount == SubmissionsBeforeHold && UiSound->GetTimePosition() == PositionBeforePause &&
+			UiSound->GetPlaybackState() == Enums::SoundPlaybackState::Playing, "gameplay hold freezes the mixer and preserves voice intent");
+		Runtime.SetPlaybackHeld(false);
 		UiSound->Pause();
 		Runtime.Step(CFrame());
 		Check(

@@ -3,6 +3,8 @@
 #include "ApplicationTemplate.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/Script.hpp"
+#include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/runtime/ApplicationPresentation.hpp"
 #include "serialization/JsonCodec.hpp"
 
 #include <algorithm>
@@ -17,7 +19,7 @@ namespace gargantuan::application_template {
 		bool IsEntry(const Json &Node, std::string_view SourceId) {
 			const auto &Props = Node.at("Properties");
 			return Node.at("ClassName") == "Script" && Props.contains("SourceId") &&
-				Props.at("SourceId").at("String") == SourceId;
+				Props.at("SourceId").at("String").get_ref<const std::string &>() == SourceId;
 		}
 
 		Json Admit(std::string_view Text) {
@@ -35,13 +37,11 @@ namespace gargantuan::application_template {
 			std::unordered_set<std::string> SourceIds;
 			std::vector<std::uint32_t> Targets;
 			std::size_t Viewports = 0;
-			constexpr std::array Classes{"Folder", "Script", "ModuleScript", "ScreenGui", "Frame", "TextButton", "TextLabel",
-				"TextBox", "ScrollingFrame", "UIListLayout", "ImageLabel", "ImageButton", "ViewportFrame", "Camera"};
 			while (!Pending.empty()) {
 				const auto &Node = *Pending.back();
 				Pending.pop_back();
 				const auto &Class = Node.at("ClassName").get_ref<const std::string &>();
-				if (std::ranges::find(Classes, Class) == Classes.end() ||
+				if (!ApplicationPresentation::SupportsClass(Class) ||
 					Node.at("ClassSchemaId") != SchemaId::FromNativeName("Engine", Class).ToString())
 					Invalid("Template contains a class outside the admitted presentation surface");
 				const auto Id = JsonCodec::DecodeUnsigned32(Node.at("NodeId"));
@@ -84,7 +84,26 @@ namespace gargantuan::application_template {
 		Children.erase(Folder);
 		Scene->at("Properties").erase("ApplicationEntry");
 		Template["Version"] = 5;
-		auto Packed = JsonCodec::Encode(Json{{"Version", 1}, {"Entry", SourceId}, {"Template", std::move(Template)}}, "application template");
+		std::unordered_set<std::uint32_t> ApplicationIds;
+		std::vector<const Json *> Pending{&Template};
+		while (!Pending.empty()) {
+			const auto &Node = *Pending.back();
+			Pending.pop_back();
+			ApplicationIds.insert(Node.at("NodeId").get<std::uint32_t>());
+			for (const auto &Child : Node.at("Children")) Pending.push_back(&Child);
+		}
+		Pending.push_back(&*Scene);
+		while (!Pending.empty()) {
+			const auto &Node = *Pending.back();
+			Pending.pop_back();
+			for (const auto &[Name, Property] : Node.at("Properties").items()) {
+				if (Property.contains("InstanceReference") && Property.at("InstanceReference").is_number_unsigned() &&
+					ApplicationIds.contains(Property.at("InstanceReference").get<std::uint32_t>()))
+					Invalid("Gameplay reference crosses the application boundary");
+			}
+			for (const auto &Child : Node.at("Children")) Pending.push_back(&Child);
+		}
+		auto Packed = JsonCodec::Encode(Json{{"Version", 1}, {"Entry", std::string(SourceId)}, {"Template", std::move(Template)}}, "application template");
 		if (!Packed) Invalid("Application template encoding failed");
 		Validate(*Packed);
 		auto Gameplay = JsonCodec::Encode(*Scene, "gameplay projection");
@@ -100,7 +119,7 @@ namespace gargantuan::application_template {
 		std::istringstream Input(Document.at("Template").dump());
 		auto Decoded = InstanceSerialization::DeserializeDetached(InstanceSerialization::InstanceFormat::Json, Input);
 		if (!Decoded.Ok || !Decoded.Instance) Invalid("Unable to materialize the admitted template");
-		Graph Result{std::make_shared<DataModel>(), {}};
+		Graph Result{ApplicationPresentation::CreateGraph(), {}};
 		Decoded.Instance->SetParent(Result.World);
 		for (const auto &Child : Decoded.Instance->Children) {
 			auto Candidate = std::dynamic_pointer_cast<Script>(Child);

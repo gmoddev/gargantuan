@@ -21,6 +21,9 @@ namespace gargantuan {
 		[[nodiscard]] virtual std::size_t GetQueuedFrames() = 0;
 		[[nodiscard]] virtual bool Submit(std::span<const float> InterleavedStereo) = 0;
 		virtual void Clear() = 0;
+		// Retain already mixed samples when the output supports a per-stream hold.
+		// Other backends drain at most the runtime's bounded queue.
+		virtual void SetPlaybackHeld(bool) {}
 		virtual void Shutdown() = 0;
 		[[nodiscard]] virtual std::string GetDiagnostic() const = 0;
 		[[nodiscard]] virtual AudioBackendMetrics GetMetrics() const = 0;

@@ -5,9 +5,12 @@
 #include "gargantuan/network/TerrainSession.hpp"
 #include "host/common/FarmLifecycleEvidence.hpp"
 #include "host/player/FarmRecoveryObservation.hpp"
+#include "host/player/StandalonePlayer.hpp"
 #include "network/ReliableServiceFeedback.hpp"
 #include "network/GameSessionTestAccess.hpp"
 #include "gargantuan/Engine.hpp"
+#include "gargantuan/runtime/ApplicationPresentation.hpp"
+#include "packaging/ApplicationTemplate.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
@@ -178,6 +181,10 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		return ExitCode;
 	}
 	const bool Distributed = Payload->Inspection.Audience == PackageAudience::DistributedPlayer;
+	if (Payload->ApplicationTemplate && !ClientText.empty()) {
+		std::cerr << "[Package:Audience] This standalone package requires an offline session.\n";
+		return 3;
+	}
 	if (Payload->Inspection.Target && !Distributed && !ClientText.empty()) {
 		std::cerr << "[Package:Audience] A managed offline Player cannot join a network session.\n";
 		return 3;
@@ -223,15 +230,33 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	std::unique_ptr<host::detail::FarmPublicationEvidence> PublicationEvidence;
 	try {
 		std::shared_ptr<DataModel> PackagedWorld;
-		if (!Distributed) {
-			PackagedWorld = Payload->LoadMode == PackageRuntimeLoadMode::LoopbackDevelopmentClient
+		const auto LoadPackageWorld = [&] {
+			return Payload->LoadMode == PackageRuntimeLoadMode::LoopbackDevelopmentClient
 				? PackageBuilder::LoadClientCodeWorld(*Payload, PackageRoot) : PackageBuilder::LoadWorld(*Payload, PackageRoot);
-		}
+		};
+		if (!Distributed && !Payload->ApplicationTemplate) PackagedWorld = LoadPackageWorld();
 		const Vector2 ViewportSize(720, 540);
 		if (Headless)
 			Renderer = std::make_unique<HeadlessRenderer>(ViewportSize);
 		else
 			Renderer = std::make_unique<SDLRenderer>(ViewportSize);
+		if (Payload->ApplicationTemplate) {
+			auto Graph = application_template::Load(*Payload->ApplicationTemplate);
+			Graph.World->Root = PackageRoot / "content";
+			Graph.World->Filesystem = nullptr;
+			auto Assets = std::dynamic_pointer_cast<AssetService>(Graph.World->GetService("AssetService"));
+			Assets->LoadRuntimeAssetSnapshot(Payload->Assets);
+			ApplicationPresentation App(Graph.World, Graph.Entry, Paths::GetExecutableDirectory() / "runtime" / "GargantuanSans.ttf",
+				[](std::string Level, std::string Message) {
+					std::clog << "[Lifecycle:Application] " << Level << " " << Message << '\n';
+				}, !Headless);
+			if (App.HasMainMenu()) {
+				const int Requested = Program.get<int>("--max-frames");
+				const int Limit = Requested > 0 ? Requested : Program.is_used("--startup-smoke") ? 12 : 0;
+				return RunStandalonePlayer(App, *Renderer, *Payload, PackageRoot, Limit);
+			}
+		}
+		if (!Distributed && !PackagedWorld) PackagedWorld = LoadPackageWorld();
 		std::shared_ptr<DataModel> World;
 #if defined(GARGANTUAN_WITH_GNS)
 		if (!ClientText.empty()) {

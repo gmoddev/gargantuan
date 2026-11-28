@@ -50,6 +50,7 @@ namespace gargantuan {
 		void AttachMixService(const std::shared_ptr<AudioMixService> &Service, RuntimeMode Mode);
 		void RegisterSound(const std::shared_ptr<Sound> &SoundValue);
 		void Step(const CFrame &Listener);
+		void SetPlaybackHeld(bool Held);
 		void Shutdown();
 		[[nodiscard]] bool IsAvailable() const;
 		[[nodiscard]] AudioRuntimeMetrics GetMetrics() const;

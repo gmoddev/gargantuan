@@ -1295,6 +1295,42 @@ namespace gargantuan {
 		}
 	}
 
+	RenderPublicationPtr RenderPublisher::PublishPresentation(std::uint32_t Width, std::uint32_t Height) {
+		AssertAuthoritativeMutation("Application presentation publication");
+		if (!Width || !Height || LastPublicationId == std::numeric_limits<RenderPublicationId>::max())
+			throw std::invalid_argument("[Render:Application] Invalid viewport or exhausted publication identity");
+		auto Result = std::make_shared<RenderPublication>();
+		Result->Id = LastPublicationId + 1;
+		Result->FullResync = FullResyncRequested;
+		Result->BaseId = FullResyncRequested ? InvalidRenderPublicationId : LastPublicationId;
+		Result->Frame = {Width, Height, 1.0f, BuildCamera({}, Width, Height), {}};
+		Result->EnvironmentChanged = FullResyncRequested;
+		Result->UiChanged = FullResyncRequested || PendingUi != nullptr;
+		if (Result->UiChanged) Result->SharedUi = CommittedUi;
+		if (FullResyncRequested || ViewportsChanged) Result->Viewports = CommittedViewports;
+		if (FullResyncRequested) {
+			for (const auto &[Texture, State] : PublishedTextures)
+				Result->TextureCreates.push_back({Texture, State.Revision, State.Width, State.Height, State.Format, State.Pixels});
+			std::ranges::sort(Result->TextureCreates, {}, &RenderTextureCreate::Texture);
+		} else {
+			Result->TextureCreates = PendingTextureCreates;
+			Result->TextureUpdates = PendingTextureUpdates;
+			Result->TextureRemoves = PendingTextureRemoves;
+		}
+		if (EstimatePublicationBytes(*Result) > Dirty->GetLimits().MaximumPublicationBytes)
+			throw std::length_error("[Render:Application] GUI publication exceeds the renderer limit");
+		PendingTextureCreates.clear();
+		PendingTextureUpdates.clear();
+		PendingTextureRemoves.clear();
+		PendingUi.reset();
+		PendingTextureBytes = 0;
+		PendingUiGeometryBytes = 0;
+		ViewportsChanged = false;
+		FullResyncRequested = false;
+		LastPublicationId = Result->Id;
+		return Result;
+	}
+
 	RenderPublicationPtr RenderPublisher::Publish(
 		const WorldRoot &World,
 		const RenderCameraInput &CameraInput,

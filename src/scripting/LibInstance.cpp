@@ -1,5 +1,6 @@
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/runtime/ApplicationPresentation.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 
@@ -50,6 +51,8 @@ namespace gargantuan {
 		}
 
 		auto *ScriptEngineValue = ScriptEngine::Get(L);
+		if (ScriptEngineValue->GetApplicationPresentation() && !ApplicationPresentation::SupportsClass(classDefinition->ClassName))
+			luaL_error(L, "This class is unavailable in application scope");
 		if (classDefinition->ClassName == "DataModel" ||
 			(ScriptEngineValue->DataModel && ScriptEngineValue->DataModel->IsProtectedServiceClass(classDefinition->Id))) {
 			luaL_error(L, "Instance class %s is a protected service and cannot be constructed", className);

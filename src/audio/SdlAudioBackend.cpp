@@ -70,6 +70,12 @@ namespace gargantuan {
 				if (Stream) (void)SDL_ClearAudioStream(Stream);
 			}
 
+			void SetPlaybackHeld(bool Held) override {
+				if (!Stream || !Available) return;
+				if (!(Held ? SDL_PauseAudioStreamDevice(Stream) : SDL_ResumeAudioStreamDevice(Stream)))
+					Fail(SDL_GetError());
+			}
+
 			void Shutdown() override {
 				Available = false;
 				if (Stream) {

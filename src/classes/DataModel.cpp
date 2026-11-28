@@ -61,6 +61,14 @@ namespace gargantuan {
 		}
 	}
 
+	int DataModel::SetGameplayInputEnabled(lua_State *L, Instance *Receiver) {
+		auto *App = CurrentApplication(L, Receiver);
+		if (!App) return MenuResult(L, false, "NotAuthorized", "The local application owns gameplay input.");
+		if (!lua_isboolean(L, 2)) return MenuResult(L, false, "InvalidOptions", "Input enablement must be a boolean.");
+		App->GameplayInputEnabled = lua_toboolean(L, 2) != 0;
+		return MenuResult(L, App->GameplayInputEnabled);
+	}
+
 	int DataModel::SetMainMenu(lua_State *L, Instance *Receiver) {
 		auto *App = CurrentApplication(L, Receiver);
 		if (!App) return MenuResult(L, false, "NotAuthorized", "A live application entry owns the main menu.");

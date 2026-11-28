@@ -42,6 +42,7 @@ namespace gargantuan {
 	}
 
 	struct AudioRuntime::Impl {
+		bool PlaybackHeld = false;
 		static constexpr AudioMixService::EffectiveGains UnityGains = [] {
 			AudioMixService::EffectiveGains Gains;
 			Gains.fill(1.0f);
@@ -355,8 +356,14 @@ namespace gargantuan {
 		State->Sounds.insert_or_assign(SoundValue->GetObjectId(), Impl::TrackedSound{SoundValue});
 	}
 
+	void AudioRuntime::SetPlaybackHeld(bool Held) {
+		if (!State || State->ShutDown || State->PlaybackHeld == Held) return;
+		if (State->Backend) State->Backend->SetPlaybackHeld(Held);
+		State->PlaybackHeld = Held;
+	}
+
 	void AudioRuntime::Step(const CFrame &Listener) {
-		if (!State || State->ShutDown) return;
+		if (!State || State->ShutDown || State->PlaybackHeld) return;
 		runtime_detail::MeasureWork(runtime_detail::WorkPhase::AudioReconcile, [&] { State->Reconcile(); });
 		const auto Service = State->MixService.lock();
 		const auto TargetGains = Service ? Service->CaptureEffectiveGains() : Impl::UnityGains;

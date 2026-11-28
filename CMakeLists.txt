@@ -496,7 +496,7 @@ endif()
 add_library(gargantuan_runtime_host STATIC "src/host/common/PackagedHost.cpp")
 target_link_libraries(gargantuan_runtime_host PUBLIC gargantuan_core)
 target_include_directories(gargantuan_runtime_host PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>")
-add_library(gargantuan_player_host STATIC "src/host/player/PlayerHost.cpp")
+add_library(gargantuan_player_host STATIC "src/host/player/PlayerHost.cpp" "src/host/player/StandalonePlayer.cpp")
 target_link_libraries(gargantuan_player_host PUBLIC gargantuan_runtime_host)
 add_executable(gargantuan_player "src/player/PlayerMain.cpp")
 set_target_properties(gargantuan_player PROPERTIES OUTPUT_NAME "GargantuanPlayer")
@@ -2176,6 +2176,18 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_packaging COMMAND gargantuan_packaging_tests)
 	add_test(NAME gargantuan_packaging_editor_host COMMAND gargantuan_packaging_editor_host_tests)
 	add_test(NAME gargantuan_packaging_benchmark_smoke COMMAND gargantuan_packaging_benchmark --quick)
+	find_program(GARGANTUAN_LIFECYCLE_TEST_PYTHON NAMES python3 python)
+	if(GARGANTUAN_LIFECYCLE_TEST_PYTHON)
+		set(LifecyclePlayerTest "${GARGANTUAN_LIFECYCLE_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/StandaloneLifecyclePlayer.py"
+			--packager $<TARGET_FILE:gargantuan_packager> --runtime $<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
+			--project "${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame")
+		add_test(NAME gargantuan_lifecycle_offline_package COMMAND ${LifecyclePlayerTest})
+		set_tests_properties(gargantuan_lifecycle_offline_package PROPERTIES LABELS "lifecycle;packaging;headless" TIMEOUT 240)
+		if(GARGANTUAN_RUN_GRAPHICAL_PACKAGE_SMOKE)
+			add_test(NAME gargantuan_lifecycle_graphical_package COMMAND ${LifecyclePlayerTest} --graphical)
+			set_tests_properties(gargantuan_lifecycle_graphical_package PROPERTIES LABELS "lifecycle;packaging;graphical" TIMEOUT 240)
+		endif()
+	endif()
 	add_test(NAME gargantuan_first_complete_game_package_smoke
 		COMMAND ${CMAKE_COMMAND}
 			-DGARGANTUAN_PACKAGER=$<TARGET_FILE:gargantuan_packager>
