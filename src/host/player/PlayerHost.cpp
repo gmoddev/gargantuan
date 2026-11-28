@@ -9,6 +9,7 @@
 #include "host/player/PackagedClient.hpp"
 #include "network/ReliableServiceFeedback.hpp"
 #include "network/GameSessionTestAccess.hpp"
+#include "SessionSmokeProbe.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/runtime/ApplicationPresentation.hpp"
 #include "gargantuan/persistence/LocalPersistenceProvider.hpp"
@@ -256,6 +257,14 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	std::unique_ptr<Engine> Runtime;
 	std::unique_ptr<network::GameSession> Session;
 	std::unique_ptr<host::detail::FarmPublicationEvidence> PublicationEvidence;
+	const bool SessionSmoke = Program.is_used("--session-smoke");
+	if (SessionSmoke || FarmRecoveryWorkload) {
+		SDL_SetLogOutputFunction([](void *, int, SDL_LogPriority, const char *Message) {
+			std::cerr << Message << '\n';
+		}, nullptr);
+		SDL_SetLogPriority(LogCategory::App, SDL_LOG_PRIORITY_INFO);
+		SDL_SetLogPriority(LogCategory::Lua, SDL_LOG_PRIORITY_INFO);
+	}
 	try {
 		std::shared_ptr<DataModel> PackagedWorld;
 		const auto UserData = [&] {
@@ -310,10 +319,9 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 					std::clog << "[Lifecycle:Application] " << Level << " " << Message << '\n';
 				}, !Headless, ConfigureWorlds, std::move(Invitation));
 			if (App.HasMainMenu()) {
-				const auto Profile = UserData();
 				const int Requested = Program.get<int>("--max-frames");
 				const int Limit = Requested > 0 ? Requested : Program.is_used("--startup-smoke") ? 12 : 0;
-				return RunStandalonePlayer(App, *Renderer, *Payload, PackageRoot, Profile, Limit, std::move(Admission), std::move(PrivateServer), Program.is_used("--sample-presented-pixel"));
+				return RunStandalonePlayer(App, *Renderer, *Payload, PackageRoot, UserData, Limit, std::move(Admission), std::move(PrivateServer), Program.is_used("--sample-presented-pixel"), SessionSmoke);
 			}
 		}
 		if (Payload->Inspection.Target && !Distributed && !ClientText.empty()) {
@@ -441,16 +449,8 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		const auto RequestedFrames = Program.get<int>("--max-frames");
 		const auto MaximumFrames = RequestedFrames > 0 ? RequestedFrames
 													   : (Program.is_used("--startup-smoke") ? 12 : 0);
-		const bool SessionSmoke = Program.is_used("--session-smoke");
 		if (SessionSmoke) Runtime->RenderPublishing.SetProfilingEnabled(true);
-		if (SessionSmoke || FarmRecoveryWorkload) {
-			SDL_SetLogOutputFunction([](void *, int, SDL_LogPriority, const char *Message) {
-				std::cerr << Message << '\n';
-			}, nullptr);
-			SDL_SetLogPriority(LogCategory::App, SDL_LOG_PRIORITY_INFO);
-			SDL_SetLogPriority(LogCategory::Lua, SDL_LOG_PRIORITY_INFO);
-		}
-		bool SessionMovementInjected = false;
+		SessionSmokeProbe SmokeProbe;
 		int Frames = 0;
 		auto NetworkFrameDeadline = std::chrono::steady_clock::now();
 		auto PreviousFrameStarted = NetworkFrameDeadline;
@@ -527,20 +527,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 				if (!Runtime->ProcessService->Alive) break;
 			}
 			if (!Runtime->ProcessService->Alive) break;
-			if (SessionSmoke && !ClientText.empty() && !SessionMovementInjected) {
-				if (auto LocalPlayer = Runtime->Players->GetLocalPlayer();
-					LocalPlayer && (*LocalPlayer)->GetCharacter()) {
-					(void)Runtime->ProcessEvent(
-						KeyEvent{
-							.Device = {1},
-							.Physical = PhysicalKey::W,
-							.Logical = LogicalKey::W,
-							.State = ButtonState::Pressed,
-						}
-					);
-					SessionMovementInjected = true;
-				}
-			}
+			if (SessionSmoke && !ClientText.empty()) SmokeProbe.SubmitMovement(*Runtime);
 			const auto EngineStarted = std::chrono::steady_clock::now();
 			Runtime->Step();
 			const auto SessionStarted = std::chrono::steady_clock::now();
@@ -785,15 +772,8 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 						}
 					}
 				}
-				if (SessionSmoke) {
-					const auto Metrics = Session->GetMetrics();
-					const bool CameraReady = Headless || Runtime->Workspace->GetCurrentCamera()->GetCameraType() ==
-															 Enums::CameraType::Scriptable;
-					const bool Satisfied =
-						Runtime->CharacterControl->GetAttributeValue("SessionSmokeComplete").has_value() &&
-						Metrics.ActionsPresented >= 1 && Metrics.ActionPresentationStops >= 1 && CameraReady;
-					if (Satisfied) Runtime->ProcessService->MarkExit(0);
-				}
+				if (SessionSmoke && SmokeProbe.Completed(*Runtime, *Session, Headless))
+					Runtime->ProcessService->MarkExit(0);
 			}
 			const auto FrameCompleted = std::chrono::steady_clock::now();
 			// Bounded, test-only trace. No world/property/credential values are logged.

@@ -2077,7 +2077,7 @@ namespace gargantuan {
 				}
 				std::optional<RuntimeDistributionPlan> Gameplay;
 				const auto *WorldPlan = Plan ? &*Plan : nullptr;
-				if (Request.Payload.ApplicationTemplate && !IsServerExecutable(Distribution->Player)) {
+				if (Request.Payload.ApplicationTemplate && IsPlayerExecutable(Distribution->Player)) {
 					auto Template = *Request.Payload.ApplicationTemplate;
 					if (Plan) {
 						const auto Bindings = application_template::GetBindings(Template);
@@ -2178,7 +2178,7 @@ namespace gargantuan {
 					{"AssetCatalog", "content/assets/catalog.json"},
 					{"PreRun", Request.Payload.PreRunSource ? Json("content/prerun.luau") : Json(nullptr)},
 				};
-				const bool WithApplication = Request.Payload.ApplicationTemplate && !IsServerExecutable(Distribution->Player);
+				const bool WithApplication = Request.Payload.ApplicationTemplate && IsPlayerExecutable(Distribution->Player);
 				if (WithApplication) Startup["Application"] = application_template::Path;
 				Json Manifest{
 					{"Format", PackageFormat},

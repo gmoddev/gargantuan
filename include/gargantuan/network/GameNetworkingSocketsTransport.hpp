@@ -22,6 +22,8 @@ namespace gargantuan::network {
 		// entire adapter lifetime. The experimental worker additionally requires
 		// this lease; ordinary adapters retain the existing shared behavior.
 		bool RequireExclusivePooledDomain = false;
+		// Owned loopback Servers report their successful listen port on a private pipe.
+		bool RetryPrivateListenPort = false;
 		bool EnableNativeEgressWorker = false;
 		// Unqualified capacity-separation DATA policy; trusted native opt-in only.
 		bool EnableNativeDataArbitration = false;
@@ -48,6 +50,7 @@ namespace gargantuan::network {
 		std::size_t PollEvents(std::span<TransportEvent> Output) override;
 		[[nodiscard]] std::optional<std::size_t> GetAvailableDatagramBytes(ConnectionId Connection) const override;
 		[[nodiscard]] std::optional<NetworkStatistics> GetStatistics(ConnectionId Connection) const override;
+		[[nodiscard]] std::optional<TransportEndpoint> GetListeningEndpoint() const;
 		[[nodiscard]] std::optional<TransportServerPublicKey> LocalServerPublicKey() const override;
 		[[nodiscard]] std::optional<TransportServerPublicKey> AuthenticatedServerPublicKey(ConnectionId Connection) const override;
 

@@ -826,6 +826,7 @@ namespace gargantuan::host {
 					TransportConfiguration.SendRate = static_cast<std::uint32_t>(HostConfiguration.ReliableService->BackendSendRate());
 					TransportConfiguration.RequireExclusivePooledDomain = HostConfiguration.ReliableService->IsPooled();
 				}
+				TransportConfiguration.RetryPrivateListenPort = PrivateControl != nullptr;
 				TransportConfiguration.EnableNativeEgressWorker = EnableNativeEgressWorker;
 				TransportConfiguration.EnableNativeDataArbitration = NonRealtimeService;
 				if (NonRealtimeService) std::cout << "[Network:ServiceProfile] contract=POOLED_CORRECTNESS_V1 native_capacity=separate native_arbitration=1 latency_guarantee=0\n";
@@ -866,7 +867,8 @@ namespace gargantuan::host {
 						!Payload->ContentManifestDigest.IsValid())
 						throw std::runtime_error("managed server listener or package content is unavailable");
 					const auto ServerPublicKey = NativeTransport->LocalServerPublicKey();
-					if (!ServerPublicKey)
+					const auto Listener = NativeTransport->GetListeningEndpoint();
+					if (!Listener || !ServerPublicKey)
 						throw std::runtime_error("managed server identity is unavailable");
 					const auto Before = HostConfiguration.ManagedLifecycle->Snapshot();
 					if (!Before.AuthorityCurrent || Before.ReadyAcknowledged || Before.DrainRequested)
@@ -874,7 +876,7 @@ namespace gargantuan::host {
 					HostConfiguration.ManagedLifecycle->OnListening({
 						.Package = {Payload->Inspection.Identity, Payload->Inspection.Revision},
 						.ContentManifestDigest = Payload->ContentManifestDigest,
-						.Endpoint = *BindEndpoint,
+						.Endpoint = *Listener,
 						.ServerPublicKey = *ServerPublicKey,
 					});
 				}
@@ -1004,7 +1006,14 @@ namespace gargantuan::host {
 						RequestManagedDrain();
 						break;
 					}
-					const auto Request = PrivateControl ? PrivateControl->GetHoldRequest() : 0;
+					auto Request = PrivateControl ? PrivateControl->GetHoldRequest() : 0;
+					if (Request != LastRequest && (Request & 1) && Session) {
+						// The client queues READY during runtime attachment. Keep servicing its
+						// authenticated handshake before acknowledging the first simulation hold.
+						const auto Peers = Session->GetPeerIdentities();
+						if (std::ranges::none_of(Peers, &network::GameSessionPeerIdentity::Ready))
+							Request = LastRequest;
+					}
 					const bool PreparingLeave = PrivateControl && PrivateControl->IsPreparingLeave();
 					const bool Held = (Request & 1) != 0 || PreparingLeave;
 					if (ManagedClock) ManagedClock->SetHeld(SimulationTimeline::Hold::Gameplay, Held);

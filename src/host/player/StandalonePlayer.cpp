@@ -4,11 +4,13 @@
 #include "gargantuan/render/ApplicationDisplay.hpp"
 #include "PackagedClient.hpp"
 #include "PrivateServerProcess.hpp"
+#include "SessionSmokeProbe.hpp"
 #include "host/common/PackagedHost.hpp"
 #if defined(GARGANTUAN_WITH_GNS)
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
 #endif
 #include "runtime/WorldWriter.hpp"
+#include "runtime/RuntimeWorkTrace.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/persistence/LocalPersistenceProvider.hpp"
 #include "gargantuan/services/WorldSaveService.hpp"
@@ -21,11 +23,12 @@
 #include "platform/sdl/SDLHost.hpp"
 #include <SDL3/SDL.h>
 #include <iostream>
+#include <thread>
 
 namespace gargantuan::host {
 
 	int RunStandalonePlayer(ApplicationPresentation &App, BaseRenderer &Device,
-		const RuntimePackagePayload &Package, const std::filesystem::path &Root, const std::filesystem::path &Profile, int MaximumFrames, std::optional<PlayerAdmission> Admission, std::optional<PrivateServerPackage> PrivateServer, bool TracePresentation) {
+		const RuntimePackagePayload &Package, const std::filesystem::path &Root, const std::function<std::filesystem::path()> &Profile, int MaximumFrames, std::optional<PlayerAdmission> Admission, std::optional<PrivateServerPackage> PrivateServer, bool TracePresentation, bool SessionSmoke) {
 		const bool PinnedLaunch = Admission.has_value();
 		SDLHost Platform;
 		RenderPublisher AppPublisher;
@@ -79,8 +82,18 @@ namespace gargantuan::host {
 		};
 		auto Last = std::chrono::steady_clock::now();
 		std::cout << "[Lifecycle:Player] Application entry registered its title\n";
-		int ExitCode = 0;
+		int ExitCode = SessionSmoke ? 8 : 0;
+		SessionSmokeProbe SmokeProbe;
+#if defined(GARGANTUAN_WORK_TRACE)
+		runtime_detail::HostWorkTrace Trace;
+		auto PreviousFrame = Last;
+#endif
 		for (std::uint64_t Frame = 0;; ++Frame) {
+			const auto Started = std::chrono::steady_clock::now();
+#if defined(GARGANTUAN_WORK_TRACE)
+			runtime_detail::HostWorkTrace::Frame TraceFrame(Trace, Started, PreviousFrame, Frame);
+			PreviousFrame = Started;
+#endif
 			if (RetiringServer) {
 				try {
 					if (RetiringServer->Exited() || RetiringServer->Close()) RetiringServer.reset();
@@ -155,9 +168,9 @@ namespace gargantuan::host {
 				if (Status == PersistenceStatus::Pending) { SDL_Delay(2); continue; }
 				if (Status != PersistenceStatus::Ok) {
 					std::cerr << "[Lifecycle:Storage] Closing with write status " << GetPersistenceStatusName(Status) << '\n';
-					return 8;
+					ExitCode = 8;
 				}
-				return ExitCode;
+				break;
 			}
 			const auto [Width, Height] = Device.GetViewportSize();
 			App.Gui.SetViewport({Width, Height, 1.0f, {}});
@@ -215,13 +228,13 @@ namespace gargantuan::host {
 								if (Private) {
 									if (!PrivatePackageReady.valid())
 										PrivatePackageReady = std::async(std::launch::async, &PrivateServerSnapshot::Stage,
-											PrivateServer->Root, PrivateServer->Manifest, Package.Inspection, Profile, PackageCopy).share();
+											PrivateServer->Root, PrivateServer->Manifest, Package.Inspection, Profile(), PackageCopy).share();
 									if (!OwnedServer) {
 										if (PrivatePackageReady.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return false;
 										std::shared_ptr<PrivateServerSnapshot> Snapshot;
 										try { Snapshot = PrivatePackageReady.get(); }
 										catch (const std::exception &) { PrivatePackageReady = {}; throw SessionAdmissionFailure::NotAuthorized; }
-										OwnedServer = std::make_unique<PrivateServerProcess>(std::move(Snapshot), *PrivateServer, Profile, App.Sessions.GetStartingSlot());
+										OwnedServer = std::make_unique<PrivateServerProcess>(std::move(Snapshot), *PrivateServer, Profile(), App.Sessions.GetStartingSlot());
 									}
 									PrivateGrant = OwnedServer->PollListening();
 									if (!PrivateGrant) return false;
@@ -270,7 +283,7 @@ namespace gargantuan::host {
 							PreparingWorld = PackageBuilder::LoadWorld(Package, Root);
 						}
 						if (const auto *Slot = App.Sessions.GetStartingSlot(); Slot && !Joining) {
-							Writer = std::make_unique<WorldWriter>(Profile,
+							Writer = std::make_unique<WorldWriter>(Profile(),
 								*ProjectId::Parse(Slot->SaveId));
 							auto Service = std::dynamic_pointer_cast<WorldSaveService>(PreparingWorld->GetService("WorldSaveService"));
 							Service->BindSlot(*Slot);
@@ -289,7 +302,7 @@ namespace gargantuan::host {
 					Providers.AdmitNetworkTerrain = Joining && !Package.TerrainArtifacts.empty();
 					if (const auto *Slot = App.Sessions.GetStartingSlot(); Slot && !Joining) {
 						Providers.Persistence = MakeDurableLocalPersistenceProvider({
-							.Path = Profile / (Slot->SaveId + ".sqlite"),
+							.Path = Profile() / (Slot->SaveId + ".sqlite"),
 							.ProfileId = Package.Inspection.Identity.ToString() + "/" + Slot->WorldId, .CreateIfMissing = false, .RecordWorldWrites = true});
 						if (!Providers.Persistence) throw std::runtime_error("[Lifecycle:Storage] World writer unavailable");
 					}
@@ -365,10 +378,14 @@ namespace gargantuan::host {
 						Connection->GetStatus() == network::GameSessionStatus::Failed);
 				};
 				if (!Closed()) {
+					if (SessionSmoke && Connection && App.GameplayInputEnabled) SmokeProbe.SubmitMovement(*Session);
 					Session->Step();
 					if (Connection) Connection->Step(Session->GetSimulationTick());
+					if (SessionSmoke && Connection && SmokeProbe.Completed(*Session, *Connection, !Graphics))
+						Session->ProcessService->MarkExit(0);
 				}
 				if (Closed()) {
+						std::clog << "[Lifecycle:Connection] Active session closed: " << Connection->GetFailure() << '\n';
 						ReleaseGameplayInput();
 						StopConnection();
 						Session.reset(); Surface.reset(); Clock.reset();
@@ -399,7 +416,16 @@ namespace gargantuan::host {
 				if (Receipt != Displayed) DisplayedSince = SDL_GetTicksNS();
 				Displayed = Receipt;
 			}
-			SDL_Delay(16);
+			const auto Deadline = Started + std::chrono::microseconds(16'667);
+#if defined(GARGANTUAN_WORK_TRACE)
+			TraceFrame.SetDeadline(Deadline, std::chrono::steady_clock::now());
+			runtime_detail::WorkScope Pacing(runtime_detail::WorkPhase::HostFramePacing);
+#endif
+			std::this_thread::sleep_until(Deadline);
 		}
+#if defined(GARGANTUAN_WORK_TRACE)
+		Trace.Write();
+#endif
+		return ExitCode;
 	}
 }

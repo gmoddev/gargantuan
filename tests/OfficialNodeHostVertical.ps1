@@ -18,6 +18,7 @@ param(
 	[ValidateSet('representative', 'lightweight', 'property-heavy')][string]$ContentShape = 'representative',
 	[ValidateRange(1, 10000)][int]$ChurnCycles = 1000,
 	[switch]$ServerOnlyChurn,
+	[switch]$StandaloneLifecycle,
 	[ValidateRange(0, 65535)][int]$LifecycleGamePort = 0,
 	[string]$MemoryOutputPrefix,
 	[string]$TokenEnvironmentName = 'GARGANTUAN_ENGINE_ADAPTER_TOKEN',
@@ -523,6 +524,30 @@ end)
 	# process fixture and ensuring publication precedes client script traffic.
 	$ProjectDocument.Children = @($ProjectDocument.Children) + @($Event, $Function)
 	$GameScripts.Children = @($GameScripts.Children) + @($ServerScript, $ClientScript)
+	if ($StandaloneLifecycle) {
+		$Application = New-RemoteNode -Name 'Application' -ClassName 'Folder' -ClassSchemaId $GameScripts.ClassSchemaId
+		$Entry = Copy-ScriptTemplate -Template $ScriptTemplate -Name 'Entry' -RunContext 'Client' -Source @'
+local Menu = Instance.new("ScreenGui")
+Menu.Parent = script.Parent
+assert(game:SetMainMenu(Menu).Ok)
+local Sessions = game:GetService("SessionService")
+task.defer(function()
+    local Page = Sessions:FindServers("Node"):Await()
+    assert(Page.Ok and #Page.Value.Items == 1)
+    local Joined = Sessions:Join({Kind="Listing", Id=Page.Value.Items[1].Id}):Await()
+    assert(Joined.Ok and Joined.Value.Mode == "Remote", Joined.Code)
+    assert(game:GetService("RunService"):PauseGameplay():Await().Code == "NotAuthorized")
+    assert(#Sessions:FindServers("Node"):Await().Value.Items == 0)
+    assert(game:SetMainMenuVisible(false).Ok and game:SetGameplayInputEnabled(true).Ok)
+    print("[Lifecycle:Hosting] Joined the authenticated Node listing")
+end)
+'@
+		$Id = @{String='a68c3926cd3244429b4def7195bfca02'}
+		$Entry.Properties | Add-Member -Force -NotePropertyName SourceId -NotePropertyValue $Id
+		$Application.Children = @($Entry)
+		$ProjectDocument.Children = @($ProjectDocument.Children) + @($Application)
+		$ProjectDocument.Properties | Add-Member -Force -NotePropertyName ApplicationEntry -NotePropertyValue $Id
+	}
 	$ProjectJson = $ProjectDocument | ConvertTo-Json -Depth 100 -Compress
 	[System.IO.File]::WriteAllText($ProjectDocumentPath, $ProjectJson, [System.Text.UTF8Encoding]::new($false))
 

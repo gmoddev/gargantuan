@@ -164,7 +164,10 @@ print("[Lifecycle:Multiplayer] Owner GUI hydrated")
     local Saves = game:GetService("WorldSaveService")
     local Page = Saves:List():Await()
     assert(Page.Ok, Page.Code)
-    local Slot = Page.Value.Items[1]
+    local Slot
+    for _, Item in Page.Value.Items do
+        if Item.Name == "Private world" then Slot = Item end
+    end
     if not Slot then
         local Created = Saves:Create({Name = "Private world", Seed = "Private seed"}):Await()
         assert(Created.Ok, Created.Code)
@@ -173,6 +176,8 @@ print("[Lifecycle:Multiplayer] Owner GUI hydrated")
     for Cycle = 1, 2 do
         local Opened = Sessions:StartLocal({PrivateServer = true, SaveId = Slot.SaveId}):Await()
         if not Opened.Ok and Opened.Code == "SaveInUse" then
+            local Ack = Saves:Create({Name = "Writer denied", Seed = Slot.SaveId}):Await()
+            assert(Ack.Ok, Ack.Code)
             print("[Lifecycle:PrivateHost] Concurrent writer denied")
             assert(game:GetService("ApplicationService"):Quit().Ok)
             return
@@ -180,12 +185,23 @@ print("[Lifecycle:Multiplayer] Owner GUI hydrated")
         assert(Opened.Ok and Opened.Value.SaveId == Slot.SaveId and Opened.Value.WorldId == Slot.WorldId, "Start cycle " .. Cycle .. ": " .. tostring(Opened.Code))
         print("[Lifecycle:PrivateHost] Opened " .. Slot.SaveId)
         assert(Opened.Ok and Opened.Value.Mode == "PrivateHost", Opened.Code)
-        task.wait(0.25)
         local Run = game:GetService("RunService")
         local Held = Run:PauseGameplay():Await()
         assert(Held.Ok and Held.Value and Run:IsGameplayPaused(), Held.Code)
         print("[Lifecycle:PrivateHost] Held")
-        task.wait(Cycle == 1 and 2.5 or 0.15)
+        if Cycle == 1 then
+            local Observed = false
+            for Attempt = 1, 160 do
+                local Records = Saves:List():Await()
+                assert(Records.Ok, Records.Code)
+                for _, Item in Records.Value.Items do
+                    if Item.Name == "Writer denied" and Item.Seed == Slot.SaveId then Observed = true end
+                end
+                if Observed then break end
+                task.wait(0.1)
+            end
+            assert(Observed, "Competing writer did not acknowledge denial")
+        end
         local Resumed = Run:ResumeGameplay():Await()
         assert(Resumed.Ok and not Resumed.Value, Resumed.Code)
         print("[Lifecycle:PrivateHost] Resumed")

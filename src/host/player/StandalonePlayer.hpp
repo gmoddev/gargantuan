@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include "JoinProof.hpp"
 #include <filesystem>
 
@@ -14,6 +15,6 @@ namespace gargantuan {
 			std::optional<network::TransportServerPublicKey> ServerKey;
 		};
 		int RunStandalonePlayer(ApplicationPresentation &App, BaseRenderer &Device,
-			const RuntimePackagePayload &Package, const std::filesystem::path &Root, const std::filesystem::path &Profile, int MaximumFrames, std::optional<PlayerAdmission> Admission = {}, std::optional<PrivateServerPackage> PrivateServer = {}, bool TracePresentation = false);
+			const RuntimePackagePayload &Package, const std::filesystem::path &Root, const std::function<std::filesystem::path()> &Profile, int MaximumFrames, std::optional<PlayerAdmission> Admission = {}, std::optional<PrivateServerPackage> PrivateServer = {}, bool TracePresentation = false, bool SessionSmoke = false);
 	}
 }

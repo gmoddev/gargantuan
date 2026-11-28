@@ -68,6 +68,7 @@ namespace gargantuan::host {
 		ManagedServerSnapshot Snapshot() const noexcept override { return {Current, Ready, Closing}; }
 		void OnListening(ServerListeningEvidence Info) noexcept override {
 			Key = Info.ServerPublicKey;
+			Port = Info.Endpoint.Port;
 			Listening.store(true, std::memory_order_release);
 		}
 		std::uint64_t GetHoldRequest() const noexcept override { return Requested.load(); }
@@ -107,7 +108,8 @@ namespace gargantuan::host {
 			bool Sent = false;
 			while (!Stop.stop_requested()) {
 				if (!Sent && Listening.load(std::memory_order_acquire)) {
-					if (!Write("GPC1", 4) || !Write(Key.data(), Key.size()) || !Write(Proof.data(), Proof.size())) break;
+					const std::array<unsigned char, 2> Address{static_cast<unsigned char>(Port), static_cast<unsigned char>(Port >> 8)};
+					if (!Write("GPC2", 4) || !Write(Address.data(), Address.size()) || !Write(Key.data(), Key.size()) || !Write(Proof.data(), Proof.size())) break;
 					Sent = true;
 				}
 				if (const auto Ack = Applied.exchange(0)) {
@@ -137,6 +139,7 @@ namespace gargantuan::host {
 		std::optional<WorldSlot> Selected;
 		std::array<unsigned char, 32> Proof{};
 		network::TransportServerPublicKey Key{};
+		std::uint16_t Port{};
 		std::FILE *Channel = nullptr;
 		std::atomic<bool> Prepare{};
 		std::atomic<char> DrainReceipt{};

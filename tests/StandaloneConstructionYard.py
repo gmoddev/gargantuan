@@ -5,10 +5,12 @@ import argparse
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
+import time
 import tempfile
 
-from SpatialConstructionPackageSession import ManagedEnvironment, Run, WriteJson
+from SpatialConstructionPackageSession import ConsoleCapture, ManagedEnvironment, Run, WriteJson
 
 Samples = Path(__file__).resolve().parents[1] / "samples"
 sys.path.insert(0, str(Samples / "TerrainQuarry"))
@@ -121,9 +123,27 @@ def Main():
         Environment = ManagedEnvironment()
         if Options.graphical:
             Environment.pop("SDL_AUDIODRIVER", None)
+        Args = [Player] if Options.graphical else [Player, "--headless"]
+        Args.extend(["--profile-root", Root, "--max-frames", "1200"])
         for Fresh in (True, False):
-            Args = [Player] if Options.graphical else [Player, "--headless"]
-            Output = Run([*Args, "--profile-root", Root, "--max-frames", "1200"], Root, Environment)
+            if not Fresh:
+                # Terminate the owned process after it has reopened and verified the
+                # committed first world. The next Player must acquire that same writer.
+                CrashLog = Root / "Interrupted.log"
+                with CrashLog.open("wb") as Stream, subprocess.Popen(
+                        [str(Arg) for Arg in Args], cwd=Root, env=Environment, stdout=Stream,
+                        stderr=subprocess.STDOUT, **ConsoleCapture()) as Interrupted:
+                    try:
+                        Deadline = time.monotonic() + 25
+                        while b"[Lifecycle:Yard] Hillside initial=1 exterior=1" not in CrashLog.read_bytes():
+                            if Interrupted.poll() is not None or time.monotonic() >= Deadline:
+                                raise RuntimeError("Construction Yard did not reopen before interruption")
+                            time.sleep(0.025)
+                    finally:
+                        if Interrupted.poll() is None:
+                            Interrupted.kill()
+                        Interrupted.wait(timeout=8)
+            Output = Run(Args, Root, Environment)
             for Name, Count in (("Hillside", 1), ("Riverside", 2)):
                 Marker = f"[Lifecycle:Yard] {Name} initial={0 if Fresh else Count} exterior={Count}"
                 if Marker not in Output:

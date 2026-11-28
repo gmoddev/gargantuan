@@ -902,6 +902,15 @@ namespace gargantuan::network {
 			State->Listener = SteamAPI_ISteamNetworkingSockets_CreateListenSocketIP(
 				Global.Interface, Address, OptionCount, Options.data()
 			);
+			if (State->Configuration.RetryPrivateListenPort && Configuration.RequireServerIdentity &&
+				IsLoopbackTransportEndpoint(Configuration.Endpoint)) {
+				for (unsigned Attempt = 1; State->Listener == k_HSteamListenSocket_Invalid && Attempt < 8; ++Attempt) {
+					Address.m_port = 49152 + (static_cast<unsigned>(Address.m_port) + 4051u) % 16384u;
+					State->Listener = SteamAPI_ISteamNetworkingSockets_CreateListenSocketIP(
+						Global.Interface, Address, OptionCount, Options.data());
+				}
+				State->Endpoint.Port = Address.m_port;
+			}
 			if (State->Listener == k_HSteamListenSocket_Invalid) {
 				return TerminalOperation(
 					TransportOperationStatus::TransportFailure,
@@ -1276,6 +1285,13 @@ namespace gargantuan::network {
 				Result.EstimatedRoundTripTime = std::chrono::milliseconds(Status.m_nPing);
 		}
 		return Result.IsValid() ? std::optional<NetworkStatistics>(Result) : std::nullopt;
+	}
+
+	std::optional<TransportEndpoint> GameNetworkingSocketsTransport::GetListeningEndpoint() const {
+		auto &Global = GlobalState();
+		std::lock_guard Lock(Global.Mutex);
+		if (!State->Started || State->Listener == k_HSteamListenSocket_Invalid) return {};
+		return State->Endpoint;
 	}
 
 	std::optional<TransportServerPublicKey> GameNetworkingSocketsTransport::LocalServerPublicKey() const {

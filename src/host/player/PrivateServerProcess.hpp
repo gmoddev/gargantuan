@@ -47,10 +47,12 @@ namespace gargantuan::host {
 				if (Code == 28) throw SessionAdmissionFailure::Incompatible;
 				throw;
 			}
-			if (std::memcmp(Greeting.data(), "GPC1", 4) != 0) throw SessionAdmissionFailure::NotAuthorized;
+			Endpoint.Port = std::to_integer<std::uint16_t>(Greeting[4]) |
+				(std::to_integer<std::uint16_t>(Greeting[5]) << 8);
+			if (!Endpoint.Port || std::memcmp(Greeting.data(), "GPC2", 4) != 0) throw SessionAdmissionFailure::NotAuthorized;
 			PlayerAdmission Grant{Endpoint, {}, network::TransportServerPublicKey{}};
-			std::copy_n(Greeting.begin() + 4, 32, Grant.ServerKey->begin());
-			std::copy_n(Greeting.begin() + 36, 32, Grant.Proof.begin());
+			std::copy_n(Greeting.begin() + 6, 32, Grant.ServerKey->begin());
+			std::copy_n(Greeting.begin() + 38, 32, Grant.Proof.begin());
 			Greeting.fill({});
 			Send('A');
 			return Grant;
@@ -134,9 +136,9 @@ namespace gargantuan::host {
 		std::shared_ptr<PrivateServerSnapshot> Snapshot;
 		PrivateServerChannel Channel;
 		network::TransportEndpoint Endpoint;
-		std::array<std::byte, 68> Greeting{};
+		std::array<std::byte, 70> Greeting{};
 		std::array<std::byte, 9> Receipt{};
-		std::array<std::byte, 68> InputFrame{};
+		std::array<std::byte, 70> InputFrame{};
 		std::size_t Offset = 0, ExpectedSize = 0;
 		std::uint64_t Sequence = 0, PendingHold = 0;
 		Clock::time_point Deadline;
