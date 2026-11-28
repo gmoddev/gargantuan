@@ -251,6 +251,10 @@ namespace gargantuan {
 		std::shared_ptr<AssetService> Assets;
 		std::shared_ptr<AssetService> AuthoringAssets;
 		ObjectId ProjectedPlayer;
+		std::weak_ptr<ScreenGui> ApplicationMenu;
+		bool ApplicationMenuVisible = false;
+		std::uint64_t ApplicationSurface = 1;
+		GuiApplicationFrame DisplayedFrame{};
 		GuiViewportConfiguration Viewport;
 		GuiTextSystem Text;
 		std::function<void()> DescendantBinding;
@@ -331,7 +335,7 @@ namespace gargantuan {
 			GuiRuntimeMode Mode
 		) {
 			if (!World) throw std::invalid_argument("GuiRuntime requires a DataModel");
-			auto Service = Mode == GuiRuntimeMode::Runtime
+			auto Service = Mode != GuiRuntimeMode::AuthoringPreview
 				? std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"))
 				: std::make_shared<AssetService>();
 			if (!Service) throw std::runtime_error("AssetService schema resolved to an incompatible service");
@@ -350,6 +354,13 @@ namespace gargantuan {
 			});
 			DescendantRemovedConnection = World->DescendantRemoved->Connect([this](std::shared_ptr<Instance> Object) {
 				const auto Id = Object->GetObjectId();
+				if (Mode == GuiRuntimeMode::Application) {
+					if (auto Menu = ApplicationMenu.lock(); Object == Menu && !EligibleApplicationMenu(Menu)) {
+						ApplicationMenu.reset();
+						ApplicationMenuVisible = false;
+						PresentedLayout.reset();
+					}
+				}
 				Observers.erase(Id);
 				ObjectDirty.erase(Id);
 				DirtyEpochs.erase(Id);
@@ -381,6 +392,7 @@ namespace gargantuan {
 		}
 
 		void RefreshScope() {
+			if (Mode == GuiRuntimeMode::Application) return;
 			if (Mode == GuiRuntimeMode::Runtime) {
 				const auto PlayersService = FindAttachedService<Players>();
 				const auto LocalPlayer = PlayersService ? PlayersService->GetLocalPlayer().value_or(nullptr) : nullptr;
@@ -486,8 +498,43 @@ namespace gargantuan {
 				Connect(Name, DirtyAccessibility);
 		}
 
+		bool EligibleApplicationMenu(const std::shared_ptr<ScreenGui> &Menu) const {
+			return Menu && !Menu->GetDestroyed() && !Menu->IsDestroying() && Menu->IsDescendantOf(World) &&
+				!Menu->FindFirstAncestorWhichIsA("ScreenGui") && !Menu->FindFirstAncestorWhichIsA("PlayerGui") &&
+				!Menu->FindFirstAncestorWhichIsA("StarterGui");
+		}
+
+		bool AcceptsInput() const {
+			if (Mode != GuiRuntimeMode::Application) return Mode == GuiRuntimeMode::Runtime;
+			return ApplicationMenuVisible && !StructureDirty && !ClearingTransientState &&
+				PresentedLayout == Layout && EligibleApplicationMenu(ApplicationMenu.lock());
+		}
+
+		bool HasBoundedMenuTree(const std::shared_ptr<ScreenGui> &Menu) const {
+			constexpr std::size_t Limit = 1024;
+			struct Entry { Instance *Object; std::size_t Depth; };
+			std::vector<Entry> Pending{{Menu.get(), 1}};
+			std::size_t Count = 1;
+			std::size_t Viewports = 0;
+			while (!Pending.empty()) {
+				const auto [Object, Depth] = Pending.back();
+				Pending.pop_back();
+				if (Depth > GuiLimits::MaximumHierarchyDepth || Object->Children.size() > Limit - Count) return false;
+				if (Object != Menu.get() && Object->IsA("ScreenGui")) return false;
+				if (Object->IsA("ViewportFrame") && ++Viewports > 8) return false;
+				Count += Object->Children.size();
+				for (const auto &Child : Object->Children) Pending.push_back({Child.get(), Depth + 1});
+			}
+			return true;
+		}
+
 		std::vector<std::shared_ptr<ScreenGui>> DiscoverRoots() {
 			std::vector<std::shared_ptr<ScreenGui>> Roots;
+			if (Mode == GuiRuntimeMode::Application) {
+				auto Menu = ApplicationMenu.lock();
+				if (ApplicationMenuVisible && EligibleApplicationMenu(Menu)) Roots.push_back(std::move(Menu));
+				return Roots;
+			}
 			for (const auto &Object : World->GetDescendants()) {
 				auto Root = std::dynamic_pointer_cast<ScreenGui>(Object);
 				if (!Root || !IsInProjection(Root)) continue;
@@ -812,7 +859,7 @@ namespace gargantuan {
 					const auto Previous = Scroll->GetContentExtent();
 					if (std::abs(Previous.GetX() - ExtentX) > 0.01f || std::abs(Previous.GetY() - ExtentY) > 0.01f)
 						Changed = true;
-					if (Mode == GuiRuntimeMode::Runtime) Scroll->CommitRuntimeContentExtent({ExtentX, ExtentY});
+					if (Mode != GuiRuntimeMode::AuthoringPreview) Scroll->CommitRuntimeContentExtent({ExtentX, ExtentY});
 				}
 				if (std::dynamic_pointer_cast<TextLabel>(Node.Object) || std::dynamic_pointer_cast<ImageLabel>(Node.Object)) continue;
 				const float ContentWidth = ContentWidths[Reverse];
@@ -894,7 +941,7 @@ namespace gargantuan {
 			RootNode.TreeOrder = 0;
 			RootNode.Depth = 0;
 			Cache.Nodes.push_back(RootNode);
-			if (Mode == GuiRuntimeMode::Runtime)
+			if (Mode != GuiRuntimeMode::AuthoringPreview)
 				Root->CommitRuntimeGeometry({RootBounds.X, RootBounds.Y}, {RootBounds.Width, RootBounds.Height}, 0.0f);
 
 			for (std::size_t Index = 0; Index < Working.size(); ++Index) {
@@ -957,7 +1004,7 @@ namespace gargantuan {
 				}
 				Committed.Presentation = ResolvePresentation(Node);
 				Cache.Nodes.push_back(std::move(Committed));
-				if (Mode == GuiRuntimeMode::Runtime)
+				if (Mode != GuiRuntimeMode::AuthoringPreview)
 					Node.Object->CommitRuntimeGeometry(
 						{Node.Bounds.X, Node.Bounds.Y}, {Node.Bounds.Width, Node.Bounds.Height}, Node.Object->GetRotation()
 					);
@@ -1095,7 +1142,7 @@ namespace gargantuan {
 					(Own != DirtyObjects.end() && (Own->second & DirtyAccessibility) != 0);
 				Result.SnapshotChanged = true;
 				Cache.Nodes[Index] = std::move(Next);
-			if (Mode == GuiRuntimeMode::Runtime)
+			if (Mode != GuiRuntimeMode::AuthoringPreview)
 				Object->CommitRuntimeGeometry({Bounds.X, Bounds.Y}, {Bounds.Width, Bounds.Height}, Object->GetRotation());
 				++Profile.LayoutNodes;
 			}
@@ -1141,7 +1188,7 @@ namespace gargantuan {
 							(!Node.EffectiveClip || !Node.EffectiveClip->IsEmpty());
 					}
 					if (auto Object = std::dynamic_pointer_cast<GuiObject>(ObjectRegistry::Get().Lookup(Node.Object)))
-						if (Mode == GuiRuntimeMode::Runtime)
+						if (Mode != GuiRuntimeMode::AuthoringPreview)
 							Object->CommitRuntimeGeometry({Node.Bounds.X, Node.Bounds.Y}, {Node.Bounds.Width, Node.Bounds.Height}, Object->GetRotation());
 					PendingVisualObjects.insert(Node.Object);
 					++Profile.LayoutNodes;
@@ -2020,6 +2067,7 @@ namespace gargantuan {
 			State->RootDirty[Root] |= DirtyAll;
 		}
 		State->PresentationDirty = true;
+		InvalidateApplicationSurface();
 	}
 
 	bool GuiRuntime::Reconcile(const AnimationRuntime *Animation) {
@@ -2241,23 +2289,31 @@ namespace gargantuan {
 		return Removals;
 	}
 
-	bool GuiRuntime::ProcessEvent(const HostEvent &Event) {
-		if (State->Mode == GuiRuntimeMode::AuthoringPreview) return false;
+	bool GuiRuntime::ProcessEvent(const HostEvent &Event) { return ProcessEvent(Event, {}); }
+	bool GuiRuntime::ProcessPointer(const GuiPointerInput &Input) { return ProcessPointer(Input, {}); }
+
+	bool GuiRuntime::ProcessEvent(const HostEvent &Event, GuiApplicationFrame Frame) {
+		if (!State->AcceptsInput() || (State->Mode == GuiRuntimeMode::Application && Frame != State->DisplayedFrame)) {
+			if (State->Mode == GuiRuntimeMode::Application) {
+				if (const auto *Focus = std::get_if<FocusEvent>(&Event); Focus && !Focus->Focused) ClearTransientState();
+			}
+			return false;
+		}
 		if (const auto *Move = std::get_if<PointerMoveEvent>(&Event)) {
 			return ProcessPointer({static_cast<int>(Move->Device.Value), Enums::GuiPointerType::Mouse,
-				Enums::GuiPointerButton::None, GuiPointerAction::Move, {Move->Position.X, Move->Position.Y}});
+				Enums::GuiPointerButton::None, GuiPointerAction::Move, {Move->Position.X, Move->Position.Y}}, Frame);
 		}
 		if (const auto *Button = std::get_if<PointerButtonEvent>(&Event)) {
 			return ProcessPointer({static_cast<int>(Button->Device.Value), Enums::GuiPointerType::Mouse,
 				ConvertButton(Button->Button), Button->State == ButtonState::Pressed ? GuiPointerAction::Down : GuiPointerAction::Up,
-				{Button->Position.X, Button->Position.Y}});
+				{Button->Position.X, Button->Position.Y}}, Frame);
 		}
 		if (const auto *Touch = std::get_if<TouchPointerEvent>(&Event)) {
 			const auto Action = Touch->Action == TouchPointerAction::Down ? GuiPointerAction::Down :
 				Touch->Action == TouchPointerAction::Move ? GuiPointerAction::Move :
 				Touch->Action == TouchPointerAction::Up ? GuiPointerAction::Up : GuiPointerAction::Cancel;
 			return ProcessPointer({static_cast<int>(Touch->Pointer.Value), Enums::GuiPointerType::Touch,
-				Enums::GuiPointerButton::Primary, Action, {Touch->Position.X, Touch->Position.Y}});
+				Enums::GuiPointerButton::Primary, Action, {Touch->Position.X, Touch->Position.Y}}, Frame);
 		}
 		if (const auto *Wheel = std::get_if<WheelEvent>(&Event)) {
 			const Vector2 Logical{Wheel->Position.X / State->Viewport.DpiScale, Wheel->Position.Y / State->Viewport.DpiScale};
@@ -2323,8 +2379,9 @@ namespace gargantuan {
 		return false;
 	}
 
-	bool GuiRuntime::ProcessPointer(const GuiPointerInput &Input) {
-		if (State->Mode == GuiRuntimeMode::AuthoringPreview) return false;
+	bool GuiRuntime::ProcessPointer(const GuiPointerInput &Input, GuiApplicationFrame Frame) {
+		if (!State->AcceptsInput() || (State->Mode == GuiRuntimeMode::Application && Frame != State->DisplayedFrame))
+			return false;
 		if (Input.PointerId < 0 || !std::isfinite(Input.PhysicalPosition.GetX()) ||
 			!std::isfinite(Input.PhysicalPosition.GetY())) return false;
 		const Vector2 Logical = Input.PhysicalPosition / State->Viewport.DpiScale;
@@ -2443,7 +2500,7 @@ namespace gargantuan {
 	}
 
 	void GuiRuntime::RequestFocus(ObjectId Object) {
-		if (State->Mode == GuiRuntimeMode::Runtime) State->Focus(Object);
+		if (State->AcceptsInput()) State->Focus(Object);
 	}
 	void GuiRuntime::ReleaseFocus(ObjectId Object) {
 		const auto Root = State->RootForObject(Object);
@@ -2466,7 +2523,7 @@ namespace gargantuan {
 	}
 
 	void GuiRuntime::CapturePointer(int PointerId, ObjectId Object) {
-		if (State->Mode == GuiRuntimeMode::AuthoringPreview) return;
+		if (!State->AcceptsInput()) return;
 		if (PointerId < 0 || !State->Layout->NodeByObject.contains(Object)) return;
 		if (!State->Captured.contains(PointerId) && State->Captured.size() >= GuiLimits::MaximumCapturedPointers) return;
 		State->Captured[PointerId] = Object;
@@ -2475,6 +2532,43 @@ namespace gargantuan {
 	void GuiRuntime::ReleasePointer(int PointerId, ObjectId Object) {
 		if (auto Existing = State->Captured.find(PointerId); Existing != State->Captured.end() && Existing->second == Object)
 			State->Captured.erase(Existing);
+	}
+
+	bool GuiRuntime::SetApplicationMenu(const std::shared_ptr<ScreenGui> &Menu, bool Visible) {
+		if (State->Mode != GuiRuntimeMode::Application ||
+			(Menu && (!State->EligibleApplicationMenu(Menu) || !State->HasBoundedMenuTree(Menu)))) return false;
+		Visible = Menu && Visible;
+		if (Menu == State->ApplicationMenu.lock() && State->ApplicationMenuVisible == Visible) return true;
+		State->ApplicationMenu = Menu;
+		State->ApplicationMenuVisible = Visible;
+		State->PresentedLayout.reset();
+		State->StructureDirty = true;
+		ClearTransientState();
+		return true;
+	}
+
+	GuiApplicationFrame GuiRuntime::GetApplicationFrame() const {
+		if (State->Mode != GuiRuntimeMode::Application) return {};
+		return {State->World->GetObjectId(), State->ApplicationSurface, State->Presentation->Generation};
+	}
+
+	void GuiRuntime::InvalidateApplicationSurface() {
+		if (State->Mode != GuiRuntimeMode::Application) return;
+		if (State->ApplicationSurface == std::numeric_limits<std::uint64_t>::max())
+			throw std::overflow_error("[Gui:Application] Surface generation exhausted");
+		++State->ApplicationSurface;
+		State->DisplayedFrame = {};
+		State->PresentedLayout.reset();
+		ClearTransientState();
+	}
+
+	bool GuiRuntime::AcknowledgeApplicationFrame(GuiApplicationFrame Frame) {
+		if (State->Mode != GuiRuntimeMode::Application || !Frame.Generation ||
+			Frame != GetApplicationFrame() || State->StructureDirty ||
+			State->PresentationDirty || !State->RootDirty.empty()) return false;
+		State->DisplayedFrame = Frame;
+		State->PresentedLayout = State->Layout;
+		return true;
 	}
 
 	void GuiRuntime::ClearTransientState() {
@@ -2536,6 +2630,7 @@ namespace gargantuan {
 	std::shared_ptr<const GuiLayoutSnapshot> GuiRuntime::GetCommittedLayout() const { return State->Layout; }
 	std::shared_ptr<const GuiLayoutSnapshot> GuiRuntime::GetPresentedLayout() const { return State->PresentedLayout; }
 	bool GuiRuntime::IsPresentedLayoutCurrent() const {
+		if (State->Mode == GuiRuntimeMode::Application && State->PresentedLayout != State->Layout) return false;
 		return State->PresentedLayout && !State->StructureDirty && State->RootDirty.empty() && !State->PresentationDirty;
 	}
 	std::shared_ptr<const GuiPresentationSnapshot> GuiRuntime::GetCommittedPresentation() const { return State->Presentation; }

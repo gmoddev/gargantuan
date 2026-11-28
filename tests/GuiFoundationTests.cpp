@@ -129,6 +129,62 @@ namespace {
 			"the same centered UDim2 tree resolves against viewport DPI and safe area");
 	}
 
+	void TestApplicationMenuProjection() {
+		using namespace gargantuan;
+		auto App = std::make_shared<DataModel>();
+		auto First = BuildTree(App);
+		auto Second = BuildTree(App);
+		auto OtherWorld = std::make_shared<DataModel>();
+		auto Foreign = BuildTree(OtherWorld);
+		GuiRuntime Runtime(App, std::filesystem::path(DefaultGuiFontPath), GuiRuntimeMode::Application);
+		Runtime.SetViewport({800, 600, 1.0f, {}});
+		(void)Runtime.Reconcile();
+		Check(Runtime.GetCommittedLayout()->Nodes.empty(), "application starts with no projected menu");
+		Check(Runtime.SetApplicationMenu(First.Root, true), "register a live application ScreenGui");
+		(void)Runtime.Reconcile();
+		const auto FirstFrame = Runtime.GetApplicationFrame();
+		Check(FindNode(Runtime.GetCommittedLayout(), First.Button->GetObjectId()) &&
+			!FindNode(Runtime.GetCommittedLayout(), Second.Button->GetObjectId()), "only registered menu is projected");
+		Check(!Runtime.SetApplicationMenu(Foreign.Root, true), "foreign menu leaves current selection intact");
+		auto ForeignFrame = FirstFrame;
+		ForeignFrame.Source = OtherWorld->GetObjectId();
+		Check(!Runtime.AcknowledgeApplicationFrame(ForeignFrame),
+			"foreign surface receipt cannot enable application input");
+		int Activations = 0;
+		First.Button->Activated->Connect([&](auto) { ++Activations; });
+		const GuiPointerInput Down{0, Enums::GuiPointerType::Mouse, Enums::GuiPointerButton::Primary,
+			GuiPointerAction::Down, {400, 340}};
+		auto Up = Down;
+		Up.Action = GuiPointerAction::Up;
+		Check(!Runtime.ProcessPointer(Down), "unpresented application menu rejects press");
+		Check(Runtime.AcknowledgeApplicationFrame(FirstFrame), "acknowledge displayed menu");
+		(void)Runtime.ProcessPointer(Down, FirstFrame);
+		(void)Runtime.ProcessPointer(Up, FirstFrame);
+		Check(Activations == 1, "displayed application button accepts a click without a Player");
+		(void)Runtime.ProcessPointer(Down, FirstFrame);
+		Check(Runtime.SetApplicationMenu(Second.Root, true), "replace menu with a live successor");
+		Check(!Runtime.ProcessPointer(Up, FirstFrame) && Activations == 1, "replacing menu cancels pending press");
+		(void)Runtime.Reconcile();
+		Check(!Runtime.AcknowledgeApplicationFrame(FirstFrame), "stale presentation rejected");
+		const auto SecondFrame = Runtime.GetApplicationFrame();
+		Check(Runtime.AcknowledgeApplicationFrame(SecondFrame), "acknowledge replacement");
+		Check(!Runtime.ProcessPointer(Down, FirstFrame) && !Runtime.ProcessPointer(Up, FirstFrame),
+			"queued click on prior menu cannot activate its replacement");
+		Runtime.SetViewport({800, 600, 2.0f, {}});
+		Check(!Runtime.ProcessPointer(Down, SecondFrame), "DPI change invalidates old hit coordinates immediately");
+		(void)Runtime.Reconcile();
+		const auto ResizedFrame = Runtime.GetApplicationFrame();
+		Runtime.InvalidateApplicationSurface();
+		Check(!Runtime.AcknowledgeApplicationFrame(ResizedFrame), "old device receipt rejected after restart");
+		Check(Runtime.SetApplicationMenu(Second.Root, false), "hide the selected application menu");
+		(void)Runtime.Reconcile();
+		Check(Runtime.GetCommittedLayout()->Nodes.empty(), "hidden root has no layout or hits");
+		Check(Runtime.SetApplicationMenu(Second.Root, true), "show same menu instance");
+		Second.Root->Destroy();
+		(void)Runtime.Reconcile();
+		Check(Runtime.GetCommittedLayout()->Nodes.empty(), "destroying selection does not select a fallback root");
+	}
+
 	void TestLayoutTextPresentationAndResources() {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
@@ -1573,6 +1629,7 @@ int main() {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		RunTest("LayoutTextPresentationAndResources", TestLayoutTextPresentationAndResources);
+		RunTest("ApplicationMenuProjection", TestApplicationMenuProjection);
 		RunTest("AutomaticSizeListAndClipping", TestAutomaticSizeListAndClipping);
 		RunTest("AutomaticSizePolicyTransition", TestAutomaticSizePolicyTransition);
 		RunTest("RotationOrderingAndAlpha", TestRotationOrderingAndAlpha);
