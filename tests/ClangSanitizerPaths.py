@@ -3,6 +3,7 @@
 
 """Exercise Clang's actual sanitizer metadata, symbolizer and build dependency edges."""
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -12,7 +13,12 @@ from pathlib import Path
 
 
 def Run(Arguments, **Options):
-    return subprocess.run(Arguments, check=True, text=True, **Options)
+    try:
+        return subprocess.run(Arguments, check=True, text=True, **Options)
+    except subprocess.CalledProcessError as Error:
+        if Error.stdout:
+            print(Error.stdout, file=sys.stderr)
+        raise
 
 
 def CheckCase(Base, Module, Compiler, Generator, Layout):
@@ -24,13 +30,17 @@ def CheckCase(Base, Module, Compiler, Generator, Layout):
     Relocated = Base / "Relocated"
     for Directory in (Source, Build, Dependency, Relocated):
         Directory.mkdir(parents=True, exist_ok=True)
+    Triple = subprocess.check_output([Compiler, "-dumpmachine"], text=True).strip()
+    # These driver operands must stay literal even when files with the same names exist.
+    for Name in ("c++", Triple, "FrontendName"):
+        (Build / Name).touch()
     (Source / "CMakeLists.txt").write_text(
         'cmake_minimum_required(VERSION 3.25)\nproject(PathProbe CXX)\n'
         'include("${Module}")\nGargantuanAddSanitizerSource(External "${Dependency}")\n'
         'add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/Generated.hpp" '
         'COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_SOURCE_DIR}/Value.txt" '
         '"${CMAKE_CURRENT_BINARY_DIR}/Generated.hpp" DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Value.txt")\n'
-        'add_compile_options(-x c++)\n'
+        'add_compile_options(-x c++ -target "${Triple}" "SHELL:-Xclang -main-file-name -Xclang FrontendName" -include cstddef)\n'
         'add_executable(Probe Probe.cpp "${CMAKE_CURRENT_BINARY_DIR}/Generated.hpp")\n'
         'target_include_directories(Probe PRIVATE "${Dependency}" "${CMAKE_CURRENT_BINARY_DIR}")\n'
     )
@@ -48,13 +58,17 @@ def CheckCase(Base, Module, Compiler, Generator, Layout):
         '    return Add(GENERATED);\n}\n'
     )
     Chain = Base / "Chain.py"
-    Chain.write_text('import os, sys\nfrom pathlib import Path\n'
-                     'Path(sys.argv[1]).touch()\nos.execvp(sys.argv[2], sys.argv[2:])\n')
+    Chain.write_text(
+        'import json, os, shlex, sys\nfrom pathlib import Path\n'
+        'Arguments = []\nfor Value in sys.argv[3:]:\n'
+        '    Arguments.extend(shlex.split(Path(Value[1:]).read_text()) if Value.startswith("@") else [Value])\n'
+        'Path(sys.argv[1]).write_text(json.dumps(Arguments))\nos.execvp(sys.argv[2], sys.argv[2:])\n'
+    )
     ChainMarker = Base / "ChainUsed"
     Flags = "-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g -O1"
     Environment = dict(os.environ, CMAKE_NINJA_FORCE_RESPONSE_FILE="1")
     Run(["cmake", "-S", Source, "-B", Build, "-G", Generator, "-DModule=" + str(Module),
-         "-DDependency=" + str(Dependency), "-DCMAKE_CXX_COMPILER=" + Compiler,
+         "-DDependency=" + str(Dependency), "-DTriple=" + Triple, "-DCMAKE_CXX_COMPILER=" + Compiler,
          "-DCMAKE_CXX_FLAGS=" + Flags,
          "-DCMAKE_CXX_COMPILER_LAUNCHER=" + ";".join([sys.executable, str(Chain), str(ChainMarker)])],
         env=Environment, stdout=subprocess.PIPE)
@@ -74,8 +88,11 @@ def CheckCase(Base, Module, Compiler, Generator, Layout):
     BuildAndRun(22)
     ExternalHeader.write_text('__attribute__((noinline)) int Add(int A) { return A + 2; }\n')
     BuildAndRun(23)
-    if not ChainMarker.exists():
-        raise RuntimeError("Configured compiler launcher did not run")
+    Actual = json.loads(ChainMarker.read_text())
+    for Expected in (["-x", "c++"], ["-target", Triple], ["-Xclang", "-main-file-name", "-Xclang", "FrontendName"],
+                     ["-include", "cstddef"]):
+        if not any(Actual[I:I + len(Expected)] == Expected for I in range(len(Actual))):
+            raise RuntimeError(f"Compiler launcher changed {Expected}: {Actual}")
     Program = Relocated / "Probe"
     shutil.copy2(Build / "Probe", Program)
     Objects = list((Build / "CMakeFiles" / "Probe.dir").rglob("*.o"))
@@ -84,6 +101,11 @@ def CheckCase(Base, Module, Compiler, Generator, Layout):
     for File in (Program, *Objects):
         if Sentinel.encode() in File.read_bytes():
             raise RuntimeError(f"Private directory name in {File.name}")
+    if "ASAN_SYMBOLIZER_PATH" not in Environment:
+        Candidate = subprocess.check_output([Compiler, "-print-prog-name=llvm-symbolizer"], text=True).strip()
+        Symbolizer = shutil.which(Candidate)
+        if Symbolizer:
+            Environment["ASAN_SYMBOLIZER_PATH"] = Symbolizer
     Environment.update(ASAN_OPTIONS="detect_leaks=1:halt_on_error=1:symbolize=1",
                        UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1")
     for Mode, Diagnostic, Location in [("u", "signed integer overflow", "Arithmetic.hpp:1"),

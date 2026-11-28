@@ -24,7 +24,7 @@ def Compile():
     Build = AliasDirectory.parent.parent
     Roots = {str(Build): os.path.relpath(Build)}
     OriginalNames = {}
-    for Alias in AliasDirectory.iterdir():
+    for Alias in sorted(AliasDirectory.iterdir()):
         if Alias.is_symlink():
             Source = os.readlink(Alias)
             Local = os.path.relpath(Alias)
@@ -34,6 +34,10 @@ def Compile():
     OrderedRoots = sorted(Roots, key=len, reverse=True)
 
     def InputName(Value):
+        # -include and -imacros also accept a search name, such as cstddef.
+        # Turning a missing local file into a pathname changes Clang's lookup.
+        if not os.path.isabs(Value) and not os.path.exists(Value):
+            return Value
         Absolute = os.path.abspath(Value)
         for Root in OrderedRoots:
             if Absolute == Root or Absolute.startswith(Root + "/"):
@@ -42,6 +46,8 @@ def Compile():
 
     Depfile = None
     IncludeOptions = ("-isystem", "-iquote", "-idirafter", "-imacros", "-include", "-I")
+    OpaqueOptions = ("-x", "-target", "--target", "-arch", "-D", "-U", "-Xclang", "-Xassembler",
+                     "-Xpreprocessor", "-mllvm", "-MQ", "-MT", "-MF", "-o")
     JoinedOptions = ("-fmodule-map-file=", *IncludeOptions)
     with ExitStack() as Files:
         def Arguments(Values):
@@ -56,14 +62,17 @@ def Compile():
                     Response.write(shlex.join(Nested))
                     Response.flush()
                     Result.append("@" + Response.name)
-                elif Value in ("-MT", "-MQ", "-o", "-MF"):
+                elif Value in OpaqueOptions:
                     Operand = next(Iterator)
                     if Value == "-MF":
                         Depfile = Path(Operand)
                     Result.extend((Value, Operand))
+                elif Value.startswith("-MF") and len(Value) > 3:
+                    Depfile = Path(Value[3:])
+                    Result.append(Value)
                 elif Value in IncludeOptions:
                     Result.extend((Value, InputName(next(Iterator))))
-                elif not Value.startswith("-") and os.path.isfile(Value):
+                elif (os.path.isabs(Value) or Result[-1:] == ["-c"]) and os.path.isfile(Value):
                     Result.append(InputName(Value))
                 else:
                     for Option in JoinedOptions:
