@@ -2482,15 +2482,15 @@ namespace gargantuan {
 			(Sink == Enums::InputSink::Activate && Input.Action != GuiPointerAction::Move);
 	}
 
-	std::optional<HostCommand> GuiRuntime::SynchronizeTextInput() {
+	std::optional<HostCommand> GuiRuntime::SynchronizeTextInput(bool Force) {
 		if (State->Mode == GuiRuntimeMode::AuthoringPreview) return std::nullopt;
-		if (!State->TextInputCommandDirty) return std::nullopt;
+		if (!Force && !State->TextInputCommandDirty) return std::nullopt;
 		State->TextInputCommandDirty = false;
 		const auto Focused = State->KeyboardFocus();
 		auto Input = std::dynamic_pointer_cast<TextBox>(ObjectRegistry::Get().Lookup(Focused));
 		auto Node = State->Layout->NodeByObject.find(Focused);
 		if (!Input || Node == State->Layout->NodeByObject.end() || !State->Layout->Nodes[Node->second].FocusEligible) {
-			if (!State->TextInputWasActive) return std::nullopt;
+			if (!Force && !State->TextInputWasActive) return std::nullopt;
 			State->TextInputWasActive = false;
 			return HostCommand{SetTextInputState{}};
 		}

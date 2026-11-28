@@ -306,10 +306,9 @@ namespace gargantuan {
 					SDL_Log("Failed to materialize signal arguments: %s", Error.what());
 				}
 
-				lua_unref(mainState, threadReference);
 			},
 			L,
-			LUA_NOREF
+			threadReference
 		);
 		ScriptEngine::Get(mainState)->TrackSignalConnection(Connection);
 		return lua_yield(L, 0);

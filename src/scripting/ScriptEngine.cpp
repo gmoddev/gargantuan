@@ -1,4 +1,5 @@
 #include "gargantuan/scripting/ScriptEngine.hpp"
+#include "gargantuan/runtime/ApplicationPresentation.hpp"
 #include "gargantuan/runtime/SpatialResidency.hpp"
 #include "gargantuan/blockgrid/RuntimeHandles.hpp"
 #include "DiagnosticText.hpp"
@@ -355,6 +356,7 @@ namespace gargantuan {
 				return !Existing || !Existing->Connected;
 			});
 		SignalConnections.emplace_back(Connection);
+		if (Application) Application->TrackConnection(Connection);
 	}
 
 	void ScriptEngine::TrackRemoteFunction(const std::shared_ptr<RemoteFunction> &Function) {

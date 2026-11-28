@@ -65,7 +65,8 @@ namespace gargantuan {
 		auto *App = CurrentApplication(L, Receiver);
 		if (!App) return MenuResult(L, false, "NotAuthorized", "The local application owns gameplay input.");
 		if (!lua_isboolean(L, 2)) return MenuResult(L, false, "InvalidOptions", "Input enablement must be a boolean.");
-		App->GameplayInputEnabled = lua_toboolean(L, 2) != 0;
+		const bool Enabled = lua_toboolean(L, 2) != 0;
+		App->SetGameplayInput(Enabled);
 		return MenuResult(L, App->GameplayInputEnabled);
 	}
 
@@ -254,12 +255,25 @@ namespace gargantuan {
 	}
 
 	const DataModel::ServiceDefinitions &DataModel::GetServiceDefinitions() const {
+		if (ApplicationGraph) {
+			static const ServiceDefinitions Application{
+				{"RunService", SchemaId::FromNativeName("Engine", "RunService")},
+				{"SessionService", SchemaId::FromNativeName("Engine", "SessionService")},
+				{"WorldSaveService", SchemaId::FromNativeName("Engine", "WorldSaveService")},
+				{"ApplicationService", SchemaId::FromNativeName("Engine", "ApplicationService")},
+				{"TweenService", SchemaId::FromNativeName("Engine", "TweenService")},
+				{"AssetService", SchemaId::FromNativeName("Engine", "AssetService")},
+				{"InputService", SchemaId::FromNativeName("Engine", "InputService")},
+			};
+			return Application;
+		}
 		static const DataModel::ServiceDefinitions CONSTRUCTORS = {
 			{"ActionMap", SchemaId::FromNativeName("Engine", "ActionMap")},
 			{"AssetService", SchemaId::FromNativeName("Engine", "AssetService")},
 			{"AudioMixService", SchemaId::FromNativeName("Engine", "AudioMixService")},
 			{"CharacterControlService", SchemaId::FromNativeName("Engine", "CharacterControlService")},
 			{"DataStoreService", SchemaId::FromNativeName("Engine", "DataStoreService")},
+			{"WorldSaveService", SchemaId::FromNativeName("Engine", "WorldSaveService")},
 			{"EntitlementService", SchemaId::FromNativeName("Engine", "EntitlementService")},
 			{"InteractionService", SchemaId::FromNativeName("Engine", "InteractionService")},
 			{"InputService", SchemaId::FromNativeName("Engine", "InputService")},

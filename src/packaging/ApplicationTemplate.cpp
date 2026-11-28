@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "ApplicationTemplate.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
+#include "gargantuan/assets/AssetTypes.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/runtime/ApplicationPresentation.hpp"
@@ -113,6 +114,49 @@ namespace gargantuan::application_template {
 	}
 
 	void Validate(std::string_view Template) { (void)Admit(Template); }
+
+	AssetRuntimeSnapshot SelectAssets(std::string_view Template, const AssetRuntimeSnapshot &PackageAssets) {
+		const auto Document = Admit(Template);
+		auto Catalog = JsonCodec::Parse(PackageAssets.CatalogJson, 1024 * 1024, "application asset catalog");
+		if (!Catalog) Invalid("Invalid runtime asset catalog");
+		auto &Records = Catalog->at("Assets");
+		std::unordered_map<std::string, const Json *> ById;
+		for (const auto &Record : Records) ById.emplace(Record.at("AssetId").get<std::string>(), &Record);
+		std::vector<const Json *> Nodes{&Document.at("Template")};
+		std::vector<std::string> Pending;
+		while (!Nodes.empty()) {
+			const auto &Node = *Nodes.back();
+			Nodes.pop_back();
+			for (const auto *Field : {"Properties", "Attributes"}) {
+				for (const auto &[Name, Value] : Node.at(Field).items()) {
+					if (Name == "Source" || !Value.contains("String")) continue;
+					const auto &Reference = Value.at("String").get_ref<const std::string &>();
+					if (Reference.starts_with("asset://")) Pending.push_back(Reference.substr(8));
+				}
+			}
+			for (const auto &Child : Node.at("Children")) Nodes.push_back(&Child);
+		}
+		std::unordered_set<std::string> Selected, Files;
+		while (!Pending.empty()) {
+			auto Id = std::move(Pending.back());
+			Pending.pop_back();
+			if (!Selected.insert(Id).second) continue;
+			const auto Found = ById.find(Id);
+			if (Found == ById.end()) Invalid("An application asset is missing from the package");
+			const auto &Record = *Found->second;
+			Files.insert("assets/artifacts/" + Record.at("ContentId").get<std::string>() + ".gasset");
+			for (const auto &Dependency : Record.at("Dependencies")) Pending.push_back(Dependency.get<std::string>());
+		}
+		Json Kept = Json::array();
+		for (const auto &Record : Records)
+			if (Selected.contains(Record.at("AssetId").get_ref<const std::string &>())) Kept.push_back(Record);
+		Records = std::move(Kept);
+		AssetRuntimeSnapshot Result{Catalog->dump(), {}};
+		for (const auto &File : PackageAssets.Artifacts)
+			if (Files.contains(File.RelativePath)) Result.Artifacts.push_back(File);
+		if (Result.Artifacts.size() != Files.size()) Invalid("An application artifact is missing from the package");
+		return Result;
+	}
 
 	Graph Load(std::string_view Template) {
 		const auto Document = Admit(Template);

@@ -14,7 +14,7 @@ namespace gargantuan {
 
 	class SDLHost final {
 	  public:
-		[[nodiscard]] bool PollEvent(HostEvent &Event);
+		[[nodiscard]] bool PollEvent(HostEvent &Event, std::uint64_t *Timestamp = nullptr);
 		void Apply(const HostCommand &Command) const;
 
 	  private:

@@ -35,6 +35,7 @@ namespace gargantuan {
 		void Cleanup();
 		[[nodiscard]] bool IsCurrentExecution(std::uint64_t Generation) const {return ExecutionActive && Generation && Generation==ExecutionGeneration && GetEnabled() && !GetDestroyed() && !IsDestroying();}
 		void RetireExecution() noexcept { ExecutionActive=false; }
+		[[nodiscard]] std::uint64_t GetExecutionGeneration() const { return ExecutionGeneration; }
 		bool ShouldStep();
 		ScriptStatus Step(lua_State *L, int *FailureLine = nullptr,
 			GameplayResumeBudget *DebugBudget = nullptr, int *StepLine = nullptr);

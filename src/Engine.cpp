@@ -74,7 +74,7 @@ namespace gargantuan {
 			  std::make_unique<AudioRuntime>(
 				  Assets,
 				  ProviderConfiguration.AudioEnabled && ProviderConfiguration.Mode != RuntimeMode::NetworkServer
-					  ? CreateSdlAudioBackend() : nullptr,
+					  ? (ProviderConfiguration.AudioOutput ? ProviderConfiguration.AudioOutput->OpenStream() : CreateSdlAudioBackend()) : nullptr,
 				  [](std::string Code, std::string Message) {
 					  LOG_WARN(App, "[Audio:Runtime] %s: %s", Code.c_str(), Message.c_str());
 				  },
@@ -141,7 +141,7 @@ namespace gargantuan {
 				"[Player:Session] Network client runtime requires a trusted LocalPlayer association"
 			);
 		Interaction->AttachRuntime(
-			DataModel, Players, ActionMap, Spatial, Renderer && dynamic_cast<HeadlessRenderer *>(Renderer) == nullptr
+			DataModel, Players, ActionMap, Spatial, Renderer && Renderer->GetCapabilities().Graphical
 		);
 		Assets->ConfigureBuiltInFont(DefaultGuiFont);
 		Gui = std::make_shared<GuiRuntime>(DataModel, DefaultGuiFont);
@@ -202,13 +202,13 @@ namespace gargantuan {
 			}
 		});
 		DataModelDestroyingConnection = DataModel->Destroying->Once([this](std::monostate) { Destroy(); });
-		const bool PreloadAllContent = ProviderConfiguration.Content &&
+		PreloadContent = ProviderConfiguration.Content &&
 			ProviderConfiguration.Content->Mode == ContentResidencyMode::FullyResident;
 		StreamingDiagnosticsEnabled = ProviderConfiguration.EnableStreamingDiagnostics;
 		ResidencyPolicyEnabled = ProviderConfiguration.Mode == RuntimeMode::NetworkServer &&
 			ProviderConfiguration.EnableResidencyDemandPolicy && ProviderConfiguration.Content &&
 			ProviderConfiguration.Content->Mode == ContentResidencyMode::OnDemand;
-		const auto ContentStartupDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		StartupDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
 		if (ProviderConfiguration.Content) {
 			Content = std::make_unique<ContentAvailabilityService>(
 				DataModel,
@@ -218,26 +218,27 @@ namespace gargantuan {
 					LOG_WARN(App, "[Content:Availability] %s: %s", Code.c_str(), Message.c_str());
 				}
 			);
-			if (PreloadAllContent) {
-				while (!Content->IsFullyResident()) {
-					Content->Step();
-					if (std::chrono::steady_clock::now() >= ContentStartupDeadline ||
-						Content->GetMetrics().Failures != 0)
-						throw std::runtime_error("[Content:Availability] fully resident package bootstrap failed");
-					std::this_thread::yield();
-				}
-			}
 		}
-
-		Script->RunBootstrapScript(Players->StartDefaultRuntime(ProviderConfiguration.Mode));
-		if (Destroyed) {
-			Construction.Complete = true;
-			return;
-		}
-		Interaction->StartDefaultRuntime();
-
-		LOG_INFO(App, "Constructed engine");
+		StartupMode = ProviderConfiguration.Mode;
+		if (!ProviderConfiguration.DeferStartup)
+			while (!AdvanceStartup()) std::this_thread::yield();
 		Construction.Complete = true;
+	}
+
+	bool Engine::AdvanceStartup() {
+		if (!StartupMode || Destroyed) return true;
+		if (PreloadContent && !Content->IsFullyResident()) {
+			Content->Step();
+			if (std::chrono::steady_clock::now() >= StartupDeadline || Content->GetMetrics().Failures)
+				throw std::runtime_error("[Content:Availability] fully resident package bootstrap failed");
+			if (!Content->IsFullyResident()) return false;
+		}
+		const auto Mode = *StartupMode;
+		StartupMode.reset();
+		Script->RunBootstrapScript(Players->StartDefaultRuntime(Mode));
+		if (!Destroyed) Interaction->StartDefaultRuntime();
+		LOG_INFO(App, "Constructed engine");
+		return true;
 	}
 
 	Engine::~Engine() {

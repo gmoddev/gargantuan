@@ -6,21 +6,34 @@
 
 namespace gargantuan {
 	namespace {
-		class SdlAudioBackend final : public IAudioBackend {
+		constexpr SDL_AudioSpec Specification{SDL_AUDIO_F32, 2, 48'000};
+		class SdlAudioOutput final : public IAudioOutput, public std::enable_shared_from_this<SdlAudioOutput> {
 		  public:
-			SdlAudioBackend() {
+			SdlAudioOutput() {
 				if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
 					Diagnostic = SDL_GetError();
 					return;
 				}
 				OwnsAudioSubsystem = true;
-				const SDL_AudioSpec Specification{
-					.format = SDL_AUDIO_F32,
-					.channels = 2,
-					.freq = static_cast<int>(SampleRate),
-				};
-				Stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &Specification, nullptr, nullptr);
-				if (!Stream || !SDL_ResumeAudioStreamDevice(Stream)) {
+				Device = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &Specification);
+				if (!Device) Diagnostic = SDL_GetError();
+			}
+			~SdlAudioOutput() override {
+				if (Device) SDL_CloseAudioDevice(Device);
+				if (OwnsAudioSubsystem) SDL_QuitSubSystem(SDL_INIT_AUDIO);
+			}
+			std::unique_ptr<IAudioBackend> OpenStream() override;
+			SDL_AudioDeviceID Device{};
+			std::string Diagnostic;
+		  private:
+			bool OwnsAudioSubsystem = false;
+		};
+		class SdlAudioBackend final : public IAudioBackend {
+		  public:
+			explicit SdlAudioBackend(std::shared_ptr<SdlAudioOutput> DeviceOutput) : Output(std::move(DeviceOutput)) {
+				if (!Output->Device) { Diagnostic = Output->Diagnostic; return; }
+				Stream = SDL_CreateAudioStream(&Specification, &Specification);
+				if (!Stream || !SDL_BindAudioStream(Output->Device, Stream)) {
 					Diagnostic = SDL_GetError();
 					if (Stream) SDL_DestroyAudioStream(Stream);
 					Stream = nullptr;
@@ -72,8 +85,8 @@ namespace gargantuan {
 
 			void SetPlaybackHeld(bool Held) override {
 				if (!Stream || !Available) return;
-				if (!(Held ? SDL_PauseAudioStreamDevice(Stream) : SDL_ResumeAudioStreamDevice(Stream)))
-					Fail(SDL_GetError());
+				if (Held) SDL_UnbindAudioStream(Stream);
+				else if (!SDL_BindAudioStream(Output->Device, Stream)) Fail(SDL_GetError());
 			}
 
 			void Shutdown() override {
@@ -82,10 +95,7 @@ namespace gargantuan {
 					SDL_DestroyAudioStream(Stream);
 					Stream = nullptr;
 				}
-				if (OwnsAudioSubsystem) {
-					SDL_QuitSubSystem(SDL_INIT_AUDIO);
-					OwnsAudioSubsystem = false;
-				}
+				Output.reset();
 			}
 
 			std::string GetDiagnostic() const override {
@@ -103,15 +113,20 @@ namespace gargantuan {
 
 			static constexpr std::uint32_t SampleRate = 48'000;
 			SDL_AudioStream *Stream = nullptr;
-			bool OwnsAudioSubsystem = false;
+			std::shared_ptr<SdlAudioOutput> Output;
 			bool Available = false;
 			bool SubmittedOnce = false;
 			std::string Diagnostic;
 			AudioBackendMetrics Metrics;
 		};
+		std::unique_ptr<IAudioBackend> SdlAudioOutput::OpenStream() {
+			return std::make_unique<SdlAudioBackend>(shared_from_this());
+		}
 	}
 
+	std::shared_ptr<IAudioOutput> CreateSdlAudioOutput() { return std::make_shared<SdlAudioOutput>(); }
+
 	std::unique_ptr<IAudioBackend> CreateSdlAudioBackend() {
-		return std::make_unique<SdlAudioBackend>();
+		return CreateSdlAudioOutput()->OpenStream();
 	}
 }

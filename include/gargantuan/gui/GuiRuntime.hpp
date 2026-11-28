@@ -67,7 +67,7 @@ namespace gargantuan {
 		[[nodiscard]] bool ProcessPointer(const GuiPointerInput &Input);
 		[[nodiscard]] bool ProcessEvent(const HostEvent &Event, GuiApplicationFrame Frame);
 		[[nodiscard]] bool ProcessPointer(const GuiPointerInput &Input, GuiApplicationFrame Frame);
-		[[nodiscard]] std::optional<HostCommand> SynchronizeTextInput();
+		[[nodiscard]] std::optional<HostCommand> SynchronizeTextInput(bool Force = false);
 		void RequestFocus(ObjectId Object);
 		void ReleaseFocus(ObjectId Object);
 		void CapturePointer(int PointerId, ObjectId Object);

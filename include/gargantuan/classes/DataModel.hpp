@@ -18,6 +18,8 @@ namespace gargantuan {
 	class SpatialRegion;
 	namespace network { class SpatialTransferProtection; }
 	class DataModel : public ServiceProvider {
+		friend class ApplicationPresentation;
+		bool ApplicationGraph = false;
 		I_DataModel;
 		~DataModel() override;
 

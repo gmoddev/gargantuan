@@ -9,6 +9,7 @@
 namespace gargantuan {
 	class DataModel;
 	class Script;
+	struct AssetRuntimeSnapshot;
 	namespace application_template {
 		inline constexpr std::string_view Path = "content/application.json";
 		inline constexpr std::size_t MaximumBytes = 2 * 1024 * 1024;
@@ -19,5 +20,6 @@ namespace gargantuan {
 		[[nodiscard]] std::string Extract(std::string &Project, std::string_view SourceId);
 		void Validate(std::string_view Template);
 		[[nodiscard]] Graph Load(std::string_view Template);
+		[[nodiscard]] AssetRuntimeSnapshot SelectAssets(std::string_view Template, const AssetRuntimeSnapshot &PackageAssets);
 	}
 }

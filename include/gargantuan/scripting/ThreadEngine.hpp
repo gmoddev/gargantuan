@@ -50,6 +50,7 @@ namespace gargantuan {
 		void SetDevelopmentClock(std::function<std::chrono::steady_clock::time_point()> Clock);
 		void ResumeThread(lua_State *thread, int threadReference, int argumentCount);
 		bool CancelPendingTasks(lua_State *Caller, lua_State *Thread);
+		void RetireOwner(ObjectId Owner, std::uint64_t Generation);
 		bool QueueScheduledTask(lua_State *Thread, ScheduledTask::Type Type, double DelaySeconds, ArgumentRange Arguments);
 		bool QueueDeferredTask(lua_State *Thread, ArgumentRange Arguments);
 
@@ -70,6 +71,7 @@ namespace gargantuan {
 
 		TaskEntry CaptureTask(lua_State *Thread, ArgumentRange Arguments);
 		void ReleaseTask(const TaskEntry &Task);
+		bool CancelMatching(const std::function<bool(const TaskEntry &)> &Matches);
 		void ResumeQueuedTask(TaskEntry Task, std::optional<double> Elapsed = std::nullopt);
 		void ResumeThreadWithContext(
 			lua_State *thread,

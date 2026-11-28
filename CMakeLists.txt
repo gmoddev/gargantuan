@@ -2182,6 +2182,20 @@ if(BUILD_TESTING)
 			--packager $<TARGET_FILE:gargantuan_packager> --runtime $<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
 			--project "${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame")
 		add_test(NAME gargantuan_lifecycle_offline_package COMMAND ${LifecyclePlayerTest})
+		if(GARGANTUAN_WITH_GNS)
+			add_test(NAME gargantuan_lifecycle_two_players COMMAND "${GARGANTUAN_LIFECYCLE_TEST_PYTHON}" -B
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/StandaloneMultiplayer.py" --packager $<TARGET_FILE:gargantuan_packager>
+				--runtime $<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
+				--server-runtime $<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution
+				--project "${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame")
+			set_tests_properties(gargantuan_lifecycle_two_players PROPERTIES LABELS "lifecycle;network;packaging" TIMEOUT 100)
+		endif()
+		if(GARGANTUAN_WITH_LOCAL_SQLITE)
+			add_test(NAME gargantuan_lifecycle_construction_yard COMMAND "${GARGANTUAN_LIFECYCLE_TEST_PYTHON}" -B
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/StandaloneConstructionYard.py" --packager $<TARGET_FILE:gargantuan_packager>
+				--runtime $<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution --engine $<TARGET_FILE:gargantuan>)
+			set_tests_properties(gargantuan_lifecycle_construction_yard PROPERTIES LABELS "lifecycle;spatial;persistence;packaging" TIMEOUT 180)
+		endif()
 		set_tests_properties(gargantuan_lifecycle_offline_package PROPERTIES LABELS "lifecycle;packaging;headless" TIMEOUT 240)
 		if(GARGANTUAN_RUN_GRAPHICAL_PACKAGE_SMOKE)
 			add_test(NAME gargantuan_lifecycle_graphical_package COMMAND ${LifecyclePlayerTest} --graphical)

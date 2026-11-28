@@ -1,6 +1,6 @@
 const c = require("@tools/classes").unpack()
 
-const Info = '{ Generation: string, State: "Idle" | "Starting" | "Active" | "Leaving", World: "Absent" | "Ready", Mode: "Offline"? }'
+const Info = '{ Generation: string, State: "Idle" | "Starting" | "Connecting" | "Active" | "Leaving", World: "Absent" | "Preparing" | "Ready", Mode: ("Offline" | "Remote")?, SaveId: string?, WorldId: string?, LastError: {Code: string, Message: string}? }'
 const Result = "{ Ok: true, Value: " .. Info .. " } | { Ok: false, Code: string, Message: string }"
 const Operation = "{ Await: (self: any) -> (" .. Result .. "), GetResult: (self: any) -> (" .. Result .. ")?, GetState: (self: any) -> string, Cancel: (self: any) -> boolean, Completed: Signal }"
 return c({
@@ -9,7 +9,8 @@ return c({
 	since = "0.9.0",
 	methods = {
 		GetSession = { asLuau = true, description = "Returns a session snapshot.", luauSignature = "(self: SessionService) -> " .. Info },
-		StartLocal = { asLuau = true, description = "Starts an offline session at the next host boundary.", luauSignature = "(self: SessionService) -> " .. Operation },
+		StartLocal = { asLuau = true, description = "Starts an offline session with an optional saved world.", luauSignature = "(self: SessionService, Options: { SaveId: string?, PrivateServer: boolean? }?) -> " .. Operation },
 		Leave = { asLuau = true, description = "Retires the current gameplay session.", luauSignature = "(self: SessionService) -> " .. Operation },
+		Join = { asLuau = true, description = "Connects to an admitted direct target.", luauSignature = '(self: SessionService, Target: {Kind: "Direct", Address: string}) -> ' .. Operation },
 	},
 })

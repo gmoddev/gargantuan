@@ -6,10 +6,12 @@
 #include "host/common/FarmLifecycleEvidence.hpp"
 #include "host/player/FarmRecoveryObservation.hpp"
 #include "host/player/StandalonePlayer.hpp"
+#include "host/player/PackagedClient.hpp"
 #include "network/ReliableServiceFeedback.hpp"
 #include "network/GameSessionTestAccess.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/runtime/ApplicationPresentation.hpp"
+#include "gargantuan/persistence/LocalPersistenceProvider.hpp"
 #include "packaging/ApplicationTemplate.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -52,6 +54,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	Program.add_description("Gargantuan standalone game runtime");
 	Program.add_argument("--headless").flag().help("disable the graphical renderer");
 	Program.add_argument("--startup-smoke").flag().help("exit after a bounded runtime startup smoke");
+	Program.add_argument("--profile-root").default_value(std::string()).help("parent directory for project-isolated local game data");
 	Program.add_argument("--session-smoke").flag().help("require a bounded packaged game-session acceptance proof");
 	Program.add_argument("--max-frames").scan<'i', int>().default_value(0).help("bounded test-only frame count");
 	Program.add_argument("--connect").default_value(std::string()).help("host:port for a network game client");
@@ -230,6 +233,15 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	std::unique_ptr<host::detail::FarmPublicationEvidence> PublicationEvidence;
 	try {
 		std::shared_ptr<DataModel> PackagedWorld;
+		const auto UserData = [&] {
+			const std::filesystem::path Parent = Program.get<std::string>("--profile-root");
+			if (Parent.empty()) return GetPackageUserDataRoot(Payload->Inspection.Identity);
+			if (!Parent.is_absolute() || !std::filesystem::is_directory(Parent))
+				throw std::invalid_argument("[Lifecycle:Storage] Profile root requires an existing absolute directory");
+			const auto Profile = Parent / Payload->Inspection.Identity.ToString();
+			std::filesystem::create_directories(Profile);
+			return Profile;
+		};
 		const auto LoadPackageWorld = [&] {
 			return Payload->LoadMode == PackageRuntimeLoadMode::LoopbackDevelopmentClient
 				? PackageBuilder::LoadClientCodeWorld(*Payload, PackageRoot) : PackageBuilder::LoadWorld(*Payload, PackageRoot);
@@ -245,15 +257,27 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			Graph.World->Root = PackageRoot / "content";
 			Graph.World->Filesystem = nullptr;
 			auto Assets = std::dynamic_pointer_cast<AssetService>(Graph.World->GetService("AssetService"));
-			Assets->LoadRuntimeAssetSnapshot(Payload->Assets);
+			Assets->LoadRuntimeAssetSnapshot(application_template::SelectAssets(*Payload->ApplicationTemplate, Payload->Assets));
 			ApplicationPresentation App(Graph.World, Graph.Entry, Paths::GetExecutableDirectory() / "runtime" / "GargantuanSans.ttf",
 				[](std::string Level, std::string Message) {
 					std::clog << "[Lifecycle:Application] " << Level << " " << Message << '\n';
 				}, !Headless);
 			if (App.HasMainMenu()) {
+				const auto Profile = UserData();
+				const auto Hash = [](const std::string &Bytes) {
+					return AssetContentId::Hash(std::span(reinterpret_cast<const std::uint8_t *>(Bytes.data()), Bytes.size())).ToString();
+				};
+				const auto Identity = Payload->Inspection.Identity.ToString();
+				App.Sessions.ConfigureCatalog(MakeDurableLocalPersistenceProvider({
+					.Path = Profile / "world-catalog.sqlite", .ProfileId = Identity}), Graph.World,
+					Hash(Payload->ProjectJson) + "/" + Hash(Payload->Assets.CatalogJson),
+					[Profile, Identity](const WorldSlot &Slot, bool Create) {
+						return MakeDurableLocalPersistenceProvider({.Path = Profile / (Slot.SaveId + ".sqlite"),
+							.ProfileId = Identity + "/" + Slot.WorldId, .CreateIfMissing = Create});
+					});
 				const int Requested = Program.get<int>("--max-frames");
 				const int Limit = Requested > 0 ? Requested : Program.is_used("--startup-smoke") ? 12 : 0;
-				return RunStandalonePlayer(App, *Renderer, *Payload, PackageRoot, Limit);
+				return RunStandalonePlayer(App, *Renderer, *Payload, PackageRoot, Profile, Limit);
 			}
 		}
 		if (!Distributed && !PackagedWorld) PackagedWorld = LoadPackageWorld();
@@ -268,26 +292,8 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			}
 			Session = std::make_unique<network::GameSession>(
 				ClientTransport,
-				network::GameSessionConfiguration{
-					.Role = network::GameSessionRole::Client,
-					.Endpoint = *ClientEndpoint,
-					.Limits = network::GameSessionConfiguration::DefaultLimits(),
-					.ClientNonce = FarmEnabled ? FarmClientNonce : 0,
-					.AllowInsecureDevelopmentNetwork = AllowInsecureDevelopmentNetwork,
-					.DeclareNormalOrdinaryService = true,
-					.HydratePlayerGuiCode = Payload->RuntimeCode ?
-						PackageBuilder::MakeDistributedPlayerGuiCodeHydrator(*Payload) :
-						PackageBuilder::MakePlayerGuiCodeHydrator(PackagedWorld),
-					.TerrainBootstrap = !Payload->WorkspaceTerrainManifest.empty() ?
-						network::MakeTerrainReceiver(Payload->Inspection.Identity,Payload->Inspection.Revision,
-							*AssetContentId::Parse(Payload->WorkspaceTerrainManifest),
-							terrain::GridSpec{static_cast<std::int8_t>(Payload->WorkspaceTerrainSpacingShift)}) :
-						NetworkTerrain ? network::MakeTerrainSessionData(Payload->Inspection.Identity,
-							Payload->Inspection.Revision, Payload->TerrainArtifacts, false) : nullptr,
-					.RuntimeDistributionIdentity = Payload->ClientCodeIdentity,
-					.HydratePackagedCode = PackageBuilder::MakeDistributedCodeHydrator(*Payload),
-					.SpatialContent = SpatialContent,
-				}
+				ConfigurePackagedClient(*Payload, PackagedWorld, *ClientEndpoint, NetworkTerrain,
+					FarmEnabled ? FarmClientNonce : 0, AllowInsecureDevelopmentNetwork)
 			);
 			if (FarmScaleWorkload && !network::detail::GameSessionTestAccess::SetOrdinarySourceNormal(*Session, false))
 				throw std::runtime_error("[Network:OrdinaryService] Client bootstrap source scope failed");
@@ -363,7 +369,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		}
 #endif
 		Runtime->ProcessService->Alive = true;
-		const auto UserDataRoot = GetPackageUserDataRoot(Payload->Inspection.Identity);
+		const auto UserDataRoot = UserData();
 		LOG_INFO(
 			App,
 			"[Package:Runtime] Started %s (%s); user data is isolated by ProjectId",

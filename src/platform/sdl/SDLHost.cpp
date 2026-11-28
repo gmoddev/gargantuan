@@ -194,7 +194,7 @@ namespace gargantuan {
 		}
 	}
 
-	bool SDLHost::PollEvent(HostEvent &Event) {
+	bool SDLHost::PollEvent(HostEvent &Event, std::uint64_t *Timestamp) {
 		SDL_Event BackendEvent;
 		while (SDL_PollEvent(&BackendEvent)) {
 			switch (BackendEvent.type) {
@@ -216,6 +216,7 @@ namespace gargantuan {
 			auto Translated = TranslateSDLEvent(BackendEvent);
 			if (!Translated) continue;
 			Event = std::move(*Translated);
+			if (Timestamp) *Timestamp = BackendEvent.common.timestamp;
 			return true;
 		}
 		return false;

@@ -87,8 +87,18 @@ namespace gargantuan {
 			lua_costatus(Caller, Thread) != LUA_COSUS)
 			return false;
 
+		return CancelMatching([&](const TaskEntry &Task) { return Task.Thread == Thread; });
+	}
+
+	void ThreadEngine::RetireOwner(ObjectId Owner, std::uint64_t Generation) {
+		(void)CancelMatching([&](const TaskEntry &Task) {
+			return Task.SecurityContext.IssuingScript == Owner && Task.SecurityContext.ExecutionGeneration == Generation;
+		});
+	}
+
+	bool ThreadEngine::CancelMatching(const std::function<bool(const TaskEntry &)> &Matches) {
 		const auto Release = [&](const TaskEntry &Task) {
-			if (Task.Thread != Thread) return false;
+			if (!Matches(Task)) return false;
 			ReleaseTask(Task);
 			return true;
 		};

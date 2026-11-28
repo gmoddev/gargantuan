@@ -6,6 +6,9 @@ namespace gargantuan {
 	int SessionService::StartLocal(lua_State *L, Instance *Receiver) {
 		return ApplicationSession::Request(L, Receiver, SessionCommand::StartLocal);
 	}
+	int SessionService::Join(lua_State *L, Instance *Receiver) {
+		return ApplicationSession::Request(L, Receiver, SessionCommand::Join);
+	}
 	int SessionService::Leave(lua_State *L, Instance *Receiver) {
 		return ApplicationSession::Request(L, Receiver, SessionCommand::Leave);
 	}

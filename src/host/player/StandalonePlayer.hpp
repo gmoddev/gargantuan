@@ -7,6 +7,6 @@ namespace gargantuan {
 	struct RuntimePackagePayload;
 	namespace host {
 		int RunStandalonePlayer(ApplicationPresentation &App, BaseRenderer &Device,
-			const RuntimePackagePayload &Package, const std::filesystem::path &Root, int MaximumFrames);
+			const RuntimePackagePayload &Package, const std::filesystem::path &Root, const std::filesystem::path &Profile, int MaximumFrames);
 	}
 }

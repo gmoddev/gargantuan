@@ -89,6 +89,8 @@ namespace gargantuan {
 		~Engine();
 
 		void Step();
+		// The enclosing host can pump application events between startup steps.
+		[[nodiscard]] bool AdvanceStartup();
 		void SetDevelopmentClock(std::function<std::chrono::steady_clock::time_point()> Clock);
 		float GetDeltaTime();
 		[[nodiscard]] HostEventResult ProcessEvent(const HostEvent &Event);
@@ -111,6 +113,9 @@ namespace gargantuan {
 		std::chrono::steady_clock::time_point LastTick{};
 		std::function<std::chrono::steady_clock::time_point()> DevelopmentClock;
 		bool Destroyed = false;
+		std::optional<RuntimeMode> StartupMode;
+		bool PreloadContent = false;
+		std::chrono::steady_clock::time_point StartupDeadline;
 		std::shared_ptr<const gargantuan::DataModel::DefaultNetworkSpatialProfile> NetworkSpatialProfile;
 		bool ResidencyPolicyEnabled = false;
 		bool StreamingDiagnosticsEnabled = false;

@@ -14,27 +14,15 @@
 #include <array>
 
 namespace gargantuan {
-	namespace {
-		class PresentationGraph final : public DataModel {
-			const ServiceDefinitions &GetServiceDefinitions() const override {
-				static const ServiceDefinitions Services{
-					{"RunService", SchemaId::FromNativeName("Engine", "RunService")},
-					{"SessionService", SchemaId::FromNativeName("Engine", "SessionService")},
-					{"ApplicationService", SchemaId::FromNativeName("Engine", "ApplicationService")},
-					{"TweenService", SchemaId::FromNativeName("Engine", "TweenService")},
-					{"AssetService", SchemaId::FromNativeName("Engine", "AssetService")},
-					{"InputService", SchemaId::FromNativeName("Engine", "InputService")},
-				};
-				return Services;
-			}
-		};
+	std::shared_ptr<DataModel> ApplicationPresentation::CreateGraph() {
+		auto Graph = std::make_shared<DataModel>();
+		Graph->ApplicationGraph = true;
+		return Graph;
 	}
-
-	std::shared_ptr<DataModel> ApplicationPresentation::CreateGraph() { return std::make_shared<PresentationGraph>(); }
 
 	bool ApplicationPresentation::SupportsClass(std::string_view Name) {
 		constexpr std::array Classes{"Folder", "Script", "ModuleScript", "ScreenGui", "Frame", "TextButton", "TextLabel",
-			"TextBox", "ScrollingFrame", "UIListLayout", "ImageLabel", "ImageButton", "ViewportFrame", "Camera", "Sound"};
+			"TextBox", "ScrollingFrame", "UIListLayout", "ImageLabel", "ImageButton", "ViewportFrame", "Camera", "Part", "Sound"};
 		return std::ranges::find(Classes, Name) != Classes.end();
 	}
 
@@ -43,7 +31,7 @@ namespace gargantuan {
 		std::function<void(std::string, std::string)> Diagnostic, bool AudioEnabled)
 		: Gui(Graph, std::move(Font), GuiRuntimeMode::Application),
 		  VM(std::make_shared<ScriptEngine>(Graph, std::move(Diagnostic), RuntimeMode::NetworkClient)), EntryScript(Entry) {
-		if (!dynamic_cast<PresentationGraph *>(Graph.get()))
+		if (!Graph->ApplicationGraph)
 			throw std::invalid_argument("[Lifecycle:Application] Expected a private presentation graph");
 		const auto Folder = Entry ? Entry->GetParent().value_or(nullptr) : nullptr;
 		if (!Folder || !Folder->IsA("Folder") || Folder->GetParent().value_or(nullptr) != Graph ||
@@ -61,12 +49,15 @@ namespace gargantuan {
 			CommitMenu();
 			if (HasMainMenu()) {
 				auto Assets = std::dynamic_pointer_cast<AssetService>(Graph->GetService("AssetService"));
-				Audio = std::make_unique<AudioRuntime>(Assets, AudioEnabled ? CreateSdlAudioBackend() : nullptr,
+				if (AudioEnabled) Output = CreateSdlAudioOutput();
+				Audio = std::make_unique<AudioRuntime>(Assets, Output ? Output->OpenStream() : nullptr,
 					[this](std::string Code, std::string Message) {
 						VM->EmitRuntimeDiagnostic("Warning", "[Audio:Application] " + Code + " " + Message);
 					});
 				UnbindAudio = Graph->BindDescendants([this](const std::shared_ptr<Instance> &Object) {
 					if (auto Voice = std::dynamic_pointer_cast<Sound>(Object)) Audio->RegisterSound(Voice);
+					if (auto ScriptValue = std::dynamic_pointer_cast<Script>(Object); ScriptValue && ScriptValue != EntryScript)
+						MenuScripts[ScriptValue->GetObjectId()] = ScriptValue;
 				});
 			}
 		} catch (...) {
@@ -86,11 +77,68 @@ namespace gargantuan {
 	bool ApplicationPresentation::IsCallerCurrent(const DataModel &Receiver) const {
 		const auto &Caller = GetCurrentScriptSecurityContext();
 		return VM->DataModel.get() == &Receiver && !VM->IsStopping() && Caller.Domain == ScriptExecutionDomain::Client &&
-			Caller.IssuingScript == EntryScript->GetObjectId() && IsEntryCurrent(Caller.ExecutionGeneration);
+			IsOwnerCurrent(Caller.IssuingScript, Caller.ExecutionGeneration);
 	}
 
-	bool ApplicationPresentation::IsEntryCurrent(std::uint64_t Generation) const {
-		return EntryScript->IsCurrentExecution(Generation) && EntryScript->IsDescendantOf(VM->DataModel);
+	bool ApplicationPresentation::IsOwnerCurrent(ObjectId Owner, std::uint64_t Generation) const {
+		if (Owner == EntryScript->GetObjectId())
+			return EntryScript->IsCurrentExecution(Generation) && EntryScript->IsDescendantOf(VM->DataModel);
+		const auto Found = Controllers.find(Owner);
+		const auto Root = Gui.GetApplicationMenu();
+		return Root && Found != Controllers.end() && Found->second->IsCurrentExecution(Generation) &&
+			Found->second->IsDescendantOf(Root) && Root->IsDescendantOf(VM->DataModel);
+	}
+
+	void ApplicationPresentation::TrackConnection(const std::shared_ptr<SignalConnection> &Connection) {
+		const auto &Caller = GetCurrentScriptSecurityContext();
+		Connections.push_back({Caller.IssuingScript, Caller.ExecutionGeneration, Connection});
+	}
+
+	void ApplicationPresentation::SetGameplayInput(bool Enabled) {
+		const auto &Caller = GetCurrentScriptSecurityContext();
+		if (Enabled) InputHolds.erase(Caller.IssuingScript);
+		else InputHolds[Caller.IssuingScript] = Caller.ExecutionGeneration;
+		if (GameplayInputEnabled && !InputHolds.empty()) GameplayInputReleasePending = true;
+		GameplayInputEnabled = InputHolds.empty();
+	}
+
+	void ApplicationPresentation::ReconcileOwners() {
+		const auto Menu = Gui.GetApplicationMenu();
+		const bool Replaced = ControllerRoot.lock() != Menu;
+		std::erase_if(Controllers, [&](const auto &Item) {
+			const auto &Controller = Item.second;
+			if (!Replaced && Menu && Controller->GetEnabled() && Controller->Status != ScriptStatus::Idle && Controller->IsDescendantOf(Menu)) return false;
+			VM->Threads.RetireOwner(Item.first, Controller->GetExecutionGeneration());
+			Controller->RetireExecution();
+			Controller->Cleanup();
+			if (Controller->GetEnabled() && !Controller->GetDestroyed()) Controller->Status = ScriptStatus::Idle;
+			return true;
+		});
+		std::erase_if(Connections, [&](const auto &Item) {
+			auto Connection = Item.Connection.lock();
+			if (!Connection || !Connection->Connected) return true;
+			if (IsOwnerCurrent(Item.Owner, Item.Generation)) return false;
+			Connection->Disconnect();
+			return true;
+		});
+		std::erase_if(InputHolds, [&](const auto &Item) { return !IsOwnerCurrent(Item.first, Item.second); });
+		GameplayInputEnabled = InputHolds.empty();
+		ControllerRoot = Menu;
+		std::erase_if(MenuScripts, [](const auto &Item) { return Item.second.expired(); });
+		if (!Menu) return;
+		std::vector<std::shared_ptr<Script>> Starts;
+		for (const auto &[Id, Weak] : MenuScripts) {
+			auto Controller = Weak.lock();
+			if (!Controller || Controllers.contains(Id) || Controller->Status != ScriptStatus::Idle ||
+				Controller->GetRunContext() != Enums::RunContext::Client || !Controller->IsDescendantOf(Menu)) continue;
+			Starts.push_back(Controller);
+			if (Starts.size() == 8) break;
+		}
+		for (const auto &Controller : Starts) {
+			if (Controller->Status != ScriptStatus::Idle || !Controller->IsDescendantOf(Menu)) continue;
+			Controllers.emplace(Controller->GetObjectId(), Controller);
+			VM->RunBootstrapScript(Controller);
+		}
 	}
 
 	bool ApplicationPresentation::HasMainMenu() const {
@@ -107,6 +155,7 @@ namespace gargantuan {
 		Selection = Menu;
 		MenuDirty = true;
 		MenuOwnerGeneration = GetCurrentScriptSecurityContext().ExecutionGeneration;
+		MenuOwner = GetCurrentScriptSecurityContext().IssuingScript;
 		return true;
 	}
 
@@ -116,6 +165,7 @@ namespace gargantuan {
 		RequestedVisible = Visible;
 		MenuDirty = true;
 		MenuOwnerGeneration = GetCurrentScriptSecurityContext().ExecutionGeneration;
+		MenuOwner = GetCurrentScriptSecurityContext().IssuingScript;
 		return true;
 	}
 
@@ -124,7 +174,7 @@ namespace gargantuan {
 		const auto Menu = Selection.lock();
 		MenuDirty = false;
 		Selection.reset();
-		if (!EntryScript->IsCurrentExecution(MenuOwnerGeneration) || !EntryScript->IsDescendantOf(VM->DataModel)) return;
+		if (!IsOwnerCurrent(MenuOwner, MenuOwnerGeneration)) return;
 		const auto Visible = RequestedVisible;
 		if (Gui.SetApplicationMenu(Menu, Visible)) CommittedVisible = Visible;
 		else
@@ -132,12 +182,21 @@ namespace gargantuan {
 	}
 
 	void ApplicationPresentation::Step(float DeltaTime) {
+		ReconcileOwners();
 		VM->Step();
 		VM->StepTweens(DeltaTime);
 		Run->PreRender->Fire(DeltaTime);
 		if (Audio) Audio->Step(CFrame{});
 		Input->EndFrame();
 		FlushPresentation();
+	}
+
+	void ApplicationPresentation::ReturnToMenu() {
+		MenuDirty = false;
+		InputHolds.clear();
+		GameplayInputEnabled = true;
+		if (const auto Menu = Gui.GetApplicationMenu())
+			CommittedVisible = Gui.SetApplicationMenu(Menu, true);
 	}
 
 	void ApplicationPresentation::FlushPresentation() {

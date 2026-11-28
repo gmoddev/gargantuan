@@ -72,9 +72,11 @@ namespace {
 		const std::filesystem::path &Runtime, const std::filesystem::path &Destination) {
 		auto FolderValue = std::make_shared<Folder>();
 		FolderValue->SetName("Title");
+		FolderValue->SetArchivable(true);
 		FolderValue->SetParent(World);
 		auto Entry = std::make_shared<Script>();
 		Entry->SetParent(FolderValue);
+		Entry->SetArchivable(true);
 		Entry->SetRunContext(Enums::RunContext::Client);
 		Entry->SetSource("local Menu = Instance.new('ScreenGui'); Menu.Parent = script.Parent; assert(game:SetMainMenu(Menu).Ok)");
 		World->SetApplicationEntry(Entry->GetSourceId());
@@ -85,6 +87,7 @@ namespace {
 		};
 		auto Private = std::make_shared<FileLink>();
 		Private->SetParent(FolderValue);
+		Private->SetArchivable(true);
 		bool Rejected = false;
 		try { (void)Capture(); } catch (const std::exception &) { Rejected = true; }
 		Require(Rejected, "application capture accepted FileLink");

@@ -29,5 +29,11 @@ namespace gargantuan {
 		[[nodiscard]] virtual AudioBackendMetrics GetMetrics() const = 0;
 	};
 
+	class IAudioOutput {
+	  public:
+		virtual ~IAudioOutput() = default;
+		[[nodiscard]] virtual std::unique_ptr<IAudioBackend> OpenStream() = 0;
+	};
+	[[nodiscard]] std::shared_ptr<IAudioOutput> CreateSdlAudioOutput();
 	[[nodiscard]] std::unique_ptr<IAudioBackend> CreateSdlAudioBackend();
 }

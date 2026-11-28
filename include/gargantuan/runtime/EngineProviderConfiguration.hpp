@@ -9,6 +9,7 @@
 namespace gargantuan {
 	class IEntitlementProvider;
 	class IPersistenceProvider;
+	class IAudioOutput;
 
 	// Trusted host composition only. Provider objects and their deployment
 	// configuration never enter the DataModel or project serialization.
@@ -27,5 +28,7 @@ namespace gargantuan {
 		// Native qualification hosts can select the renderer-only terrain detail trial.
 		bool ExperimentalTerrainVisualDensity = false;
 		bool AdmitSpatialContent = false;
+		std::shared_ptr<IAudioOutput> AudioOutput;
+		bool DeferStartup = false;
 	};
 }
