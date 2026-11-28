@@ -51,6 +51,8 @@ namespace gargantuan {
 		// Called at application host safe points. A receipt identifies the
 		// displayed frame, including after session or renderer replacement.
 		[[nodiscard]] bool SetApplicationMenu(const std::shared_ptr<ScreenGui> &Menu, bool Visible);
+		[[nodiscard]] bool CanSelectApplicationMenu(const std::shared_ptr<ScreenGui> &Menu) const;
+		[[nodiscard]] std::shared_ptr<ScreenGui> GetApplicationMenu() const;
 		[[nodiscard]] GuiApplicationFrame GetApplicationFrame() const;
 		[[nodiscard]] bool AcknowledgeApplicationFrame(GuiApplicationFrame Frame);
 		void InvalidateApplicationSurface();

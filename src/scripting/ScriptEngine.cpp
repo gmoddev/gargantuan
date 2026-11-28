@@ -91,8 +91,6 @@ namespace gargantuan {
 		{"Task", OpenLibTask},
 	};
 
-	static thread_local lua_State *CurrentState = nullptr;
-
 	ScriptEngine::ScriptEngine(
 		std::shared_ptr<gargantuan::DataModel> game,
 		std::function<void(std::string, std::string)> RuntimeDiagnosticValue,
@@ -104,14 +102,14 @@ namespace gargantuan {
 			throw std::runtime_error("Failed to instantiate Luau VM");
 		}
 
-		CurrentState = L;
-		Luau::assertHandler() = [](const char *expression, const char *file, int line, const char *function) -> int {
+		static const auto InstallAssertionHandler = Luau::assertHandler() = [](const char *expression, const char *file, int line, const char *function) -> int {
 			LOG_CRITICAL(Lua, "Internal assertion failed: %s", expression);
 			LOG_CRITICAL(Lua, "In: %s:%d in %s", file, line, function);
-			if (CurrentState) ScriptEngine::DumpStack(CurrentState);
+			if (auto *Active = GetActiveGameplayState()) ScriptEngine::DumpStack(Active);
 			assert(false);
 			return 1;
 		};
+		(void)InstallAssertionHandler;
 
 		lua_pushstring(L, "gargantuan::ScriptEngine");
 		lua_pushlightuserdata(L, this);
@@ -189,7 +187,6 @@ namespace gargantuan {
 			ShutdownRuntime();
 			lua_close(L);
 			L = nullptr;
-			CurrentState = nullptr;
 		}
 	}
 

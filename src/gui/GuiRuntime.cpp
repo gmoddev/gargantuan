@@ -2534,9 +2534,18 @@ namespace gargantuan {
 			State->Captured.erase(Existing);
 	}
 
+	std::shared_ptr<ScreenGui> GuiRuntime::GetApplicationMenu() const {
+		auto Menu = State->ApplicationMenu.lock();
+		return Menu && State->EligibleApplicationMenu(Menu) ? Menu : nullptr;
+	}
+
+	bool GuiRuntime::CanSelectApplicationMenu(const std::shared_ptr<ScreenGui> &Menu) const {
+		return State->Mode == GuiRuntimeMode::Application &&
+			(!Menu || (State->EligibleApplicationMenu(Menu) && State->HasBoundedMenuTree(Menu)));
+	}
+
 	bool GuiRuntime::SetApplicationMenu(const std::shared_ptr<ScreenGui> &Menu, bool Visible) {
-		if (State->Mode != GuiRuntimeMode::Application ||
-			(Menu && (!State->EligibleApplicationMenu(Menu) || !State->HasBoundedMenuTree(Menu)))) return false;
+		if (!CanSelectApplicationMenu(Menu)) return false;
 		Visible = Menu && Visible;
 		if (Menu == State->ApplicationMenu.lock() && State->ApplicationMenuVisible == Visible) return true;
 		State->ApplicationMenu = Menu;

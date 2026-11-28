@@ -7,6 +7,13 @@
 
 namespace gargantuan {
 	namespace {
+		thread_local lua_State *ActiveGameplayState = nullptr;
+
+		struct ActiveGameplayScope {
+			lua_State *Previous;
+			explicit ActiveGameplayScope(lua_State *State) : Previous(ActiveGameplayState) { ActiveGameplayState = State; }
+			~ActiveGameplayScope() { ActiveGameplayState = Previous; }
+		};
 		using Clock = std::chrono::steady_clock;
 		constexpr unsigned SafepointsPerClockCheck = 512;
 		struct BudgetScope {
@@ -47,6 +54,7 @@ namespace gargantuan {
 
 		template <typename Function>
 		int RunGameplay(lua_State *State, Function Call, GameplayResumeBudget *Retained = nullptr) {
+			const ActiveGameplayScope Active(State);
 			if (lua_callbacks(State)->interrupt == BudgetScope::Interrupt) return Call();
 			auto *Engine = ScriptEngine::Get(State);
 			const auto Configured = std::min(Engine->GameplayExecutionBudget, std::chrono::milliseconds(86'400'000));
@@ -67,6 +75,8 @@ namespace gargantuan {
 			return Status;
 		}
 	}
+
+	lua_State *GetActiveGameplayState() noexcept { return ActiveGameplayState; }
 
 	int ResumeGameplay(lua_State *Thread, lua_State *From, int ArgumentCount, GameplayResumeBudget *Retained) {
 		return RunGameplay(Thread, [&] { return lua_resume(Thread, From, ArgumentCount); }, Retained);

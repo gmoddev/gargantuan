@@ -2,6 +2,8 @@
 // This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
 
 #include "gargantuan/Engine.hpp"
+#include "gargantuan/runtime/ApplicationPresentation.hpp"
+#include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/GuiRuntimeConfig.hpp"
 #include "gargantuan/assets/GasDependencies.hpp"
 #include "gargantuan/assets/GasInstanceSerialization.hpp"
@@ -183,6 +185,46 @@ namespace {
 		Second.Root->Destroy();
 		(void)Runtime.Reconcile();
 		Check(Runtime.GetCommittedLayout()->Nodes.empty(), "destroying selection does not select a fallback root");
+	}
+
+	void TestApplicationBindings() {
+		using namespace gargantuan;
+		auto Graph = std::make_shared<DataModel>();
+		auto FolderValue = std::make_shared<Folder>();
+		FolderValue->SetParent(Graph);
+		auto Entry = std::make_shared<Script>();
+		Entry->SetParent(FolderValue);
+		Entry->SetRunContext(Enums::RunContext::Client);
+		Entry->SetSource(R"(
+			local Menu = Instance.new("ScreenGui")
+			Menu.Parent = script.Parent
+			assert(game:SetMainMenu(Menu).Ok and game:IsMainMenuVisible())
+			assert(game:SetMainMenu(script).Code == "InvalidMenu")
+			local Frame = 0
+			game:GetService("RunService").PreRender:Connect(function()
+				Frame += 1
+				if Frame == 1 then
+					assert(game:SetMainMenuVisible(false).Ok)
+				elseif Frame == 2 then
+					assert(game:SetMainMenuVisible(true).Ok)
+				end
+			end)
+		)");
+		ApplicationPresentation App(Graph, Entry, std::filesystem::path(DefaultGuiFontPath));
+		Check(App.IsMainMenuVisible(), "registered title is visible on successful entry");
+		App.Step(0.016f);
+		Check(!App.IsMainMenuVisible(), "managed presentation callback hides the menu");
+		App.Step(0.016f);
+		Check(App.IsMainMenuVisible(), "application callbacks advance before there is a gameplay session");
+		Check(!Graph->FindFirstChildWhichIsA("Player", true), "application VM does not allocate a Player");
+		auto Foreign = std::make_shared<DataModel>();
+		auto VM = std::make_shared<ScriptEngine>(Foreign);
+		auto Ordinary = std::make_shared<Script>();
+		Ordinary->SetParent(Foreign);
+		Ordinary->SetRunContext(Enums::RunContext::Client);
+		Ordinary->SetSource("assert(game:SetMainMenu(nil).Code == 'NotAuthorized')");
+		VM->RunBootstrapScript(Ordinary);
+		Check(Ordinary->Status == ScriptStatus::Finished, "ordinary client cannot register an application menu");
 	}
 
 	void TestLayoutTextPresentationAndResources() {
@@ -1630,6 +1672,7 @@ int main() {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		RunTest("LayoutTextPresentationAndResources", TestLayoutTextPresentationAndResources);
 		RunTest("ApplicationMenuProjection", TestApplicationMenuProjection);
+		RunTest("ApplicationBindings", TestApplicationBindings);
 		RunTest("AutomaticSizeListAndClipping", TestAutomaticSizeListAndClipping);
 		RunTest("AutomaticSizePolicyTransition", TestAutomaticSizePolicyTransition);
 		RunTest("RotationOrderingAndAlpha", TestRotationOrderingAndAlpha);

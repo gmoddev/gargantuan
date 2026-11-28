@@ -29,6 +29,7 @@ namespace gargantuan {
 	class RemoteFunction;
 	class SignalConnection;
 	class TweenRuntime;
+	class ApplicationPresentation;
 
 	int OpenLibBase(lua_State *L);
 	int OpenLibRequire(lua_State *L);
@@ -82,6 +83,7 @@ namespace gargantuan {
 		std::unique_ptr<blockgrid::binding::HandleSet> BlockGridHandles;
 		RuntimeMode Mode = RuntimeMode::Offline;
 		[[nodiscard]] bool IsStopping() const { return Stopping; }
+		[[nodiscard]] ApplicationPresentation *GetApplicationPresentation() const { return Application; }
 		std::shared_ptr<Instance> FindRequiredInstanceByPath(const char *path);
 		void EmitRuntimeDiagnostic(std::string Severity, std::string Message) const noexcept;
 		void SetScriptFailureObserver(std::function<void(const Script &, int, std::string)> Observer);
@@ -109,6 +111,8 @@ namespace gargantuan {
 		static void DumpStack(lua_State *L);
 
 	  private:
+		friend class ApplicationPresentation;
+		ApplicationPresentation *Application = nullptr;
 		using ManagedScriptIterator = decltype(ManagedScripts)::iterator;
 		std::unordered_map<ObjectId, ManagedScriptIterator> ManagedScriptIds;
 		std::map<std::weak_ptr<Script>, ManagedScriptIterator, std::owner_less<std::weak_ptr<Script>>>

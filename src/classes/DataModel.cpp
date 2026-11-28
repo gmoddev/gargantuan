@@ -9,6 +9,9 @@
 
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
+#include "gargantuan/runtime/ApplicationPresentation.hpp"
+#include "gargantuan/classes/ScreenGui.hpp"
+#include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
 #include "gargantuan/services/ActionMap.hpp"
@@ -34,6 +37,57 @@ namespace gargantuan {
 	namespace {
 		thread_local DataModel *DeferredRevisionWorld = nullptr;
 		thread_local bool *DeferredRevisionChanged = nullptr;
+
+		ApplicationPresentation *CurrentApplication(lua_State *L, Instance *Receiver) {
+			auto *Application = ScriptEngine::Get(L)->GetApplicationPresentation();
+			return Application && Application->IsCallerCurrent(*static_cast<DataModel *>(Receiver)) ? Application : nullptr;
+		}
+
+		int MenuResult(lua_State *L, bool Value, const char *Code = nullptr, const char *Message = nullptr) {
+			lua_createtable(L, 0, Code ? 3 : 2);
+			lua_pushboolean(L, !Code);
+			lua_setfield(L, -2, "Ok");
+			if (Code) {
+				lua_pushstring(L, Code);
+				lua_setfield(L, -2, "Code");
+				lua_pushstring(L, Message);
+				lua_setfield(L, -2, "Message");
+			} else {
+				lua_pushboolean(L, Value);
+				lua_setfield(L, -2, "Value");
+			}
+			lua_setreadonly(L, -1, true);
+			return 1;
+		}
+	}
+
+	int DataModel::SetMainMenu(lua_State *L, Instance *Receiver) {
+		auto *App = CurrentApplication(L, Receiver);
+		if (!App) return MenuResult(L, false, "NotAuthorized", "A live application entry owns the main menu.");
+		std::shared_ptr<ScreenGui> Menu;
+		if (!lua_isnil(L, 2)) {
+			if (!StackValue<std::shared_ptr<ScreenGui>>::Is(L, 2))
+				return MenuResult(L, false, "InvalidMenu", "Select a ScreenGui in the application.");
+			Menu = StackValue<std::shared_ptr<ScreenGui>>::From(L, 2);
+		}
+		if (!App->SetMainMenu(std::move(Menu)))
+			return MenuResult(L, false, "InvalidMenu", "The application cannot present this ScreenGui.");
+		return MenuResult(L, true);
+	}
+
+	int DataModel::SetMainMenuVisible(lua_State *L, Instance *Receiver) {
+		auto *App = CurrentApplication(L, Receiver);
+		if (!App) return MenuResult(L, false, "NotAuthorized", "A live application entry owns the main menu.");
+		if (!lua_isboolean(L, 2)) return MenuResult(L, false, "InvalidOptions", "Visibility must be a boolean.");
+		if (!App->SetMainMenuVisible(lua_toboolean(L, 2) != 0))
+			return MenuResult(L, false, "NoMenu", "Register an application menu first.");
+		return MenuResult(L, App->IsMainMenuVisible());
+	}
+
+	int DataModel::IsMainMenuVisible(lua_State *L, Instance *Receiver) {
+		const auto *App = CurrentApplication(L, Receiver);
+		lua_pushboolean(L, App && App->IsMainMenuVisible());
+		return 1;
 	}
 	std::vector<std::shared_ptr<SpatialRegion>> DataModel::GetSpatialRegions() const {
 		std::vector<std::shared_ptr<SpatialRegion>> Result;
