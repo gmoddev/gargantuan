@@ -17,6 +17,8 @@
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include "PackageSourcePaths.hpp"
+#include "../src/packaging/ApplicationTemplate.hpp"
+#include "gargantuan/runtime/ApplicationPresentation.hpp"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -64,6 +66,45 @@ namespace {
 
 	void Require(bool Condition, std::string_view Message) {
 		if (!Condition) throw std::runtime_error(std::string(Message));
+	}
+
+	void TestApplicationPackage(const Project &ProjectValue, const std::shared_ptr<DataModel> &World,
+		const std::filesystem::path &Runtime, const std::filesystem::path &Destination) {
+		auto FolderValue = std::make_shared<Folder>();
+		FolderValue->SetName("Title");
+		FolderValue->SetParent(World);
+		auto Entry = std::make_shared<Script>();
+		Entry->SetParent(FolderValue);
+		Entry->SetRunContext(Enums::RunContext::Client);
+		Entry->SetSource("local Menu = Instance.new('ScreenGui'); Menu.Parent = script.Parent; assert(game:SetMainMenu(Menu).Ok)");
+		World->SetApplicationEntry(Entry->GetSourceId());
+		FolderValue->SetName("RenamedTitle");
+		const auto Capture = [&] {
+			const auto Revision = World->GetAuthoritativeRevision();
+			return PackageBuilder::Capture(ProjectValue, World, Revision, Revision);
+		};
+		auto Private = std::make_shared<FileLink>();
+		Private->SetParent(FolderValue);
+		bool Rejected = false;
+		try { (void)Capture(); } catch (const std::exception &) { Rejected = true; }
+		Require(Rejected, "application capture accepted FileLink");
+		Private->Destroy();
+		auto Payload = Capture();
+		Require(Payload.ApplicationTemplate && Payload.ProjectJson.find(Entry->GetSourceId()) == std::string::npos,
+			"application code was not separated from the gameplay package");
+		const auto Built = PackageBuilder::Build({.Payload = std::move(Payload), .RuntimeDistributionRoot = Runtime,
+			.OutputDirectory = Destination});
+		Require(Built.Ok, "standalone package build failed");
+		std::vector<PackageDiagnostic> Diagnostics;
+		auto Loaded = PackageBuilder::Load(Destination, Diagnostics);
+		Require(Loaded && Loaded->ApplicationTemplate && Loaded->Inspection.FormatVersion == StandalonePackageFormatVersion,
+			"packaged application template did not survive admission");
+		auto Graph = application_template::Load(*Loaded->ApplicationTemplate);
+		Require(Graph.Entry->GetSourceId() == Entry->GetSourceId(), "materialized the wrong entry");
+		ApplicationPresentation App(Graph.World, Graph.Entry, Runtime / "runtime" / "GargantuanSans.ttf");
+		Require(App.IsMainMenuVisible(), "packaged entry did not register its menu");
+		World->SetApplicationEntry("");
+		FolderValue->Destroy();
 	}
 
 	std::string ReadText(const std::filesystem::path &Path) {
@@ -736,6 +777,7 @@ int main() {
 			"project identity did not remain stable across reopen"
 		);
 		TestTerrainClientBootstrap(ProjectValue, Runtime, Workspace.Root);
+		TestApplicationPackage(ProjectValue, ProjectValue.DeserializeGame(), Runtime, Workspace.Root / "Standalone");
 		auto World = ProjectValue.DeserializeGame();
 		// The sample's dynamic and skinned subtrees correctly remain bootstrap.
 		// Give this partition/determinism fixture an explicitly static unit.

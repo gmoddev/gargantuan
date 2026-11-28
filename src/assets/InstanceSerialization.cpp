@@ -352,6 +352,9 @@ namespace gargantuan::InstanceSerialization {
 			json &properties
 		) {
 			VisitSavedProperties(*definition, [&](const std::string &key, const InstanceProperty &property) {
+				if (key == "ApplicationEntry") {
+					if (const auto *World = dynamic_cast<DataModel *>(instance.get()); World && World->GetApplicationEntry().empty()) return;
+				}
 				if (property.ReadEnumValue) {
 					const auto Enum = ReadSavedEnum(*instance, property);
 					properties[key] = json::object({SerializedPair{"EnumItem", {Enum.EnumType, Enum.Item}}});
@@ -599,6 +602,9 @@ namespace gargantuan::InstanceSerialization {
 				Budget.AddValue(Entry->first, Entry->second);
 			}
 			VisitSavedProperties(*Definition, [&](const std::string &Name, const InstanceProperty &Property) {
+				if (Name == "ApplicationEntry") {
+					if (const auto *World = dynamic_cast<DataModel *>(&Object); World && World->GetApplicationEntry().empty()) return;
+				}
 				if (IsOptionalSpatialMembership(Name, Property) && !Property.ReadObjectReference(&Object)) return;
 				auto Value = CaptureGasProperty(Object, Name, Property, Ids);
 				Budget.AddValue(Name, Value);

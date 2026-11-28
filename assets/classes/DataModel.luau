@@ -6,6 +6,18 @@ return c({
 	extends = "ServiceProvider",
 	description = "Class that provides the root hierachy and services",
 	since = "0.1.0",
+	properties = {
+		ApplicationEntry = {
+			description = "Project-local durable SourceId of the standalone client entry. Empty uses direct startup.",
+			type = t.String,
+			unmodified = "std::string()",
+			serializable = true,
+			replicated = false,
+			readLevel = "Engine",
+			writeLevel = "Engine",
+			category = "Application",
+		},
+	},
 	methods = {
 		SetMainMenu = {
 			description = "Registers the application's ScreenGui. Pass nil to clear the selection.",

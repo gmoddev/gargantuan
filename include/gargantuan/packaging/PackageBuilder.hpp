@@ -31,6 +31,7 @@ namespace gargantuan {
 	inline constexpr std::uint32_t GamePackageFormatVersion = 2;
 	inline constexpr std::uint32_t DistributedPlayerPackageFormatVersion = 3;
 	inline constexpr std::uint32_t RuntimeDistributionPackageFormatVersion = 4;
+	inline constexpr std::uint32_t StandalonePackageFormatVersion = 5;
 	inline constexpr std::uint32_t RuntimeCompatibilityVersion = 1;
 
 	enum class PackageConfiguration : std::uint8_t { Development, Release };
@@ -93,6 +94,7 @@ namespace gargantuan {
 		std::uint64_t AuthoritativeRevision = 0;
 		bool UnsavedChanges = false;
 		std::string ProjectJson;
+		std::optional<std::string> ApplicationTemplate;
 		std::optional<std::string> PreRunSource;
 		AssetRuntimeSnapshot Assets;
 		// Captured on Main; keeps the frozen reflection generation alive during worker packaging.
@@ -184,6 +186,7 @@ namespace gargantuan {
 		std::string WorkspaceTerrainManifest;
 		int WorkspaceTerrainSpacingShift{};
 		std::string ProjectJson;
+		std::optional<std::string> ApplicationTemplate;
 		std::optional<std::string> PreRunSource;
 		AssetRuntimeSnapshot Assets;
 		std::optional<std::string> ContentManifestReference;

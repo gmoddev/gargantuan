@@ -22,6 +22,7 @@
 #include "assets/AssetImporter.hpp"
 #include "assets/PreparedInstanceSerialization.hpp"
 #include "serialization/JsonCodec.hpp"
+#include "ApplicationTemplate.hpp"
 #include "terrain/ScenePersistence.hpp"
 #include "terrain/TerrainProfile.hpp"
 
@@ -179,6 +180,7 @@ namespace gargantuan {
 		struct ParsedPackageManifest {
 			PackageInspection Inspection;
 			std::string ProjectPath;
+			bool HasApplication = false;
 			std::string AssetCatalogPath;
 			std::optional<std::string> PreRunPath;
 			std::optional<std::string> ContentManifestPath;
@@ -665,10 +667,11 @@ namespace gargantuan {
 					throw std::runtime_error("Package manifest shape is invalid");
 				const auto FormatVersion = (*Parsed)["PackageFormatVersion"].get<std::uint64_t>();
 				const bool Managed = FormatVersion == RuntimeDistributionPackageFormatVersion;
+				const bool Standalone = FormatVersion == StandalonePackageFormatVersion;
 				if (Managed) (void)runtime_distribution::ParseStrictJson(Raw, MaximumManifestBytes);
 				const bool Distributed = FormatVersion == DistributedPlayerPackageFormatVersion ||
 					(Managed && Parsed->contains("Audience"));
-				if (FormatVersion != 1 && FormatVersion != GamePackageFormatVersion && !Distributed && !Managed)
+				if (FormatVersion != 1 && FormatVersion != GamePackageFormatVersion && !Distributed && !Managed && !Standalone)
 					throw std::runtime_error("Package format version is unsupported");
 				if (Parsed->size() != (Distributed ? 13u : 12u) + (Managed ? 1u : 0u) ||
 					(Distributed && (!Parsed->contains("Audience") ||
@@ -697,7 +700,8 @@ namespace gargantuan {
 						Startup["ClientCode"].get_ref<const std::string &>() != client_package::CodePath ||
 						Startup["AssetCatalog"].get_ref<const std::string &>() != client_package::CatalogPath)
 						throw std::runtime_error("Distributed Player startup metadata is invalid");
-				} else if (Startup.size() != (FormatVersion == 1 ? 3 : 4) ||
+				} else if (Startup.size() != (FormatVersion == 1 ? 3 : Standalone ? 5 : 4) ||
+					(Standalone && (!Startup.contains("Application") || Startup["Application"] != application_template::Path)) ||
 					!Startup.contains("Project") || !Startup["Project"].is_string() ||
 					!Startup.contains("PreRun") || (!Startup["PreRun"].is_null() && !Startup["PreRun"].is_string()) ||
 					(FormatVersion != 1 && (!Startup.contains("ContentManifest") || !Startup["ContentManifest"].is_string()))) {
@@ -705,6 +709,7 @@ namespace gargantuan {
 				}
 
 				ParsedPackageManifest Result;
+				Result.HasApplication = Standalone;
 				Result.Inspection = {
 					.Identity = *Identity,
 					.DisplayName = DisplayName,
@@ -1679,6 +1684,9 @@ namespace gargantuan {
 			throw std::invalid_argument("Package snapshot source is invalid");
 		const bool ManagedMultiplayer = RuntimeDistribution &&
 			RuntimeDistribution->Target != RuntimeDistributionTarget::OfflinePlayer;
+		const auto ApplicationEntry = World->GetApplicationEntry();
+		if (!ApplicationEntry.empty() && (Audience != PackageAudience::Trusted || RuntimeDistribution))
+			throw RuntimeDistributionError("UnsupportedAudience", "This application template requires a trusted offline Player.");
 		bool SpatialContent = false;
 		if (ManagedMultiplayer) {
 			for (const auto &Node : World->GetDescendants())
@@ -1793,6 +1801,7 @@ namespace gargantuan {
 		auto Root = std::static_pointer_cast<Instance>(World);
 		blockgrid::SegmentCapture Grids;
 		Result.ProjectJson = InstanceSerialization::Serialize(ProjectValue.InstanceFileFormat,Root,TerrainManifest,DomainBindings,&Grids);
+		if (!ApplicationEntry.empty()) Result.ApplicationTemplate = application_template::Extract(Result.ProjectJson, ApplicationEntry);
 		Result.GridSegments=std::move(Grids.Parts);
 		if (Result.ProjectJson.size() > MaximumProjectSnapshotBytes)
 			throw std::length_error("Project snapshot exceeds the package byte limit");
@@ -1844,6 +1853,10 @@ namespace gargantuan {
 
 			RunPhase(PackagePhase::Snapshot, [&] {
 				InjectFailure(Request.FailurePoint, PackageFailurePoint::Snapshot);
+				if (Request.Payload.ApplicationTemplate) {
+					if (Distributed || Plan) throw std::invalid_argument("Application template requires a trusted offline package");
+					application_template::Validate(*Request.Payload.ApplicationTemplate);
+				}
 				if (!Request.Payload.SchemaSnapshot || !Request.Payload.Identity.IsValid() ||
 					Request.Payload.AuthoritativeRevision == 0 ||
 					Request.Payload.DisplayName.empty() ||
@@ -2051,6 +2064,8 @@ namespace gargantuan {
 					AddText("content/game.instance.json", "Project", Plan ?
 						runtime_distribution::RemoveCompiledSource(Request.Payload.ProjectJson, *Plan, false) :
 						Request.Payload.ProjectJson);
+					if (Request.Payload.ApplicationTemplate)
+						AddText(std::string(application_template::Path), "Project", *Request.Payload.ApplicationTemplate);
 					PackageContentManifest ContentManifest{
 						.Package = {Request.Payload.Identity, Request.Payload.AuthoritativeRevision},
 						.InstanceSchemaVersion = Request.Payload.ContentInstanceSchemaVersion,
@@ -2119,10 +2134,12 @@ namespace gargantuan {
 					{"AssetCatalog", "content/assets/catalog.json"},
 					{"PreRun", Request.Payload.PreRunSource ? Json("content/prerun.luau") : Json(nullptr)},
 				};
+				if (Request.Payload.ApplicationTemplate) Startup["Application"] = application_template::Path;
 				Json Manifest{
 					{"Format", PackageFormat},
 					{"PackageFormatVersion", Plan ? RuntimeDistributionPackageFormatVersion :
-						(Distributed ? DistributedPlayerPackageFormatVersion : GamePackageFormatVersion)},
+						(Distributed ? DistributedPlayerPackageFormatVersion :
+							Request.Payload.ApplicationTemplate ? StandalonePackageFormatVersion : GamePackageFormatVersion)},
 					{"RuntimeCompatibility", RuntimeCompatibilityVersion},
 					{"ProjectId", Request.Payload.Identity.ToString()},
 					{"DisplayName", Request.Payload.DisplayName},
@@ -2439,6 +2456,8 @@ namespace gargantuan {
 				client_package::ValidateCode(ReadPinnedPackageFile(
 					PackageRoot, *Manifest, Manifest->ProjectPath, client_package::MaximumCodeBytes));
 			} else {
+				if (Manifest->HasApplication)
+					application_template::Validate(ReadPinnedText(PackageRoot, *Manifest, application_template::Path, application_template::MaximumBytes));
 				const auto ProjectText = ReadPinnedText(PackageRoot, *Manifest, Manifest->ProjectPath, MaximumProjectSnapshotBytes);
 				auto ProjectJson = JsonCodec::Parse(ProjectText, MaximumProjectSnapshotBytes, "packaged project snapshot");
 				if (!ProjectJson || !ProjectJson->is_object() || !ProjectJson->contains("Version") ||
@@ -2616,6 +2635,8 @@ namespace gargantuan {
 				return ReadPinnedPackageFile(PackageRoot, *Manifest, RelativePath, MaximumBytes);
 			};
 			RuntimePackagePayload Result{.Inspection = Manifest->Inspection};
+			if (Manifest->HasApplication)
+				Result.ApplicationTemplate = ReadPinned(application_template::Path, application_template::MaximumBytes);
 			if (CanDeferTerrain(*Manifest, Mode) && !TerrainArtifacts.empty())
 				Result.LoadMode = PackageRuntimeLoadMode::LoopbackDevelopmentClient;
 			Result.TerrainArtifacts = std::move(TerrainArtifacts);
