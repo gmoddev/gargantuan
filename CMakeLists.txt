@@ -2216,6 +2216,13 @@ if(BUILD_TESTING)
 				--server-runtime $<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution
 				--project "${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame")
 			set_tests_properties(gargantuan_lifecycle_two_players PROPERTIES LABELS "lifecycle;network;packaging" TIMEOUT 100)
+			if(TARGET gargantuan_spatial_construction_integration_tests)
+				add_test(NAME gargantuan_lifecycle_spatial_session COMMAND "${GARGANTUAN_LIFECYCLE_TEST_PYTHON}" -B
+					"${CMAKE_CURRENT_SOURCE_DIR}/tests/StandaloneSpatialSession.py" --fixture $<TARGET_FILE:gargantuan_spatial_construction_integration_tests>
+					--packager $<TARGET_FILE:gargantuan_packager> --player-runtime $<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
+					--server-runtime $<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution)
+				set_tests_properties(gargantuan_lifecycle_spatial_session PROPERTIES LABELS "lifecycle;network;spatial;packaging" TIMEOUT 120)
+			endif()
 		endif()
 		if(GARGANTUAN_WITH_LOCAL_SQLITE)
 			add_test(NAME gargantuan_lifecycle_construction_yard COMMAND "${GARGANTUAN_LIFECYCLE_TEST_PYTHON}" -B
@@ -2233,6 +2240,12 @@ if(BUILD_TESTING)
 			add_test(NAME gargantuan_lifecycle_viewport_input COMMAND ${LifecycleInputTest})
 			set_tests_properties(gargantuan_lifecycle_viewport_input PROPERTIES LABELS "lifecycle;graphics;editor" TIMEOUT 90)
 			if(WIN32)
+				if(GARGANTUAN_WITH_LOCAL_SQLITE)
+					add_test(NAME gargantuan_lifecycle_yard_menu COMMAND "${GARGANTUAN_LIFECYCLE_TEST_PYTHON}" -B
+						"${CMAKE_CURRENT_SOURCE_DIR}/tests/StandaloneConstructionYard.py" --authored-menu --packager $<TARGET_FILE:gargantuan_packager>
+						--runtime $<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution --engine $<TARGET_FILE:gargantuan>)
+					set_tests_properties(gargantuan_lifecycle_yard_menu PROPERTIES LABELS "lifecycle;graphics;spatial;persistence;packaging" TIMEOUT 150)
+				endif()
 				add_test(NAME gargantuan_lifecycle_window_input COMMAND ${LifecycleInputTest} --installed)
 				set_tests_properties(gargantuan_lifecycle_window_input PROPERTIES LABELS "lifecycle;graphics;packaging" TIMEOUT 90)
 			endif()

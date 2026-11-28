@@ -1007,6 +1007,12 @@ namespace gargantuan::host {
 						break;
 					}
 					auto Request = PrivateControl ? PrivateControl->GetHoldRequest() : 0;
+					if (PrivateControl) PrivateControl->ServiceGuestInvitations();
+					if (PrivateControl && PrivateControl->AwaitingOwnerReady() && Session) {
+						const auto Peers = Session->GetPeerIdentities();
+						if (std::ranges::any_of(Peers, &network::GameSessionPeerIdentity::Ready))
+							PrivateControl->ConfirmOwnerReady();
+					}
 					if (Request != LastRequest && (Request & 1) && Session) {
 						// The client queues READY during runtime attachment. Keep servicing its
 						// authenticated handshake before acknowledging the first simulation hold.
@@ -1538,7 +1544,7 @@ namespace gargantuan::host {
 					}
 					if (Status != PersistenceStatus::Ok) {
 						std::cerr << "[Lifecycle:Storage] Private server drain " << GetPersistenceStatusName(Status) << '\n';
-						ExitCode = 8;
+						ExitCode = Status == PersistenceStatus::Pending || Status == PersistenceStatus::UnknownOutcome ? 30 : 29;
 					}
 				}
 			}

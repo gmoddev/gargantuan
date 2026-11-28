@@ -322,6 +322,7 @@ namespace gargantuan::network {
 		[[nodiscard]] GameSessionRole GetRole() const;
 		[[nodiscard]] GameSessionStatus GetStatus() const;
 		[[nodiscard]] const std::string &GetFailure() const;
+		[[nodiscard]] std::optional<DisconnectReason> GetFailureReason() const;
 		[[nodiscard]] GameSessionMetrics GetMetrics() const;
 		// Stored counters only: safe to sample after Stop during host cleanup.
 		[[nodiscard]] GameSessionLifecycleCounts GetLifecycleCounts() const noexcept;

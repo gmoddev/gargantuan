@@ -14,7 +14,7 @@ namespace gargantuan {
 	enum class PersistenceOperation { Get, Put, Delete, Query };
 	enum class PersistenceStatus {
 		Pending, Ok, Missing, Conflict, Invalid, Denied, Unavailable,
-		Unsupported, Deadline, Cancelled, UnknownOutcome, Busy, StaleCursor, Consumed,
+		Unsupported, Deadline, Cancelled, UnknownOutcome, Busy, StaleCursor, Consumed, StorageFull,
 	};
 
 	struct PersistenceCapabilities final {

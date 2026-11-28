@@ -37,10 +37,11 @@ namespace gargantuan::client_package {
 				Shared = Shared || Definition->ServicePolicy == SchemaServicePolicy::Replicated;
 				const auto ScriptValue = std::dynamic_pointer_cast<Script>(Object);
 				const auto Module = std::dynamic_pointer_cast<ModuleScript>(Object);
-				if (ScriptValue && ScriptValue->GetRunContext() != Enums::RunContext::Client) return;
+				const bool ClientScript = ScriptValue && ScriptValue->GetRunContext() == Enums::RunContext::Client;
+				if (ScriptValue && !ClientScript && !Template) return;
 				if (Module && !Shared && !Template) return;
 				Path.push_back(Object->GetName());
-				if (ScriptValue && (!Shared || Template)) Read(Path, "Script", ScriptValue);
+				if (ClientScript && (!Shared || Template)) Read(Path, "Script", ScriptValue);
 				if (Module) Read(Path, "ModuleScript", Module);
 				for (const auto &Child : Object->Children) Self(Self, Child, Shared, Template);
 				Path.pop_back();
@@ -51,7 +52,8 @@ namespace gargantuan::client_package {
 				if (Authored && IncludeTemplates && dynamic_cast<StarterGui *>(Child.get())) {
 					// Only code belonging to provisioned ScreenGui clones is public.
 					// Other children of this server-only service never enter the catalog.
-					Path.push_back(Child->GetName());
+					if (!Child->GetArchivable()) continue;
+					Path.emplace_back("StarterGui");
 					for (const auto &Gui : GetStarterGuiTemplates(Child, false))
 						Walk(Walk, Gui.Root, false, true);
 					Path.pop_back();

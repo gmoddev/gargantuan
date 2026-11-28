@@ -435,8 +435,8 @@ namespace gargantuan {
 			if (const auto Interrupted = Context.Interruption()) return *Interrupted;
 			switch (Code & 0xff) {
 			case SQLITE_BUSY:
-			case SQLITE_LOCKED:
-			case SQLITE_FULL: return PersistenceStatus::Busy;
+			case SQLITE_LOCKED: return PersistenceStatus::Busy;
+			case SQLITE_FULL: return PersistenceStatus::StorageFull;
 			default: return PersistenceStatus::Unavailable;
 			}
 		}
@@ -730,7 +730,8 @@ namespace gargantuan {
 			}
 			const int Committed = Transaction.Commit();
 			if (Committed == SQLITE_OK) return MutationResult(Usage->Revision);
-			if (((Committed & 0xff) == SQLITE_BUSY || (Committed & 0xff) == SQLITE_LOCKED) && !sqlite3_get_autocommit(Database))
+			const int Primary = Committed & 0xff;
+			if ((Primary == SQLITE_BUSY || Primary == SQLITE_LOCKED || Primary == SQLITE_FULL) && !sqlite3_get_autocommit(Database))
 				return Status(SqlFailure(Committed, Context));
 			return Status(PersistenceStatus::UnknownOutcome);
 		}

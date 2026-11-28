@@ -12,6 +12,10 @@
 #endif
 
 namespace gargantuan::host {
+	void ReportPackagedRuntimeDiagnostic(std::string Code, std::string Message) {
+		if (Code != "Information") std::cerr << "[Runtime:Diagnostic] [" << Code << "] " << Message << '\n';
+	}
+
 	std::optional<network::TransportEndpoint> ParseEndpoint(std::string_view Value) {
 		if (Value.empty() || Value.size() > network::MaximumTransportEndpointBytes) return std::nullopt;
 		std::string Host;
@@ -32,6 +36,7 @@ namespace gargantuan::host {
 		for (const auto Character : PortText) {
 			if (Character < '0' || Character > '9' || Port > 6553) return std::nullopt;
 			Port = Port * 10 + static_cast<std::uint32_t>(Character - '0');
+			if (Port > 65535) return std::nullopt;
 		}
 		network::TransportEndpoint Result{std::move(Host), static_cast<std::uint16_t>(Port)};
 		return Result.IsValid() ? std::optional(std::move(Result)) : std::nullopt;

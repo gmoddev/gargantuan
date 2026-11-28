@@ -48,6 +48,7 @@ namespace gargantuan::network {
 		ConnectionId Connection;
 		ConnectionState Previous = ConnectionState::Connecting;
 		ConnectionState Current = ConnectionState::Connecting;
+		std::optional<DisconnectReason> Reason{};
 	};
 
 	struct ReceivedMessageEvent {

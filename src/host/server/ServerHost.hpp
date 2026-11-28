@@ -95,6 +95,9 @@ namespace gargantuan::host {
 		virtual void AcknowledgeHold(std::uint64_t Request) noexcept = 0;
 		[[nodiscard]] virtual const WorldSlot *GetWorldSlot() const noexcept = 0;
 		[[nodiscard]] virtual const std::filesystem::path &GetProfile() const noexcept = 0;
+		[[nodiscard]] virtual bool AwaitingOwnerReady() const noexcept { return false; }
+		virtual void ConfirmOwnerReady() noexcept {}
+		virtual void ServiceGuestInvitations() {}
 	};
 
 	struct ServerHostConfiguration final {

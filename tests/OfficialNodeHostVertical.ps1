@@ -492,11 +492,13 @@ RunService.PostSimulation:Connect(function()
 	if Step == 1 then
 		if not TimelinePublished then
 			TimelinePublished = true
-			CharacterControl:SetAttribute("OfficialHostTimeline", string.format(
+			local Timeline = string.format(
 				"[Content:OfficialHost] ClientTimeline local_player_us=%.0f character_us=%.0f movement_us=%.0f remote_function_us=%.0f first_visible_us=%.0f evicted_us=%.0f reload_visible_us=%.0f",
 				LocalPlayerReadyUs, CharacterReadyUs, MovementObservedUs, RemoteFunctionCompleteUs,
 				FirstVisibleUs, EvictedVisibleUs, ReloadVisibleUs
-			))
+			)
+			CharacterControl:SetAttribute("OfficialHostTimeline", Timeline)
+			print(Timeline)
 		end
 		CompletionTicks += 1
 		if CompletionTicks >= 20 then CharacterControl:SetAttribute("SessionSmokeComplete", true) end

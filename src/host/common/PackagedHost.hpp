@@ -9,6 +9,7 @@
 #include <string_view>
 
 namespace gargantuan::host {
+	void ReportPackagedRuntimeDiagnostic(std::string Code, std::string Message);
 	[[nodiscard]] std::optional<network::TransportEndpoint> ParseEndpoint(std::string_view Value);
 	[[nodiscard]] std::optional<RuntimePackagePayload> BootstrapPackagedRuntime(
 		const std::filesystem::path &PackageRoot,

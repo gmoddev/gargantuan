@@ -11,6 +11,7 @@ namespace gargantuan::network {
 	inline constexpr std::uint32_t NativeMaximumGnsConnections = 4096;
 	inline constexpr std::uint32_t NativeMaximumGnsPendingEvents = 1'048'576;
 	inline constexpr std::size_t NativeMaximumGnsPendingReceiveBytes = 64 * 1024 * 1024;
+	[[nodiscard]] bool IsConcreteGnsEndpoint(const TransportEndpoint &Endpoint);
 
 	struct GameNetworkingSocketsTransportConfiguration {
 		std::uint32_t MaximumConnections = 256;

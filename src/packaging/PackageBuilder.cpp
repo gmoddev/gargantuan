@@ -1636,10 +1636,10 @@ namespace gargantuan {
 		AssertAuthoritativeMutation("PackageBuilder::CaptureRuntimeDistribution");
 		if (!World) throw RuntimeDistributionError("InvalidPolicy", "Runtime distribution requires a loaded project.");
 		const bool Distributed = Request.Target == RuntimeDistributionTarget::DistributedPlayer;
-		std::set<std::string, std::less<>> Public;
+		std::map<std::string, std::vector<std::string>, std::less<>> PublicPaths;
 		if (Distributed)
-			for (const auto &Script : client_package::CaptureEligibleScripts(*World))
-				Public.insert(Script.SourceId);
+			for (auto &Script : client_package::CaptureEligibleScripts(*World))
+				PublicPaths.emplace(std::move(Script.SourceId), std::move(Script.Path));
 		RuntimeDistributionPlan Plan{.Request = Request};
 		std::vector<std::shared_ptr<LuaSourceContainer>> Objects;
 		std::vector<std::string> Path;
@@ -1655,9 +1655,10 @@ namespace gargantuan {
 				if (Plan.Scripts.size() == 4096)
 					throw RuntimeDistributionError("InvalidPolicy", "The script catalog exceeds its entry bound.");
 				auto Id = Script->GetSourceId();
+				const auto Public = PublicPaths.find(Id);
 				const bool Eligible = Authored && (InApplication ? Request.Target != RuntimeDistributionTarget::DedicatedServer :
-					!Distributed || Public.contains(Id));
-				Plan.Scripts.push_back({.SourceId = std::move(Id), .Path = Path,
+					!Distributed || Public != PublicPaths.end());
+				Plan.Scripts.push_back({.SourceId = std::move(Id), .Path = Public == PublicPaths.end() ? Path : Public->second,
 					.Class = std::string(Object->GetClassName()), .Eligible = Eligible});
 				Objects.push_back(std::move(Script));
 			}
@@ -2669,8 +2670,8 @@ namespace gargantuan {
 		std::filesystem::remove_all(Root, Error);
 	}
 
-	std::shared_ptr<PrivateServerSnapshot> PrivateServerSnapshot::Stage(const std::filesystem::path &Source,
-		const std::string &ExpectedManifest, const PackageInspection &Client, const std::filesystem::path &Profile, PackageCancellationToken Token) {
+	static ParsedPackageManifest ReadPairedManifest(const std::filesystem::path &Source, const std::string &ExpectedManifest,
+		const PackageInspection &Client) {
 		std::vector<PackageDiagnostic> Diagnostics;
 		auto Manifest = ParseManifest(Source, Diagnostics, false);
 		if (!Manifest || Manifest->Inspection.ManifestSha256 != ExpectedManifest ||
@@ -2679,6 +2680,31 @@ namespace gargantuan {
 			Manifest->Inspection.Audience != PackageAudience::Trusted ||
 			(Manifest->Inspection.Target && *Manifest->Inspection.Target != RuntimeDistributionTarget::DedicatedServer))
 			throw std::invalid_argument("Invalid paired server package");
+		return std::move(*Manifest);
+	}
+
+	std::string PrivateServerSnapshot::ReadWorldBaseline(const std::filesystem::path &Source, const std::string &ExpectedManifest,
+		const PackageInspection &Client) {
+		const auto Manifest = ReadPairedManifest(Source, ExpectedManifest, Client);
+		const auto Digest = [&](const std::string &Path) {
+			const auto *Entry = FindContentEntry(Manifest, Path);
+			if (!Entry) throw std::invalid_argument("Paired world metadata is missing");
+			return Entry->Sha256;
+		};
+		return Digest(Manifest.ProjectPath) + "/" + Digest(Manifest.AssetCatalogPath) + "/" +
+			Manifest.ContentManifestDigest.ToString() + "/" + (Manifest.PreRunPath ? Digest(*Manifest.PreRunPath) : HashText(""));
+	}
+
+	std::shared_ptr<PrivateServerSnapshot> PrivateServerSnapshot::Stage(const std::filesystem::path &Source,
+		const std::string &ExpectedManifest, const PackageInspection &Client, const std::filesystem::path &Profile,
+		PackageCancellationToken Token, const std::filesystem::path &RuntimeEnrollment) {
+		auto Manifest = ReadPairedManifest(Source, ExpectedManifest, Client);
+		RuntimeDistributionAdmission Admission{.ExpectedManifestSha256 = ExpectedManifest};
+		if (!RuntimeEnrollment.empty()) {
+			Admission.Security = LoadProvisionedRuntimePackageSecurity(RuntimeEnrollment, RuntimePackageProvisioningUse::Runtime);
+			if (Admission.Security->Status != RuntimePackageCryptoStatus::Ok)
+				throw std::invalid_argument("Paired server runtime enrollment is unavailable");
+		}
 		const auto Directory = Profile / (".server-" + ProjectId::New().ToString());
 		if (IsReparseOrLink(Profile) || !std::filesystem::create_directory(Directory))
 			throw std::runtime_error("Cannot create private paired server snapshot");
@@ -2690,14 +2716,14 @@ namespace gargantuan {
 			return CopyAndHash(*From, Directory / Relative, Relative, {}, Token);
 		};
 		if (Copy("game.package.json").Sha256 != ExpectedManifest) throw std::runtime_error("Server manifest changed");
-		if (Manifest->RuntimeDistribution && !Manifest->RuntimeDistribution->SigningKeyId.empty())
+		if (Manifest.RuntimeDistribution && !Manifest.RuntimeDistribution->SigningKeyId.empty())
 			Copy(std::string(runtime_distribution::SignaturePath));
-		for (const auto &Item : Manifest->Content) {
+		for (const auto &Item : Manifest.Content) {
 			const auto Staged = Copy(Item.Path);
 			if (Staged.Size != Item.Size || Staged.Sha256 != Item.Sha256)
 				throw std::runtime_error("Server package changed during admission");
 		}
-		if (HasErrors(PackageBuilder::Validate(Directory, PackageAudience::Trusted, {.ExpectedManifestSha256 = ExpectedManifest})))
+		if (HasErrors(PackageBuilder::Validate(Directory, PackageAudience::Trusted, Admission)))
 			throw std::runtime_error("Staged server failed admission");
 		return Snapshot;
 	}

@@ -11,8 +11,11 @@ namespace gargantuan {
 	struct PackageCancellationToken;
 	class PrivateServerSnapshot final {
 	  public:
+		[[nodiscard]] static std::string ReadWorldBaseline(const std::filesystem::path &Source,
+			const std::string &ExpectedManifest, const PackageInspection &Client);
 		[[nodiscard]] static std::shared_ptr<PrivateServerSnapshot> Stage(const std::filesystem::path &Source,
-			const std::string &ExpectedManifest, const PackageInspection &Client, const std::filesystem::path &Profile, PackageCancellationToken Token);
+			const std::string &ExpectedManifest, const PackageInspection &Client, const std::filesystem::path &Profile,
+			PackageCancellationToken Token, const std::filesystem::path &RuntimeEnrollment);
 		~PrivateServerSnapshot();
 		PrivateServerSnapshot(const PrivateServerSnapshot &) = delete;
 		PrivateServerSnapshot &operator=(const PrivateServerSnapshot &) = delete;

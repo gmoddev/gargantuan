@@ -13,6 +13,7 @@
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Script.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/InputService.hpp"
@@ -73,37 +74,10 @@ namespace gargantuan {
 		ApplicationDisplay Display;
 		std::chrono::steady_clock::time_point Last = std::chrono::steady_clock::now();
 		std::uint32_t Width, Height;
-		bool Preparing = false;
+		bool Preparing = false, GameplayResizePending = false;
 		GuiApplicationFrame Published{}, Displayed{};
 		RenderPublicationId LastPublication = InvalidRenderPublicationId;
 	};
-
-	PlaySession::PlaySession(PlaySessionId SessionId, std::uint64_t Revision, std::uint32_t Width, std::uint32_t Height,
-		std::string Template, AssetRuntimeSnapshot Assets, bool AudioEnabled, WorldFactory Open, WorldStorage Storage)
-		: Id(SessionId), State(PlaySessionState::Starting), LaunchAuthoringRevision(Revision) {
-		auto Graph = application_template::Load(Template);
-		auto Service = std::dynamic_pointer_cast<AssetService>(Graph.World->GetService("AssetService"));
-		Service->LoadRuntimeAssetSnapshot(application_template::SelectAssets(Template, Assets));
-		Application = std::make_unique<PlayApplication>();
-		auto &App = *Application;
-		App.Open = std::move(Open);
-		App.Storage = std::move(Storage);
-		App.Graph = Graph.World;
-		App.Width = Width;
-		App.Height = Height;
-		App.Presentation = std::make_unique<ApplicationPresentation>(Graph.World, Graph.Entry,
-			Paths::GetExecutableDirectory() / "runtime" / "GargantuanSans.ttf",
-			[this](std::string Level, std::string Message) { AddDiagnostic(std::move(Level), "Application", std::move(Message)); },
-			AudioEnabled, [&App, World = Graph.World](ApplicationSession &Sessions) {
-				if (App.Storage.Open) Sessions.ConfigureCatalog(App.Storage.Catalog, World, App.Storage.Baseline, App.Storage.Open);
-			});
-		if (!App.Presentation->HasMainMenu()) {
-			App.Presentation.reset();
-			App.Child = App.Open(Width, Height, {}, nullptr, {});
-		}
-		State = PlaySessionState::Running;
-		Step();
-	}
 
 	const ApplicationPresentation *PlaySession::GetApplication() const {
 		return Application ? Application->Presentation.get() : nullptr;
@@ -119,7 +93,7 @@ namespace gargantuan {
 		if (Menu) {
 			Menu->Gui.SetViewport({App.Width, App.Height, 1.0f, {}});
 			const auto Now = std::chrono::steady_clock::now();
-			Menu->Step(std::chrono::duration<float>(Now - App.Last).count());
+			if (!Menu->QuitRequested) Menu->Step(std::chrono::duration<float>(Now - App.Last).count());
 			App.Last = Now;
 			if (Menu->QuitRequested) {
 				const auto Result = PrepareStop();
@@ -133,6 +107,7 @@ namespace gargantuan {
 			Menu->Sessions.PumpCatalog(*Menu);
 			Menu->Sessions.Commit(*Menu, [&](SessionCommand Command) {
 				switch (Command) {
+				case SessionCommand::Host: throw SessionAdmissionFailure::UnsupportedTopology;
 				case SessionCommand::StartLocal: {
 					if (Menu->Sessions.StartingPrivateServer()) throw SessionAdmissionFailure::UnsupportedTopology;
 					if (!std::exchange(App.Preparing, true)) return false;
@@ -155,6 +130,7 @@ namespace gargantuan {
 						App.Opening.reset();
 					}
 					App.Child = App.Open(App.Width, App.Height, Menu->GetAudioOutput(), Slot, App.Selected);
+					App.GameplayResizePending = false;
 					App.Preparing = false;
 					break;
 				}
@@ -184,15 +160,23 @@ namespace gargantuan {
 				}
 				return true;
 			}, [&] {
+				auto Status = PersistenceStatus::Ok;
+				if (App.Child) {
+					if (const auto Storage = App.Child->RuntimeEngine->Script->GetPersistenceRuntime()) {
+						Status = Storage->PollWriteDrain(App.Selected != nullptr);
+						if (Status == PersistenceStatus::Pending) return Status;
+					}
+				}
 				App.Preparing = false;
 				App.Admission.reset();
 				App.Opening.reset();
 				App.Child.reset();
 				App.Selected.reset();
 				App.Writer.reset();
+				return Status;
 			});
 			if (Menu->GameplayInputReleasePending) {
-				if (App.Child) (void)App.Child->ProcessEvent(FocusEvent{false});
+				if (App.Child && !Menu->Sessions.IsPaused() && !Menu->Sessions.IsLeaving()) (void)App.Child->ProcessEvent(FocusEvent{false});
 				Menu->GameplayInputReleasePending = false;
 			}
 			if (Menu->QuitRequested) return;
@@ -201,7 +185,10 @@ namespace gargantuan {
 		bool PublishedGame = false;
 		if (App.Child) {
 			auto &Child = *App.Child;
-			if (!Menu || (!Menu->Sessions.IsPaused() && !Menu->Sessions.IsLeaving())) Child.Step();
+			if (!Menu || (!Menu->Sessions.IsPaused() && !Menu->Sessions.IsLeaving())) {
+				if (std::exchange(App.GameplayResizePending, false)) Child.Resize(App.Width, App.Height);
+				Child.Step();
+			}
 			else if (auto Storage = Child.RuntimeEngine->Script->GetPersistenceRuntime()) Storage->Pump();
 			for (auto &Diagnostic : Child.DrainDiagnostics())
 				AddDiagnostic(std::move(Diagnostic.Severity), std::move(Diagnostic.Category),
@@ -278,6 +265,33 @@ namespace gargantuan {
 		case PlaySessionState::Failed: return "Failed";
 		}
 		return "Failed";
+	}
+
+	PlaySession::PlaySession(PlaySessionId SessionId, std::uint64_t Revision, std::uint32_t Width, std::uint32_t Height,
+		std::string Template, AssetRuntimeSnapshot Assets, bool AudioEnabled, WorldFactory Open, WorldStorage Storage)
+		: Id(SessionId), State(PlaySessionState::Starting), LaunchAuthoringRevision(Revision) {
+		auto Graph = application_template::Load(Template);
+		auto Service = std::dynamic_pointer_cast<AssetService>(Graph.World->GetService("AssetService"));
+		Service->LoadRuntimeAssetSnapshot(application_template::SelectAssets(Template, Assets));
+		Application = std::make_unique<PlayApplication>();
+		auto &App = *Application;
+		App.Open = std::move(Open);
+		App.Storage = std::move(Storage);
+		App.Graph = Graph.World;
+		App.Width = Width;
+		App.Height = Height;
+		App.Presentation = std::make_unique<ApplicationPresentation>(Graph.World, Graph.Entry,
+			Paths::GetExecutableDirectory() / "runtime" / "GargantuanSans.ttf",
+			[this](std::string Level, std::string Message) { AddDiagnostic(std::move(Level), "Application", std::move(Message)); },
+			AudioEnabled, [&App, World = Graph.World](ApplicationSession &Sessions) {
+				if (App.Storage.Open) Sessions.ConfigureCatalog(App.Storage.Catalog, World, App.Storage.Baseline, App.Storage.Open);
+			});
+		if (!App.Presentation->HasMainMenu()) {
+			App.Presentation.reset();
+			App.Child = App.Open(Width, Height, {}, nullptr, {});
+		}
+		State = PlaySessionState::Running;
+		Step();
 	}
 
 	PlaySession::PlaySession(
@@ -424,8 +438,10 @@ namespace gargantuan {
 			auto &App = *Application;
 			if (auto *Menu = App.Presentation.get()) {
 				const bool Consumed = Menu->ProcessEvent(Event, App.Displayed);
-				if (Consumed || !Menu->GameplayInputEnabled || Menu->Sessions.IsPaused())
-					return {Consumed, Menu->Gui.SynchronizeTextInput()};
+				auto TextInput = Menu->Gui.SynchronizeTextInput();
+				if (Consumed || TextInput || !Menu->GameplayInputEnabled ||
+					Menu->Sessions.IsPaused() || Menu->Sessions.IsLeaving())
+					return {Consumed || TextInput.has_value(), std::move(TextInput)};
 			}
 			return App.Child ? App.Child->ProcessEvent(Event) : HostEventResult{};
 		}
@@ -450,6 +466,8 @@ namespace gargantuan {
 		if (Application && Application->Child) return Application->Child->ResumeRootDebug(Serial, Step);
 		const auto Pause = GetRootDebugPause();
 		if (!Pause || Pause->Serial != Serial || !Pause->CanResume || DebugPauseSerial == UINT32_MAX) return false;
+		const auto PreviousView = RuntimeEngine->Workspace->GetCurrentSpatialRegion().value_or(nullptr);
+		const auto PreviousActivation = PreviousView ? PreviousView->GetSpatialActivation() : 0;
 		try {
 			RuntimeEngine->Script->ResumeRootScriptDebug(Step);
 		} catch (...) {
@@ -457,6 +475,9 @@ namespace gargantuan {
 			throw;
 		}
 		if (RuntimeEngine->Script && RuntimeEngine->Script->GetPausedRootLine()) {
+			const auto View = RuntimeEngine->Workspace->GetCurrentSpatialRegion().value_or(nullptr);
+			if (View != PreviousView || (View && View->GetSpatialActivation() != PreviousActivation))
+				RequestRenderFullResync();
 			++DebugPauseSerial;
 			return true;
 		}
@@ -497,7 +518,14 @@ namespace gargantuan {
 		if (Application) {
 			Application->Width = Width;
 			Application->Height = Height;
-			if (Application->Child) Application->Child->Resize(Width, Height);
+			if (Application->Child) {
+				const auto &Menu = Application->Presentation;
+				if (Menu && (Menu->Sessions.IsPaused() || Menu->Sessions.IsLeaving())) {
+					Application->GameplayResizePending = true;
+					Application->Child->RuntimeRenderer->Resize(static_cast<int>(Width), static_cast<int>(Height));
+				}
+				else Application->Child->Resize(Width, Height);
+			}
 			RequestRenderFullResync();
 			return;
 		}
@@ -518,6 +546,11 @@ namespace gargantuan {
 	void PlaySession::Stop() {
 		if (State == PlaySessionState::Stopped || State == PlaySessionState::Stopping) return;
 		State = PlaySessionState::Stopping;
+		if (Application && Application->Presentation) {
+			auto &Menu = *Application->Presentation;
+			Menu.CommitClose();
+			Menu.Sessions.FinishClose(Menu, PrepareStop());
+		}
 		Application.reset();
 		DebugSource.reset();
 		DebugPendingResize.reset();
@@ -551,10 +584,13 @@ namespace gargantuan {
 			// Keep the runtime clock, scripts, and resize event parked while extracting it.
 			const auto [Width, Height] = RuntimeRenderer->GetViewportSize();
 			const auto Camera = RuntimeEngine->Workspace->GetCurrentCamera();
+			const auto Selected = RuntimeEngine->Workspace->GetCurrentSpatialRegion();
+			const std::shared_ptr<WorldRoot> View = Selected ? *Selected : RuntimeEngine->WorldRoot;
 			auto &Publisher = RuntimeEngine->RenderPublishing;
 			PublishPausedGui(*RuntimeEngine, Width, Height);
+			Publisher.SetTerrainRenderState(View->GetTerrainRenderState());
 			Publisher.RequestFullResync();
-			auto Publication = Publisher.Publish(*RuntimeEngine->WorldRoot, MakeRenderCameraInput(*Camera), Width, Height);
+			auto Publication = Publisher.Publish(*View, MakeRenderCameraInput(*Camera), Width, Height);
 			RuntimeRenderer->Draw(Publication);
 			PendingRenderPublications.push_back(RuntimeRenderer->TakeLastPublication());
 			AwaitingRenderFullResync = false;

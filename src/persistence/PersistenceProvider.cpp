@@ -98,6 +98,7 @@ namespace gargantuan {
 			case PersistenceStatus::Busy: return "Busy";
 			case PersistenceStatus::StaleCursor: return "StaleCursor";
 			case PersistenceStatus::Consumed: return "Consumed";
+			case PersistenceStatus::StorageFull: return "StorageFull";
 		}
 		return "Unavailable";
 	}

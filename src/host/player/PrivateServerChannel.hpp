@@ -24,7 +24,7 @@ namespace gargantuan::host {
 		PrivateServerChannel(const PrivateServerChannel &) = delete;
 		PrivateServerChannel &operator=(const PrivateServerChannel &) = delete;
 #if defined(_WIN32)
-		void Start(const std::filesystem::path &Executable, const std::vector<const char *> &Arguments) {
+		void Start(const std::filesystem::path &Executable, const std::vector<const char *> &Arguments, const std::filesystem::path &RuntimeEnrollment) {
 			SECURITY_ATTRIBUTES Security{sizeof(Security), nullptr, TRUE};
 			Handle Input, Output, Errors;
 			if (!CreatePipe(&Input.Value, &WritePipe.Value, &Security, 4096) ||
@@ -72,7 +72,12 @@ namespace gargantuan::host {
 				Command.append(Slashes * 2, L'\\');
 				Command += L'"';
 			}
-			for (const auto *Name : {L"LOCALAPPDATA", L"SystemRoot", L"TEMP", L"TMP", L"USERPROFILE"}) {
+			// Reopen the same provisioned runtime trust store used to verify the snapshot.
+			for (const auto *Name : {L"GARGANTUAN_RUNTIME_PACKAGE_RUNTIME_ENROLLMENT", L"LOCALAPPDATA", L"SystemRoot", L"TEMP", L"TMP", L"USERPROFILE"}) {
+				if (!RuntimeEnrollment.empty() && std::wstring_view(Name) == L"GARGANTUAN_RUNTIME_PACKAGE_RUNTIME_ENROLLMENT") {
+					Environment.append(Name).append(L"=").append(RuntimeEnrollment.native()).push_back(L'\0');
+					continue;
+				}
 				const DWORD Count = GetEnvironmentVariableW(Name, nullptr, 0);
 				if (!Count) continue;
 				std::wstring Value(Count, L'\0');
@@ -112,11 +117,15 @@ namespace gargantuan::host {
 		};
 		Handle Job, Process, ReadPipe, WritePipe;
 #else
-		void Start(const std::filesystem::path &, const std::vector<const char *> &Arguments) {
+		void Start(const std::filesystem::path &, const std::vector<const char *> &Arguments, const std::filesystem::path &RuntimeEnrollment) {
 			const auto Properties = SDL_CreateProperties();
 			const auto Env = SDL_CreateEnvironment(false);
 			bool Valid = Properties && Env;
-			for (const auto *Name : {"HOME", "LANG", "TMPDIR", "XDG_DATA_HOME"}) {
+			for (const auto *Name : {"GARGANTUAN_RUNTIME_PACKAGE_RUNTIME_ENROLLMENT", "HOME", "LANG", "TMPDIR", "XDG_DATA_HOME"}) {
+				if (!RuntimeEnrollment.empty() && std::string_view(Name) == "GARGANTUAN_RUNTIME_PACKAGE_RUNTIME_ENROLLMENT") {
+					Valid &= SDL_SetEnvironmentVariable(Env, Name, RuntimeEnrollment.c_str(), true);
+					continue;
+				}
 				if (const char *Value = SDL_getenv(Name)) Valid &= SDL_SetEnvironmentVariable(Env, Name, Value, true);
 			}
 			if (Valid && SDL_SetPointerProperty(Properties, SDL_PROP_PROCESS_CREATE_ENVIRONMENT_POINTER, Env) &&

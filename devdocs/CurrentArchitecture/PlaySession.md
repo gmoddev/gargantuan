@@ -1,7 +1,7 @@
 ---
 status: current
 owner: editor-runtime
-last_verified: 2026-08-24
+last_verified: 2026-11-28
 related_code:
   - src/editor/PlaySession.cpp
   - src/Engine.cpp
@@ -48,6 +48,16 @@ play session is retained. Stop is idempotent at the Studio service boundary and 
 at the host boundary. Natural runtime exit and step exceptions become a controlled
 `PlaySessionExited` path so Studio can perform normal cleanup.
 
+Application Play retains the same exact `PlaySessionId` and authoring snapshot
+boundary. Its application shell and menu outlive each isolated gameplay child;
+starting, pausing, leaving, or replacing a child never changes the authoritative
+authoring graph. A selected development world may write to its separate Play
+persistence profile. Stop retires the active child and returns to the authoring
+projection without saving the authored project. The shell synchronizes menu text
+input on every event and does not forward input to a child while its menu has
+consumed the event, gameplay input is disabled, gameplay is paused, or a leave is
+in progress. Studio's Stop remains a synchronous bounded teardown request.
+
 ## Viewport, input, and diagnostics
 
 The existing EditorHost viewport renderer consumes the exact immutable
@@ -91,8 +101,10 @@ shares the existing exact-session authorization and flow for streaming
 inspection.
 
 Stop destroys the exact runtime Engine/VM/graph/renderer and discards all runtime
-mutation. It never saves, changes persisted revision, advances authoritative
-revision, dirties the project, or adds Undo/Redo history.
+authoring mutation. It never saves or changes the authored project revision,
+advances its authoritative revision, dirties the project, or adds Undo/Redo
+history. Application Play may separately drain a selected world save in its
+development persistence profile before retirement.
 
 ## Local development persistence
 

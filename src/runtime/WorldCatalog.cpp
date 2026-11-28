@@ -28,14 +28,15 @@ namespace gargantuan {
 			if (!Document || Document->at("Version") != 1 || !Document->at("Slots").is_array() ||
 				Document->at("Slots").size() > MaximumSlots) throw std::invalid_argument("Unsupported catalog");
 			std::vector<WorldSlot> Slots;
-			std::unordered_set<std::string> Ids;
+			std::unordered_set<std::string> SaveIds, WorldIds;
 			for (const auto &Row : Document->at("Slots")) {
 				WorldSlot Slot{Row.at("SaveId").get<std::string>(), Row.at("WorldId").get<std::string>(),
 					Row.at("Name").get<std::string>(), Row.at("Seed").get<std::string>()};
 				Slot.Initializing = Row.value("Initializing", false);
 				Slot.Baseline = Row.value("Baseline", "");
 				Slot.Compatible = Slot.Baseline == Baseline && !Baseline.empty();
-				if (!ProjectId::Parse(Slot.SaveId) || !ProjectId::Parse(Slot.WorldId) || !Ids.insert(Slot.SaveId).second ||
+				if (!ProjectId::Parse(Slot.SaveId) || !ProjectId::Parse(Slot.WorldId) || !SaveIds.insert(Slot.SaveId).second ||
+					!WorldIds.insert(Slot.WorldId).second ||
 					!ValidName(Slot.Name) || !ValidSeed(Slot.Seed)) throw std::invalid_argument("Invalid world slot");
 				Slots.push_back(std::move(Slot));
 			}
@@ -52,6 +53,7 @@ namespace gargantuan {
 		const char *Code(PersistenceStatus Status) {
 			switch (Status) {
 			case PersistenceStatus::Cancelled: return "Cancelled";
+			case PersistenceStatus::StorageFull: return "StorageFull";
 			case PersistenceStatus::Conflict: case PersistenceStatus::Busy: return "Busy";
 			case PersistenceStatus::UnknownOutcome: return "UnknownOutcome";
 			case PersistenceStatus::Deadline: return "TimedOut";

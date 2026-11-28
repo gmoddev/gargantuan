@@ -3,6 +3,14 @@
 #include "gargantuan/scripting/ScriptEngine.hpp"
 
 namespace gargantuan {
+	int ApplicationService::GetState(lua_State *L, Instance *Receiver) {
+		auto *VM = ScriptEngine::Get(L);
+		const auto *App = VM->GetApplicationPresentation();
+		if (App && Receiver->GetDataModel() == VM->DataModel && App->IsCallerCurrent(*VM->DataModel)) lua_pushstring(L, App->GetState());
+		else lua_pushnil(L);
+		return 1;
+	}
+
 	int ApplicationService::Quit(lua_State *L, Instance *Receiver) {
 		auto *VM = ScriptEngine::Get(L);
 		auto *App = VM->GetApplicationPresentation();

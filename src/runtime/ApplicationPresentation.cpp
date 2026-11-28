@@ -1,10 +1,13 @@
 // Copyright (c) 2026 Team Fireworks
 // SPDX-License-Identifier: MPL-2.0
 #include "gargantuan/runtime/ApplicationPresentation.hpp"
+#include "gargantuan/runtime/SessionSnapshot.hpp"
 
 #include "gargantuan/classes/ScreenGui.hpp"
 #include "gargantuan/classes/Sound.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/ApplicationService.hpp"
+#include "gargantuan/services/SessionService.hpp"
 #include "gargantuan/audio/AudioRuntime.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
@@ -28,8 +31,9 @@ namespace gargantuan {
 
 	ApplicationPresentation::ApplicationPresentation(std::shared_ptr<DataModel> Graph,
 		const std::shared_ptr<Script> &Entry, std::filesystem::path Font,
-		std::function<void(std::string, std::string)> Diagnostic, bool AudioEnabled, ApplicationSession::CatalogSetup Setup, std::optional<SessionInvitation> Invitation)
-		: Sessions(std::move(Setup)), Gui(Graph, std::move(Font), GuiRuntimeMode::Application),
+		std::function<void(std::string, std::string)> Diagnostic, bool AudioEnabled, ApplicationSession::CatalogSetup Setup,
+		std::optional<SessionInvitation> Invitation, bool CanHost, std::string DirectorySource)
+		: Sessions(std::move(Setup), CanHost), Gui(Graph, std::move(Font), GuiRuntimeMode::Application),
 		  VM(std::make_shared<ScriptEngine>(Graph, std::move(Diagnostic), RuntimeMode::NetworkClient)), EntryScript(Entry) {
 		if (!Graph->ApplicationGraph)
 			throw std::invalid_argument("[Lifecycle:Application] Expected a private presentation graph");
@@ -41,6 +45,7 @@ namespace gargantuan {
 		Run = std::dynamic_pointer_cast<RunService>(Graph->GetService("RunService"));
 		Input = std::dynamic_pointer_cast<InputService>(Graph->GetService("InputService"));
 		Sessions.SetInvitation(std::move(Invitation));
+		Sessions.ConfigureDirectory(std::move(DirectorySource));
 		VM->Application = this;
 		try {
 			(void)Entry->GetObjectId();
@@ -48,6 +53,7 @@ namespace gargantuan {
 			if (Entry->Status != ScriptStatus::Finished)
 				throw std::runtime_error("[Lifecycle:Application] Entry failed to complete its startup turn");
 			CommitMenu();
+			Starting = false;
 			if (HasMainMenu()) {
 				auto Assets = std::dynamic_pointer_cast<AssetService>(Graph->GetService("AssetService"));
 				if (AudioEnabled) Output = CreateSdlAudioOutput();
@@ -96,6 +102,19 @@ namespace gargantuan {
 	}
 
 	void ApplicationPresentation::NotifyPause(bool Held) { Run->GameplayPauseChanged->Fire(Held); }
+
+	void ApplicationPresentation::NotifySession() {
+		if (auto Service = std::dynamic_pointer_cast<SessionService>(VM->DataModel->FindFirstChildOfClass("SessionService", false)))
+			Service->Changed->Fire(Sessions.GetSnapshot());
+	}
+
+	void ApplicationPresentation::CommitClose() {
+		if (Closing) return;
+		Closing = true;
+		Sessions.RetireOperations(*this);
+		if (auto Service = std::dynamic_pointer_cast<ApplicationService>(VM->DataModel->FindFirstChildOfClass("ApplicationService", false)))
+			Service->Closing->Fire(true);
+	}
 
 	void ApplicationPresentation::SetGameplayInput(bool Enabled) {
 		const auto &Caller = GetCurrentScriptSecurityContext();

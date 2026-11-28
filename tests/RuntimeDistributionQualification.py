@@ -357,6 +357,42 @@ def Loopback(Server, Player, Reports, HostEnv, PlayerEnv):
     return {"PlayerRuns": ClientRuns, "RolePairWallMs": round((time.perf_counter_ns() - Started) / 1e6, 3)}
 
 
+def ProtectedHost(Client, Server, Pin, Profile, Reports, LocalEnv, HostRuntime, WorldId):
+    from StandaloneHostInvitations import InvitationChannel
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as Socket:
+        Socket.bind(("127.0.0.1", 0))
+        Address = f"127.0.0.1:{Socket.getsockname()[1]}"
+    Args = [PackageExecutable(Client), "--headless", "--require-package-publisher", "--max-frames", "1800",
+            "--profile-root", Profile, "--local-server-root", Server, "--local-server-manifest-sha256", Pin,
+            "--local-server-runtime-enrollment", HostRuntime]
+    Log = Reports / "protected-shared-owner.log"
+    with InvitationChannel() as (Handle, Capture, Receive, _), Log.open("xb") as Output:
+        Owner = subprocess.Popen([*Args, "--local-host-bind", Address, "--local-host-invitations", str(Handle)],
+                                 cwd=Client, env=LocalEnv, stdout=Output, stderr=subprocess.STDOUT, **Capture)
+        try:
+            Ticket = Receive()
+            Require(Ticket["Action"] == "Publish" and Ticket["PackageSHA256"] == Pin and Ticket["Endpoint"] == Address,
+                    "Protected host issued an unexpected listing")
+            GuestTime, Guest = Run([*Args, "--connect", Address, "--join-proof-env", "LIFECYCLE_PROOF",
+                "--server-key-env", "LIFECYCLE_KEY", "--join-listing-source", "LAN", "--join-listing-id", Ticket["SessionID"],
+                "--join-expires-ms", Ticket["ExpiresUnixMillis"]], "protected-shared-guest", Client, Reports,
+                LocalEnv | {"LIFECYCLE_PROOF": Ticket["GuestProofs"][0], "LIFECYCLE_KEY": Ticket["ServerPublicKeyHex"]})
+            Require(b"[Lifecycle:SignedPackage] Protected guest retired" in Guest and GuiProof.encode() in Guest,
+                    "Protected guest did not confirm its shared session and GUI")
+            Require(Owner.wait(timeout=15) == 0 and b"Protected host retired " + WorldId in Log.read_bytes(),
+                    "Protected host failed to retire its selected world")
+            End = Receive()
+            if End["Action"] == "Refresh":
+                End = Receive()
+            Require(End == {"Version": 1, "Action": "Withdraw", "Source": "LAN", "SessionID": Ticket["SessionID"]},
+                    "Protected host did not withdraw its own listing")
+        finally:
+            if Owner.poll() is None:
+                Owner.kill()
+                Owner.wait(timeout=6)
+    return {"Guest": GuestTime, "WorldId": WorldId.decode("ascii"), "Withdrawal": True, "CompiledGui": True}
+
+
 def Main():
     Parser = argparse.ArgumentParser(description=__doc__)
     Parser.add_argument("--packager", type=Path, required=True, dest="Packager")
@@ -485,6 +521,110 @@ end)
                          Label + "-startup", Output, Reports, Env)
             Require(b"[Lifecycle:SignedPackage] Title ready" in Log, "Compiled menu or sibling module failed to run")
         Evidence["Application"][Role] = Receipt
+    if Options.Loopback:
+        Entry["Properties"]["Source"]["String"] = """
+local Menu = Instance.new("ScreenGui")
+Menu.Parent = script.Parent
+assert(require('./TitleText') == "Ready" and game:SetMainMenu(Menu).Ok)
+task.defer(function()
+    local Saves = game:GetService("WorldSaveService")
+    local Sessions = game:GetService("SessionService")
+    local Listed = Saves:List():Await()
+    if not Listed.Ok and Listed.Code == "Unavailable" then
+        local Missing = Saves:Create({Name = "No installed Server"}):Await()
+        assert(not Missing.Ok and Missing.Code == "Unavailable")
+        print("[Lifecycle:SignedPackage] Unpaired world creation declined")
+        assert(game:GetService("ApplicationService"):Quit().Ok)
+        return
+    end
+    assert(Listed.Ok, Listed.Code)
+    local Lan = Sessions:FindServers("LAN"):Await()
+    if Lan.Ok and #Lan.Value.Items == 1 then
+        local Joined = Sessions:Join({Kind = "Listing", Id = Lan.Value.Items[1].Id}):Await()
+        assert(Joined.Ok and Joined.Value.Mode == "Remote", Joined.Code)
+        assert(game:GetService("RunService"):PauseGameplay():Await().Code == "NotAuthorized")
+        task.wait(0.35)
+        assert(Sessions:Leave():Await().Ok)
+        assert(Saves:Create({Name = "Protected guest finished"}):Await().Ok)
+        print("[Lifecycle:SignedPackage] Protected guest retired")
+        assert(game:GetService("ApplicationService"):Quit().Ok)
+        return
+    end
+    local Saved = Listed.Value.Items[1]
+    if not Saved then
+        local Created = Saves:Create({Name = "Protected Yard", Seed = "protected"}):Await()
+        assert(Created.Ok, Created.Code)
+        Saved = Created.Value
+    end
+    local Hosting = Sessions:Host({SaveId = Saved.SaveId, Discovery = "LAN", MaxPlayers = 2}):Await()
+    if Hosting.Ok then
+        assert(Hosting.Value.Mode == "MultiplayerHost" and Hosting.Value.WorldId == Saved.WorldId)
+        assert(game:GetService("RunService"):PauseGameplay():Await().Code == "NotAuthorized")
+        local Finished = false
+        while not Finished do
+            local Page = Saves:List():Await()
+            assert(Page.Ok)
+            for _, Item in Page.Value.Items do if Item.Name == "Protected guest finished" then Finished = true end end
+            task.wait(0.05)
+        end
+        assert(Sessions:Leave():Await().Ok)
+        print("[Lifecycle:SignedPackage] Protected host retired " .. Saved.WorldId)
+        assert(game:GetService("ApplicationService"):Quit().Ok)
+        return
+    end
+    assert(Hosting.Code == "UnsupportedTopology", Hosting.Code)
+    for _ = 1, 2 do
+        local Started = Sessions:StartLocal({SaveId = Saved.SaveId, PrivateServer = true}):Await()
+        assert(Started.Ok and Started.Value.WorldId == Saved.WorldId, Started.Code)
+        assert(game:GetService("RunService"):PauseGameplay():Await().Ok)
+        assert(Sessions:Leave():Await().Ok)
+    end
+    print("[Lifecycle:SignedPackage] Reopened protected private world " .. Saved.WorldId)
+    assert(game:GetService("ApplicationService"):Quit().Ok)
+end)
+"""
+        Paired = {}
+        GuiNodes = {Item["Name"]: Item for Item, _ in WalkNodes(World)}
+        GuiNodes["StarterGui"]["Name"] = "AuthoredHudTemplates"
+        Container = CodeNode("GuiServerContainer", "Script", "-- private-container-marker", "Server")
+        Container["Properties"]["RunContext"] = GuiNodes["RD1AuthoritativeInventory"]["Properties"]["RunContext"]
+        Container["Children"] = GuiNodes["RD1Gui"]["Children"]
+        GuiNodes["RD1Gui"]["Children"] = [Container]
+        WriteJson(Document, World)
+        for Role, Enrollment in (("DedicatedServer", HostBuild), ("DistributedPlayer", LocalBuild)):
+            Label = "Private-" + Role
+            Receipt, _ = Build(Options, Label, Role, "Protected", Project, Reports / Label,
+                               Policy, Reports, Enrollment, Signed=True, Protected=True)
+            Paired[Role] = Receipt
+        Server = Reports / "Private-DedicatedServer"
+        Client = Reports / "Private-DistributedPlayer"
+        Public = {Item["Id"]: Item for Item in ReadJson(Client / "content/runtime-scripts.json")["Scripts"]}
+        Require(ResourceId("GuiServerContainer") not in Public and
+                Public[ResourceId("RD1GuiScript")]["Path"] == ["StarterGui", "RD1Gui", "GuiServerContainer", "RD1GuiScript"],
+                "Protected shared GUI lost its canonical provisioned path")
+        Profile = Reports / "Private-Profile"
+        Profile.mkdir()
+        _, Missing = Run([PackageExecutable(Client), "--headless", "--max-frames", "100", "--require-package-publisher",
+                          "--profile-root", Profile], "protected-private-unpaired", Client, Reports, LocalEnv)
+        Require(b"[Lifecycle:SignedPackage] Unpaired world creation declined" in Missing and not list(Profile.iterdir()),
+                "Unpaired distributed Player created private world data")
+        def Reopen(Package, Pin, Label):
+            Timing, Log = Run([PackageExecutable(Client), "--headless", "--max-frames", "1200", "--require-package-publisher",
+                               "--profile-root", Profile, "--local-server-root", Package, "--local-server-manifest-sha256", Pin,
+                               "--local-server-runtime-enrollment", HostRuntime], Label, Client, Reports, LocalEnv)
+            Prefix = b"[Lifecycle:SignedPackage] Reopened protected private world "
+            Require(Prefix in Log, "Protected private world failed to reopen")
+            return Timing, Log.split(Prefix, 1)[1][:32]
+        Pin = Paired["DedicatedServer"]["ManifestSha256"]
+        Paired["Reopen"], WorldId = Reopen(Server, Pin, "protected-private-reopen")
+        Rebuilt = Reports / "Private-ReprotectedServer"
+        Receipt, _ = Build(Options, "Private-ReprotectedServer", "DedicatedServer", "Protected", Project,
+                           Rebuilt, Policy, Reports, HostBuild, Signed=True, Protected=True)
+        Require(Receipt["ManifestSha256"] != Pin, "Independent protected Server reused the original envelope")
+        Paired["Reinstall"], ReopenedId = Reopen(Rebuilt, Receipt["ManifestSha256"], "protected-private-reinstall")
+        Require(ReopenedId == WorldId, "Reinstall selected a different world")
+        Paired["SharedHost"] = ProtectedHost(Client, Rebuilt, Receipt["ManifestSha256"], Profile, Reports, LocalEnv, HostRuntime, WorldId)
+        Evidence["PrivateServer"] = Paired
     Document.write_bytes(DirectDocument)
     WriteJson(Reports / "Qualification.json", Evidence)
 

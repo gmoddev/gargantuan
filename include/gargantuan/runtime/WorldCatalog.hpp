@@ -28,6 +28,7 @@ namespace gargantuan {
 			std::string Baseline, SlotProvider Open);
 		[[nodiscard]] bool CanCancel() const { return !Writing; }
 		void Begin(WorldCatalogAction Action, std::string Argument, std::string Seed = {});
+		[[nodiscard]] std::string GetRecoveryId() const { return Writing ? NewSlot.SaveId : std::string{}; }
 		void Cancel();
 		std::optional<WorldCatalogResult> Poll();
 	  private:

@@ -303,7 +303,7 @@ namespace gargantuan::network {
 			Transport->Connections.erase(Iterator);
 			ReleaseConnection(*Transport, Connection);
 			assert(HasEventCapacityWithReservations(Network, *Transport, 2));
-			Transport->Events.push_back(ConnectionStateEvent{Connection, Previous, ConnectionState::Closed});
+			Transport->Events.push_back(ConnectionStateEvent{Connection, Previous, ConnectionState::Closed, Information.Reason});
 			Transport->Events.push_back(DisconnectedEvent{Connection, Information});
 		}
 

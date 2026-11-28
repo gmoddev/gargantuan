@@ -27,7 +27,7 @@ namespace gargantuan {
 		[[nodiscard]] static bool SupportsClass(std::string_view Name);
 		ApplicationPresentation(std::shared_ptr<DataModel> Graph, const std::shared_ptr<Script> &Entry,
 			std::filesystem::path Font, std::function<void(std::string, std::string)> Diagnostic = {}, bool AudioEnabled = false,
-			ApplicationSession::CatalogSetup Setup = {}, std::optional<SessionInvitation> Invitation = {});
+			ApplicationSession::CatalogSetup Setup = {}, std::optional<SessionInvitation> Invitation = {}, bool CanHost = false, std::string DirectorySource = {});
 		~ApplicationPresentation();
 		ApplicationPresentation(const ApplicationPresentation &) = delete;
 		ApplicationPresentation &operator=(const ApplicationPresentation &) = delete;
@@ -37,6 +37,10 @@ namespace gargantuan {
 		void TrackConnection(const std::shared_ptr<SignalConnection> &Connection);
 		void SetGameplayInput(bool Enabled);
 		void NotifyPause(bool Held);
+		void NotifySession();
+		void CommitClose();
+		[[nodiscard]] const char *GetState() const { return Closing ? "Closing" : Starting ? "Starting" : "Running"; }
+		[[nodiscard]] bool IsClosing() const { return Closing || QuitRequested; }
 		ApplicationSession Sessions;
 		[[nodiscard]] std::shared_ptr<IAudioOutput> GetAudioOutput() const { return Output; }
 		bool QuitRequested = false;
@@ -64,6 +68,7 @@ namespace gargantuan {
 		bool RequestedVisible = false;
 		bool CommittedVisible = false;
 		bool MenuDirty = false;
+		bool Starting = true, Closing = false;
 		std::uint64_t MenuOwnerGeneration = 0;
 		ObjectId MenuOwner;
 		std::map<ObjectId, std::shared_ptr<Script>> Controllers;

@@ -41,6 +41,7 @@ namespace gargantuan::network {
 		constexpr int ResourceExhaustionEndReason = k_ESteamNetConnectionEnd_AppException_Min + 1;
 		constexpr int ProtocolViolationEndReason = k_ESteamNetConnectionEnd_AppException_Min + 2;
 		constexpr int IncompatibleVersionEndReason = k_ESteamNetConnectionEnd_AppException_Min + 3;
+		constexpr int AuthenticationFailureEndReason = k_ESteamNetConnectionEnd_AppException_Min + 4;
 		static_assert(k_EResultNoConnection == 3 && k_EResultLimitExceeded == 25);
 
 		const char *GnsResultName(int Result) noexcept {
@@ -174,6 +175,7 @@ namespace gargantuan::network {
 
 		DisconnectReason MapRemoteDisconnect(int Reason, ESteamNetworkingConnectionState State) {
 			if (Reason == ResourceExhaustionEndReason) return DisconnectReason::ResourceExhaustion;
+			if (Reason == AuthenticationFailureEndReason) return DisconnectReason::AuthenticationFailure;
 			if (Reason == ProtocolViolationEndReason || Reason == k_ESteamNetConnectionEnd_Remote_BadCrypt)
 				return DisconnectReason::ProtocolViolation;
 			if (Reason == IncompatibleVersionEndReason ||
@@ -198,8 +200,9 @@ namespace gargantuan::network {
 				return ProtocolViolationEndReason;
 			case DisconnectReason::IncompatibleVersion:
 				return IncompatibleVersionEndReason;
-			case DisconnectReason::Timeout:
 			case DisconnectReason::AuthenticationFailure:
+				return AuthenticationFailureEndReason;
+			case DisconnectReason::Timeout:
 			case DisconnectReason::TransportFailure:
 				return k_ESteamNetConnectionEnd_AppException_Generic;
 			}
@@ -526,7 +529,7 @@ namespace gargantuan::network {
 					.Connection = Id, .ObservedAtMicroseconds = Final.ObservedAtMicroseconds,
 					.State = ConnectionState::Closed, .CountersValid = false};
 			const auto Handle = Record.Handle;
-			QueueEvent(ConnectionStateEvent{Id, ConnectionState::Closing, ConnectionState::Closed});
+			QueueEvent(ConnectionStateEvent{Id, ConnectionState::Closing, ConnectionState::Closed, Record.ClosingInformation->Reason});
 			QueueEvent(DisconnectedEvent{Id, *Record.ClosingInformation});
 			ReleaseConnection(Id, Handle);
 			return true;
@@ -767,6 +770,15 @@ namespace gargantuan::network {
 			}
 		}
 	};
+
+	bool IsConcreteGnsEndpoint(const TransportEndpoint &Endpoint) {
+		SteamNetworkingIPAddr Address;
+		Address.Clear();
+		if (!Endpoint.IsValid() || !SteamAPI_SteamNetworkingIPAddr_ParseString(&Address, Endpoint.Host.c_str()) || Address.m_port)
+			return false;
+		if (Address.IsIPv4()) return Address.GetIPv4() != 0;
+		return !Address.IsIPv6AllZeros();
+	}
 
 	bool GameNetworkingSocketsTransportConfiguration::IsValid() const {
 		if (EnableNativeDataArbitration && !EnableNativeEgressWorker) return false;

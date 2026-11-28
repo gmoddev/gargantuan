@@ -39,8 +39,10 @@ def Main():
         Slot = Created.Value
     end
     print("[Lifecycle:StudioSlot] " .. Slot.SaveId)
-    local Previous =""").replace("local Started = Sessions:StartLocal():Await()",
-        "local Started = Sessions:StartLocal({SaveId=Slot.SaveId}):Await()\n        assert(Started.Ok and Started.Value.WorldId == Slot.WorldId)")
+    local Previous =""").replace("local Operation = Sessions:StartLocal()", "local Operation = Sessions:StartLocal({SaveId=Slot.SaveId})")
+        Source = Source.replace("local Started = Operation:Await()", """local Started = Operation:Await()
+        assert(Started.Ok and Started.Value.WorldId == Slot.WorldId and Started.Value.SaveId == Slot.SaveId)
+        print("[Lifecycle:StudioWorld] " .. Started.Value.SaveId)""")
         Controller["Properties"]["Source"]["String"] = Source
         ScenePath.write_text(json.dumps(Scene), encoding="utf-8")
         DataRoot = Path(Scratch) / "PlayData"
@@ -84,16 +86,31 @@ def Main():
                 assert Log.count("[Lifecycle:Acceptance] Gameplay startup") == Options.cycles, Log[-2200:]
                 Slot = next(Message.split("[Lifecycle:StudioSlot] ")[1].split()[0] for Message in Messages
                             if "[Lifecycle:StudioSlot] " in Message)
+                assert Log.count("[Lifecycle:StudioWorld] " + Slot) == Options.cycles, Log[-2200:]
                 if Mode == "Persistent":
                     assert PersistentSlot is None or Slot == PersistentSlot
                     PersistentSlot = Slot
                 assert any(Row["MenuVisible"] and not Row["WorldActive"] for Row in States)
                 assert any(Row["MenuVisible"] and Row["GameplayPaused"] for Row in States)
+            Launch = Host.Call("StartPlaySession", LaunchMode="Application", PersistenceMode="Disposable")
+            Session = Launch["PlaySessionId"]
+            assert Session != Previous
+            Deadline = time.monotonic() + 15
+            while time.monotonic() < Deadline:
+                State = Host.Call("GetPlaySessionState")
+                assert State["PlaySessionId"] == Session
+                if State["State"] == "Running" and State.get("Application", {}).get("WorldActive"):
+                    break
+                time.sleep(0.005)
+            else:
+                raise RuntimeError("Explicit Stop did not find an active application world")
+            Stopped = Host.Call("StopPlaySession", PlaySessionId=Session)
+            assert Stopped["State"] == "Stopped"
+            assert Host.Call("GetPlaySessionState")["State"] == "Stopped"
             After = Host.Call("GetSnapshot")["Snapshot"]
             assert Before == After, "Play changed the authoritative authoring snapshot"
-        print("[Lifecycle:Studio] Three application Play runs completed six saved worlds at one authoring revision")
+        print("[Lifecycle:Studio] Three full application Play runs and one active Stop restored one authoring revision")
 
 
 if __name__ == "__main__":
     Main()
-

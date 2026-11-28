@@ -415,6 +415,7 @@ namespace gargantuan::network {
 			~DispatchScope() { Active=false; }
 		};
 		std::string Failure;
+		std::optional<DisconnectReason> FailureReason;
 		GameSessionMetrics Metrics;
 		std::uint64_t CurrentTick = 0;
 		std::uint64_t TerrainTick = 0;
@@ -919,6 +920,7 @@ namespace gargantuan::network {
 		void FailSession(DisconnectInfo Information) {
 			if (Status == GameSessionStatus::Closing || Status == GameSessionStatus::Failed || Status == GameSessionStatus::Closed) return;
 			RecordPooledLifecycle(detail::PooledLifecyclePoint::FailSession, PrimaryConnection.value_or(ConnectionId{}), Information.Reason);
+			FailureReason = Information.Reason;
 			const auto Diagnostic = Information.Diagnostic.size() <= 512 ? Information.Diagnostic
 																		 : Information.Diagnostic.substr(0, 512);
 			Status = GameSessionStatus::Closing;
@@ -2309,7 +2311,7 @@ namespace gargantuan::network {
 					}
 					else if (Changed->Current == ConnectionState::Closed) {
 						if (Configuration.Role == GameSessionRole::Client)
-							FailSession({DisconnectReason::RemoteShutdown, "Game server connection closed"});
+							FailSession({Changed->Reason.value_or(DisconnectReason::RemoteShutdown), "Game server connection closed"});
 						else
 							TearDownPeer(Changed->Connection);
 					}
@@ -4036,6 +4038,9 @@ namespace gargantuan::network {
 	}
 	const std::string &GameSession::GetFailure() const {
 		return State->Failure;
+	}
+	std::optional<DisconnectReason> GameSession::GetFailureReason() const {
+		return State->FailureReason;
 	}
 	GameSessionLifecycleCounts GameSession::GetLifecycleCounts() const noexcept {
 		return {
