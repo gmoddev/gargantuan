@@ -1,0 +1,23 @@
+---
+title: Creator workflows
+description: Find public APIs, examples, supported execution contexts and candidate lifecycle boundaries.
+---
+
+Use the [creator reference](../reference/index.md) for class members and native enum values. The documented revision is a qualified unreleased spatial candidate. Signatures and metadata come from declarations. Capability checks and behavioral guides define how to use them in a running game.
+
+| Task | Starting point |
+| --- | --- |
+| Create objects, parent them and manage lifetime | [Instances and services](../api/instances-and-services.mdx) |
+| Scripts, modules, tasks, signals and native math | [Datatypes and globals](../api/datatypes-and-globals.mdx) |
+| Attributes, tags and lookup | [Attributes](../developing/instance-attributes.mdx) and [tags](../developing/instance-tags.mdx) |
+| Parts, meshes, queries, collision and lighting | [World and rendering](../api/world-and-rendering.mdx) |
+| Terrain, construction and independent coordinates | [Generate a world](./procedural-generation.mdx) and [spatial API guide](../api/block-grid-and-spatial-domains.mdx) |
+| Characters, movement and animation | [Character authoring](./character-authoring.mdx) |
+| Input, action bindings, GUI, audio and tweens | [Input and media](../api/input-gui-and-media.mdx) |
+| Server authority, remotes, player identity and persistence | [Networking and persistence](../api/networking-and-persistence.mdx) |
+| Studio, PreRun and package creation | [First project](./first-project.mdx) and [Studio integration](../developing/engine-studio-node.mdx) |
+| Small scripts and larger runnable projects | [Example setup and validation](../../../../../docs/examples/README.md), FirstCompleteGame and Construction Yard |
+
+The standalone lifecycle campaign owns application menus, gameplay pause, hosting, joining and returning to the menu. Those changes are outside this documented source. Main-menu registration and session signatures require its qualified recipient and a separate metadata refresh. Existing direct-start projects use the selected runtime's normal package lifecycle. A menu's visibility alone does not suspend a multiplayer Server's authoritative simulation.
+
+PreRun registration belongs to project schema setup. Runtime Scripts execute with their own client/server context and capabilities. A type declaration cannot grant a permission. Native metadata can leave defaults or yielding behavior unspecified. Treat such missing fields as a documentation backlog and follow the linked subsystem contracts before relying on them.

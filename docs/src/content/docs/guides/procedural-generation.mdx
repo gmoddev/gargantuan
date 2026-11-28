@@ -1,0 +1,34 @@
+---
+title: Generate a procedural world
+description: Seeded native terrain and block construction, authority, scheduling and persistence.
+---
+
+This guide targets the qualified unreleased spatial candidate `830f5f26ea5642c9a6d7e281db8df0fb3982e5df`. Use its matching Studio and runtime distribution. Begin with a Server Script in a fresh offline Play world, then test the same policy on the authoritative Server used for multiplayer.
+
+Choose Parts for independently configured objects, MeshParts for imported visual geometry, Terrain for smooth volumetric ground, and BlockGrid for discrete construction. Give a separate SpatialRegion to a space that needs independent coordinates and physics, such as an interior. A grid already stores its cells in native pages. A creator can divide generation work into batches without creating an Instance for every cell or managing native page residency.
+
+## Start with a bounded scene
+
+The [procedural-world Server Script](../../../../../docs/examples/procedural-world.server.luau) creates a 16 by 16 foundation, eight seeded columns and a separate terrain mound. Stone and Brick definitions are built in. Run it once in a fresh scene. Repeating it creates another grid. Choose a game-owned identifier and lookup policy before making generation resumable.
+
+`Random.new(Seed)` supplies an explicit seed. The same generation logic and random-call order are necessary for repeatable results. Native distribution algorithms do not establish a cross-version or cross-platform persistence format. Persist the generated result or the versioned generator inputs when exact recovery matters. For independently scheduled tiles, derive each tile's seed from its integer coordinates with a documented bounded hash and keep traversal order fixed. A single shared random stream changes later tiles when earlier tiles consume different numbers of draws.
+
+Grid coordinates are integers in grid-local space. `Fill(Min, MaxExclusive, Definition)` uses an exclusive upper corner. `CellToWorld` and `WorldToCell` account for the grid transform. Terrain brush coordinates are world units in the owning domain. `GetGridInfo()` reports sample spacing, field revision and editing availability. Terrain `ReadRegion` and `WriteRegion` address lattice samples and packed buffers, so inspect their generated signatures before building custom field encoders.
+
+## Bound and schedule generation
+
+Use native Fill and BeginEdit operations for bulk grid work. Revisions are opaque, scoped tokens. Supply the expected revision when committing work derived from a previous read, and handle a rejected commit by reading current state. Keep individual batches within the [construction budgets](../api/block-grid-and-spatial-domains.mdx). The current point/box edit budget is 1,024 commands and 32,768 visited cells. A region read or extraction admits up to 4,096 cells.
+
+Generate a bounded amount per simulation callback or scheduled task. `task.defer` schedules later work. It does not make a large synchronous fill parallel. Cancel the game's pending generation work when its owning session ends. Terrain brush methods return tickets for asynchronous work. Submission is followed by status inspection through `GetEditStatus`; it is not proof that collision and rendering have finished preparing. The [Terrain reference](../reference/classes/terrain.md) exposes the current ticket and region methods.
+
+## Compose ground, buildings and interiors
+
+Put natural ground in the world's Terrain and buildings in grids. Query the intended WorldRoot when coordinates overlap. Set `RaycastParams.IncludeTerrain` or `IncludeBlockGrids` for those query participants. A cell hit identifies the grid and its local cell. A moving grid retains its local cells while its CFrame changes.
+
+Moving grids admit up to 4,096 occupied cells, 128 derived convex shapes, mass 2,048 and coordinates within ±64. Each chart admits 64 active moving grids. Adjacent cubes merge within native leaves. A fragmented construction can exhaust its shape budget much earlier. Imported mesh definitions require static mode. Rejecting dynamic activation preserves the prior valid construction.
+
+## Save and replicate deliberately
+
+Project Save persists authored data. Play generates a separate runtime world. Runtime edits need the game's persistence policy. The existing [Construction Yard](../../../../../samples/ConstructionYard/README.md) persists a versioned document of acknowledged edits through DataStoreService and replays it after Server restart. Keep generator version, seed and player edits distinct so regeneration can preserve gameplay changes.
+
+The Server owns generation and validates client edit requests. A replica may have an unknown cell where the Server has authoritative data. Use `IsRegionAvailable` before reading a required area. Verified air and unknown data have different meanings. Native scoped replication and collision readiness decide when the peer can use a landing area. Current distributed spatial sessions use the bounded DevelopmentLocal loopback transport. A spatial transfer requires stationary collision state across the destination chart. Yard parks its freight deck around outstanding outdoor reservations.
