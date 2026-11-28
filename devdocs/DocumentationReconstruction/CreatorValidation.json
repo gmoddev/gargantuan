@@ -1,0 +1,24 @@
+{
+  "DocumentedRevision": "830f5f26ea5642c9a6d7e281db8df0fb3982e5df",
+  "Availability": "Qualified unreleased candidate",
+  "LifecycleOverlay": {"Revision": "61f8520d782ea2810f168fa38d3b28027aff7a89", "ChangedDeclarations": 6, "SeparateCandidatePages": 7, "Guide": "standalone-application", "ParserCheckedSnippetsTotal": 33, "BuiltContentPages": 187, "BuiltHtmlPages": 188, "LinksChecked": 40199, "Errors": 0, "MenuExampleRuntime": "Not executed in documentation campaign; owner sample qualification retained"},
+  "HistoricalInventory": {"Declarations": 79, "Members": 511},
+  "CurrentInventory": {"Classes": 64, "Services": 18, "Properties": 311, "Methods": 190, "Signals": 63, "Members": 564},
+  "ReferencePages": {"ClassesAndServices": 82, "NativeBindingsAndReturnedObjects": 20, "Enums": 37, "Index": 1},
+  "DeclarationDescriptions": 564,
+  "DetailedBehavioralAudit": "Incomplete; description presence does not establish behavioral verification",
+  "NativeSignatureAudit": "Incomplete; native labels and registrations preserve source evidence",
+  "Enums": {"Types": 37, "Items": 343, "NumericSource": "Native G_ENUM declarations and C++ integer assignment semantics"},
+  "Examples": {
+    "ParserCheckedStandaloneAndEmbedded": 32,
+    "TypeCheckedInCampaign": 0,
+    "ExecutedInCampaign": ["docs/examples/procedural-world.server.luau"],
+    "ExecutionReceipt": "CreatorExampleExecution.json",
+    "TerrainExecutionScope": "Brush submitted and ticket returned; completion and collision not asserted",
+    "OtherExamples": "Parser-checked; retain earlier runtime evidence at its recorded revision"
+  },
+  "Validation": {"DocumentationErrors": 0, "GeneratedDrift": 0, "ExistingPythonTests": 9, "RepositoryLinkTests": 5, "BuiltContentPages": 179, "BuiltHtmlPages": 180, "SiteLinksChecked": 38241, "SiteLinkErrors": 0, "QualifiedMemberAnchors": 564, "PagefindIndex": "Built by existing site integration"},
+  "Dependencies": {"Node": "24.11.1", "SitePackages": "Existing lockfile-compatible dependency tree"},
+  "IntegrationDependencies": ["Standalone lifecycle owner must supply qualified menu and session API revision", "Studio document editor can consume PublicApi and NativeApi without UI changes here"],
+  "RemainingGaps": ["Native overload and datatype operator signatures", "Missing declaration policy and validation metadata", "Detailed member lifecycle and failure behavior", "More runtime-executed creator examples", "Published release availability and version introduction beyond declared since fields"]
+}

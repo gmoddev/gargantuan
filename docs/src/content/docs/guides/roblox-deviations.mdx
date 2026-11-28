@@ -9,8 +9,8 @@ the [API reference](../../api/) and current source declarations.
 
 ## Implemented conventions
 
-- Obtain Workspace with `game:GetService("Workspace")`; do not assume a
-  `workspace` global.
+- Obtain Workspace with `game:GetService("Workspace")`. The `workspace` global
+  also resolves to that VM's Workspace in the documented candidate.
 - Runtime scripts use `Script` and its execution context. Do not assume
   `LocalScript`, `BaseScript` or `Humanoid` supplies Roblox behavior.
   The current actor model is `Character` with Engine-shipped player policy

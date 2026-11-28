@@ -24,6 +24,8 @@ Runtime scripts have DataModel read/mutation and bounded network capabilities. T
 
 ## Scope of this reference
 
+Browse the [individual creator reference pages](../reference/index.md) for class, service, qualified member and enum entries. The [creator workflows](../guides/creator-workflows.mdx) connect those entries to examples and subsystem guidance. The reference identifies its qualified unreleased source revision.
+
 The engine also registers `Axes`, `CFrame`, `Color3`, `Enum`, `Random`, `RaycastParams`, `Signal`, `TweenInfo`, `UDim`, `UDim2`, `Vector2`, and `Vector3` globals. Their exact constructor and method surface is defined by `src/scripting/Lib*.cpp` and datatype bindings. `AnimationTrack`, `EnumItem`, `Rect`, and signal connections can be returned as values without separate constructor globals. See [datatypes and globals](./datatypes-and-globals/) for the native registration map and the [declaration catalog](./declaration-catalog/) for class and service members; neither implies every Roblox API exists.
 
 For implementation evidence and constraints, see `devdocs/CurrentArchitecture/LuauRuntimeSurface.md`, `ScriptSecurity.md`, and the subsystem contracts linked from [AI contribution guidance](../meta/agents/). Current source and tests take precedence over older prose when they differ.

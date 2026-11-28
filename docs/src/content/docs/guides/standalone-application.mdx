@@ -1,0 +1,54 @@
+---
+title: Standalone menus, pause and sessions
+description: Application lifetime and gameplay sessions in the separately qualified lifecycle candidate.
+---
+
+This section targets lifecycle Engine `61f8520d782ea2810f168fa38d3b28027aff7a89`, tree `afd46a229a18f552c92961620241b7156ff4b704`. Its owner qualified five affected Windows installed tests and three Linux native tests. The spatial reference elsewhere on this site targets a different candidate. Combining the source trees requires integration qualification. The [candidate reference](../lifecycle-reference/index.md) records the lifecycle declarations independently.
+
+## Author an application entry
+
+Create a client Script in the project's Application folder and designate its durable SourceId through `DataModel.ApplicationEntry` in Studio or the EditorHost property transaction. The application entry owns the menu across gameplay session replacement. A project with an empty ApplicationEntry keeps direct startup behavior. The qualified candidate's `samples/StandaloneConstructionYard/BuildProject.py` demonstrates the authoring transaction and uses `Entry.luau` for menu behavior.
+
+The entry can create a ScreenGui beneath its parent, register it through `game:SetMainMenu(Menu)` and control its visibility through `SetMainMenuVisible`. Check the returned result's `Ok` before proceeding. Menu visibility and `SetGameplayInputEnabled` control presentation and input separately from the simulation hold.
+
+```luau
+-- Application entry Client Script, designated by ApplicationEntry.
+local Sessions = game:GetService("SessionService")
+local Menu = Instance.new("ScreenGui")
+Menu.Name = "MainMenu"
+Menu.Parent = script.Parent
+local Play = Instance.new("TextButton")
+Play.Text = "Play"
+Play.Size = UDim2.fromOffset(180, 40)
+Play.Parent = Menu
+assert(game:SetMainMenu(Menu).Ok)
+Play.Activated:Connect(function()
+	local Opened = Sessions:StartLocal():Await()
+	if Opened.Ok then
+		game:SetMainMenuVisible(false)
+		game:SetGameplayInputEnabled(true)
+	else
+		Play.Text = Opened.Message
+	end
+end)
+```
+
+This minimal example starts an offline world without selecting a persistent slot. It is parser-checked here. The owner's full Yard fixture supplies the qualified menu and world-selection execution evidence.
+
+## Select a world and manage a session
+
+`WorldSaveService:List(Cursor?)` returns an operation whose successful result contains Items and NextCursor. `Create({Name, Seed?})` commits a slot and returns its SaveId, WorldId and revision. Pass SaveId to `SessionService:StartLocal({SaveId = Slot.SaveId})`. When an uncertain create returns a RecoveryId, use ResolveCreate before offering a duplicate create. World-slot identity belongs to the local project profile. Gameplay data remains subject to authoritative persistence policy.
+
+Session operations expose Await, GetResult, progress and completion signals. Use their explicit success/error result instead of treating submission as completion. `GetSession()` returns a generation-scoped snapshot. `Changed` fires on committed transitions. GetResult can be absent while pending. Cancellation has its own disposition and does not establish that an admitted write was rolled back.
+
+`StartLocal` can select a provisioned private Server. `Host` opens an enrolled multiplayer Server and joins as a player. `FindServers` uses launcher-supplied LAN or Node discovery. `Join` accepts an admitted direct target or listing identity. `Reconnect` starts a new connection to the previous remote session. `Leave` retires the current gameplay session. Present LastError on a returned Idle state so a failed connection can return to a usable menu. Optional managed services require the matching host enrollment and package configuration.
+
+## Pause and return to the title
+
+`RunService:PauseGameplay():Await()` requests a hold at a simulation boundary. Check its result before showing a pause menu or suppressing gameplay input. `ResumeGameplay():Await()` releases the caller's hold. The returned effective state can remain paused when another hold still exists. `IsGameplayPaused` and GameplayPauseChanged expose committed state.
+
+The application presentation and menu callbacks continue while an offline gameplay world is held. Multiplayer Server simulation retains its authoritative lifetime. A local menu or presentation hold does not grant a client authority to suspend that Server. Use the mode-specific result and qualified host policy when deciding which pause controls to display.
+
+Await `SessionService:Leave()` before reusing a selected world slot. Show any failure rather than assuming pending writes drained. `ApplicationService:GetState()` reads the local presentation state when available. `Quit()` requests shutdown after the current callback, and Closing signals the host's committed closure.
+
+The qualified scope excludes long Windows profile-root paths and authenticated non-loopback spatial play. Existing development-local spatial Yard and managed remote-terrain receipts have distinct scopes. The owner's 100-session replacement measurement does not establish a memory plateau.

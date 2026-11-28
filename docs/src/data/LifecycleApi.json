@@ -1,0 +1,315 @@
+{
+  "SchemaVersion": 1,
+  "SourceHashFormat": "Hashes below identify normalized extracted declarations; original source identity is the pinned Git revision",
+  "Coverage": "All tracked native class/service Luau declarations; native headers indexed separately. Not proof of implementation or capability grants.",
+  "Classes": [
+    {
+      "Name": "ApplicationService",
+      "Kind": "Service",
+      "Source": "assets/services/ApplicationService.luau",
+      "SourceSha256": "b8478a9a84a00aa6997e893524d97b98ba14d2d4104467b05f0afc7a2ad74e26",
+      "Description": "Controls the enclosing standalone application.",
+      "Extends": "Instance",
+      "Abstract": false,
+      "Since": "0.9.0",
+      "DefaultOverrides": "{}",
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [],
+      "Methods": [
+        {
+          "Name": "GetState",
+          "AsLuau": true,
+          "Description": "Returns the state of the local presentation, when available.",
+          "LuauSignature": "(self: ApplicationService) -> (\"Starting\" | \"Running\" | \"Closing\")?"
+        },
+        {
+          "Name": "Quit",
+          "AsLuau": true,
+          "Description": "Requests application shutdown after the current callback.",
+          "LuauSignature": "(self: ApplicationService) -> { Ok: true, Value: boolean } | { Ok: false, Code: string, Message: string }"
+        }
+      ],
+      "Signals": [
+        {
+          "Name": "Closing",
+          "Description": "Fires once when the local host commits to closing the application.",
+          "Args": "{t.Bool}"
+        }
+      ]
+    },
+    {
+      "Name": "Character",
+      "Kind": "Class",
+      "Source": "assets/classes/Character.luau",
+      "SourceSha256": "10ab138ee837187498915ed13dd69d9b6cebe75feae5a700ea3fc135d68a5e7f",
+      "Description": "A movable character semantic root with one authoritative motion-admission boundary.",
+      "Extends": "Folder",
+      "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [
+        {
+          "Name": "CFrame",
+          "Description": "The authoritative world transform accepted by this Character's movement owner.",
+          "Type": "t.CFrame",
+          "Unmodified": "gargantuan::CFrame(0.0f, 6.0f, 0.0f)",
+          "OverrideRead": "GetCFrame",
+          "OverrideWrite": "SetCFrame",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Transform",
+          "EditorHint": "CFrameComponents"
+        },
+        {
+          "Name": "Position",
+          "Description": "The world position component of CFrame.",
+          "Type": "t.Vector3",
+          "Unmodified": "glm::vec3(0.0f, 6.0f, 0.0f)",
+          "OverrideRead": "GetPosition",
+          "OverrideWrite": "SetPosition",
+          "Category": "Transform",
+          "Editable": false
+        },
+        {
+          "Name": "RootPart",
+          "Description": "The optional spatial root synchronized to accepted Character movement.",
+          "Type": "t.Optional(t.Instance(\"BasePart\"))",
+          "Unmodified": "std::nullopt",
+          "OverrideRead": "GetRootPart",
+          "OverrideWrite": "SetRootPart",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Transform"
+        }
+      ],
+      "Methods": [
+        {
+          "Name": "Move",
+          "Description": "Requests bounded collision-authoritative world movement and returns the accepted result.",
+          "AsLuau": true,
+          "LuauSignature": "(self: Character, translation: Vector3, velocity: Vector3?) -> CharacterMotionResult"
+        }
+      ],
+      "Signals": []
+    },
+    {
+      "Name": "DataModel",
+      "Kind": "Class",
+      "Source": "assets/classes/DataModel.luau",
+      "SourceSha256": "ae5d1a50ac87a92371eacaffbb6a726fc6326c71e7c5c306e0ccc8b5e264be05",
+      "Description": "Class that provides the root hierachy and services",
+      "Extends": "ServiceProvider",
+      "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [
+        {
+          "Name": "ApplicationEntry",
+          "Description": "Project-local durable SourceId of the standalone client entry. Empty uses direct startup.",
+          "Type": "t.String",
+          "Unmodified": "std::string()",
+          "Serializable": true,
+          "Replicated": false,
+          "AuthoringOnly": true,
+          "Category": "Application"
+        }
+      ],
+      "Methods": [
+        {
+          "Name": "IsMainMenuVisible",
+          "Description": "Reads the current application's menu visibility.",
+          "AsLuau": true,
+          "LuauSignature": "(self: DataModel) -> boolean"
+        },
+        {
+          "Name": "SetGameplayInputEnabled",
+          "Description": "Controls local input delivery to the active gameplay session.",
+          "AsLuau": true,
+          "LuauSignature": "(self: DataModel, Enabled: boolean) -> { Ok: true, Value: boolean } | { Ok: false, Code: string, Message: string }"
+        },
+        {
+          "Name": "SetMainMenu",
+          "Description": "Registers the application's ScreenGui. Pass nil to clear the selection.",
+          "AsLuau": true,
+          "LuauSignature": "(self: DataModel, Menu: ScreenGui?) -> { Ok: true, Value: boolean } | { Ok: false, Code: string, Message: string }"
+        },
+        {
+          "Name": "SetMainMenuVisible",
+          "Description": "Shows or hides the registered application menu.",
+          "AsLuau": true,
+          "LuauSignature": "(self: DataModel, Visible: boolean) -> { Ok: true, Value: boolean } | { Ok: false, Code: string, Message: string }"
+        }
+      ],
+      "Signals": []
+    },
+    {
+      "Name": "RunService",
+      "Kind": "Service",
+      "Source": "assets/services/RunService.luau",
+      "SourceSha256": "696b3f43525ed9a3ead9ae1017c5e6fdac81449053547b285de93e542ce5c971",
+      "Description": "Provides access to the runtime.",
+      "Extends": "Instance",
+      "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [],
+      "Methods": [
+        {
+          "Name": "IsGameplayPaused",
+          "AsLuau": true,
+          "Description": "Returns the committed gameplay pause state.",
+          "LuauSignature": "(self: RunService) -> boolean"
+        },
+        {
+          "Name": "PauseGameplay",
+          "AsLuau": true,
+          "Description": "Requests a pause at the next simulation boundary.",
+          "LuauSignature": "(self: RunService) -> { Await: (self: any) -> ({ Ok: true, Value: boolean } | { Ok: false, Code: string, Message: string }), GetResult: (self: any) -> ({ Ok: true, Value: boolean } | { Ok: false, Code: string, Message: string })?, GetState: (self: any) -> string, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        },
+        {
+          "Name": "ResumeGameplay",
+          "AsLuau": true,
+          "Description": "Releases the caller's gameplay pause.",
+          "LuauSignature": "(self: RunService) -> { Await: (self: any) -> ({ Ok: true, Value: boolean } | { Ok: false, Code: string, Message: string }), GetResult: (self: any) -> ({ Ok: true, Value: boolean } | { Ok: false, Code: string, Message: string })?, GetState: (self: any) -> string, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        }
+      ],
+      "Signals": [
+        {
+          "Name": "GameplayPauseChanged",
+          "Description": "Fired in presentation when the effective gameplay hold changes.",
+          "Args": "{ t.Bool }"
+        },
+        {
+          "Name": "PostSimulation",
+          "Description": "Fired after simulating WorldRoots. Listeners receive the delta time",
+          "Args": "{ t.Float }"
+        },
+        {
+          "Name": "PreRender",
+          "Description": "Fired before rendering the scene. Listeners receive the delta time.",
+          "Args": "{ t.Float }"
+        },
+        {
+          "Name": "PreSimulation",
+          "Description": "Fired before simulating WorldRoots. Listeners receive the delta time",
+          "Args": "{ t.Float }"
+        }
+      ]
+    },
+    {
+      "Name": "SessionService",
+      "Kind": "Service",
+      "Source": "assets/services/SessionService.luau",
+      "SourceSha256": "e89eab935bd79c4e2504cd6c7d6b53c1cc8a09b206488d45c561ef213864c74b",
+      "Description": "Controls the gameplay session owned by a standalone application.",
+      "Extends": "Instance",
+      "Abstract": false,
+      "Since": "0.9.0",
+      "DefaultOverrides": "{}",
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [],
+      "Methods": [
+        {
+          "Name": "FindServers",
+          "AsLuau": true,
+          "Description": "Lists current sessions supplied by the native launcher for the selected source.",
+          "LuauSignature": "(self: SessionService, Source: \"LAN\" | \"Node\", Cursor: string?) -> { Await: (self: any) -> ({ Ok: true, Value: {Items: {{Id: string, Name: string}}, NextCursor: string?} } | { Ok: false, Code: string, Message: string }), GetResult: (self: any) -> ({ Ok: true, Value: {Items: {{Id: string, Name: string}}, NextCursor: string?} } | { Ok: false, Code: string, Message: string })?, GetState: (self: any) -> string, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        },
+        {
+          "Name": "GetSession",
+          "AsLuau": true,
+          "Description": "Returns a session snapshot.",
+          "LuauSignature": "(self: SessionService) -> { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? }"
+        },
+        {
+          "Name": "Host",
+          "AsLuau": true,
+          "Description": "Opens an enrolled multiplayer Server and joins it as a player.",
+          "LuauSignature": "(self: SessionService, Options: {SaveId: string?, MaxPlayers: number?, Discovery: (\"LAN\" | \"Node\")?}?) -> { Await: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string }), GetResult: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string })?, GetState: (self: any) -> string, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        },
+        {
+          "Name": "Join",
+          "AsLuau": true,
+          "Description": "Connects to an admitted direct target.",
+          "LuauSignature": "(self: SessionService, Target: ({Kind: \"Direct\", Address: string} | {Kind: \"Listing\", Id: string})) -> { Await: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string }), GetResult: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string })?, GetState: (self: any) -> string, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        },
+        {
+          "Name": "Leave",
+          "AsLuau": true,
+          "Description": "Retires the current gameplay session.",
+          "LuauSignature": "(self: SessionService) -> { Await: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string }), GetResult: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string })?, GetState: (self: any) -> string, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        },
+        {
+          "Name": "Reconnect",
+          "AsLuau": true,
+          "Description": "Starts a fresh connection to the last remote session after leaving or disconnecting.",
+          "LuauSignature": "(self: SessionService) -> { Await: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string }), GetResult: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string })?, GetState: (self: any) -> string, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        },
+        {
+          "Name": "StartLocal",
+          "AsLuau": true,
+          "Description": "Starts an offline world or its provisioned private Server.",
+          "LuauSignature": "(self: SessionService, Options: { SaveId: string?, PrivateServer: boolean? }?) -> { Await: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string }), GetResult: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string })?, GetState: (self: any) -> string, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        }
+      ],
+      "Signals": [
+        {
+          "Name": "Changed",
+          "Description": "Fires with an immutable snapshot at each committed session transition.",
+          "Args": "{{kind = \"c\", cType = \"gargantuan::SessionSnapshot\", luauType = Info, cIncludes = {'\"gargantuan/runtime/SessionSnapshot.hpp\"'}}}"
+        }
+      ]
+    },
+    {
+      "Name": "WorldSaveService",
+      "Kind": "Service",
+      "Source": "assets/services/WorldSaveService.luau",
+      "SourceSha256": "08815026ab8f6d018e460644989afddccd465caa449b861d5db00edbb2f8fd9c",
+      "Description": "Manages world slots in the local project profile.",
+      "Extends": "Instance",
+      "Abstract": false,
+      "Since": "0.9.0",
+      "DefaultOverrides": "{}",
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [],
+      "Methods": [
+        {
+          "Name": "Create",
+          "AsLuau": true,
+          "Description": "Commits a world slot with an optional seed.",
+          "LuauSignature": "(self: WorldSaveService, Options: {Name: string, Seed: string?}) -> { Await: (self: any) -> ({ Ok: true, Value: { SaveId: string, WorldId: string, Name: string, Seed: string?, Revision: string, Compatibility: string } } | { Ok: false, Code: string, Message: string, RecoveryId: string? }), GetResult: (self: any) -> ({ Ok: true, Value: { SaveId: string, WorldId: string, Name: string, Seed: string?, Revision: string, Compatibility: string } } | { Ok: false, Code: string, Message: string, RecoveryId: string? })?, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        },
+        {
+          "Name": "GetCurrentWorld",
+          "AsLuau": true,
+          "Description": "Reads the selected save in authoritative gameplay.",
+          "LuauSignature": "(self: WorldSaveService) -> { Ok: true, Value: { SaveId: string, WorldId: string, Name: string, Seed: string?, Revision: string, Compatibility: string } } | { Ok: false, Code: string, Message: string }"
+        },
+        {
+          "Name": "List",
+          "AsLuau": true,
+          "Description": "Lists a page of saved worlds.",
+          "LuauSignature": "(self: WorldSaveService, Cursor: string?) -> { Await: (self: any) -> ({ Ok: true, Value: { Items: {{ SaveId: string, WorldId: string, Name: string, Seed: string?, Revision: string, Compatibility: string }}, NextCursor: string? } } | { Ok: false, Code: string, Message: string, RecoveryId: string? }), GetResult: (self: any) -> ({ Ok: true, Value: { Items: {{ SaveId: string, WorldId: string, Name: string, Seed: string?, Revision: string, Compatibility: string }}, NextCursor: string? } } | { Ok: false, Code: string, Message: string, RecoveryId: string? })?, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        },
+        {
+          "Name": "ResolveCreate",
+          "AsLuau": true,
+          "Description": "Reads a world slot after an uncertain create outcome.",
+          "LuauSignature": "(self: WorldSaveService, RecoveryId: string) -> { Await: (self: any) -> ({ Ok: true, Value: { SaveId: string, WorldId: string, Name: string, Seed: string?, Revision: string, Compatibility: string } } | { Ok: false, Code: string, Message: string, RecoveryId: string? }), GetResult: (self: any) -> ({ Ok: true, Value: { SaveId: string, WorldId: string, Name: string, Seed: string?, Revision: string, Compatibility: string } } | { Ok: false, Code: string, Message: string, RecoveryId: string? })?, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        }
+      ],
+      "Signals": []
+    }
+  ],
+  "SourceRevision": "61f8520d782ea2810f168fa38d3b28027aff7a89",
+  "Availability": "Separately qualified unreleased lifecycle candidate; not integrated with spatial source"
+}

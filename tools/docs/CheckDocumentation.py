@@ -242,6 +242,9 @@ def ExtractApi() -> dict:
             if Path.name.startswith("."):
                 continue
             Text = RemoveComments(Read(Path))
+            if re.search(r'local function \w+\(\w+\)', Text):
+                from DeclarationExpressions import Expand
+                Text = Expand(Text)
             Match = re.search(r"return\s+c\(\s*(\{.*\})\s*\)\s*$", Text, re.S)
             if not Match:
                 raise ValueError(f"Unsupported class declaration format: {Path}")
@@ -256,6 +259,8 @@ def ExtractApi() -> dict:
                       "Description": Value(Definition.get("description", '""')),
                       "Extends": Value(Definition.get("extends", '"Instance"')) if Definition["name"] != '"Instance"' else None,
                       "Abstract": Value(Definition.get("abstract", "false")),
+                      "Since": Value(Definition.get("since", '""')),
+                      "DefaultOverrides": Value(Definition.get("defaultOverrides", "{}")),
                       "ServicePolicy": Value(Definition.get("servicePolicy", '"Default"')),
                       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior"}
             for Section in ("properties", "methods", "signals"):

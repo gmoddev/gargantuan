@@ -1,0 +1,14 @@
+---
+title: API data and Studio integration
+description: Stable reference URLs, declaration metadata, native evidence and documentation drift checks.
+---
+
+The reference targets qualified unreleased Engine `830f5f26ea5642c9a6d7e281db8df0fb3982e5df`. Its declaration catalog is `docs/src/data/PublicApi.json`. The generator reads that catalog's authoritative extractor rather than maintaining a second class registry. `NativeApi.json` records native binding entry points, labels, enum values and source hashes. `ReferenceCoverage.json` reports structural counts and behavioral gaps.
+
+Studio can resolve a class page as `reference/classes/<lowercase-name>/`. A direct member URL adds the normalized qualified member heading, such as `#instanceclassname` or `#runservicepresimulation`. Enum items follow `reference/enums/<lowercase-enum>/#enum<enum><item>`, all lowercase. The site uses its existing `/gargantuan` base path. Consumers should retain the raw qualified identity separately from its URL.
+
+For hover text, use the declaring class and member Description. For signature help, prefer LuauSignature when present. Other Params and Returns fields retain declaration type expressions and need the existing schema tooling's interpretation. They are not executable source. Inherited member lookup follows Extends with cycle detection. Missing permission, default or lifecycle metadata means unspecified documentation. Consumers must not infer unrestricted execution. Native binding labels identify a source audit surface and do not establish signatures or overload resolution.
+
+The documentation generator does not change Studio, its language service or PreRun. The document-editor owner can consume these files independently of the rendering template. Candidate source identities should accompany imported metadata so an editor cannot silently use reference material for another runtime. `LifecycleApi.json` supplies six changed declarations from separately qualified lifecycle source `61f8520d7`. ReferenceIndex.json contains spatial page names and categories for navigation. Both generators extract their pinned Git trees, allowing the current declaration catalog to follow the integrated runtime while the candidate references retain accurate provenance.
+
+Run `python -B tools/docs/GenerateReference.py` after a declaration or binding change. Use `--check` in CI to detect stale metadata and missing generated pages. The existing `CheckDocumentation.py --update-api --inventory` refreshes declaration metadata and the document inventory. Its default mode checks drift and links. Build the site with its lockfile-pinned dependencies and a supported Node version. Pagefind indexes the generated Markdown text and member headings during the normal build.

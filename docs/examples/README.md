@@ -1,5 +1,7 @@
 # Luau examples
 
+`procedural-world.server.luau` is a Server Script for a fresh world on qualified unreleased spatial candidate `830f5f26ea`. It uses seeded columns, a native bulk grid fill and an optional terrain brush. Terrain editing must be enabled for the brush. See the procedural-generation guide for coordinates, tickets, authority and persistence. Validation is recorded in `devdocs/DocumentationReconstruction/CreatorValidation.md`.
+
 Author these sources through Studio, or place recognized `.luau`, `.client.luau`, and `.server.luau` files in a trusted FileLink source directory for startup-time import. FileLink creates a `ModuleScript` for `.luau` and a `Script` for the context-specific suffixes. It is not a live sync or write API. Set `RunContext` as noted in each script. The examples are parser-checked; only the animation policy has a separate mock-driven Luau behavior test. Each script checks missing setup or recoverable API errors and uses `[System:SubSystem]` diagnostics.
 
 | File | Setup |

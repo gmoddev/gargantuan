@@ -11,6 +11,8 @@
       "Description": "Maps bounded physical input bindings to semantic gameplay actions.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -94,6 +96,8 @@
       "Description": "Owns bounded runtime animation tracks for the skinned MeshPart that directly contains it.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.5.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -108,6 +112,41 @@
       "Signals": []
     },
     {
+      "Name": "ApplicationService",
+      "Kind": "Service",
+      "Source": "assets/services/ApplicationService.luau",
+      "SourceSha256": "6ed9faf754b23b1cf2a0a7edcc187bebc41b0a03b26e05e6351825be8f0ef9bb",
+      "Description": "Controls the enclosing standalone application.",
+      "Extends": "Instance",
+      "Abstract": false,
+      "Since": "0.9.0",
+      "DefaultOverrides": "{}",
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [],
+      "Methods": [
+        {
+          "Name": "GetState",
+          "AsLuau": true,
+          "Description": "Returns the state of the local presentation, when available.",
+          "LuauSignature": "'(self: ApplicationService) -> (\"Starting\" | \"Running\" | \"Closing\")?'"
+        },
+        {
+          "Name": "Quit",
+          "AsLuau": true,
+          "Description": "Requests application shutdown after the current callback.",
+          "LuauSignature": "(self: ApplicationService) -> { Ok: true, Value: boolean } | { Ok: false, Code: string, Message: string }"
+        }
+      ],
+      "Signals": [
+        {
+          "Name": "Closing",
+          "Description": "Fires once when the local host commits to closing the application.",
+          "Args": "{t.Bool}"
+        }
+      ]
+    },
+    {
       "Name": "AssetService",
       "Kind": "Service",
       "Source": "assets/services/AssetService.luau",
@@ -115,6 +154,8 @@
       "Description": "Resolves stable project and built-in asset references through one bounded catalog.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.4.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -148,6 +189,8 @@
       "Description": "Defines a point and orientation relative to an ancestor BasePart, optional canonical skeleton joint, or another Attachment.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -193,6 +236,8 @@
       "Description": "Rigid visual-only mesh at an Attachment's semantic transform; it has no physics body.",
       "Extends": "Attachment",
       "Abstract": false,
+      "Since": "0.6.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -286,6 +331,8 @@
       "Description": "Controls master and fixed category audio gain for the local runtime session.",
       "Extends": "Instance",
       "Abstract": true,
+      "Since": "0.4.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -353,6 +400,8 @@
       "Description": "Abstract class for workspace objects that physically interact.",
       "Extends": "Instance",
       "Abstract": true,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -650,6 +699,8 @@
       "Description": "A discrete construction grid with native, automatically partitioned cells.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.2.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -936,6 +987,8 @@
       "Description": "Class that defines the 3D view of a world.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -1041,6 +1094,8 @@
       "Description": "A movable character semantic root with one authoritative motion-admission boundary.",
       "Extends": "Folder",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -1103,6 +1158,8 @@
       "Description": "A narrow runtime bridge between replaceable Character policy and native network authority.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -1183,6 +1240,8 @@
       "Description": "Rectangular fixed-topology deformable cloth grid.",
       "Extends": "DeformableBody",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -1218,6 +1277,8 @@
       "Description": "Abstract class for constraint-based instances.",
       "Extends": "Instance",
       "Abstract": true,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -1260,14 +1321,52 @@
       "Name": "DataModel",
       "Kind": "Class",
       "Source": "assets/classes/DataModel.luau",
-      "SourceSha256": "345655541b68ce479c2ca12d09f7c8aac8d64f8db8375697fc7bad27ca293342",
+      "SourceSha256": "2cf62721b88c4fe45687b5ebc1ae04b5548b48338d21f53e46d93c5e246efff5",
       "Description": "Class that provides the root hierachy and services",
       "Extends": "ServiceProvider",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
-      "Properties": [],
-      "Methods": [],
+      "Properties": [
+        {
+          "Name": "ApplicationEntry",
+          "Description": "Project-local durable SourceId of the standalone client entry. Empty uses direct startup.",
+          "Type": "t.String",
+          "Unmodified": "std::string()",
+          "Serializable": true,
+          "Replicated": false,
+          "AuthoringOnly": true,
+          "Category": "Application"
+        }
+      ],
+      "Methods": [
+        {
+          "Name": "IsMainMenuVisible",
+          "Description": "Reads the current application's menu visibility.",
+          "AsLuau": true,
+          "LuauSignature": "(self: DataModel) -> boolean"
+        },
+        {
+          "Name": "SetGameplayInputEnabled",
+          "Description": "Controls local input delivery to the active gameplay session.",
+          "AsLuau": true,
+          "LuauSignature": "\"(self: DataModel, Enabled: boolean) -> \" .. MenuResult"
+        },
+        {
+          "Name": "SetMainMenu",
+          "Description": "Registers the application's ScreenGui. Pass nil to clear the selection.",
+          "AsLuau": true,
+          "LuauSignature": "\"(self: DataModel, Menu: ScreenGui?) -> \" .. MenuResult"
+        },
+        {
+          "Name": "SetMainMenuVisible",
+          "Description": "Shows or hides the registered application menu.",
+          "AsLuau": true,
+          "LuauSignature": "\"(self: DataModel, Visible: boolean) -> \" .. MenuResult"
+        }
+      ],
       "Signals": []
     },
     {
@@ -1278,6 +1377,8 @@
       "Description": "Submits bounded persistence work to the server's configured provider.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.6.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "ServerOnly",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -1321,6 +1422,8 @@
       "Description": "Abstract engine-owned deformable body with backend-neutral material and budget controls.",
       "Extends": "Instance",
       "Abstract": true,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -1443,6 +1546,8 @@
       "Description": "Checks provider-neutral semantic entitlements for runtime-owned Player identities.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.4.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -1470,6 +1575,8 @@
       "Description": "Compatibility class that imports a project-relative source directory through SourceMount",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -1509,6 +1616,8 @@
       "Description": "Simple container for instances, offers little additional functionality",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -1523,6 +1632,8 @@
       "Description": "Class that renders a simple rectangle, best-suited as a container",
       "Extends": "GuiObject",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -1537,6 +1648,8 @@
       "Description": "Abstract class for compiling shader bytecode",
       "Extends": "Instance",
       "Abstract": true,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -1558,6 +1671,8 @@
       "Description": "Abstract class for instances that compose graphical user interface",
       "Extends": "Instance",
       "Abstract": true,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -1572,6 +1687,8 @@
       "Description": "Intermediate abstract class for instances that compose 2D graphical user interface",
       "Extends": "GuiBase",
       "Abstract": true,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -1682,6 +1799,8 @@
       "Description": "Runtime-only pointer routing data with explicit propagation consumption",
       "Extends": "Instance",
       "Abstract": true,
+      "Since": "0.2.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -1758,6 +1877,8 @@
       "Description": "Abstract class for instances that compose 2D graphical user interface",
       "Extends": "GuiBase2d",
       "Abstract": true,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -1918,6 +2039,8 @@
       "Description": "A focusable image control with pointer and keyboard activation",
       "Extends": "ImageLabel",
       "Abstract": false,
+      "Since": "0.6.0",
+      "DefaultOverrides": "{ { Property = \"BackgroundTransparency\", Value = 0 }, { Property = \"BackgroundColor3\", Value = { 0.18, 0.22, 0.30 } }, { Property = \"Interactable\", Value = true }, { Property = \"Selectable\", Value = true }, { Property = \"InputSink\", Value = \"Activate\" }, }",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -1932,6 +2055,8 @@
       "Description": "A retained GUI object that presents a logical image resource",
       "Extends": "GuiObject",
       "Abstract": false,
+      "Since": "0.2.0",
+      "DefaultOverrides": "{ { Property = \"BackgroundTransparency\", Value = 1 }, }",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -1983,6 +2108,8 @@
       "Description": "A persistent semantic action whose local runtime state is inspectable.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.2.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -2059,6 +2186,8 @@
       "Description": "A persistent physical binding with four normalized modifier slots.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.2.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -2207,6 +2336,8 @@
       "Description": "A persistent enabled input-action context with deterministic priority.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.2.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -2256,6 +2387,8 @@
       "Description": "Class that describes a user input at an instant.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -2308,6 +2441,8 @@
       "Description": "Owns persistent input contexts and local derived action evaluation.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.2.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -2335,6 +2470,8 @@
       "Description": "Abstract class for all instances which can be part of the DataModel",
       "Extends": null,
       "Abstract": true,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -2586,6 +2723,8 @@
       "Description": "Owns bounded proximity discovery, activation validation, hold state, and presentation state.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.2.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -2680,6 +2819,8 @@
       "Description": "Connects two attachment frames as a ball socket, hinge, slider, or distance joint.",
       "Extends": "Constraint",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -2800,6 +2941,8 @@
       "Description": "Character specialization using the bounded native capsule movement primitive.",
       "Extends": "Character",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -2845,6 +2988,8 @@
       "Description": "Abstract root for an ordered two-dimensional GUI layer",
       "Extends": "GuiBase2d",
       "Abstract": true,
+      "Since": "0.2.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -2884,6 +3029,8 @@
       "Description": "Owns the authored global environment and lighting semantics for one DataModel.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.5.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -3077,6 +3224,8 @@
       "Description": "Abstract emitter with a rigid pose relative to its nearest BasePart or WorldRoot.",
       "Extends": "Instance",
       "Abstract": true,
+      "Since": "0.5.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -3164,6 +3313,8 @@
       "Description": "Abstract class for compiling Lua bytecode",
       "Extends": "Instance",
       "Abstract": true,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -3250,6 +3401,8 @@
       "Description": "A BasePart rendered from a canonical AssetService mesh",
       "Extends": "BasePart",
       "Abstract": false,
+      "Since": "0.3.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -3298,6 +3451,8 @@
       "Description": "Class that contains a Lua module which can be required at runtime",
       "Extends": "LuaSourceContainer",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -3325,6 +3480,8 @@
       "Description": "Class that renders a primitive shape",
       "Extends": "BasePart",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -3349,6 +3506,8 @@
       "Description": "A gameplay player identity whose lifetime is independent from transport connections.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -3445,6 +3604,8 @@
       "Description": "The runtime-owned screen interface container for one player.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.2.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -3459,6 +3620,8 @@
       "Description": "Owns DataModel-scoped gameplay player identities and local player lifecycle.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -3520,6 +3683,8 @@
       "Description": "An omnidirectional local emitter.",
       "Extends": "LocalLight",
       "Abstract": false,
+      "Since": "0.5.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -3534,6 +3699,8 @@
       "Description": "Provides access to the system process.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -3565,6 +3732,8 @@
       "Description": "Declares a bounded world interaction anchored by an ancestor BasePart or Attachment.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.2.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -3646,6 +3815,8 @@
       "Description": "Bounded local environment source with a spatial influence volume; the global Sky remains independent.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.5.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -3817,6 +3988,8 @@
       "Description": "Internal base for replicated application messaging instances",
       "Extends": "Instance",
       "Abstract": true,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -3831,6 +4004,8 @@
       "Description": "Reliable ordered bounded application event",
       "Extends": "RemoteEventBase",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -3845,6 +4020,8 @@
       "Description": "Internal base for bounded remote events",
       "Extends": "RemoteBase",
       "Abstract": true,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -3924,6 +4101,8 @@
       "Description": "Bounded reliable request and terminal response",
       "Extends": "RemoteBase",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -3993,6 +4172,8 @@
       "Description": "Provides a container for shared assets across the client and server.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Replicated",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -4007,6 +4188,8 @@
       "Description": "Fixed-topology elastic lattice that recovers its translated rest shape.",
       "Extends": "DeformableBody",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -4048,15 +4231,41 @@
       "Name": "RunService",
       "Kind": "Service",
       "Source": "assets/services/RunService.luau",
-      "SourceSha256": "9d2f10b57e33fdd244f94a1e4f9a224fb3eaa8c858c6d9222baa984e470a22d7",
+      "SourceSha256": "87c141c4a0f71a45df82582137d7272cb195bad8d59d18ee4298342616284061",
       "Description": "Provides access to the runtime.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
-      "Methods": [],
+      "Methods": [
+        {
+          "Name": "IsGameplayPaused",
+          "AsLuau": true,
+          "Description": "Returns the committed gameplay pause state.",
+          "LuauSignature": "(self: RunService) -> boolean"
+        },
+        {
+          "Name": "PauseGameplay",
+          "AsLuau": true,
+          "Description": "Requests a pause at the next simulation boundary.",
+          "LuauSignature": "\"(self: RunService) -> \" .. PauseOperation"
+        },
+        {
+          "Name": "ResumeGameplay",
+          "AsLuau": true,
+          "Description": "Releases the caller's gameplay pause.",
+          "LuauSignature": "\"(self: RunService) -> \" .. PauseOperation"
+        }
+      ],
       "Signals": [
+        {
+          "Name": "GameplayPauseChanged",
+          "Description": "Fired in presentation when the effective gameplay hold changes.",
+          "Args": "{ t.Bool }"
+        },
         {
           "Name": "PostSimulation",
           "Description": "Fired after simulating WorldRoots. Listeners receive the delta time",
@@ -4082,6 +4291,8 @@
       "Description": "A screen-space GUI root resolved against the runtime viewport and safe area",
       "Extends": "LayerCollector",
       "Abstract": false,
+      "Since": "0.2.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -4113,6 +4324,8 @@
       "Description": "Class that runs the source code in an asynchronous thread",
       "Extends": "LuaSourceContainer",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -4146,6 +4359,8 @@
       "Description": "A retained clipped viewport whose children are translated by a semantic canvas position",
       "Extends": "Frame",
       "Abstract": false,
+      "Since": "0.3.0",
+      "DefaultOverrides": "{ { Property = \"Interactable\", Value = true }, { Property = \"Selectable\", Value = true }, { Property = \"InputSink\", Value = \"All\" }, }",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -4209,6 +4424,8 @@
       "Description": "Abstract class that owns registered singleton services. Canonical direct member access and GetService lazily resolve the same service; FindService never constructs.",
       "Extends": "Instance",
       "Abstract": true,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -4244,6 +4461,71 @@
       ]
     },
     {
+      "Name": "SessionService",
+      "Kind": "Service",
+      "Source": "assets/services/SessionService.luau",
+      "SourceSha256": "1988a92b2042aecd8e593c8fe2cb8acfa69870d077561431f03b05458dadd697",
+      "Description": "Controls the gameplay session owned by a standalone application.",
+      "Extends": "Instance",
+      "Abstract": false,
+      "Since": "0.9.0",
+      "DefaultOverrides": "{}",
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [],
+      "Methods": [
+        {
+          "Name": "FindServers",
+          "AsLuau": true,
+          "Description": "Lists current sessions supplied by the native launcher for the selected source.",
+          "LuauSignature": "(self: SessionService, Source: \"LAN\" | \"Node\", Cursor: string?) -> { Await: (self: any) -> ({ Ok: true, Value: {Items: {{Id: string, Name: string}}, NextCursor: string?} } | { Ok: false, Code: string, Message: string }), GetResult: (self: any) -> ({ Ok: true, Value: {Items: {{Id: string, Name: string}}, NextCursor: string?} } | { Ok: false, Code: string, Message: string })?, GetState: (self: any) -> string, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        },
+        {
+          "Name": "GetSession",
+          "AsLuau": true,
+          "Description": "Returns a session snapshot.",
+          "LuauSignature": "(self: SessionService) -> { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? }"
+        },
+        {
+          "Name": "Host",
+          "AsLuau": true,
+          "Description": "Opens an enrolled multiplayer Server and joins it as a player.",
+          "LuauSignature": "(self: SessionService, Options: {SaveId: string?, MaxPlayers: number?, Discovery: (\"LAN\" | \"Node\")?}?) -> { Await: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string }), GetResult: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string })?, GetState: (self: any) -> string, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        },
+        {
+          "Name": "Join",
+          "AsLuau": true,
+          "Description": "Connects to an admitted direct target.",
+          "LuauSignature": "(self: SessionService, Target: ({Kind: \"Direct\", Address: string} | {Kind: \"Listing\", Id: string})) -> { Await: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string }), GetResult: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string })?, GetState: (self: any) -> string, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        },
+        {
+          "Name": "Leave",
+          "AsLuau": true,
+          "Description": "Retires the current gameplay session.",
+          "LuauSignature": "(self: SessionService) -> { Await: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string }), GetResult: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string })?, GetState: (self: any) -> string, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        },
+        {
+          "Name": "Reconnect",
+          "AsLuau": true,
+          "Description": "Starts a fresh connection to the last remote session after leaving or disconnecting.",
+          "LuauSignature": "(self: SessionService) -> { Await: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string }), GetResult: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string })?, GetState: (self: any) -> string, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        },
+        {
+          "Name": "StartLocal",
+          "AsLuau": true,
+          "Description": "Starts an offline world or its provisioned private Server.",
+          "LuauSignature": "(self: SessionService, Options: { SaveId: string?, PrivateServer: boolean? }?) -> { Await: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string }), GetResult: (self: any) -> ({ Ok: true, Value: { Generation: string, State: \"Idle\" | \"Starting\" | \"Connecting\" | \"Active\" | \"Leaving\", World: \"Absent\" | \"Preparing\" | \"Ready\" | \"Retiring\", Mode: (\"Offline\" | \"PrivateHost\" | \"MultiplayerHost\" | \"Remote\")?, SaveId: string?, WorldId: string?, LastError: {Ok: false, Code: string, Message: string, RecoveryId: string?}? } } | { Ok: false, Code: string, Message: string })?, GetState: (self: any) -> string, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        }
+      ],
+      "Signals": [
+        {
+          "Name": "Changed",
+          "Description": "Fires with an immutable snapshot at each committed session transition.",
+          "Args": "{{kind = \"c\", cType = \"gargantuan::SessionSnapshot\", luauType = Info, cIncludes = {'\"gargantuan/runtime/SessionSnapshot.hpp\"'}}}"
+        }
+      ]
+    },
+    {
       "Name": "Sky",
       "Kind": "Class",
       "Source": "assets/classes/Sky.luau",
@@ -4251,6 +4533,8 @@
       "Description": "Declares one six-face visual skybox; it is effective only as a direct Lighting child.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.5.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -4349,6 +4633,8 @@
       "Description": "Pins one stable deformable vertex to a world-space position when parented beneath a DeformableBody.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -4392,6 +4678,8 @@
       "Description": "Serializable material controls shared by deformable bodies.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -4487,6 +4775,8 @@
       "Description": "Plays one canonical AssetService Audio asset as a 2D or hierarchy-anchored 3D voice.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.4.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -4621,6 +4911,8 @@
       "Description": "An independent spatial domain. Positions, physics, and inherited world queries are local to this domain.",
       "Extends": "WorldRoot",
       "Abstract": false,
+      "Since": "0.9.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -4647,6 +4939,8 @@
       "Description": "A local emitter directed along its LightCFrame's negative Z axis.",
       "Extends": "LocalLight",
       "Abstract": false,
+      "Since": "0.5.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -4673,6 +4967,8 @@
       "Description": "Provides authored screen interface templates for new players.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.2.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "ServerOnly",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -4687,6 +4983,8 @@
       "Description": "Provides bounded, DataModel-scoped Instance tag membership and indexed queries.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -4738,6 +5036,8 @@
       "Description": "The protected volumetric terrain of the Workspace.",
       "Extends": "Instance",
       "Abstract": true,
+      "Since": "0.2.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -4827,6 +5127,8 @@
       "Description": "A bounded UTF-8 editable text control with code-point-safe caret and selection state",
       "Extends": "TextLabel",
       "Abstract": false,
+      "Since": "0.3.0",
+      "DefaultOverrides": "{ { Property = \"BackgroundTransparency\", Value = 0 }, { Property = \"BackgroundColor3\", Value = { 0.08, 0.10, 0.14 } }, { Property = \"TextXAlignment\", Value = \"Left\" }, { Property = \"Interactable\", Value = true }, { Property = \"Selectable\", Value = true }, { Property = \"InputSink\", Value = \"All\" }, }",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -4925,6 +5227,8 @@
       "Description": "A focusable text control with pointer and keyboard activation",
       "Extends": "TextLabel",
       "Abstract": false,
+      "Since": "0.2.0",
+      "DefaultOverrides": "{ { Property = \"BackgroundTransparency\", Value = 0 }, { Property = \"BackgroundColor3\", Value = { 0.18, 0.22, 0.30 } }, { Property = \"Interactable\", Value = true }, { Property = \"Selectable\", Value = true }, { Property = \"InputSink\", Value = \"Activate\" }, }",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -4939,6 +5243,8 @@
       "Description": "A retained GUI object that presents shaped UTF-8 text",
       "Extends": "GuiObject",
       "Abstract": false,
+      "Since": "0.2.0",
+      "DefaultOverrides": "{ { Property = \"BackgroundTransparency\", Value = 1 }, }",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -5022,6 +5328,8 @@
       "Description": "Creates runtime tweens of writable properties on live Instances.",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.6.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -5044,6 +5352,8 @@
       "Description": "A deterministic one-axis layout for direct GuiObject siblings",
       "Extends": "GuiBase",
       "Abstract": false,
+      "Since": "0.2.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -5075,6 +5385,8 @@
       "Description": "Best-effort unordered bounded application event",
       "Extends": "RemoteEventBase",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -5089,6 +5401,8 @@
       "Description": "Best-effort newest-wins bounded application state event",
       "Extends": "RemoteEventBase",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [],
@@ -5103,6 +5417,8 @@
       "Description": "Provides user input events, including keyboard, mouse, touch, and gamepads",
       "Extends": "Instance",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -5347,6 +5663,8 @@
       "Description": "Composes a local 3D presentation scene into a GUI rectangle.",
       "Extends": "GuiObject",
       "Abstract": false,
+      "Since": "0.9.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -5404,6 +5722,8 @@
       "Description": "\tConnects two BaseParts together such that their relative position and orientation remain the same.",
       "Extends": "Constraint",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -5435,6 +5755,8 @@
       "Description": "Provides a physical 3D workspace",
       "Extends": "WorldRoot",
       "Abstract": false,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -5481,6 +5803,8 @@
       "Description": "Abstract class for a physical 3D world.",
       "Extends": "Instance",
       "Abstract": true,
+      "Since": "0.1.0",
+      "DefaultOverrides": "{}",
       "ServicePolicy": "Default",
       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
       "Properties": [
@@ -5563,6 +5887,47 @@
           "Description": "Sweeps a sphere; Direction magnitude is distance. Initial overlaps are ignored.",
           "AsLuau": true,
           "LuauSignature": "(self: WorldRoot, Origin: Vector3, Radius: number, Direction: Vector3, Params: RaycastParams?) -> { Instance: BasePart | Terrain | BlockGrid, GridHit: { Cell: Vector3, Block: { Definition: string, Orientation: { Up: string, Front: string } }, Position: Vector3, Normal: Vector3, Revision: string }?, Position: Vector3, Normal: Vector3, Distance: number }?"
+        }
+      ],
+      "Signals": []
+    },
+    {
+      "Name": "WorldSaveService",
+      "Kind": "Service",
+      "Source": "assets/services/WorldSaveService.luau",
+      "SourceSha256": "0454b7099f6b3027a730a4d28df30cfc95df6c6edf87d58e9d8648010f5e2e8c",
+      "Description": "Manages world slots in the local project profile.",
+      "Extends": "Instance",
+      "Abstract": false,
+      "Since": "0.9.0",
+      "DefaultOverrides": "{}",
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [],
+      "Methods": [
+        {
+          "Name": "Create",
+          "AsLuau": true,
+          "Description": "Commits a world slot with an optional seed.",
+          "LuauSignature": "(self: WorldSaveService, Options: {Name: string, Seed: string?}) -> { Await: (self: any) -> ({ Ok: true, Value: { SaveId: string, WorldId: string, Name: string, Seed: string?, Revision: string, Compatibility: string } } | { Ok: false, Code: string, Message: string, RecoveryId: string? }), GetResult: (self: any) -> ({ Ok: true, Value: { SaveId: string, WorldId: string, Name: string, Seed: string?, Revision: string, Compatibility: string } } | { Ok: false, Code: string, Message: string, RecoveryId: string? })?, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        },
+        {
+          "Name": "GetCurrentWorld",
+          "AsLuau": true,
+          "Description": "Reads the selected save in authoritative gameplay.",
+          "LuauSignature": "(self: WorldSaveService) -> { Ok: true, Value: { SaveId: string, WorldId: string, Name: string, Seed: string?, Revision: string, Compatibility: string } } | { Ok: false, Code: string, Message: string }"
+        },
+        {
+          "Name": "List",
+          "AsLuau": true,
+          "Description": "Lists a page of saved worlds.",
+          "LuauSignature": "(self: WorldSaveService, Cursor: string?) -> { Await: (self: any) -> ({ Ok: true, Value: { Items: {{ SaveId: string, WorldId: string, Name: string, Seed: string?, Revision: string, Compatibility: string }}, NextCursor: string? } } | { Ok: false, Code: string, Message: string, RecoveryId: string? }), GetResult: (self: any) -> ({ Ok: true, Value: { Items: {{ SaveId: string, WorldId: string, Name: string, Seed: string?, Revision: string, Compatibility: string }}, NextCursor: string? } } | { Ok: false, Code: string, Message: string, RecoveryId: string? })?, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
+        },
+        {
+          "Name": "ResolveCreate",
+          "AsLuau": true,
+          "Description": "Reads a world slot after an uncertain create outcome.",
+          "LuauSignature": "(self: WorldSaveService, RecoveryId: string) -> { Await: (self: any) -> ({ Ok: true, Value: { SaveId: string, WorldId: string, Name: string, Seed: string?, Revision: string, Compatibility: string } } | { Ok: false, Code: string, Message: string, RecoveryId: string? }), GetResult: (self: any) -> ({ Ok: true, Value: { SaveId: string, WorldId: string, Name: string, Seed: string?, Revision: string, Compatibility: string } } | { Ok: false, Code: string, Message: string, RecoveryId: string? })?, GetProgress: (self: any) -> {Phase: string}?, ProgressChanged: Signal, Cancel: (self: any) -> boolean, Completed: Signal }"
         }
       ],
       "Signals": []
@@ -5718,7 +6083,8 @@
       "Path": "include/gargantuan/audio/AudioBackend.hpp",
       "Types": [
         "AudioBackendMetrics",
-        "IAudioBackend"
+        "IAudioBackend",
+        "IAudioOutput"
       ]
     },
     {
@@ -6530,10 +6896,12 @@
     {
       "Path": "include/gargantuan/editor/PlaySession.hpp",
       "Types": [
-        "DevelopmentTimeline",
+        "ApplicationPresentation",
         "ExecutionProfile",
+        "IAudioOutput",
         "IPersistenceProvider",
         "Phase",
+        "PlayApplication",
         "PlayDiagnostic",
         "PlayExecutionDiagnostics",
         "PlayRootDebugPause",
@@ -6543,7 +6911,9 @@
         "PlaySession",
         "PlaySessionId",
         "PlaySessionState",
-        "PlayStreamingDiagnostics"
+        "PlayStreamingDiagnostics",
+        "SimulationTimeline",
+        "WorldStorage"
       ]
     },
     {
@@ -6666,13 +7036,15 @@
       "Types": [
         "AnimationRuntime",
         "DataModel",
+        "GuiApplicationFrame",
         "GuiObject",
         "GuiPointerAction",
         "GuiPointerInput",
         "GuiRuntime",
         "GuiRuntimeMode",
         "Impl",
-        "RenderPublisher"
+        "RenderPublisher",
+        "ScreenGui"
       ]
     },
     {
@@ -6821,6 +7193,13 @@
       ]
     },
     {
+      "Path": "include/gargantuan/network/GameAdmission.hpp",
+      "Types": [
+        "GameAdmissionRequest",
+        "IGameAdmissionProvider"
+      ]
+    },
+    {
       "Path": "include/gargantuan/network/GameNetworkingSocketsTransport.hpp",
       "Types": [
         "GameNetworkingSocketsTransport",
@@ -6834,7 +7213,9 @@
         "DataModel",
         "Engine",
         "GameSession",
+        "GameSessionAdmissionMode",
         "GameSessionConfiguration",
+        "GameSessionLifecycleCounts",
         "GameSessionMetrics",
         "GameSessionPeerIdentity",
         "GameSessionRole",
@@ -6849,6 +7230,7 @@
     {
       "Path": "include/gargantuan/network/GameSessionProtocol.hpp",
       "Types": [
+        "GameSessionAuthenticatedClientHello",
         "GameSessionClientHello",
         "GameSessionClientReady",
         "GameSessionMessageKind",
@@ -7222,6 +7604,7 @@
     {
       "Path": "include/gargantuan/persistence/PersistenceProvider.hpp",
       "Types": [
+        "ILocalMutationReceipts",
         "IPersistenceProvider",
         "PersistenceCapabilities",
         "PersistenceComparison",
@@ -7433,6 +7816,12 @@
       ]
     },
     {
+      "Path": "include/gargantuan/render/ApplicationDisplay.hpp",
+      "Types": [
+        "ApplicationDisplay"
+      ]
+    },
+    {
       "Path": "include/gargantuan/render/FilamentRenderer.hpp",
       "Types": [
         "FilamentFrameMetrics",
@@ -7605,6 +7994,39 @@
       ]
     },
     {
+      "Path": "include/gargantuan/runtime/ApplicationPresentation.hpp",
+      "Types": [
+        "ApplicationPresentation",
+        "AudioRuntime",
+        "IAudioOutput",
+        "InputService",
+        "OwnedConnection",
+        "RunService",
+        "Script",
+        "ScriptEngine",
+        "SignalConnection"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/runtime/ApplicationSession.hpp",
+      "Types": [
+        "ApplicationPresentation",
+        "ApplicationSession",
+        "DataModel",
+        "IPersistenceProvider",
+        "Instance",
+        "Operation",
+        "SessionAdmissionFailure",
+        "SessionCommand",
+        "SessionFailure",
+        "SessionInvitation",
+        "SessionListing",
+        "SessionSnapshot",
+        "WorldInUse",
+        "lua_State"
+      ]
+    },
+    {
       "Path": "include/gargantuan/runtime/AttributeValidation.hpp",
       "Types": []
     },
@@ -7673,6 +8095,7 @@
       "Path": "include/gargantuan/runtime/EngineProviderConfiguration.hpp",
       "Types": [
         "EngineProviderConfiguration",
+        "IAudioOutput",
         "IEntitlementProvider",
         "IPersistenceProvider"
       ]
@@ -7769,6 +8192,19 @@
       "Path": "include/gargantuan/runtime/ServicePolicy.hpp",
       "Types": [
         "Instance"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/runtime/SessionSnapshot.hpp",
+      "Types": [
+        "SessionSnapshot"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/runtime/SimulationTimeline.hpp",
+      "Types": [
+        "Hold",
+        "SimulationTimeline"
       ]
     },
     {
@@ -7898,6 +8334,17 @@
       ]
     },
     {
+      "Path": "include/gargantuan/runtime/WorldCatalog.hpp",
+      "Types": [
+        "Phase",
+        "WorldCatalog",
+        "WorldCatalogAction",
+        "WorldCatalogResult",
+        "WorldSlot",
+        "lua_State"
+      ]
+    },
+    {
       "Path": "include/gargantuan/scripting/ExecutionBudget.hpp",
       "Types": [
         "GameplayResumeBudget"
@@ -7932,6 +8379,7 @@
     {
       "Path": "include/gargantuan/scripting/ScriptEngine.hpp",
       "Types": [
+        "ApplicationPresentation",
         "IPersistenceProvider",
         "ModuleScript",
         "PersistenceRuntime",
@@ -8031,6 +8479,12 @@
         "InputContext",
         "InputService",
         "UserInputService"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/services/ApplicationService.hpp",
+      "Types": [
+        "ApplicationService"
       ]
     },
     {
@@ -8137,6 +8591,12 @@
       ]
     },
     {
+      "Path": "include/gargantuan/services/SessionService.hpp",
+      "Types": [
+        "SessionService"
+      ]
+    },
+    {
       "Path": "include/gargantuan/services/StarterGui.hpp",
       "Types": [
         "StarterGui"
@@ -8170,6 +8630,12 @@
         "ServiceProvider",
         "Terrain",
         "Workspace"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/services/WorldSaveService.hpp",
+      "Types": [
+        "WorldSaveService"
       ]
     },
     {

@@ -1,0 +1,333 @@
+{
+  "SourceRevision": "830f5f26ea5642c9a6d7e281db8df0fb3982e5df",
+  "Classes": [
+    {
+      "Name": "ActionMap",
+      "Kind": "Service"
+    },
+    {
+      "Name": "Animator",
+      "Kind": "Class"
+    },
+    {
+      "Name": "AssetService",
+      "Kind": "Service"
+    },
+    {
+      "Name": "Attachment",
+      "Kind": "Class"
+    },
+    {
+      "Name": "AttachmentMesh",
+      "Kind": "Class"
+    },
+    {
+      "Name": "AudioMixService",
+      "Kind": "Service"
+    },
+    {
+      "Name": "BasePart",
+      "Kind": "Class"
+    },
+    {
+      "Name": "BlockGrid",
+      "Kind": "Class"
+    },
+    {
+      "Name": "Camera",
+      "Kind": "Class"
+    },
+    {
+      "Name": "Character",
+      "Kind": "Class"
+    },
+    {
+      "Name": "CharacterControlService",
+      "Kind": "Service"
+    },
+    {
+      "Name": "Cloth",
+      "Kind": "Class"
+    },
+    {
+      "Name": "Constraint",
+      "Kind": "Class"
+    },
+    {
+      "Name": "DataModel",
+      "Kind": "Class"
+    },
+    {
+      "Name": "DataStoreService",
+      "Kind": "Service"
+    },
+    {
+      "Name": "DeformableBody",
+      "Kind": "Class"
+    },
+    {
+      "Name": "EntitlementService",
+      "Kind": "Service"
+    },
+    {
+      "Name": "FileLink",
+      "Kind": "Class"
+    },
+    {
+      "Name": "Folder",
+      "Kind": "Class"
+    },
+    {
+      "Name": "Frame",
+      "Kind": "Class"
+    },
+    {
+      "Name": "GlslSourceContainer",
+      "Kind": "Class"
+    },
+    {
+      "Name": "GuiBase",
+      "Kind": "Class"
+    },
+    {
+      "Name": "GuiBase2d",
+      "Kind": "Class"
+    },
+    {
+      "Name": "GuiInputEvent",
+      "Kind": "Class"
+    },
+    {
+      "Name": "GuiObject",
+      "Kind": "Class"
+    },
+    {
+      "Name": "ImageButton",
+      "Kind": "Class"
+    },
+    {
+      "Name": "ImageLabel",
+      "Kind": "Class"
+    },
+    {
+      "Name": "InputAction",
+      "Kind": "Class"
+    },
+    {
+      "Name": "InputBinding",
+      "Kind": "Class"
+    },
+    {
+      "Name": "InputContext",
+      "Kind": "Class"
+    },
+    {
+      "Name": "InputObject",
+      "Kind": "Class"
+    },
+    {
+      "Name": "InputService",
+      "Kind": "Service"
+    },
+    {
+      "Name": "Instance",
+      "Kind": "Class"
+    },
+    {
+      "Name": "InteractionService",
+      "Kind": "Service"
+    },
+    {
+      "Name": "JointConstraint",
+      "Kind": "Class"
+    },
+    {
+      "Name": "KinematicCharacter",
+      "Kind": "Class"
+    },
+    {
+      "Name": "LayerCollector",
+      "Kind": "Class"
+    },
+    {
+      "Name": "Lighting",
+      "Kind": "Service"
+    },
+    {
+      "Name": "LocalLight",
+      "Kind": "Class"
+    },
+    {
+      "Name": "LuaSourceContainer",
+      "Kind": "Class"
+    },
+    {
+      "Name": "MeshPart",
+      "Kind": "Class"
+    },
+    {
+      "Name": "ModuleScript",
+      "Kind": "Class"
+    },
+    {
+      "Name": "Part",
+      "Kind": "Class"
+    },
+    {
+      "Name": "Player",
+      "Kind": "Class"
+    },
+    {
+      "Name": "PlayerGui",
+      "Kind": "Class"
+    },
+    {
+      "Name": "Players",
+      "Kind": "Service"
+    },
+    {
+      "Name": "PointLight",
+      "Kind": "Class"
+    },
+    {
+      "Name": "ProcessService",
+      "Kind": "Service"
+    },
+    {
+      "Name": "ProximityPrompt",
+      "Kind": "Class"
+    },
+    {
+      "Name": "ReflectionProbe",
+      "Kind": "Class"
+    },
+    {
+      "Name": "RemoteBase",
+      "Kind": "Class"
+    },
+    {
+      "Name": "RemoteEvent",
+      "Kind": "Class"
+    },
+    {
+      "Name": "RemoteEventBase",
+      "Kind": "Class"
+    },
+    {
+      "Name": "RemoteFunction",
+      "Kind": "Class"
+    },
+    {
+      "Name": "ReplicatedStorage",
+      "Kind": "Service"
+    },
+    {
+      "Name": "RubberBody",
+      "Kind": "Class"
+    },
+    {
+      "Name": "RunService",
+      "Kind": "Service"
+    },
+    {
+      "Name": "ScreenGui",
+      "Kind": "Class"
+    },
+    {
+      "Name": "Script",
+      "Kind": "Class"
+    },
+    {
+      "Name": "ScrollingFrame",
+      "Kind": "Class"
+    },
+    {
+      "Name": "ServiceProvider",
+      "Kind": "Class"
+    },
+    {
+      "Name": "Sky",
+      "Kind": "Class"
+    },
+    {
+      "Name": "SoftBodyAttachment",
+      "Kind": "Class"
+    },
+    {
+      "Name": "SoftBodyMaterial",
+      "Kind": "Class"
+    },
+    {
+      "Name": "Sound",
+      "Kind": "Class"
+    },
+    {
+      "Name": "SpatialRegion",
+      "Kind": "Class"
+    },
+    {
+      "Name": "SpotLight",
+      "Kind": "Class"
+    },
+    {
+      "Name": "StarterGui",
+      "Kind": "Service"
+    },
+    {
+      "Name": "Tags",
+      "Kind": "Service"
+    },
+    {
+      "Name": "Terrain",
+      "Kind": "Class"
+    },
+    {
+      "Name": "TextBox",
+      "Kind": "Class"
+    },
+    {
+      "Name": "TextButton",
+      "Kind": "Class"
+    },
+    {
+      "Name": "TextLabel",
+      "Kind": "Class"
+    },
+    {
+      "Name": "TweenService",
+      "Kind": "Service"
+    },
+    {
+      "Name": "UIListLayout",
+      "Kind": "Class"
+    },
+    {
+      "Name": "UnreliableRemoteEvent",
+      "Kind": "Class"
+    },
+    {
+      "Name": "UnreliableSequencedRemoteEvent",
+      "Kind": "Class"
+    },
+    {
+      "Name": "UserInputService",
+      "Kind": "Service"
+    },
+    {
+      "Name": "ViewportFrame",
+      "Kind": "Class"
+    },
+    {
+      "Name": "WeldConstraint",
+      "Kind": "Class"
+    },
+    {
+      "Name": "Workspace",
+      "Kind": "Service"
+    },
+    {
+      "Name": "WorldRoot",
+      "Kind": "Class"
+    }
+  ]
+}
