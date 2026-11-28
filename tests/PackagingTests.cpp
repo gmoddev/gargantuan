@@ -16,6 +16,7 @@
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "PackageSourcePaths.hpp"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -28,6 +29,7 @@
 #include <nlohmann/json.hpp>
 #include <ranges>
 #include <span>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -74,6 +76,61 @@ namespace {
 		std::ofstream Output(Path, std::ios::binary | std::ios::trunc);
 		Output.write(Text.data(), static_cast<std::streamsize>(Text.size()));
 		if (!Output) throw std::runtime_error("Could not write packaging test fixture");
+	}
+
+	void CheckPrivatePathScanner(const std::filesystem::path &Fixture) {
+		using namespace gargantuan::test;
+		const std::array<std::string, 2> Roots{"/src", "/authoring/project with spaces"};
+		std::istringstream Relative("vendor/src/file ./src/part ../src/x /src-extra /src2 /other/src/part");
+		Require(!FindPackagePath(Relative, Roots), "relative source paths or similar directory names matched /src");
+		for (const auto Offset : {std::size_t(0), PackageScanChunkBytes-4, PackageScanChunkBytes-1, PackageScanChunkBytes}) {
+			std::istringstream Input(std::string(Offset, '\0') + "/src");
+			const auto Match = FindPackagePath(Input, Roots);
+			Require(Match && Match->RootIndex == 0 && Match->Offset == Offset, "missed exact root or chunk-edge path");
+		}
+		std::istringstream Embedded(std::string(PackageScanChunkBytes-1, 'v') + "/src/relative.cpp");
+		Require(!FindPackagePath(Embedded, Roots), "chunk overlap lost the preceding relative path component");
+		std::istringstream Longer(std::string(PackageScanChunkBytes-4, '\0') + "/srcExtra/File");
+		Require(!FindPackagePath(Longer, Roots), "chunk overlap lost the following path component");
+		constexpr std::size_t LateOffset = 16 * 1024 * 1024 + PackageScanChunkBytes - 3;
+		{
+			std::ofstream Output(Fixture, std::ios::binary);
+			Output.seekp(LateOffset);
+			Output << Roots[1] << "/entry.cpp";
+			Require(Output.good(), "could not write the large package path scanner fixture");
+		}
+		std::ifstream Late(Fixture, std::ios::binary);
+		const auto Match = FindPackagePath(Late, Roots);
+		Require(Match && Match->RootIndex == 1 && Match->Offset == LateOffset,
+			"missed an absolute authoring path past 16 MiB spanning two scan chunks");
+		const std::array<std::string, 1> Drive{"c:/project/authorroot"};
+		for (const auto *Spelling : {R"(binary:C:\PROJECT\AuthorRoot\part.cpp)",
+			R"(binary:C:\project/AuthorRoot\part.cpp)", "binary:C:/Project/AuthorRoot/part.cpp"}) {
+			std::istringstream Native(Spelling);
+			const auto WindowsMatch = FindPackagePath(Native, Drive, PackagePathStyle::Windows);
+			Require(WindowsMatch && WindowsMatch->Offset == 7, "missed a native or mixed-separator Windows authoring path");
+		}
+		std::istringstream Siblings(R"(C:\project/AuthorRoot-extra\file C:/PROJECT/AuthorRoot2/x vendor\src\file .\project\authorroot\file)");
+		Require(!FindPackagePath(Siblings, Drive, PackagePathStyle::Windows), "matched a sibling or relative Windows path");
+		for (const auto Style : {PackagePathStyle::Windows, PackagePathStyle::Posix}) {
+			const std::string Volume = Style == PackagePathStyle::Windows ? "c:" : "";
+			const std::array GnsRoots{Volume + "/build/_deps/gamenetworkingsockets-src", Volume + "/external checkout/gns"};
+			for (std::size_t I = 0; I < GnsRoots.size(); ++I) {
+				std::istringstream Absolute(GnsRoots[I] + "/src/steamnetworkingsockets/diagnostic.cpp");
+				const auto Hit = FindPackagePath(Absolute, GnsRoots, Style);
+				Require(Hit && Hit->RootIndex == I && Hit->Offset == 0, "missed the populated GNS source checkout");
+			}
+			std::istringstream RelativeGns("./GameNetworkingSockets/src/steamnetworkingsockets/diagnostic.cpp");
+			Require(!FindPackagePath(RelativeGns, GnsRoots, Style), "relative GNS diagnostic matched a private checkout");
+		}
+	}
+
+	void RequirePublicPackagePaths(const std::filesystem::path &File, std::span<const std::string> Roots) {
+		std::ifstream Input(File, std::ios::binary);
+		if (!Input) throw std::runtime_error("Could not open packaged file " + File.string());
+		if (const auto Hit = test::FindPackagePath(Input, Roots))
+			throw std::runtime_error("Private path " + Roots[Hit->RootIndex] + " in " + File.string() +
+				" at byte " + std::to_string(Hit->Offset));
 	}
 
 	bool HasError(const std::vector<PackageDiagnostic> &Diagnostics) {
@@ -668,6 +725,7 @@ int main() {
 	} Sdl;
 	try {
 		TestWorkspace Workspace;
+		CheckPrivatePathScanner(Workspace.Root / "path-scan-fixture.bin");
 		const auto Runtime = std::filesystem::absolute(GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT).lexically_normal();
 		BootstrapProjectRuntimeSchema(Workspace.ProjectRoot);
 		DiskFilesystem Filesystem(Workspace.ProjectRoot);
@@ -777,7 +835,14 @@ int main() {
 				Loaded->Assets.Artifacts.size() == Payload.Assets.Artifacts.size(),
 			"validated package payload did not load with its stable identity/assets"
 		);
-		const auto SourcePath = Workspace.ProjectRoot.generic_string();
+		const std::array PrivateRoots{
+			test::PackagePathRoot(Workspace.ProjectRoot),
+			test::PackagePathRoot(GARGANTUAN_PACKAGE_SOURCE_ROOT),
+			test::PackagePathRoot(GARGANTUAN_PACKAGE_BUILD_ROOT),
+#ifdef GARGANTUAN_PACKAGE_GNS_ROOT
+			test::PackagePathRoot(GARGANTUAN_PACKAGE_GNS_ROOT),
+#endif
+		};
 		std::filesystem::remove_all(Workspace.ProjectRoot);
 		BootstrapPackagedRuntimeSchema(Loaded->PreRunSource);
 		auto PackagedWorld = PackageBuilder::LoadWorld(*Loaded, ReleaseA);
@@ -916,21 +981,15 @@ int main() {
 				Entry["Path"].get<std::string>().find("telemetry") == std::string::npos,
 				"optional telemetry entered the standalone runtime package"
 			);
-		for (const auto &Entry : Manifest["Content"]) {
-			const auto PackageFile = ReleaseA / std::filesystem::path(Entry["Path"].get<std::string>());
-			if (std::filesystem::file_size(PackageFile) <= 16 * 1024 * 1024) {
-				const auto Content = ReadText(PackageFile);
-				const auto EngineSourceRoot = std::filesystem::path(GARGANTUAN_FIRST_COMPLETE_GAME_ROOT)
-										  .parent_path()
-										  .parent_path();
-				Require(
-					Content.find(SourcePath) == std::string::npos &&
-						Content.find(EngineSourceRoot.string()) == std::string::npos &&
-						Content.find(EngineSourceRoot.generic_string()) == std::string::npos,
-					"package content exposed the authoring source root"
-				);
-			}
-		}
+		RequirePublicPackagePaths(ReleaseA / "game.package.json", PrivateRoots);
+		for (const auto &Entry : Manifest["Content"])
+			RequirePublicPackagePaths(ReleaseA / Entry.at("Path").get<std::string>(), PrivateRoots);
+		const std::filesystem::path ServerRuntime = GARGANTUAN_SERVER_RUNTIME_DISTRIBUTION_ROOT;
+		const auto ServerManifestFile = ServerRuntime / "runtime-distribution.json";
+		RequirePublicPackagePaths(ServerManifestFile, PrivateRoots);
+		const auto ServerManifest = Json::parse(ReadText(ServerManifestFile));
+		for (const auto &Entry : ServerManifest.at("Files"))
+			RequirePublicPackagePaths(ServerRuntime / Entry.at("Path").get<std::string>(), PrivateRoots);
 
 		const auto OptionalRuntime = Workspace.Root / "RuntimeWithOptionalTelemetry";
 		std::filesystem::copy(Runtime, OptionalRuntime, std::filesystem::copy_options::recursive);

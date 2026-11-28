@@ -7,10 +7,19 @@
 
 #include <algorithm>
 #include <limits>
+#include <mutex>
 #include <lua.h>
 #include <stdexcept>
 
 namespace gargantuan {
+	namespace {
+		ObjectId GetPublishedScriptId(const Script &Owner) {
+			// Starting a detached bootstrap Script must not publish a DataModel identity.
+			std::scoped_lock Lock(Owner.IdentityMutex);
+			return Owner.Id;
+		}
+	}
+
 	Script::Script() {
 		Destroying->Connect([this](std::monostate _) { this->Cleanup(); });
 	}
@@ -77,7 +86,8 @@ namespace gargantuan {
 		if (ExecutionGeneration==std::numeric_limits<std::uint64_t>::max()) throw std::overflow_error("[Script:Runtime] Execution generation exhausted");
 		++ExecutionGeneration; ExecutionActive=true;
 		auto Security=GetRunContext()==Enums::RunContext::Client?ScriptSecurityContext::ClientRuntime():ScriptSecurityContext::ServerRuntime();
-		Security.IssuingScript=GetObjectId(); Security.ExecutionGeneration=ExecutionGeneration;
+		Security.IssuingScript = GetPublishedScriptId(*this);
+		Security.ExecutionGeneration = ExecutionGeneration;
 		ScriptSecurityScope SecurityScope(Security);
 
 		auto scriptEngine = ScriptEngine::Get(L);
@@ -126,7 +136,9 @@ namespace gargantuan {
 			throw std::logic_error("[Editor:PlayDebugger] Suspended Script is no longer owned");
 		[[maybe_unused]] auto KeepScriptAlive = weak_from_this().lock();
 		[[maybe_unused]] auto KeepRuntimeAlive = ScriptEngine::Get(L)->weak_from_this().lock();
-		auto Bound=Security; Bound.IssuingScript=GetObjectId(); Bound.ExecutionGeneration=ExecutionGeneration;
+		auto Bound = Security;
+		Bound.IssuingScript = GetPublishedScriptId(*this);
+		Bound.ExecutionGeneration = ExecutionGeneration;
 		ScriptSecurityScope SecurityScope(Bound);
 		Status = ScriptStatus::Running;
 		return ResumeOwnedThread(L, FailureLine, &Budget, StepLine);

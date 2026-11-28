@@ -18,6 +18,10 @@ Across 64 appends, elapsed time from submitting the write until the server scrip
 
 The driver terminated the first four processes after their writes and readbacks completed. It terminated the fifth after its readback and let the sixth shut down normally. Power loss during a SQLite transaction, storage across different hosts and long-lived allocation growth remain outside this run.
 
+## Integrated Engine repeat
+
+The integrated Windows runtime `d28a2ad74` repeated the two-Player construction, excavation, door, reconnect and fresh-server test. The independent six-process soak then recovered all 64 accepted edits. Its fifth and sixth processes each completed replay in 1.250 s. Both returned identical 4,000-sample terrain fields (SHA-256 `420e0c45c6a336a93cb6d289f3ca545d2cdbc3979a2a205a95b465020ea113dd`) and 100 physical rays (`50d759f35af883f25319a9d9ba175b0f6cda355fc3267e8746b1672f86c3f3ef`). Each retained one 2,128-byte document at revision 70. Across the 64 writes, observed completion latency was 16.547 ms at p50, 24.463 ms at p95 and 25.204 ms at the maximum. The dedicated Server SHA-256 was `f7ae1d9042c710ac4192b11f88c8f97b41662b68c892a440733b2c345f4f54e2` and the package manifest was `3054cb06a2993fa57836c5cf45e06fb91f4d942c75a917503de676b990faf72a`.
+
 ## Reproduction
 
 Run from the repository with a SQLite-enabled Windows product suite. Use a short, unused absolute output directory on Windows. The driver retains the authored project, relocated package, database, unmodified process logs, binary terrain/ray exports, CSVs and JSON summary.

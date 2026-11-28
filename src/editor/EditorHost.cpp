@@ -1448,6 +1448,7 @@ namespace gargantuan {
 		auto Retired = GuiPreview->Runtime.GetPreviewTextureRemovals();
 		RetiredGuiPreviewTextures.insert(RetiredGuiPreviewTextures.end(), Retired.begin(), Retired.end());
 		GuiPreview.reset();
+		RetirePresentedEditFrames();
 	}
 
 	void EditorHost::PublishEditViewport(Workspace &WorkspaceService, const RenderCameraInput &Camera) {
@@ -1506,8 +1507,14 @@ namespace gargantuan {
 		Frames.push_back({FrameNumber, Revision, GuiPreview->Placement, GuiPreview->DisplayedLayout});
 	}
 
+	void EditorHost::RetirePresentedEditFrames() {
+		PresentedEditFrames = {};
+		++PresentedEditEpoch;
+	}
+
 	void EditorHost::AdvanceViewportGeneration() {
 		if (GuiPreview) GuiPreview->DisplayedFrames.clear();
+		RetirePresentedEditFrames();
 		ViewportGeneration = ViewportGeneration == std::numeric_limits<std::uint64_t>::max()
 			? 1 : ViewportGeneration + 1;
 		ViewportFrameNumber = 0;
@@ -1584,6 +1591,8 @@ namespace gargantuan {
 
 			LatestViewportFrameMetadata Metadata{.Generation = ViewportGeneration};
 			EditViewportSource EditSource;
+			const auto EditEpoch = PresentedEditEpoch;
+			const bool CapturingGui = GuiPreview != nullptr;
 			if (ActivePlaySession && ActivePlaySession->GetState() == PlaySessionState::Running) {
 				ConsumePlayRenderPublications(ViewportCaptureForTesting ? nullptr : ViewportRenderer.get());
 				if (!LastViewportPublication) return;
@@ -1611,11 +1620,10 @@ namespace gargantuan {
 			ViewportFrameNumber = ViewportLatestFrameMailbox->Publish(
 				Captured.Width, Captured.Height, Captured.BgraPixels, Metadata
 			);
-			if (Metadata.Mode == LatestFrameMailboxLayout::Mode::Edit) {
-				RecordGuiPreviewFrame(ViewportFrameNumber);
-				PresentedEditFrames[ViewportFrameNumber % PresentedEditFrames.size()] = {
-					ViewportFrameNumber, Metadata.Generation, Metadata.CameraRevision, EditSource
-				};
+			if (Metadata.Mode == LatestFrameMailboxLayout::Mode::Edit && EditEpoch == PresentedEditEpoch) {
+				if (CapturingGui) RecordGuiPreviewFrame(ViewportFrameNumber);
+				else PresentedEditFrames[ViewportFrameNumber % PresentedEditFrames.size()] = {
+					ViewportFrameNumber, Metadata.Generation, Metadata.CameraRevision, EditSource};
 			}
 			++ViewportProducedFrames;
 			ViewportLastRenderSubmissionUs = static_cast<std::uint64_t>(Captured.RenderSubmission.count());
@@ -2565,7 +2573,7 @@ namespace gargantuan {
 					const auto Region = std::dynamic_pointer_cast<SpatialRegion>(Selected);
 					if (Default->GetCurrentSpatialRegion().value_or(nullptr) != Region) {
 						Default->SetCurrentSpatialRegion(Region ? std::optional(Region) : std::nullopt);
-						PresentedEditFrames = {};
+						RetirePresentedEditFrames();
 						LastViewportPublication.reset();
 					}
 				}
@@ -4444,6 +4452,7 @@ namespace gargantuan {
 						GuiPreview->Width = Width;
 						GuiPreview->Height = Height;
 						GuiPreview->DisplayedFrames.clear();
+						RetirePresentedEditFrames();
 						NextViewportFrame = std::chrono::steady_clock::now();
 					} else if (!Enabled && GuiPreview) {
 						ResetGuiPreview();
@@ -4631,7 +4640,7 @@ namespace gargantuan {
 				const auto NextCamera = MakeLookAtRenderCameraInput(*position, *target, {0.0f, 1.0f, 0.0f}, fieldOfView);
 				if (camera.Position != NextCamera.Position || camera.LookDirection != NextCamera.LookDirection ||
 					camera.UpDirection != NextCamera.UpDirection || camera.VerticalFieldOfView != NextCamera.VerticalFieldOfView)
-					PresentedEditFrames = {};
+					RetirePresentedEditFrames();
 				camera = NextCamera;
 				if (RequestedCameraRevision) ViewportCameraRevision = *RequestedCameraRevision;
 				else if (ViewportCameraRevision != std::numeric_limits<std::uint64_t>::max()) {

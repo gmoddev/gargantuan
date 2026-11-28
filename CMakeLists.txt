@@ -232,21 +232,19 @@ if(FT_DISABLE_ZLIB)
 endif()
 add_subdirectory(vendor/sdl_ttf SYSTEM)
 
-# SDL expands __FILE__ into diagnostics that ship in its runtime library. Keep
-# those strings independent of the developer checkout without changing codegen
-# for Gargantuan or the rest of the dependency graph.
-if(MSVC)
-	target_compile_options(SDL3-shared PRIVATE
-		/experimental:deterministic
-		"/pathmap:${CMAKE_CURRENT_SOURCE_DIR}=."
-		"/pathmap:${CMAKE_CURRENT_BINARY_DIR}=."
-	)
-else()
-	target_compile_options(SDL3-shared PRIVATE
-		"-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=."
-		"-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=."
-	)
-endif()
+# Shipped dependency diagnostics retain source-relative file names.
+function(GargantuanMapRuntimeSourcePaths Target)
+	if(MSVC)
+		target_compile_options(${Target} PRIVATE /experimental:deterministic)
+		set(Prefix "/pathmap:")
+	else()
+		set(Prefix "-ffile-prefix-map=")
+	endif()
+	foreach(Mapping IN ITEMS "${CMAKE_CURRENT_SOURCE_DIR}=." "${CMAKE_CURRENT_BINARY_DIR}=." ${ARGN})
+		target_compile_options(${Target} PRIVATE "${Prefix}${Mapping}")
+	endforeach()
+endfunction()
+GargantuanMapRuntimeSourcePaths(SDL3-shared)
 
 set(GARGANTUAN_GUI_RUNTIME_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/runtime")
 file(MAKE_DIRECTORY "${GARGANTUAN_GUI_RUNTIME_DIRECTORY}")
@@ -503,7 +501,8 @@ set_target_properties(gargantuan_player PROPERTIES OUTPUT_NAME "GargantuanPlayer
 if(APPLE)
 	set_target_properties(gargantuan_player PROPERTIES BUILD_RPATH "@loader_path" INSTALL_RPATH "@loader_path")
 elseif(UNIX)
-	set_target_properties(gargantuan_player PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
+	# Prefer adjacent packaged libraries and keep CMake's extra build-tree lookup relative.
+	set_target_properties(gargantuan_player PROPERTIES BUILD_RPATH "$ORIGIN" BUILD_RPATH_USE_ORIGIN TRUE INSTALL_RPATH "$ORIGIN")
 endif()
 target_link_libraries(gargantuan_player PRIVATE gargantuan_player_host gargantuan_core ${CMAKE_DL_LIBS})
 add_library(gargantuan_server_host STATIC "src/host/server/ServerHost.cpp")
@@ -545,7 +544,7 @@ set_target_properties(gargantuan_server PROPERTIES OUTPUT_NAME "GargantuanServer
 if(APPLE)
 	set_target_properties(gargantuan_server PROPERTIES BUILD_RPATH "@loader_path" INSTALL_RPATH "@loader_path")
 elseif(UNIX)
-	set_target_properties(gargantuan_server PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
+	set_target_properties(gargantuan_server PROPERTIES BUILD_RPATH "$ORIGIN" BUILD_RPATH_USE_ORIGIN TRUE INSTALL_RPATH "$ORIGIN")
 endif()
 target_link_libraries(gargantuan_server PRIVATE gargantuan_server_host gargantuan_core ${CMAKE_DL_LIBS})
 add_executable(gargantuan_packager "tools/PackagerMain.cpp")
@@ -1344,7 +1343,14 @@ if(BUILD_TESTING)
 	target_compile_definitions(gargantuan_packaging_tests PRIVATE
 		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
 		GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT="$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution"
+		GARGANTUAN_SERVER_RUNTIME_DISTRIBUTION_ROOT="$<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution"
+		GARGANTUAN_PACKAGE_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}"
+		GARGANTUAN_PACKAGE_BUILD_ROOT="${CMAKE_CURRENT_BINARY_DIR}"
 	)
+	if(GARGANTUAN_WITH_GNS)
+		target_compile_definitions(gargantuan_packaging_tests PRIVATE
+			GARGANTUAN_PACKAGE_GNS_ROOT="${gamenetworkingsockets_SOURCE_DIR}")
+	endif()
 	add_dependencies(gargantuan_packaging_tests gargantuan_packager gargantuan_runtime_distribution)
 	add_executable(gargantuan_blockgrid_persistence_tests "tests/blockgrid/BlockGridPersistenceTests.cpp")
 	target_link_libraries(gargantuan_blockgrid_persistence_tests PRIVATE gargantuan_core)
