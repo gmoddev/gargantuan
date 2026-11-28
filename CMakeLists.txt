@@ -205,8 +205,9 @@ set(SDLTTF_PLUTOSVG OFF CACHE BOOL "" FORCE)
 set(FT_DISABLE_ZLIB ON CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
-add_subdirectory(vendor/argparse SYSTEM)
 enable_language(C)
+include(cmake/ClangSanitizerPaths.cmake)
+add_subdirectory(vendor/argparse SYSTEM)
 include(cmake/Box3DCompatibility.cmake)
 GargantuanPrepareBox3DCompatibility("${CMAKE_CURRENT_SOURCE_DIR}/vendor/box3d" GARGANTUAN_BOX3D_SOURCE_DIR)
 add_subdirectory("${GARGANTUAN_BOX3D_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/box3d-compat-build" SYSTEM)
@@ -400,6 +401,7 @@ if(GARGANTUAN_WITH_LOCAL_SQLITE)
 		DOWNLOAD_EXTRACT_TIMESTAMP FALSE
 		TLS_VERIFY TRUE)
 	FetchContent_MakeAvailable(gargantuan_sqlite_source)
+	GargantuanAddSanitizerSource(SQLite "${gargantuan_sqlite_source_SOURCE_DIR}")
 	add_library(gargantuan_sqlite STATIC "${gargantuan_sqlite_source_SOURCE_DIR}/sqlite3.c")
 	target_include_directories(gargantuan_sqlite PUBLIC "${gargantuan_sqlite_source_SOURCE_DIR}")
 	target_compile_definitions(gargantuan_sqlite PRIVATE SQLITE_THREADSAFE=1 SQLITE_OMIT_LOAD_EXTENSION)
@@ -862,6 +864,12 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+	if(GargantuanSanitizerAliasDirectory AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+		add_test(NAME gargantuan_clang_sanitizer_paths COMMAND "${GargantuanSanitizerPython}"
+			"${CMAKE_CURRENT_SOURCE_DIR}/tests/ClangSanitizerPaths.py"
+			"${CMAKE_CURRENT_SOURCE_DIR}/cmake/ClangSanitizerPaths.cmake" "${CMAKE_CXX_COMPILER}" "${CMAKE_GENERATOR}")
+		set_tests_properties(gargantuan_clang_sanitizer_paths PROPERTIES LABELS "build;sanitizer-safety" TIMEOUT 90)
+	endif()
 	foreach(TerrainTest IN ITEMS
 		"tests/terrain/TerrainFieldTests.cpp"
 		"tests/terrain/TerrainCoordinatorTests.cpp"

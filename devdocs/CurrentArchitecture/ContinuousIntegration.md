@@ -764,6 +764,20 @@ as the Windows gate on failure. UBSan is not described as an MSVC feature, and
 the workflow does not weaken the normal Windows ABI/toolchain contract to obtain
 sanitizer coverage.
 
+The Linux Clang ASan/UBSan build gives C and C++ source inputs stable relative
+names. Clang 19 records input names in sanitizer globals independently of
+its DWARF and preprocessor prefix maps. The compiler launcher points the
+Engine, GameNetworkingSockets and SQLite includes at build-local aliases,
+keeps generated inputs relative to the build, and restores physical source
+names in compiler depfiles. An existing compiler launcher receives the
+resulting command. The instrumented Player, Server and SDL retain their file
+and line metadata for symbolization. The generic package test scans every
+delivered binary and resource. A separate CTest relocates an instrumented
+probe and checks both diagnostics, incremental header rebuilds and the
+absence of a private directory marker in its object and executable.
+[Compiler setup](../../cmake/ClangSanitizerPaths.cmake)
+[Regression](../../tests/ClangSanitizerPaths.py)
+
 ## GNS sanitizer safety versus F1 capacity
 
 The dedicated `.github/workflows/gns-sanitizers.yml` workflow exercises pinned
