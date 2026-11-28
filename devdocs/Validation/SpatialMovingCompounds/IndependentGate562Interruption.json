@@ -1,0 +1,57 @@
+{
+  "NoExtraUnknown": {
+    "MeanLow": -7.743064346957428,
+    "MeanHigh": -7.0888832836010955,
+    "Upper95": -5.002362159785553
+  },
+  "Add0Through20": {
+    "SmallestMeanPercent": -7.743350645349051,
+    "LargestMeanPercent": -6.965062286584481,
+    "LargestUpper95Percent": -4.875705967350483
+  },
+  "Replace0Through20": {
+    "SmallestMeanPercent": -7.803005884598536,
+    "LargestMeanPercent": -6.9645756194408035,
+    "LargestUpper95Percent": -4.842475790971672
+  },
+  "Add0Through21": {
+    "SmallestMeanPercent": -7.743350645349051,
+    "LargestMeanPercent": -6.9645756194408035,
+    "LargestUpper95Percent": -4.875208564196642
+  },
+  "Replace0Through21": {
+    "SmallestMeanPercent": -7.804250436363869,
+    "LargestMeanPercent": -6.959002062022238,
+    "LargestUpper95Percent": -4.836044795523073
+  },
+  "Add0Through47": {
+    "SmallestMeanPercent": -7.743350645349051,
+    "LargestMeanPercent": -6.763146800999792,
+    "LargestUpper95Percent": -4.6691976919591385
+  },
+  "Replace0Through47": {
+    "SmallestMeanPercent": -7.867665872910468,
+    "LargestMeanPercent": -6.697083433650509,
+    "LargestUpper95Percent": -4.528049242397401
+  },
+  "Add0Through48": {
+    "SmallestMeanPercent": -7.743350645349051,
+    "LargestMeanPercent": -6.742912144241019,
+    "LargestUpper95Percent": -4.648484867585074
+  },
+  "Replace0Through48": {
+    "SmallestMeanPercent": -7.871072270910822,
+    "LargestMeanPercent": -6.673151664931988,
+    "LargestUpper95Percent": -4.501229202015617
+  },
+  "OmitBlock35": {
+    "Blocks": 63,
+    "EstimatePercent": -7.094595117134679,
+    "Bounds": {
+      "MeanLow": -7.3849717311173055,
+      "MeanHigh": -6.74380126327253,
+      "Upper95": -4.711768457552475
+    }
+  }
+}
+

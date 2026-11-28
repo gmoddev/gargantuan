@@ -1,0 +1,150 @@
+{
+  "Manifest": {
+    "Compile": [
+      "src/editor/PlaySession.cpp",
+      "src/reflection/RuntimeSchema.cpp",
+      "src/classes/Character.cpp",
+      "src/classes/WorldRoot.cpp",
+      "src/render/RenderPublisher.cpp",
+      "src/render/RenderProjection.cpp"
+    ],
+    "CompileFlags": [],
+    "Extra": {
+      "tests/BenchmarkAllocationProbe.cpp": "src/editor/PlaySession.cpp"
+    },
+    "Files": {
+      "src/classes/Character.cpp": "2662759d6a10ac0c726c3947f4d56927c4a54357285f6f902aff22660b445ee7",
+      "src/classes/WorldRoot.cpp": "ea36e77c5ddb84395fa65563512bf1aa75357f165a94785f2384f808562d03cd",
+      "src/editor/PlaySession.cpp": "c2890d0a60b254fb09e71d1c61dd030387c4d8ae35fbc4979f77efa9f4c1bf82",
+      "src/reflection/RuntimeSchema.cpp": "3c19b26f775abaf0a2c97634f3e1cae91231adb1c94acd7bf98dc74fb71bbfaf",
+      "src/render/RenderProjection.cpp": "a5db3c6d07dffc733b91be3fd90b1c7255e949cf75998e477e4e73236b0c16ae",
+      "src/render/RenderPublisher.cpp": "9f438eb1aa2f7716eb9ac3424ef7074e4c36c4f88751bfd7738e6e2b8957eddd",
+      "tests/BenchmarkAllocationProbe.cpp": "3a4869436fa8ab848a72c423d3c6fbfbb5ebe719e5bab48ee80b4ed49f7df246",
+      "tests/BenchmarkAllocationProbe.hpp": "ae5ca16275cf271e7af01fc47268ede1a0188f466d210457d78dc25bc5a2440b",
+      "tests/SpatialOrdinaryCallProfile.hpp": "df6da5aa73a5cdea6da371e95d020c3c13f28a6161161e927d46c8ffe7cc3547",
+      "tests/SpatialOrdinaryNativeProfile.hpp": "ad1cd5b443433c1bc13f325105d81d712b64416d9bb79cbb11b5e2b3bef271c3"
+    },
+    "Graph": "4af419f004b94aa85379c163ccc23f27d68311c0",
+    "Label": "Profile-Stock",
+    "LinkFlags": [],
+    "Map": false,
+    "Pin": "1e89d189af82ea6897555205cbcaea4ff4f22085",
+    "Runtime": [],
+    "Targets": [
+      "gargantuan"
+    ]
+  },
+  "InputDelivery": "610c2f934408298bd7d4fcbb04a63be93e335ba5821c1e920e1f6fd90eeac794",
+  "GraphEngineSha256": "a62153f7657927d20e9a9d8bd2ffc6c8b0b7575b4afd736dd6a38b0324e7afce",
+  "Objects": [
+    {
+      "RecoveredExactSameCapsuleObject": false,
+      "Source": "src/editor/PlaySession.cpp",
+      "SourceSha256": "c2890d0a60b254fb09e71d1c61dd030387c4d8ae35fbc4979f77efa9f4c1bf82",
+      "MatchedSourceSha256": "d99ec30e78b63483538554a3531dc3e60e20e18f7a600f7ec66c3e2e69f161cb",
+      "OriginalObjectSha256": "d2f4b4389b54a638947040abdcba087db0b1e5e576511fc48993d03a29180ead",
+      "ObjectSha256": "bbb93efed35a430442a7685018e13128b8ae87e87a4ee6bc7148ba3a121f6cea",
+      "Seconds": 17.197
+    },
+    {
+      "RecoveredExactSameCapsuleObject": false,
+      "Source": "src/reflection/RuntimeSchema.cpp",
+      "SourceSha256": "3c19b26f775abaf0a2c97634f3e1cae91231adb1c94acd7bf98dc74fb71bbfaf",
+      "MatchedSourceSha256": "7f6ed67d017f9e2305bd884a4917b68403ebdde85bded10be8c401df17760e0d",
+      "OriginalObjectSha256": "791819bca1b534a5aa2423c5236489a0b00fcc2f8986f084bd328051f35edd0d",
+      "ObjectSha256": "05700fce2109ca392b2b27954d376d9adf863c3aad5158fa3c32038edde50ad8",
+      "Seconds": 5.263
+    },
+    {
+      "RecoveredExactSameCapsuleObject": false,
+      "Source": "src/classes/Character.cpp",
+      "SourceSha256": "2662759d6a10ac0c726c3947f4d56927c4a54357285f6f902aff22660b445ee7",
+      "MatchedSourceSha256": "a64f071c8d531d69fa3d9dede1af945d4ae01a874d9241344eb43955daa9c010",
+      "OriginalObjectSha256": "fc4f7ce65390468755cb0ce7ad5cf7adf66539e37ca3d922ea8e252488113749",
+      "ObjectSha256": "70c24b874ae842b792a5bc2b2791ab0b3ad32d6885d03b9b578bf3a4837305f7",
+      "Seconds": 6.233
+    },
+    {
+      "RecoveredExactSameCapsuleObject": false,
+      "Source": "src/classes/WorldRoot.cpp",
+      "SourceSha256": "ea36e77c5ddb84395fa65563512bf1aa75357f165a94785f2384f808562d03cd",
+      "MatchedSourceSha256": "5fcb0de3f813b0b443fc60fbe0d9b73132be71735b2d2889ff05205f7889a072",
+      "OriginalObjectSha256": "5171b0f42527d8b29a95744193f50129c921cdb08bf6693a88218f8f724ae42a",
+      "ObjectSha256": "318f7ffbcfacbed1ffc9c95f1d3624e42c30a32cc8b35ca7993010fbce1667b8",
+      "Seconds": 12.022
+    },
+    {
+      "RecoveredExactSameCapsuleObject": false,
+      "Source": "src/render/RenderPublisher.cpp",
+      "SourceSha256": "9f438eb1aa2f7716eb9ac3424ef7074e4c36c4f88751bfd7738e6e2b8957eddd",
+      "MatchedSourceSha256": "3ffbef3d5d55d595675113292981a4e0715c624e30caf34662462add9465304c",
+      "OriginalObjectSha256": "b686ee48096d3c9482f29f2356f7ccf25892e753ab734fc21288e3bb08fbc9ec",
+      "ObjectSha256": "f7325a249e3dada6063789c674e0636e9484d78ef4e942862a13c202172e2cd5",
+      "Seconds": 14.275
+    },
+    {
+      "RecoveredExactSameCapsuleObject": false,
+      "Source": "src/render/RenderProjection.cpp",
+      "SourceSha256": "a5db3c6d07dffc733b91be3fd90b1c7255e949cf75998e477e4e73236b0c16ae",
+      "MatchedSourceSha256": "8dfed0cc0f79c02da5e62fedfde6cc03ab92d52b9efeac3c05c0225048c0729f",
+      "OriginalObjectSha256": "71e1ef12288731823303f1dcc09d73176fc1f40e2aa3cb3876a66427215bbd48",
+      "ObjectSha256": "cf9563ff4468c598436bb27c85f0336ba00d531d939810c22eca98974be99a88",
+      "Seconds": 5.514
+    },
+    {
+      "RecoveredExactSameCapsuleObject": false,
+      "Source": "tests/BenchmarkAllocationProbe.cpp",
+      "SourceSha256": "3a4869436fa8ab848a72c423d3c6fbfbb5ebe719e5bab48ee80b4ed49f7df246",
+      "MatchedSourceSha256": "d99ec30e78b63483538554a3531dc3e60e20e18f7a600f7ec66c3e2e69f161cb",
+      "OriginalObjectSha256": "d2f4b4389b54a638947040abdcba087db0b1e5e576511fc48993d03a29180ead",
+      "ObjectSha256": "8c92e76c5d2f51e39ab8237d83eccf115bae7940a4bc401e2fd630650851c398",
+      "Seconds": 0.241,
+      "CompiledAgainstTemplate": "src/editor/PlaySession.cpp"
+    }
+  ],
+  "Products": [
+    {
+      "Target": "gargantuan",
+      "Sha256": "239138e16515d460b3928c08f06b2a8bc204d59b2b0d83bfe6e18ebca75125a1",
+      "Seconds": 2.919,
+      "OriginalTargetSha256": "a62153f7657927d20e9a9d8bd2ffc6c8b0b7575b4afd736dd6a38b0324e7afce",
+      "LinkResponseSha256": "ec365f3f4ab496c780c9330d2c005397fcc26923b18485037cc17cf0a9e7fae0"
+    }
+  ],
+  "DeliveredClosure": {
+    "libcrypto-3-x64.dll": "0298564196cae6cce93e2d56457add881db6a5b0ba7c754918ed80f5233676cd",
+    "libprotobuf.dll": "8bad99650e9705473678e5daae8fe330f38512739ff81c3cc74671299e77a645",
+    "SDL3.dll": "d606b0af4f995dfc9fa09c5bd3e56883822c95dc72facd5648d2b0bbe91f278a",
+    "runtime/DefaultActionMap.luau": "54ddcbb48e70946553898864d6b1b2313d566485903553c26a648be9bc099e8b",
+    "runtime/DefaultCamera.luau": "d2a0502aed84665850c49eae8ab2239782c4def04fbd51bb344234e4741da6ec",
+    "runtime/DefaultCharacterAnimation.luau": "07a69f9a21aea845c0426d7de6ca13fc86672984098f477316211480921e719b",
+    "runtime/DefaultCharacterAssembly.luau": "9b3d52070a2ab205479079ecb25324eacf084ea2e03912be0ba4a6add46b6cfc",
+    "runtime/DefaultCharacterRuntime.luau": "b10b370e64a80e4c38f3116ab9b2926ca0f426eb7ef6a5363c49207e33c7bf96",
+    "runtime/DefaultInteractionRuntime.luau": "6a886d0e04406b528ad486a85c490fb05752bc78ba542d4cc4c83c5316bec90e",
+    "runtime/DefaultLocomotion.luau": "3d7235e898fca2f32e94c34238216c3350c5d9765cc51b6260fb92bb549c9b3f",
+    "runtime/DefaultNetworkCharacterRuntime.luau": "5b425690355b5f1361b175861503a394c02f7a718db86873b0af7711eb23f3b8",
+    "runtime/DefaultNetworkClientRuntime.luau": "22e46b58d598a16c8627a2b6b59df219aa2bc533636254dbb33ab317036a1a5e",
+    "runtime/DefaultNetworkLocomotion.luau": "6e38b8311bd7464f1a54e4dfb42f937fdca4e2f09cd87add7bc15553226db894",
+    "runtime/DefaultNetworkServerRuntime.luau": "9109f58371ab781c2c320664c8380586caa250d040c62d14570b8f13b703979c",
+    "runtime/DefaultPlayerRuntime.luau": "02d21c102c06c8d26c816a3a360e35f164aa8294ac90f7e4f1e68d0e66a4e672",
+    "runtime/GargantuanSans.ttf": "797e35f7f5d6020a5c6ea13b42ecd668bcfb3bbc4baa0e74773527e5b6cb3174",
+    "shaders/gui.frag.spv": "cca62755a3c0352b6dcc65fa6f855ae1e421ba8d538b62a7f5b605d003393c75",
+    "shaders/gui.vert.spv": "fdbaa31922ba2d636ff592128154ddc05503bfef33c67db53391509c7b0dd53f",
+    "shaders/ibl_brdf.frag.spv": "7120970b6dc88ed6758b188923e2848ad42112e9dac54b5077364f8050326ff9",
+    "shaders/ibl_convolve.frag.spv": "165ccfe7026ec1c9454d8e04c683b2b15c9f91af2584c01a69846f569459f61f",
+    "shaders/ibl_fullscreen.vert.spv": "dc3f97b0bf58a34a07d88f92625b03fd48de909d441b5555024120244be8a153",
+    "shaders/ibl_source.frag.spv": "e425052e01fb48eba22e802ab4fedfc71fbd57f97c9eb621f02faf73db2e9a02",
+    "shaders/opaque-instanced.vert.spv": "ee3b8b1e0c653b346c87850e4ce325394572270a3c2f0a9f73660c8dc7a95400",
+    "shaders/opaque-portable.frag.spv": "b0d5bb7cea94a8183852894fb937ee0ddd957ef34b4a91814df51950a3318fb9",
+    "shaders/opaque.frag.spv": "63d2126e11b2923343f8f2d7d4f19b4a1a9171f51211d335a180b8e2226ccdaf",
+    "shaders/opaque.vert.spv": "373a603afa271eededa8a0c66c0300b04b8560c15b0bd5e6c8b7915001a6e0b4",
+    "shaders/scene-resolve.frag.spv": "07f173e5af2b762139d2564549a42e0da5773ef65fc31e93e523a7eeab0215b3",
+    "shaders/scene-resolve.vert.spv": "dc3f97b0bf58a34a07d88f92625b03fd48de909d441b5555024120244be8a153",
+    "shaders/shadow-instanced.vert.spv": "d068ff0678af27e643f8b8a182ea623bf502b01a7f2e52e9d190b13639f6596d",
+    "shaders/shadow-opaque.frag.spv": "d3a2d3f4239115d2744fc926736df58c11ab517e1522946d23e28408a821ccd9",
+    "shaders/shadow.frag.spv": "09c877e760dc177855ebe66a5ad133348e5cfe3e6e63f82fe829ba77b74bcfc9",
+    "shaders/shadow.vert.spv": "43ba5c26fd884ae18f556a5df8412837e3481bdc1ccb11ab7212606e00a5528d",
+    "shaders/sky.frag.spv": "7b2fe4385b82c8a81f79b30d0c965f63b21516c73da6d7a239f6ff07e4119ec4",
+    "shaders/sky.vert.spv": "717abc1ae4a6cca2040d08efe64c789cd38269ed8999a30ec140f0f999c82a86"
+  }
+}

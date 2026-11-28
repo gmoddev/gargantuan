@@ -53,7 +53,7 @@ print("[Spatial:CompoundPlay] finished")
 Marker = re.compile(r"^\[Spatial:CompoundPlay\] (Solid|Fragmented) (\d+) (true|false) ([\d.]+) (.+)$")
 
 
-def Capture(Engine, Project, Profile, Interactions, ContactSide, Mass):
+def Capture(Engine, Project, Profile, Interactions, ContactSide, Mass, Bounds=False):
     Rows = []
     Recent = []
     with EditorHost(Engine) as Host:
@@ -62,7 +62,9 @@ def Capture(Engine, Project, Profile, Interactions, ContactSide, Mass):
         Host.Call("GetSnapshot")
         Definition = next(Row for Row in Host.Call("GetSchema")["Definitions"]
                           if Row["Kind"]=="Class" and Row["Namespace"]=="Engine" and Row["Name"]=="Script")
-        if Mass:
+        if Bounds:
+            Source=(Path(__file__).parent/"blockgrid/gameplay/MovingCompoundBounds.luau").read_text(encoding="utf-8")
+        elif Mass:
             Source=(Path(__file__).parent/"blockgrid/gameplay/MovingCompoundMass.luau").read_text(encoding="utf-8")
         elif Interactions:
             Text=(Path(__file__).parent/"blockgrid/gameplay/MovingCompoundContacts.luau").read_text(encoding="utf-8")
@@ -82,7 +84,8 @@ def Capture(Engine, Project, Profile, Interactions, ContactSide, Mass):
                         Recent=(Recent+[Message])[-12:]
                     if Entry.get("Severity")=="Error":
                         raise RuntimeError(Message)
-                    if (Interactions and Message.startswith("[Spatial:CompoundContacts] ") or
+                    if (Bounds and Message.startswith("[Spatial:CompoundBounds] ") or
+                            Interactions and Message.startswith("[Spatial:CompoundContacts] ") or
                             Mass and Message.startswith("[Spatial:CompoundMass] ")):
                         return {Key:float(Value) for Key,Value in re.findall(r"(\w+)=([-\d.]+)",Message)}
                     if Message=="[Spatial:CompoundPlay] finished":
@@ -111,15 +114,17 @@ if __name__=="__main__":
     Checks=Parser.add_mutually_exclusive_group()
     Checks.add_argument("--interactions",action="store_true")
     Checks.add_argument("--mass",action="store_true")
+    Checks.add_argument("--bounds",action="store_true")
     Parser.add_argument("--contact-side",type=int,choices=(8,16))
     Args=Parser.parse_args()
     Engine=Args.engine.resolve(strict=True)
     with Engine.open("rb") as File: Digest=hashlib.file_digest(File,"sha256").hexdigest()
     with tempfile.TemporaryDirectory(prefix="gcompound-") as Directory:
-        Rows=Capture(Engine,Path(Directory)/"Scene",Args.profile,Args.interactions,Args.contact_side,Args.mass)
+        Rows=Capture(Engine,Path(Directory)/"Scene",Args.profile,Args.interactions,Args.contact_side,Args.mass,Args.bounds)
     with Args.output.open("x",encoding="utf-8") as File:
         json.dump(dict(Profile=Args.profile,EngineSHA256=Digest,Observations=Rows),File,indent=2)
         File.write("\n")
-    if Args.mass: print(f"[Spatial:CompoundMass] {Rows}")
+    if Args.bounds: print(f"[Spatial:CompoundBounds] {Rows}")
+    elif Args.mass: print(f"[Spatial:CompoundMass] {Rows}")
     elif Args.interactions: print(f"[Spatial:CompoundContacts] {Rows}")
     else: print(f"[Spatial:CompoundPlay] {len(Rows)} checked admissions, {sum(R['Accepted'] for R in Rows)} dynamic")

@@ -1,0 +1,43 @@
+{
+  "HistoricalSource": "284443879fcecc66a0257006fcdf7d65566fef4d",
+  "RepairedSource": "562a0fe7b40f6ce2a90cf42e1cebef0fd4bf120b",
+  "Machine": "AMD Ryzen 9 5900X",
+  "OS": "Windows-11-10.0.26200-SP0",
+  "StartUTC": "2026-11-28T07:00:29.721510+00:00",
+  "EndUTC": "2026-11-28T07:02:40.902468+00:00",
+  "MeasuredSeconds": 126.587,
+  "Settings": {
+    "EngineMask": "0xfff",
+    "Main": 4,
+    "Sampler": 18,
+    "Warmup": 192,
+    "Ticks": 256,
+    "Blocks": 6,
+    "Order": "preseeded ABBA/BAAB"
+  },
+  "AmbientBusyFractionBefore": 0.09073,
+  "AmbientBusyFractionAfter": 0.09374,
+  "Profiles": {
+    "baseline": {
+      "NativeExecutableSHA256": "90601b0790447cdcf9e668c128f7d380e2424467f7ec63fdcc5f27c74e3d8c97",
+      "Exact": 3052,
+      "Attempted": 3072,
+      "RingTicks": 3072,
+      "PollMissing": 20,
+      "ResetMissing": 0,
+      "Queries": 5891
+    },
+    "current": {
+      "NativeExecutableSHA256": "a5e5337df7e032e02b298573b49a32771488394c6cf8a1f6fb22a7ddcd1a3e98",
+      "Exact": 3040,
+      "Attempted": 3074,
+      "RingTicks": 3072,
+      "PollMissing": 32,
+      "ResetMissing": 2,
+      "Queries": 5847
+    }
+  },
+  "RawArchiveCommit": "14963a9a1bb4b4268a66a7370fea036e78c198ee",
+  "RawArchivePath": "devdocs/Validation/SpatialStabilizationDelivery/QuietStudy.zip",
+  "RawArchiveSHA256": "29d7c9bbdc440ab6ae61838350bae8edf597225a96f96f48fe5485d754a8ae21"
+}

@@ -1,0 +1,2092 @@
+{
+  "Runtime": "562a0fe7b40f6ce2a90cf42e1cebef0fd4bf120b",
+  "Tree": "d7eefd038fdabf00d1d68a2d8172247b8b0d4453",
+  "PreviousIntegratedRuntime": "1d9bd6323f855d91da69536cc86f379c952c7410",
+  "RetainedDependencies": {
+    "vendor/argparse": "d924b84eba1f0f0adf38b20b7b4829f6f65b6570",
+    "vendor/box3d": "8441b4a06d6d09dcfb0b0f704df4d847d1437b92",
+    "vendor/glaze": "7521e2ab262acd7a0d625354e26876cd9c35a231",
+    "vendor/glm": "8d1fd52e5ab5590e2c81768ace50c72bae28f2ed",
+    "vendor/json": "2e23687092840a66876b4bea48060bd79595ea4b",
+    "vendor/luau": "3fc82b1071ab387531175869afc4fb528464afa4",
+    "vendor/magicenum": "61173726dbdfb0ea2ce87f0c474e89dea2690a5a",
+    "vendor/sdl": "f87239e71e42da91ca317a12eefb82cfbf3393eb",
+    "vendor/sdl_image": "0ee698ef02cf38026c476e28157c182685861d18",
+    "vendor/sdl_ttf": "a42434b8c96daaf7650dbd0befe480c090d1c2eb",
+    "vendor/tracy": "05cceee0df3b8d7c6fa87e9638af311dbabc63cb"
+  },
+  "RuntimeModule": "01ff88e43c875363e6d3b126a54d2e803c1c8aec0ddce49e1b8e9b4111735567",
+  "WindowsSourceArchiveSha256": "055491a853d6676293877fb6699bea8940fb0d588587eeff1da610a2bcc10cb7",
+  "UnixGitArchiveSha256": "7d8d9a0cf9c7cd9c2be671038b938f8a40e78af44da668a84afe2d992e16b9be",
+  "Hosts": {
+    "CPU": "Ryzen 9 5900X, 12 physical/24 logical",
+    "Windows": "10.0.26200, MSVC 19.51.36260.0 x64 (toolset 14.51.36231), Windows SDK 10.0.28000.0, CMake 3.31.10",
+    "WindowsGPU": "NVIDIA GeForce GTX 1650 SUPER, 591.86",
+    "Linux": "Ubuntu 24.04.4, Clang 19.1.1, x86-64, CMake 3.31.10, SQLite and GameNetworkingSockets enabled",
+    "LinuxToolchainImage": "sha256:4c51540a6d6799df0b08fd6294744374a64b242c81b0c83d18c8ff9a82ef7915",
+    "LinuxGPU": "Mesa lavapipe, llvmpipe (LLVM 17.0.6, 256 bits)",
+    "Sanitizer": "ASan and UBSan together, leak detection on, halt on first error, llvm-symbolizer 19",
+    "SanitizerEnvironment": {
+      "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1",
+      "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1",
+      "ASAN_SYMBOLIZER_PATH": "/usr/bin/llvm-symbolizer-19"
+    }
+  },
+  "WindowsProducts": {
+    "SuiteSha256": "7e7901e0872f85312b8e0146b0bb4d037c5d698ed140ba1375bfe59ba560ab88",
+    "Files": 148,
+    "RoleClosure": {
+      "RuntimeDistribution": {
+        "Files": 56,
+        "Bytes": 25753363,
+        "RootMatches": 0
+      },
+      "ServerRuntimeDistribution": {
+        "Files": 55,
+        "Bytes": 25627813,
+        "RootMatches": 0
+      }
+    },
+    "LoaderObservations": {
+      "EditorHost": {
+        "Pid": 30064,
+        "ObservedModules": 34,
+        "Samples": 30,
+        "Protobuf": []
+      },
+      "Packager": {
+        "Pid": 12640,
+        "ObservedModules": 33,
+        "Samples": 64,
+        "Protobuf": []
+      },
+      "Server": {
+        "Pid": 23376,
+        "ObservedModules": 39,
+        "Samples": 156,
+        "Protobuf": [
+          {
+            "Image": "libprotobuf.dll",
+            "Sha256": "8bad99650e9705473678e5daae8fe330f38512739ff81c3cc74671299e77a645"
+          }
+        ]
+      },
+      "Player": {
+        "Pid": 1732,
+        "ObservedModules": 43,
+        "Samples": 153,
+        "Protobuf": [
+          {
+            "Image": "libprotobuf.dll",
+            "Sha256": "8bad99650e9705473678e5daae8fe330f38512739ff81c3cc74671299e77a645"
+          }
+        ]
+      }
+    },
+    "LinkInputs": {
+      "gargantuan.exe": {
+        "Sha256": "1378d39488e60a5c2120d94ab9e2b753889d5aba4b62f68f26763e7d34028adc",
+        "OlderSha256": "798ae3281474f8599e5e710bfa25b5367ecc50db0daf8e0bc0b7e020a0ff106f",
+        "EagerProtobuf": [],
+        "DelayedProtobuf": [],
+        "ChangedPESections": [
+          ".text",
+          ".rdata",
+          ".data",
+          ".pdata"
+        ]
+      },
+      "gargantuan-packager.exe": {
+        "Sha256": "1809aecaa1bf9b45ab33d4741ce8304d8edb040e0593ef041d843c7fc88999ca",
+        "OlderSha256": "e7341670701f3b5d228071f286b40c27776ee15de08490f69af43d4cb39d4f22",
+        "EagerProtobuf": [],
+        "DelayedProtobuf": [],
+        "ChangedPESections": [
+          ".rdata"
+        ]
+      },
+      "RuntimeDistribution/GargantuanPlayer.exe": {
+        "Sha256": "50622ed3f31df503244eadfc93d871aedca04300cf5cc7183532c177a0608157",
+        "OlderSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba",
+        "EagerProtobuf": [
+          "libprotobuf.dll"
+        ],
+        "DelayedProtobuf": [],
+        "ChangedPESections": [
+          ".rdata"
+        ]
+      },
+      "ServerRuntimeDistribution/GargantuanServer.exe": {
+        "Sha256": "0809eb62ffea137f06e9326056a9f8b09df0785e501290083c5a06a12c47adf2",
+        "OlderSha256": "ba7f4d097f8c25f295768ddc252784b3df47d63131238a6cbd902ac23ba01d1a",
+        "EagerProtobuf": [
+          "libprotobuf.dll"
+        ],
+        "DelayedProtobuf": [],
+        "ChangedPESections": [
+          ".rdata"
+        ]
+      },
+      "SDL3.dll": {
+        "Sha256": "cdf67d1cec3fa70e2ca6f3cbc17e155fdf8ad849e783557a4b2b79ead9b1dc1d",
+        "OlderSha256": "cdf67d1cec3fa70e2ca6f3cbc17e155fdf8ad849e783557a4b2b79ead9b1dc1d",
+        "EagerProtobuf": [],
+        "DelayedProtobuf": [],
+        "ChangedPESections": []
+      },
+      "libprotobuf.dll": {
+        "Sha256": "8bad99650e9705473678e5daae8fe330f38512739ff81c3cc74671299e77a645",
+        "OlderSha256": "8bad99650e9705473678e5daae8fe330f38512739ff81c3cc74671299e77a645",
+        "EagerProtobuf": [],
+        "DelayedProtobuf": [],
+        "ChangedPESections": []
+      },
+      "libcrypto-3-x64.dll": {
+        "Sha256": "0298564196cae6cce93e2d56457add881db6a5b0ba7c754918ed80f5233676cd",
+        "OlderSha256": "0298564196cae6cce93e2d56457add881db6a5b0ba7c754918ed80f5233676cd",
+        "EagerProtobuf": [],
+        "DelayedProtobuf": [],
+        "ChangedPESections": []
+      }
+    },
+    "Changed": {
+      "RuntimeDistribution/GargantuanPlayer.exe": {
+        "Prior": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba",
+        "Final": "50622ed3f31df503244eadfc93d871aedca04300cf5cc7183532c177a0608157"
+      },
+      "RuntimeDistribution/distributed-player-capability.json": {
+        "Prior": "a1523b07d70532ea0454b89c33f6e7a6dadedc931d90e06d9e5816231d56e81a",
+        "Final": "b64cf5620a04b211e80274c180da492d698224d4dcd85735b49098c86b55e2ee"
+      },
+      "RuntimeDistribution/runtime-distribution-capability.json": {
+        "Prior": "6601cbdf4ef4947dc020da945d288feeb0cd13cac6fc15d0e75d29088cff5aa7",
+        "Final": "db885282e957c90524dd2c36ad52b64b652a5888cd61dbbb867dd3619b290162"
+      },
+      "ServerRuntimeDistribution/GargantuanServer.exe": {
+        "Prior": "ba7f4d097f8c25f295768ddc252784b3df47d63131238a6cbd902ac23ba01d1a",
+        "Final": "0809eb62ffea137f06e9326056a9f8b09df0785e501290083c5a06a12c47adf2"
+      },
+      "ServerRuntimeDistribution/runtime-distribution-capability.json": {
+        "Prior": "3ab7dbd742e37bfd7ef9dc3cd50fe995235d7184b2101e37f997935bc08aeecc",
+        "Final": "61028cc82a6f6fb848e9ed143bb66b2e9576a5b14889898380585f8484183a6f"
+      },
+      "gargantuan-packager.exe": {
+        "Prior": "e7341670701f3b5d228071f286b40c27776ee15de08490f69af43d4cb39d4f22",
+        "Final": "1809aecaa1bf9b45ab33d4741ce8304d8edb040e0593ef041d843c7fc88999ca"
+      },
+      "gargantuan.exe": {
+        "Prior": "798ae3281474f8599e5e710bfa25b5367ecc50db0daf8e0bc0b7e020a0ff106f",
+        "Final": "1378d39488e60a5c2120d94ab9e2b753889d5aba4b62f68f26763e7d34028adc"
+      },
+      "libprotobufd.dll": {
+        "Prior": null,
+        "Final": "be450e85ee93c80f3021846097bc495a58262ae74785569c7cb52581eb81ad6a"
+      }
+    },
+    "MatchedFiles": 140,
+    "RawClosureScanSha256": "c22d66eb14b18d76d32dc2902f689d88ce9ef918a5e9db9d4031d81f485467b0",
+    "ArchivedRoleFileListingSha256": "2f413a70fd9307aaa1e6847fa3cd21d09b23b8461915c485bb4ea9878e6975a8"
+  },
+  "EditorFrameObservations": {
+    "WindowsOriginal": {
+      "Sha256": "fd697bdab5a83e3d1ae2389a0a246ed0312e6d62fde2b15e2229f0462f929071",
+      "Rows": [
+        {
+          "Stage": "default",
+          "World": "Workspace",
+          "Activation": "1",
+          "PauseSerial": "11",
+          "Width": "120",
+          "Height": "96",
+          "Sampled": "2880",
+          "Red": "2880",
+          "Blue": "0",
+          "Matched": "True",
+          "PixelSha256": "ef409028d47a44d0000bada46ff2c08b95df00e826c37f7f5a960fce7cd39804",
+          "EngineSha256": "798ae3281474f8599e5e710bfa25b5367ecc50db0daf8e0bc0b7e020a0ff106f"
+        },
+        {
+          "Stage": "named unchanged size",
+          "World": "DebugInterior",
+          "Activation": "1",
+          "PauseSerial": "12",
+          "Width": "120",
+          "Height": "96",
+          "Sampled": "2880",
+          "Red": "2880",
+          "Blue": "0",
+          "Matched": "False",
+          "PixelSha256": "ef409028d47a44d0000bada46ff2c08b95df00e826c37f7f5a960fce7cd39804",
+          "EngineSha256": "798ae3281474f8599e5e710bfa25b5367ecc50db0daf8e0bc0b7e020a0ff106f"
+        },
+        {
+          "Stage": "named",
+          "World": "DebugInterior",
+          "Activation": "1",
+          "PauseSerial": "12",
+          "Width": "128",
+          "Height": "96",
+          "Sampled": "3072",
+          "Red": "3072",
+          "Blue": "0",
+          "Matched": "False",
+          "PixelSha256": "f962ac0e71467d2de83d307a00b9c1ec51e10800a15c1dfe2c068743818cfa7e",
+          "EngineSha256": "798ae3281474f8599e5e710bfa25b5367ecc50db0daf8e0bc0b7e020a0ff106f"
+        },
+        {
+          "Stage": "named reattachment",
+          "World": "DebugInterior",
+          "Activation": "1",
+          "PauseSerial": "12",
+          "Width": "128",
+          "Height": "96",
+          "Sampled": "3072",
+          "Red": "3072",
+          "Blue": "0",
+          "Matched": "False",
+          "PixelSha256": "f962ac0e71467d2de83d307a00b9c1ec51e10800a15c1dfe2c068743818cfa7e",
+          "EngineSha256": "798ae3281474f8599e5e710bfa25b5367ecc50db0daf8e0bc0b7e020a0ff106f"
+        },
+        {
+          "Stage": "restored default unchanged size",
+          "World": "Workspace",
+          "Activation": "1",
+          "PauseSerial": "13",
+          "Width": "128",
+          "Height": "96",
+          "Sampled": "3072",
+          "Red": "3072",
+          "Blue": "0",
+          "Matched": "True",
+          "PixelSha256": "f962ac0e71467d2de83d307a00b9c1ec51e10800a15c1dfe2c068743818cfa7e",
+          "EngineSha256": "798ae3281474f8599e5e710bfa25b5367ecc50db0daf8e0bc0b7e020a0ff106f"
+        },
+        {
+          "Stage": "restored default",
+          "World": "Workspace",
+          "Activation": "1",
+          "PauseSerial": "13",
+          "Width": "136",
+          "Height": "96",
+          "Sampled": "3264",
+          "Red": "3264",
+          "Blue": "0",
+          "Matched": "True",
+          "PixelSha256": "be0c4c1a7a8c4c055e19e75bb6b84574f9d05b1b243bae36752232c5943eeab5",
+          "EngineSha256": "798ae3281474f8599e5e710bfa25b5367ecc50db0daf8e0bc0b7e020a0ff106f"
+        },
+        {
+          "Stage": "running named",
+          "World": "DebugInterior",
+          "Activation": "1",
+          "PauseSerial": "0",
+          "Width": "144",
+          "Height": "96",
+          "Sampled": "3456",
+          "Red": "0",
+          "Blue": "3456",
+          "Matched": "True",
+          "PixelSha256": "3532ed364140685cc160bb547dcbeadd36955ec7972d034a5bf59fc945555291",
+          "EngineSha256": "798ae3281474f8599e5e710bfa25b5367ecc50db0daf8e0bc0b7e020a0ff106f"
+        }
+      ]
+    },
+    "WindowsFinal": {
+      "Sha256": "d45e3e04731799f905711706d790982972fef65a7f7fb1bc99524dedea178c9e",
+      "Rows": [
+        {
+          "Stage": "default",
+          "World": "Workspace",
+          "Activation": "1",
+          "PauseSerial": "11",
+          "Width": "120",
+          "Height": "96",
+          "Sampled": "2880",
+          "Red": "2880",
+          "Blue": "0",
+          "Matched": "True",
+          "PixelSha256": "ef409028d47a44d0000bada46ff2c08b95df00e826c37f7f5a960fce7cd39804",
+          "EngineSha256": "1378d39488e60a5c2120d94ab9e2b753889d5aba4b62f68f26763e7d34028adc"
+        },
+        {
+          "Stage": "named unchanged size",
+          "World": "DebugInterior",
+          "Activation": "1",
+          "PauseSerial": "12",
+          "Width": "120",
+          "Height": "96",
+          "Sampled": "2880",
+          "Red": "0",
+          "Blue": "2880",
+          "Matched": "True",
+          "PixelSha256": "6696128dbcfd936eda5fbad4bff29ebc00c734f8625a48c7ffaa0c3f2184c122",
+          "EngineSha256": "1378d39488e60a5c2120d94ab9e2b753889d5aba4b62f68f26763e7d34028adc"
+        },
+        {
+          "Stage": "named",
+          "World": "DebugInterior",
+          "Activation": "1",
+          "PauseSerial": "12",
+          "Width": "128",
+          "Height": "96",
+          "Sampled": "3072",
+          "Red": "0",
+          "Blue": "3072",
+          "Matched": "True",
+          "PixelSha256": "ea57cb0bc060aaa13e9b4bf5d1dd3f5021b55a5db58f1d4d7f9b744239726d1c",
+          "EngineSha256": "1378d39488e60a5c2120d94ab9e2b753889d5aba4b62f68f26763e7d34028adc"
+        },
+        {
+          "Stage": "named reattachment",
+          "World": "DebugInterior",
+          "Activation": "1",
+          "PauseSerial": "12",
+          "Width": "128",
+          "Height": "96",
+          "Sampled": "3072",
+          "Red": "0",
+          "Blue": "3072",
+          "Matched": "True",
+          "PixelSha256": "ea57cb0bc060aaa13e9b4bf5d1dd3f5021b55a5db58f1d4d7f9b744239726d1c",
+          "EngineSha256": "1378d39488e60a5c2120d94ab9e2b753889d5aba4b62f68f26763e7d34028adc"
+        },
+        {
+          "Stage": "restored default unchanged size",
+          "World": "Workspace",
+          "Activation": "1",
+          "PauseSerial": "13",
+          "Width": "128",
+          "Height": "96",
+          "Sampled": "3072",
+          "Red": "3072",
+          "Blue": "0",
+          "Matched": "True",
+          "PixelSha256": "f962ac0e71467d2de83d307a00b9c1ec51e10800a15c1dfe2c068743818cfa7e",
+          "EngineSha256": "1378d39488e60a5c2120d94ab9e2b753889d5aba4b62f68f26763e7d34028adc"
+        },
+        {
+          "Stage": "restored default",
+          "World": "Workspace",
+          "Activation": "1",
+          "PauseSerial": "13",
+          "Width": "136",
+          "Height": "96",
+          "Sampled": "3264",
+          "Red": "3264",
+          "Blue": "0",
+          "Matched": "True",
+          "PixelSha256": "be0c4c1a7a8c4c055e19e75bb6b84574f9d05b1b243bae36752232c5943eeab5",
+          "EngineSha256": "1378d39488e60a5c2120d94ab9e2b753889d5aba4b62f68f26763e7d34028adc"
+        },
+        {
+          "Stage": "running named",
+          "World": "DebugInterior",
+          "Activation": "1",
+          "PauseSerial": "0",
+          "Width": "144",
+          "Height": "96",
+          "Sampled": "3456",
+          "Red": "0",
+          "Blue": "3456",
+          "Matched": "True",
+          "PixelSha256": "3532ed364140685cc160bb547dcbeadd36955ec7972d034a5bf59fc945555291",
+          "EngineSha256": "1378d39488e60a5c2120d94ab9e2b753889d5aba4b62f68f26763e7d34028adc"
+        }
+      ]
+    },
+    "LinuxReleaseFinal": {
+      "Sha256": "7937e367ed2c37b5138c28102a7e0996b096d73427c4bdd96404a82254833fd3",
+      "Rows": [
+        {
+          "Stage": "default",
+          "World": "Workspace",
+          "Activation": "1",
+          "PauseSerial": "11",
+          "Width": "120",
+          "Height": "96",
+          "Sampled": "2880",
+          "Red": "2880",
+          "Blue": "0",
+          "Matched": "True",
+          "PixelSha256": "ef409028d47a44d0000bada46ff2c08b95df00e826c37f7f5a960fce7cd39804",
+          "EngineSha256": "4ff143a8e7de890611dda8ecbcfdd56f08d423fe0b0059a4d6d1da266a8820c0"
+        },
+        {
+          "Stage": "named unchanged size",
+          "World": "DebugInterior",
+          "Activation": "1",
+          "PauseSerial": "12",
+          "Width": "120",
+          "Height": "96",
+          "Sampled": "2880",
+          "Red": "0",
+          "Blue": "2880",
+          "Matched": "True",
+          "PixelSha256": "6696128dbcfd936eda5fbad4bff29ebc00c734f8625a48c7ffaa0c3f2184c122",
+          "EngineSha256": "4ff143a8e7de890611dda8ecbcfdd56f08d423fe0b0059a4d6d1da266a8820c0"
+        },
+        {
+          "Stage": "named",
+          "World": "DebugInterior",
+          "Activation": "1",
+          "PauseSerial": "12",
+          "Width": "128",
+          "Height": "96",
+          "Sampled": "3072",
+          "Red": "0",
+          "Blue": "3072",
+          "Matched": "True",
+          "PixelSha256": "ea57cb0bc060aaa13e9b4bf5d1dd3f5021b55a5db58f1d4d7f9b744239726d1c",
+          "EngineSha256": "4ff143a8e7de890611dda8ecbcfdd56f08d423fe0b0059a4d6d1da266a8820c0"
+        },
+        {
+          "Stage": "restored default unchanged size",
+          "World": "Workspace",
+          "Activation": "1",
+          "PauseSerial": "13",
+          "Width": "128",
+          "Height": "96",
+          "Sampled": "3072",
+          "Red": "3072",
+          "Blue": "0",
+          "Matched": "True",
+          "PixelSha256": "f962ac0e71467d2de83d307a00b9c1ec51e10800a15c1dfe2c068743818cfa7e",
+          "EngineSha256": "4ff143a8e7de890611dda8ecbcfdd56f08d423fe0b0059a4d6d1da266a8820c0"
+        },
+        {
+          "Stage": "restored default",
+          "World": "Workspace",
+          "Activation": "1",
+          "PauseSerial": "13",
+          "Width": "136",
+          "Height": "96",
+          "Sampled": "3264",
+          "Red": "3264",
+          "Blue": "0",
+          "Matched": "True",
+          "PixelSha256": "be0c4c1a7a8c4c055e19e75bb6b84574f9d05b1b243bae36752232c5943eeab5",
+          "EngineSha256": "4ff143a8e7de890611dda8ecbcfdd56f08d423fe0b0059a4d6d1da266a8820c0"
+        },
+        {
+          "Stage": "running named",
+          "World": "DebugInterior",
+          "Activation": "1",
+          "PauseSerial": "0",
+          "Width": "144",
+          "Height": "96",
+          "Sampled": "3456",
+          "Red": "0",
+          "Blue": "3456",
+          "Matched": "True",
+          "PixelSha256": "3532ed364140685cc160bb547dcbeadd36955ec7972d034a5bf59fc945555291",
+          "EngineSha256": "4ff143a8e7de890611dda8ecbcfdd56f08d423fe0b0059a4d6d1da266a8820c0"
+        }
+      ]
+    },
+    "LinuxSanFinal": {
+      "Sha256": "e41c4a8b2bdfde42bbef24c0f06bc5c2da80b7cf4611b9cc8d12cc2e4f475811",
+      "Rows": [
+        {
+          "Stage": "default",
+          "World": "Workspace",
+          "Activation": "1",
+          "PauseSerial": "11",
+          "Width": "120",
+          "Height": "96",
+          "Sampled": "2880",
+          "Red": "2880",
+          "Blue": "0",
+          "Matched": "True",
+          "PixelSha256": "ef409028d47a44d0000bada46ff2c08b95df00e826c37f7f5a960fce7cd39804",
+          "EngineSha256": "1cfbf381190555496adcbd6a8974da024b14b0f363f20454856a4c9a4e16a43b"
+        },
+        {
+          "Stage": "named unchanged size",
+          "World": "DebugInterior",
+          "Activation": "1",
+          "PauseSerial": "12",
+          "Width": "120",
+          "Height": "96",
+          "Sampled": "2880",
+          "Red": "0",
+          "Blue": "2880",
+          "Matched": "True",
+          "PixelSha256": "6696128dbcfd936eda5fbad4bff29ebc00c734f8625a48c7ffaa0c3f2184c122",
+          "EngineSha256": "1cfbf381190555496adcbd6a8974da024b14b0f363f20454856a4c9a4e16a43b"
+        },
+        {
+          "Stage": "named",
+          "World": "DebugInterior",
+          "Activation": "1",
+          "PauseSerial": "12",
+          "Width": "128",
+          "Height": "96",
+          "Sampled": "3072",
+          "Red": "0",
+          "Blue": "3072",
+          "Matched": "True",
+          "PixelSha256": "ea57cb0bc060aaa13e9b4bf5d1dd3f5021b55a5db58f1d4d7f9b744239726d1c",
+          "EngineSha256": "1cfbf381190555496adcbd6a8974da024b14b0f363f20454856a4c9a4e16a43b"
+        },
+        {
+          "Stage": "restored default unchanged size",
+          "World": "Workspace",
+          "Activation": "1",
+          "PauseSerial": "13",
+          "Width": "128",
+          "Height": "96",
+          "Sampled": "3072",
+          "Red": "3072",
+          "Blue": "0",
+          "Matched": "True",
+          "PixelSha256": "f962ac0e71467d2de83d307a00b9c1ec51e10800a15c1dfe2c068743818cfa7e",
+          "EngineSha256": "1cfbf381190555496adcbd6a8974da024b14b0f363f20454856a4c9a4e16a43b"
+        },
+        {
+          "Stage": "restored default",
+          "World": "Workspace",
+          "Activation": "1",
+          "PauseSerial": "13",
+          "Width": "136",
+          "Height": "96",
+          "Sampled": "3264",
+          "Red": "3264",
+          "Blue": "0",
+          "Matched": "True",
+          "PixelSha256": "be0c4c1a7a8c4c055e19e75bb6b84574f9d05b1b243bae36752232c5943eeab5",
+          "EngineSha256": "1cfbf381190555496adcbd6a8974da024b14b0f363f20454856a4c9a4e16a43b"
+        },
+        {
+          "Stage": "running named",
+          "World": "DebugInterior",
+          "Activation": "1",
+          "PauseSerial": "0",
+          "Width": "144",
+          "Height": "96",
+          "Sampled": "3456",
+          "Red": "0",
+          "Blue": "3456",
+          "Matched": "True",
+          "PixelSha256": "3532ed364140685cc160bb547dcbeadd36955ec7972d034a5bf59fc945555291",
+          "EngineSha256": "1cfbf381190555496adcbd6a8974da024b14b0f363f20454856a4c9a4e16a43b"
+        }
+      ]
+    }
+  },
+  "SavedYard": {
+    "WindowsRelease": {
+      "Original": {
+        "AuthoredDocument": "0159e1ffdea166d9a5b657f36500935bff2869219c3b292ea688e3af627ce766",
+        "SourceFiles": 18,
+        "SourcePreserved": true,
+        "RoleBinaries": {
+          "gargantuan.exe": "798ae3281474f8599e5e710bfa25b5367ecc50db0daf8e0bc0b7e020a0ff106f",
+          "gargantuan-packager.exe": "e7341670701f3b5d228071f286b40c27776ee15de08490f69af43d4cb39d4f22",
+          "GargantuanPlayer.exe": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba",
+          "GargantuanServer.exe": "ba7f4d097f8c25f295768ddc252784b3df47d63131238a6cbd902ac23ba01d1a"
+        },
+        "ArchiveSha256": "a1e68d0c62d84b4b447f59a519ba97b7d3bfe88f4f11c080e30d1a44dac5e9fa",
+        "Cases": [
+          {
+            "Case": "PackagedMultiplayer",
+            "Exit": 1,
+            "Seconds": 49.625
+          },
+          {
+            "Case": "StudioDurable",
+            "Exit": 0,
+            "Seconds": 1.437
+          }
+        ],
+        "RawSha256": {
+          "PackagedMultiplayer.log": "dfdc1624e5af9502dd69e85303c6999751ddd9140d90160e88e264f33f6055a2",
+          "StudioDurable.log": "d48091462716d4ac38d28f4a1e132a431572a47b91798af32e43f4cb5e9ac0ac"
+        },
+        "StableSamples": [],
+        "PackageManifests": {
+          "DedicatedServer": "bd5d6c300ff7bde8e42ae08a233fd2de929aa08a9b7ba257ad653a19ab210d03",
+          "DistributedPlayer": "3c436cc8b6bd0487339350088f17ca69e3d75342e508511ce638c364b0325e8d"
+        }
+      },
+      "Final": {
+        "AuthoredDocument": "7d79dbf72a6d23c2ba8f52b68149c59a7974c038f6c09c6fb8c3ef224b8de6a0",
+        "SourceFiles": 18,
+        "SourcePreserved": true,
+        "RoleBinaries": {
+          "gargantuan.exe": "1378d39488e60a5c2120d94ab9e2b753889d5aba4b62f68f26763e7d34028adc",
+          "gargantuan-packager.exe": "1809aecaa1bf9b45ab33d4741ce8304d8edb040e0593ef041d843c7fc88999ca",
+          "GargantuanPlayer.exe": "50622ed3f31df503244eadfc93d871aedca04300cf5cc7183532c177a0608157",
+          "GargantuanServer.exe": "0809eb62ffea137f06e9326056a9f8b09df0785e501290083c5a06a12c47adf2"
+        },
+        "ArchiveSha256": "8f974b55f77b727b2627f89c326e0043ecf22ca21c2cdb790976613c56837fd1",
+        "Cases": [
+          {
+            "Case": "PackagedMultiplayer",
+            "Exit": 0,
+            "Seconds": 8.312
+          },
+          {
+            "Case": "StudioDurable",
+            "Exit": 0,
+            "Seconds": 1.469
+          },
+          {
+            "Case": "Interlock",
+            "Exit": 0,
+            "Seconds": 1.797
+          }
+        ],
+        "RawSha256": {
+          "Interlock.log": "5335cda45452419317b0cd14488795c350e70392a29893333d4e1cdaa5fa0255",
+          "PackagedMultiplayer.log": "f8f77db2d39d3106b5d32e359c22c2b07de07618d7d31e2de7d13de3f627c38f",
+          "StudioDurable.log": "e573d56577f27268e7044d2f04f76786b1ea4e4f63ff403fbcd958957c71da8a"
+        },
+        "StableSamples": [
+          "[Spatial:YardProcess] Stable surface=3421671802 field=265284588"
+        ],
+        "PackageManifests": {
+          "DedicatedServer": "0533e3585689a449b06ac7c5a3ff1a9a47218de350d853bd7296c437918dd044",
+          "DistributedPlayer": "9f85a0415009e82d2569841a772bc3f91af9229aa6a5c9c43a0dd4b0a3d7ade0"
+        }
+      }
+    },
+    "LinuxRelease": {
+      "Prior": {
+        "AuthoredDocument": "7d79dbf72a6d23c2ba8f52b68149c59a7974c038f6c09c6fb8c3ef224b8de6a0",
+        "SourceFiles": 18,
+        "SourcePreserved": true,
+        "RoleBinaries": {
+          "gargantuan": "9bc7a2d793c08cc797e8f8fc015f8efe9e968c9514f7e6dd40a6629cc797b0da",
+          "gargantuan-packager": "5d0e1b6a17b1e6dba2ac09098c8cd465c0452f54e9bfa2d06d2e498cb05884ea",
+          "GargantuanPlayer": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47",
+          "GargantuanServer": "c29c2cdaa90fda264a10b701628b0637b91b8513414773d054b0bd54a9645d4b"
+        },
+        "ArchiveSha256": "8f974b55f77b727b2627f89c326e0043ecf22ca21c2cdb790976613c56837fd1",
+        "Cases": [
+          {
+            "Case": "PackagedMultiplayer",
+            "Exit": 0,
+            "Seconds": 7.233
+          },
+          {
+            "Case": "StudioDurable",
+            "Exit": 0,
+            "Seconds": 1.268
+          },
+          {
+            "Case": "Interlock",
+            "Exit": 0,
+            "Seconds": 1.569
+          }
+        ],
+        "RawSha256": {
+          "Interlock.log": "b8da757c618f0abc1ea88e23e484dbe849be40b1e84356a4bb5476a7a0fb5496",
+          "PackagedMultiplayer.log": "a97a46408153b2d53a81bdf1d3414ef3a9062ad5a771a14a6c2f397db48cbd1a",
+          "StudioDurable.log": "001157c1b0c816267ba7c5f60135327bd29365570d66ceb1a067e09824c65d57"
+        },
+        "StableSamples": [
+          "[Spatial:YardProcess] Stable surface=3421671802 field=265284588"
+        ],
+        "PackageManifests": {
+          "DedicatedServer": "830d431fe89ed6a3b1684117ddf5a4e97a35144b629972dd371c4f1062e8a229",
+          "DistributedPlayer": "90840dc27dbea797078b19d0e4b12694a77e9c8c513c0bb3c308c086d73529f4"
+        }
+      },
+      "Final": {
+        "AuthoredDocument": "7d79dbf72a6d23c2ba8f52b68149c59a7974c038f6c09c6fb8c3ef224b8de6a0",
+        "SourceFiles": 18,
+        "SourcePreserved": true,
+        "RoleBinaries": {
+          "gargantuan": "4ff143a8e7de890611dda8ecbcfdd56f08d423fe0b0059a4d6d1da266a8820c0",
+          "gargantuan-packager": "bc778c5c07bce721525a008cbc3df12551964d3ecb2b323848017dbd2e387596",
+          "GargantuanPlayer": "7c843ad156c66ae1ce2581ae037092e16b0b799352defd1acc12b2ca054466fd",
+          "GargantuanServer": "dbe9799c7f54b0ffe576ff74bfbb8f1ade4f2e1805d264faf169727889fe9c35"
+        },
+        "ArchiveSha256": "8f974b55f77b727b2627f89c326e0043ecf22ca21c2cdb790976613c56837fd1",
+        "Cases": [
+          {
+            "Case": "PackagedMultiplayer",
+            "Exit": 0,
+            "Seconds": 7.434
+          },
+          {
+            "Case": "StudioDurable",
+            "Exit": 0,
+            "Seconds": 1.319
+          },
+          {
+            "Case": "Interlock",
+            "Exit": 0,
+            "Seconds": 1.57
+          }
+        ],
+        "RawSha256": {
+          "Interlock.log": "b8da757c618f0abc1ea88e23e484dbe849be40b1e84356a4bb5476a7a0fb5496",
+          "PackagedMultiplayer.log": "fca2b242cfbc3a83de283d71ec31cf292abd52f446fb358d5f64a5276dcc8abc",
+          "StudioDurable.log": "001157c1b0c816267ba7c5f60135327bd29365570d66ceb1a067e09824c65d57"
+        },
+        "StableSamples": [
+          "[Spatial:YardProcess] Stable surface=3421671802 field=265284588"
+        ],
+        "PackageManifests": {
+          "DedicatedServer": "898ee738b0027ab7f49ba692944b84b6ca8cc480222430c6658dd66ce361ec62",
+          "DistributedPlayer": "25a146b0d83e72481981fcb4fb1d4da8336ea3a99b541fc1e4b7f15c72307026"
+        }
+      }
+    },
+    "LinuxSan": {
+      "Prior": {
+        "AuthoredDocument": "7d79dbf72a6d23c2ba8f52b68149c59a7974c038f6c09c6fb8c3ef224b8de6a0",
+        "SourceFiles": 18,
+        "SourcePreserved": true,
+        "RoleBinaries": {
+          "gargantuan": "2a25e8243d5012e5a2fc296749cb64d70342c4865e97aac0f31a949d2e15722a",
+          "gargantuan-packager": "f332fe139b603748358b68afd4cddfdce06367387460f09be764deb3e875aa8d",
+          "GargantuanPlayer": "67750b69f492a27d944fdecc1ba3461489fda3c3dcfcc9a13544fe6c086db2b2",
+          "GargantuanServer": "7b189f8960a397b05db027349d9a98af1ed5b148f7b62a5c3a8862290e9633cf"
+        },
+        "ArchiveSha256": "8f974b55f77b727b2627f89c326e0043ecf22ca21c2cdb790976613c56837fd1",
+        "Cases": [
+          {
+            "Case": "PackagedMultiplayer",
+            "Exit": 0,
+            "Seconds": 21.561
+          },
+          {
+            "Case": "StudioDurable",
+            "Exit": 0,
+            "Seconds": 1.87
+          },
+          {
+            "Case": "Interlock",
+            "Exit": 0,
+            "Seconds": 1.919
+          }
+        ],
+        "RawSha256": {
+          "Interlock.log": "b8da757c618f0abc1ea88e23e484dbe849be40b1e84356a4bb5476a7a0fb5496",
+          "PackagedMultiplayer.log": "cf67feeccad451d133f7e2fe7fbe492b1ca11c300df3fe3a7af3a1dba2c74b59",
+          "StudioDurable.log": "001157c1b0c816267ba7c5f60135327bd29365570d66ceb1a067e09824c65d57"
+        },
+        "StableSamples": [
+          "[Spatial:YardProcess] Stable surface=3421671802 field=265284588"
+        ],
+        "PackageManifests": {
+          "DedicatedServer": "a4981acb3130c0e011552d07c0631f030621402a1cbe86a7e228f9fb745f87cd",
+          "DistributedPlayer": "b4cbfaa758dd4be1d1e59d0ee22b2d1a87ebfa42b2c6d251407f6b9d117fd1a0"
+        }
+      },
+      "InitialLink": {
+        "AuthoredDocument": "7d79dbf72a6d23c2ba8f52b68149c59a7974c038f6c09c6fb8c3ef224b8de6a0",
+        "SourceFiles": 18,
+        "SourcePreserved": true,
+        "RoleBinaries": {
+          "gargantuan": "1cfbf381190555496adcbd6a8974da024b14b0f363f20454856a4c9a4e16a43b",
+          "gargantuan-packager": "457272234516741733ab354ab4f70d23198e9089b842c056e61187d3cb1d1645",
+          "GargantuanPlayer": "2865aefa0cd083abde6cd5f8264c9e63b393f3bf200d353d4d7e62603298e1bd",
+          "GargantuanServer": "4ca1f1965e2a9c603359fb07d64b58eb823a1f4c6ef5d0ff5e4600d194d116b8"
+        },
+        "ArchiveSha256": "8f974b55f77b727b2627f89c326e0043ecf22ca21c2cdb790976613c56837fd1",
+        "Cases": [
+          {
+            "Case": "PackagedMultiplayer",
+            "Exit": 0,
+            "Seconds": 20.361
+          },
+          {
+            "Case": "StudioDurable",
+            "Exit": 0,
+            "Seconds": 1.884
+          },
+          {
+            "Case": "Interlock",
+            "Exit": 0,
+            "Seconds": 1.87
+          }
+        ],
+        "RawSha256": {
+          "Interlock.log": "b8da757c618f0abc1ea88e23e484dbe849be40b1e84356a4bb5476a7a0fb5496",
+          "PackagedMultiplayer.log": "dc57ea509dc8193b61f0524b646e3e36d305bd85516d5791bb5ef5f0520cfee7",
+          "StudioDurable.log": "001157c1b0c816267ba7c5f60135327bd29365570d66ceb1a067e09824c65d57"
+        },
+        "StableSamples": [
+          "[Spatial:YardProcess] Stable surface=3421671802 field=265284588"
+        ],
+        "PackageManifests": {
+          "DedicatedServer": "cc4c5f3263f13b3c6e07720e6f8d18f1b716585248b602d8ef700fad93b22d6b",
+          "DistributedPlayer": "b1d2030f7651f305919707abcf8200e91732e4f6fb694d584582733233e4214b"
+        }
+      },
+      "Final": {
+        "AuthoredDocument": "7d79dbf72a6d23c2ba8f52b68149c59a7974c038f6c09c6fb8c3ef224b8de6a0",
+        "SourceFiles": 18,
+        "SourcePreserved": true,
+        "RoleBinaries": {
+          "gargantuan": "1cfbf381190555496adcbd6a8974da024b14b0f363f20454856a4c9a4e16a43b",
+          "gargantuan-packager": "457272234516741733ab354ab4f70d23198e9089b842c056e61187d3cb1d1645",
+          "GargantuanPlayer": "3a66715c534d4abc751d43c2fa3e1e1a23d32ad37d21ff0936fa59ca40e29958",
+          "GargantuanServer": "0f16db46eccc02a3fd2d1ec6efd0ede5068646888d8c86786b04e9cc9d2757bc"
+        },
+        "ArchiveSha256": "8f974b55f77b727b2627f89c326e0043ecf22ca21c2cdb790976613c56837fd1",
+        "Cases": [
+          {
+            "Case": "PackagedMultiplayer",
+            "Exit": 0,
+            "Seconds": 21.864
+          },
+          {
+            "Case": "StudioDurable",
+            "Exit": 0,
+            "Seconds": 2.042
+          },
+          {
+            "Case": "Interlock",
+            "Exit": 0,
+            "Seconds": 1.92
+          }
+        ],
+        "RawSha256": {
+          "Interlock.log": "b8da757c618f0abc1ea88e23e484dbe849be40b1e84356a4bb5476a7a0fb5496",
+          "PackagedMultiplayer.log": "870925e098aa0525b9e3eb5d67c8fd225f14742333c0e9a811c57ea7bddf607c",
+          "StudioDurable.log": "001157c1b0c816267ba7c5f60135327bd29365570d66ceb1a067e09824c65d57"
+        },
+        "StableSamples": [
+          "[Spatial:YardProcess] Stable surface=3421671802 field=265284588"
+        ],
+        "PackageManifests": {
+          "DedicatedServer": "52774127f384645828edf9becdd071339895e95000da8080f28af7bb6f8a680d",
+          "DistributedPlayer": "4c9a6f6f265de96a5b26324906a499ce43ee4678ba747e52a18e1208d0365487"
+        }
+      }
+    }
+  },
+  "LinuxProducts": {
+    "LinuxRelease": {
+      "SuiteArchiveSha256": "d5449888b44b4b6ca2749bb1826c258942d213fd81639127a63630709442d495",
+      "RoleAndPackagerEntriesCompared": 108,
+      "Differences": {
+        "RuntimeDistribution/GargantuanPlayer": {
+          "Prior": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47",
+          "Final": "7c843ad156c66ae1ce2581ae037092e16b0b799352defd1acc12b2ca054466fd"
+        },
+        "RuntimeDistribution/distributed-player-capability.json": {
+          "Prior": "5733791ab3ffc3585fdb9010c83f6a847503a008560b99bf7ab0b470944ce0fa",
+          "Final": "7690af345b05e4a185728ae6aa1315c826251bf71092ccd636b891205c6c64c5"
+        },
+        "RuntimeDistribution/runtime-distribution-capability.json": {
+          "Prior": "4c88f1360f666db7c7758064d4e5d3d6dc2a91c55c640eafd64f1ad56abbd254",
+          "Final": "b6900b913859de429ba34fa445ed72fa6b4ad7f0853f9a025f6a5a4c86f31280"
+        },
+        "ServerRuntimeDistribution/GargantuanServer": {
+          "Prior": "c29c2cdaa90fda264a10b701628b0637b91b8513414773d054b0bd54a9645d4b",
+          "Final": "dbe9799c7f54b0ffe576ff74bfbb8f1ade4f2e1805d264faf169727889fe9c35"
+        },
+        "ServerRuntimeDistribution/runtime-distribution-capability.json": {
+          "Prior": "20f2e5bb20bdce5e10ed1d67690a5b27f5f36d8b2836f3cb270f6dea623f352c",
+          "Final": "11a2273c67071845c66cda51d157d897385d8e5ace7ccddbf06a7d66aaef66d6"
+        },
+        "gargantuan-packager": {
+          "Prior": "5d0e1b6a17b1e6dba2ac09098c8cd465c0452f54e9bfa2d06d2e498cb05884ea",
+          "Final": "bc778c5c07bce721525a008cbc3df12551964d3ecb2b323848017dbd2e387596"
+        }
+      },
+      "Binaries": {
+        "gargantuan": "4ff143a8e7de890611dda8ecbcfdd56f08d423fe0b0059a4d6d1da266a8820c0",
+        "gargantuan-packager": "bc778c5c07bce721525a008cbc3df12551964d3ecb2b323848017dbd2e387596",
+        "GargantuanPlayer": "7c843ad156c66ae1ce2581ae037092e16b0b799352defd1acc12b2ca054466fd",
+        "GargantuanServer": "dbe9799c7f54b0ffe576ff74bfbb8f1ade4f2e1805d264faf169727889fe9c35"
+      },
+      "FilesScanned": 107,
+      "BytesScanned": 68403987,
+      "ProtectedMatches": 0,
+      "Roots": [
+        "/qualification/engine-source-ordinary-release-20261127",
+        "/work",
+        "/seed-sqlite"
+      ],
+      "PerFileScanSha256": "45a6c82bd655a2db641aa1497f6b55fbe04578b9470b5d4a70d5f0618452f368",
+      "WholeFileJUnitSha256": "49b5c28462ae1eff2e73d429dd47b10287910ebb6e9a5e3aa1f6fc59bf0481c8",
+      "ConsecutiveWholeFileSeconds": [
+        16.24,
+        17.29,
+        17.1
+      ]
+    },
+    "LinuxSan": {
+      "SuiteArchiveSha256": "ce12e5bac7f865a9e9615ddacbfd4db1a0df5845e208be1233242991f092c3d6",
+      "RoleAndPackagerEntriesCompared": 108,
+      "Differences": {
+        "RuntimeDistribution/GargantuanPlayer": {
+          "Prior": "ceabe90079a963a5deadea4ba73a9df84bee09951dca3dca29f1aa02bb721485",
+          "Final": "2865aefa0cd083abde6cd5f8264c9e63b393f3bf200d353d4d7e62603298e1bd"
+        },
+        "RuntimeDistribution/distributed-player-capability.json": {
+          "Prior": "5494849058c02950f618c5df76a71b84e9d38a2a4c10ab5bb1de537ba11d9cf1",
+          "Final": "2525d386e75a68521d8ffb7f61d58a25a71b64a931f345f6aa5ddb3e1b03ca0b"
+        },
+        "RuntimeDistribution/runtime-distribution-capability.json": {
+          "Prior": "bbfd9cefb68440f30ec6a45ba77a203fe7ee0e8be394792f79f4cf59632cb955",
+          "Final": "c8fc2acfe1f7fc936c875e5c7e1a6e5fbbc09beb071191528b997014741b36a7"
+        },
+        "ServerRuntimeDistribution/GargantuanServer": {
+          "Prior": "2139899abc0367e8d152ee9c91eb70d703b3722707fd464af75953dc38ff28be",
+          "Final": "4ca1f1965e2a9c603359fb07d64b58eb823a1f4c6ef5d0ff5e4600d194d116b8"
+        },
+        "ServerRuntimeDistribution/runtime-distribution-capability.json": {
+          "Prior": "c61119e89cb3b4112464127fc7bf6b91dec7e58b5cb962d03fddfdfa29a2c59c",
+          "Final": "56283706d62eb9c28a339c1127a4b41e420635183be954c498b76d622ee96a0c"
+        },
+        "gargantuan-packager": {
+          "Prior": "f332fe139b603748358b68afd4cddfdce06367387460f09be764deb3e875aa8d",
+          "Final": "457272234516741733ab354ab4f70d23198e9089b842c056e61187d3cb1d1645"
+        }
+      },
+      "Binaries": {
+        "gargantuan": "1cfbf381190555496adcbd6a8974da024b14b0f363f20454856a4c9a4e16a43b",
+        "gargantuan-packager": "457272234516741733ab354ab4f70d23198e9089b842c056e61187d3cb1d1645",
+        "GargantuanPlayer": "3a66715c534d4abc751d43c2fa3e1e1a23d32ad37d21ff0936fa59ca40e29958",
+        "GargantuanServer": "0f16db46eccc02a3fd2d1ec6efd0ede5068646888d8c86786b04e9cc9d2757bc"
+      },
+      "InitialLink": {
+        "SuiteArchiveSha256": "6c56d43fb9243852af302e8246cb8481591c491a6f7fe9b95bbe156e5c20db3a",
+        "Binaries": {
+          "gargantuan": "1cfbf381190555496adcbd6a8974da024b14b0f363f20454856a4c9a4e16a43b",
+          "gargantuan-packager": "457272234516741733ab354ab4f70d23198e9089b842c056e61187d3cb1d1645",
+          "GargantuanPlayer": "2865aefa0cd083abde6cd5f8264c9e63b393f3bf200d353d4d7e62603298e1bd",
+          "GargantuanServer": "4ca1f1965e2a9c603359fb07d64b58eb823a1f4c6ef5d0ff5e4600d194d116b8"
+        },
+        "ChangesBeforeFreeze": {
+          "RuntimeDistribution/GargantuanPlayer": {
+            "Initial": "2865aefa0cd083abde6cd5f8264c9e63b393f3bf200d353d4d7e62603298e1bd",
+            "Frozen": "3a66715c534d4abc751d43c2fa3e1e1a23d32ad37d21ff0936fa59ca40e29958"
+          },
+          "RuntimeDistribution/distributed-player-capability.json": {
+            "Initial": "2525d386e75a68521d8ffb7f61d58a25a71b64a931f345f6aa5ddb3e1b03ca0b",
+            "Frozen": "9276532c24321d787cecd340a544acd7fdbaa9d8e07aca9b18bf4db9ed0bd425"
+          },
+          "RuntimeDistribution/runtime-distribution-capability.json": {
+            "Initial": "c8fc2acfe1f7fc936c875e5c7e1a6e5fbbc09beb071191528b997014741b36a7",
+            "Frozen": "b05b41c6b7252b5498aac29a1e81edc4fa25ef490876308fb933b7d100ce5a4e"
+          },
+          "ServerRuntimeDistribution/GargantuanServer": {
+            "Initial": "4ca1f1965e2a9c603359fb07d64b58eb823a1f4c6ef5d0ff5e4600d194d116b8",
+            "Frozen": "0f16db46eccc02a3fd2d1ec6efd0ede5068646888d8c86786b04e9cc9d2757bc"
+          },
+          "ServerRuntimeDistribution/runtime-distribution-capability.json": {
+            "Initial": "56283706d62eb9c28a339c1127a4b41e420635183be954c498b76d622ee96a0c",
+            "Frozen": "11867aa1f88a674eb25194f488ef1a0c69ae9c8fc95ae20f60f490b4a2d76ef9"
+          }
+        }
+      },
+      "FrozenFiles": 140,
+      "FrozenClosureReceiptSha256": "ee25463d421c0e2f28ec72645dc050db7e273846551430fd6729515cd81accb5",
+      "LinkSectionComparison": {
+        "RuntimeDistribution/GargantuanPlayer": {
+          "DifferentSections": {
+            ".note.gnu.build-id": {
+              "Old": [
+                36,
+                "df9612049c55e4e2eb9fe49e8e54fe2b9c1b32e23fe0f967db939c637f3edfaf"
+              ],
+              "Final": [
+                36,
+                "7ce1c9592845db80bb57120c4e8fd4d614399f8a623c45f03b8daacaa395bbd8"
+              ]
+            },
+            ".rodata": {
+              "Old": [
+                6641408,
+                "07922c11f8045959ea20fa319d04c83f4c2493a86c680be75ecea9a072c54175"
+              ],
+              "Final": [
+                6641408,
+                "fad8f6d79be6244d7e2d6d492004034f89a142ffbe2f6fcb3b6fece912cd94c5"
+              ]
+            }
+          },
+          "EqualSections": [
+            ".comment",
+            ".data",
+            ".data.rel.ro",
+            ".debug_abbrev",
+            ".debug_addr",
+            ".debug_info",
+            ".debug_line",
+            ".debug_line_str",
+            ".debug_rnglists",
+            ".debug_str",
+            ".debug_str_offsets",
+            ".dynamic",
+            ".dynstr",
+            ".dynsym",
+            ".eh_frame",
+            ".eh_frame_hdr",
+            ".fini",
+            ".fini_array",
+            ".gcc_except_table",
+            ".gnu.hash",
+            ".gnu.version",
+            ".gnu.version_r",
+            ".got",
+            ".got.plt",
+            ".init",
+            ".init_array",
+            ".interp",
+            ".note.ABI-tag",
+            ".note.gnu.property",
+            ".plt",
+            ".plt.got",
+            ".preinit_array",
+            ".rela.dyn",
+            ".rela.plt",
+            ".shstrtab",
+            ".strtab",
+            ".symtab",
+            ".tdata",
+            ".text",
+            "asan_globals",
+            "protodesc_cold"
+          ]
+        },
+        "ServerRuntimeDistribution/GargantuanServer": {
+          "DifferentSections": {
+            ".note.gnu.build-id": {
+              "Old": [
+                36,
+                "3186ddbf015b4e8587a500fef33ecc8c6249068cc3d3d46d82f4176b070a30c2"
+              ],
+              "Final": [
+                36,
+                "d2216366c952efc24b7de819559df504b43c20d7aae4bc778274b80f9acbd00d"
+              ]
+            },
+            ".rodata": {
+              "Old": [
+                6711744,
+                "722514bfcc0de57749444e39ba6995a530518efad452856773252101270ecbe7"
+              ],
+              "Final": [
+                6711744,
+                "fbe8714bd3987c98a95b4b8a4606b1c5c85a794ae23d59c49e182159095d1633"
+              ]
+            }
+          },
+          "EqualSections": [
+            ".comment",
+            ".data",
+            ".data.rel.ro",
+            ".debug_abbrev",
+            ".debug_addr",
+            ".debug_info",
+            ".debug_line",
+            ".debug_line_str",
+            ".debug_rnglists",
+            ".debug_str",
+            ".debug_str_offsets",
+            ".dynamic",
+            ".dynstr",
+            ".dynsym",
+            ".eh_frame",
+            ".eh_frame_hdr",
+            ".fini",
+            ".fini_array",
+            ".gcc_except_table",
+            ".gnu.hash",
+            ".gnu.version",
+            ".gnu.version_r",
+            ".got",
+            ".got.plt",
+            ".init",
+            ".init_array",
+            ".interp",
+            ".note.ABI-tag",
+            ".note.gnu.property",
+            ".plt",
+            ".plt.got",
+            ".preinit_array",
+            ".rela.dyn",
+            ".rela.plt",
+            ".shstrtab",
+            ".strtab",
+            ".symtab",
+            ".tdata",
+            ".text",
+            "asan_globals",
+            "protodesc_cold"
+          ]
+        },
+        "gargantuan-packager": {
+          "DifferentSections": {},
+          "EqualSections": [
+            ".comment",
+            ".data",
+            ".data.rel.ro",
+            ".debug_abbrev",
+            ".debug_addr",
+            ".debug_info",
+            ".debug_line",
+            ".debug_line_str",
+            ".debug_rnglists",
+            ".debug_str",
+            ".debug_str_offsets",
+            ".dynamic",
+            ".dynstr",
+            ".dynsym",
+            ".eh_frame",
+            ".eh_frame_hdr",
+            ".fini",
+            ".fini_array",
+            ".gcc_except_table",
+            ".gnu.hash",
+            ".gnu.version",
+            ".gnu.version_r",
+            ".got",
+            ".got.plt",
+            ".init",
+            ".init_array",
+            ".interp",
+            ".note.ABI-tag",
+            ".note.gnu.build-id",
+            ".note.gnu.property",
+            ".plt",
+            ".plt.got",
+            ".preinit_array",
+            ".rela.dyn",
+            ".rela.plt",
+            ".rodata",
+            ".shstrtab",
+            ".strtab",
+            ".symtab",
+            ".tdata",
+            ".text",
+            "asan_globals"
+          ]
+        }
+      },
+      "ReadOnlyByteChanges": {
+        "RuntimeDistribution/GargantuanPlayer": {
+          "DifferentBytes": 3,
+          "Groups": [
+            {
+              "Start": 6447098,
+              "LiteralOld": "opensource Nov 28 2026 06:37:44",
+              "LiteralNew": "opensource Nov 28 2026 06:41:04"
+            }
+          ]
+        },
+        "ServerRuntimeDistribution/GargantuanServer": {
+          "DifferentBytes": 3,
+          "Groups": [
+            {
+              "Start": 6517434,
+              "LiteralOld": "opensource Nov 28 2026 06:37:44",
+              "LiteralNew": "opensource Nov 28 2026 06:41:04"
+            }
+          ]
+        }
+      },
+      "GuiProcessProducts": {
+        "Signed/Player/GargantuanPlayer": "3a66715c534d4abc751d43c2fa3e1e1a23d32ad37d21ff0936fa59ca40e29958",
+        "Signed/Server/GargantuanServer": "0f16db46eccc02a3fd2d1ec6efd0ede5068646888d8c86786b04e9cc9d2757bc",
+        "Development/Player/GargantuanPlayer": "3a66715c534d4abc751d43c2fa3e1e1a23d32ad37d21ff0936fa59ca40e29958",
+        "Development/Server/GargantuanServer": "0f16db46eccc02a3fd2d1ec6efd0ede5068646888d8c86786b04e9cc9d2757bc"
+      },
+      "FilesScanned": 107,
+      "BytesScanned": 401430283,
+      "ProtectedMatches": 0,
+      "Roots": [
+        "/src",
+        "/build",
+        "/private/GnsLayoutMarker927",
+        "/private/SqliteLayoutMarker683"
+      ],
+      "PerFileScanSha256": "ad8a001b5e4fcfaff4ff9c95d59e7e22f94cddd5fec77e33c0e9efd4e8588a1e",
+      "WholeFileJUnitSha256": "fec353e102d5e25104156f5c985b62d2cf1bac3261f1ab6f744f79b1449dd9ff",
+      "ConsecutiveWholeFileSeconds": [
+        118.83,
+        117.72,
+        114.37
+      ],
+      "DetachedSymbols": {
+        "Player": {
+          "Artifact": {
+            "Size": 170721096,
+            "Sha256": "3a66715c534d4abc751d43c2fa3e1e1a23d32ad37d21ff0936fa59ca40e29958",
+            "Protected": {
+              "/src": 0,
+              "/build": 0,
+              "/private/GnsLayoutMarker927": 0,
+              "/private/SqliteLayoutMarker683": 0
+            }
+          },
+          "Detached": {
+            "Size": 87579784,
+            "Sha256": "9041a2266a99e43cf2f5906ca662452d391baa076e3da1d2db2d889173d92356",
+            "Protected": {
+              "/src": 0,
+              "/build": 0,
+              "/private/GnsLayoutMarker927": 0,
+              "/private/SqliteLayoutMarker683": 0
+            }
+          },
+          "Example": "main\n./CMakeFiles/GargantuanSources/Engine/src/player/PlayerMain.cpp:3:0"
+        },
+        "Server": {
+          "Artifact": {
+            "Size": 172144416,
+            "Sha256": "0f16db46eccc02a3fd2d1ec6efd0ede5068646888d8c86786b04e9cc9d2757bc",
+            "Protected": {
+              "/src": 0,
+              "/build": 0,
+              "/private/GnsLayoutMarker927": 0,
+              "/private/SqliteLayoutMarker683": 0
+            }
+          },
+          "Detached": {
+            "Size": 88217472,
+            "Sha256": "ce81ef39ca0451e461a4413fbef471c678cae6304d44354a3f1d7834ca8d97f5",
+            "Protected": {
+              "/src": 0,
+              "/build": 0,
+              "/private/GnsLayoutMarker927": 0,
+              "/private/SqliteLayoutMarker683": 0
+            }
+          },
+          "Example": "main\n./CMakeFiles/GargantuanSources/Engine/src/server/ServerMain.cpp:3:0"
+        },
+        "SDL": {
+          "Artifact": {
+            "Size": 14326440,
+            "Sha256": "2aa35ee1d7ffa9557520903cdd54d25c5b2b2f1752f70e61fc9e67a9d16332b5",
+            "Protected": {
+              "/src": 0,
+              "/build": 0,
+              "/private/GnsLayoutMarker927": 0,
+              "/private/SqliteLayoutMarker683": 0
+            }
+          },
+          "Detached": {
+            "Size": 2677256,
+            "Sha256": "57c8e0520478cb8b99ea456051256350a8766ff8d91855afc9a524c1ac85b2a8",
+            "Protected": {
+              "/src": 0,
+              "/build": 0,
+              "/private/GnsLayoutMarker927": 0,
+              "/private/SqliteLayoutMarker683": 0
+            }
+          },
+          "Example": "SDL_Init_REAL\n./CMakeFiles/GargantuanSources/Engine/vendor/sdl/src/SDL.c:585:0"
+        }
+      },
+      "RelocatedFailureOracleSha256": "428d0a79f2ac997f0674838510be3d1c5fd3cf979e36326837213ec417f47567",
+      "RelocatedDiagnostics": [
+        "[Build:SanitizerPaths] Ninja layout=disjoint CMakeFiles/GargantuanSources/External/Arithmetic.hpp:1:53: runtime error: signed integer overflow: 2147483647 + 2 cannot be represented in type 'int'",
+        "[Build:SanitizerPaths] Ninja layout=disjoint #0 0x6018014f6cf0 in Read(int*) CMakeFiles/GargantuanSources/Engine/Probe.cpp:4:53",
+        "[Build:SanitizerPaths] Ninja layout=nested CMakeFiles/GargantuanSources/External/Arithmetic.hpp:1:53: runtime error: signed integer overflow: 2147483647 + 2 cannot be represented in type 'int'",
+        "[Build:SanitizerPaths] Ninja layout=nested #0 0x61bd597e9cf0 in Read(int*) CMakeFiles/GargantuanSources/Engine/Probe.cpp:4:53",
+        "[Build:SanitizerPaths] Ninja layout=in-source CMakeFiles/GargantuanSources/External/Arithmetic.hpp:1:53: runtime error: signed integer overflow: 2147483647 + 2 cannot be represented in type 'int'",
+        "[Build:SanitizerPaths] Ninja layout=in-source #0 0x5eb137b3dcf0 in Read(int*) CMakeFiles/GargantuanSources/Engine/Probe.cpp:4:53"
+      ]
+    }
+  },
+  "RegisteredTests": {
+    "WindowsRelease": {
+      "1d9bd6323": {
+        "OriginalRegistered": {
+          "Cases": 50,
+          "Failures": [
+            "gargantuan_spatial_construction_yard_multiplayer"
+          ],
+          "Skipped": [],
+          "SuiteSeconds": 145,
+          "ReceiptSha256": "4d8290b41b6accc3eedf5884464a962e3a68feb48b2f19223a96d6991eeb191f"
+        },
+        "ReviewedSampleRegistered": {
+          "Cases": 50,
+          "Failures": [],
+          "Skipped": [],
+          "SuiteSeconds": 176,
+          "ReceiptSha256": "893497bfa31e4caf5d22f2c0353a01e4880a0502588f3a28c288a1bdfc705322"
+        }
+      },
+      "562a0fe7b": {
+        "FinalRegistered": {
+          "Cases": 50,
+          "Failures": [],
+          "Skipped": [],
+          "SuiteSeconds": 110,
+          "ReceiptSha256": "5eab323411eb4596038a2a55b5f588ba4ac14a3d99b1d58f1a9c3af9165353fe"
+        },
+        "EnabledGraphicalRegistration": {
+          "Cases": 1,
+          "Failures": [],
+          "Skipped": [],
+          "SuiteSeconds": 0,
+          "ReceiptSha256": "7ce1c8f015033adbaef20a45bd5be31b3f9068dfd1e5254d6dd576a297f0f8a6"
+        }
+      }
+    },
+    "LinuxRelease": {
+      "1d9bd6323": {
+        "FirstNative": {
+          "Cases": 49,
+          "Failures": [
+            "gargantuan_spatial_construction_yard_multiplayer"
+          ],
+          "Skipped": [],
+          "SuiteSeconds": 162,
+          "ReceiptSha256": "8ad4c9badeed34559e0527dfb64f21199b66727d6f7b51a171856c9ba5923ff4"
+        },
+        "EarlierYardReplay": {
+          "Cases": 2,
+          "Failures": [
+            "gargantuan_spatial_construction_yard_restart"
+          ],
+          "Skipped": [],
+          "SuiteSeconds": 49,
+          "ReceiptSha256": "ca16ff2e02e6a72a8c1ced9f3daf5484ac6bd9d74d566378b9b810468b13a408"
+        }
+      },
+      "562a0fe7b": {
+        "FinalRegistered": {
+          "Cases": 49,
+          "Failures": [],
+          "Skipped": [],
+          "SuiteSeconds": 72,
+          "ReceiptSha256": "2b487422edad549d0a73572f428c9d31dfda04a7b32fa6b69adfe556bbf707c9"
+        },
+        "FinalEditor": {
+          "Cases": 8,
+          "Failures": [],
+          "Skipped": [],
+          "SuiteSeconds": 13,
+          "ReceiptSha256": "894ba2670a5fb9338e65695f8ee4262c565510c3b5f2bcb0d8493e4f9474f99d"
+        },
+        "EnabledGraphicalRegistration": {
+          "Cases": 1,
+          "Failures": [],
+          "Skipped": [],
+          "SuiteSeconds": 0,
+          "ReceiptSha256": "6a8f5e1b9d648e1e051af4fb3fe908f9293e1e7e40e329b592d308c63cef287f"
+        }
+      }
+    },
+    "LinuxSan": {
+      "1d9bd6323": {
+        "FirstNative": {
+          "Cases": 49,
+          "Failures": [
+            "gargantuan_spatial_construction_yard_multiplayer"
+          ],
+          "Skipped": [],
+          "SuiteSeconds": 296,
+          "ReceiptSha256": "c2a8e95082c457204bd9aa43222915ca40f4d27bb26ecfdf324bad5143d57ad1"
+        },
+        "EarlierYardReplay": {
+          "Cases": 2,
+          "Failures": [],
+          "Skipped": [],
+          "SuiteSeconds": 22,
+          "ReceiptSha256": "addc0a6a6da8180c1d461320f67cca7098621f158656d3c28e152e893edc5130"
+        }
+      },
+      "562a0fe7b": {
+        "FinalRegistered": {
+          "Cases": 49,
+          "Failures": [],
+          "Skipped": [],
+          "SuiteSeconds": 262,
+          "ReceiptSha256": "673341600255415b3ad09c4dbc54a1ebf81d30b047fc54ea0c41ae7e0a81cf3c"
+        },
+        "FinalEditor": {
+          "Cases": 8,
+          "Failures": [],
+          "Skipped": [],
+          "SuiteSeconds": 31,
+          "ReceiptSha256": "bb568b8991c6b5a0dbb5f3c22054ea2af5d3e2ff0aa8a791133c54c0ca163c26"
+        },
+        "EnabledGraphicalRegistration": {
+          "Cases": 1,
+          "Failures": [],
+          "Skipped": [],
+          "SuiteSeconds": 1,
+          "ReceiptSha256": "33fd95d97c3d0f325fd894ef37b450f31ab818b39801eee3b238f533bd4d80c7"
+        }
+      }
+    }
+  },
+  "SupplementalSigned": {
+    "WindowsRelease": {
+      "TwoProjects": [
+        {
+          "Project": "40dbd25fcd364047907a8c5376b7ec22",
+          "Signed": true,
+          "Owners": [
+            2,
+            1
+          ],
+          "Replacement": 3,
+          "PlayerManifest": "4935bd13f72eb94fb24a6c6bfdc40a01d48d26e578aa3c944a4b508e40495e48",
+          "ServerManifest": "0bb074defd95bf7449cd387bdc87234b567d4b8e64c4eaa06a04dfc2bf3715a8"
+        },
+        {
+          "Project": "c1fd0cc5b1894e058de25f33e0ccc014",
+          "Signed": false,
+          "Owners": [
+            1,
+            2
+          ],
+          "Replacement": 3,
+          "PlayerManifest": "9dde6d9afe10e0dd1ae47e2e9776d50aa5d883fd3a3b6cfeafe85a70db199cee",
+          "ServerManifest": "69dbbbc6c5e8894802bf21c32c845fe50a19d65ebc86a50eb95d85805efa7b6f"
+        }
+      ],
+      "Presets": {
+        "LegacySource": 3,
+        "Open": 3,
+        "Compiled": 3,
+        "SignedCompiled": 3,
+        "Protected": 3,
+        "Hybrid": 3
+      },
+      "ExpectedDenials": {
+        "untrusted-unsigned-compiled": 3,
+        "unenrolled-signed-compiled": 3,
+        "protected-missing-key": 3,
+        "protected-wrong-key": 3,
+        "protected-tampered-ciphertext": 3,
+        "rollback-compile-failure": 3
+      },
+      "HybridJoinReconnect": [
+        0,
+        0
+      ],
+      "MatrixSha256": "0957c44fd7a797a75544c69345149de4220fbcfe1ed6d0e2c8dcf5e9de704dde",
+      "RoleBinaries": {
+        "GargantuanPlayer": "50622ed3f31df503244eadfc93d871aedca04300cf5cc7183532c177a0608157",
+        "GargantuanServer": "0809eb62ffea137f06e9326056a9f8b09df0785e501290083c5a06a12c47adf2",
+        "gargantuan-packager": "1809aecaa1bf9b45ab33d4741ce8304d8edb040e0593ef041d843c7fc88999ca"
+      }
+    },
+    "LinuxRelease": {
+      "TwoProjects": [
+        {
+          "Project": "cbe9e7ba0cf747e193c6fe8c5b1eaf26",
+          "Signed": true,
+          "Owners": [
+            1,
+            2
+          ],
+          "Replacement": 3,
+          "PlayerManifest": "ee07579dca522080eb0fad1890fd6b03f6fbe3b3f025b665a1f7b6e8c16d0016",
+          "ServerManifest": "a51581a98783029d2c295bf7f09a84546323d8f2b81ce9bd0a96fb7ff4629cdb"
+        },
+        {
+          "Project": "8e18e9796d964b5481552d01927a1fd5",
+          "Signed": false,
+          "Owners": [
+            2,
+            1
+          ],
+          "Replacement": 3,
+          "PlayerManifest": "5165e9be654c0c177bcb4248def120ecbc897507b650fd8748bad16aa58f2136",
+          "ServerManifest": "7e928ebbca5c2d31af423da4de4e9e67d480db6e626bd67c265e1e37d48232e5"
+        }
+      ],
+      "Presets": {
+        "LegacySource": 3,
+        "Open": 3,
+        "Compiled": 3,
+        "SignedCompiled": 3,
+        "Protected": 3,
+        "Hybrid": 3
+      },
+      "ExpectedDenials": {
+        "untrusted-unsigned-compiled": 3,
+        "unenrolled-signed-compiled": 3,
+        "protected-missing-key": 3,
+        "protected-wrong-key": 3,
+        "protected-tampered-ciphertext": 3,
+        "rollback-compile-failure": 3
+      },
+      "HybridJoinReconnect": [
+        0,
+        0
+      ],
+      "MatrixSha256": "c9553b0a7bcc7934037ccab0fe9e7c3f3afbb9d01e89a06b0f33fc12959641b4",
+      "RoleBinaries": {
+        "GargantuanPlayer": "7c843ad156c66ae1ce2581ae037092e16b0b799352defd1acc12b2ca054466fd",
+        "GargantuanServer": "dbe9799c7f54b0ffe576ff74bfbb8f1ade4f2e1805d264faf169727889fe9c35",
+        "gargantuan-packager": "bc778c5c07bce721525a008cbc3df12551964d3ecb2b323848017dbd2e387596"
+      }
+    },
+    "LinuxSan": {
+      "TwoProjects": [
+        {
+          "Project": "05a2e9d7a3d84a14a22a3d53f95bcee7",
+          "Signed": true,
+          "Owners": [
+            1,
+            2
+          ],
+          "Replacement": 3,
+          "PlayerManifest": "9ce2c98fb3ceb8f1b1b1addd9c95fc101a92dbd75b9096c75a34cbacd9b0ad61",
+          "ServerManifest": "6388ceb6e7414c6d134d0b3d33569f0b2faeec80dd2840d8658b58c6c8d0c2c9"
+        },
+        {
+          "Project": "6aaf8a0eaa2a474e949e29e90d5e1dac",
+          "Signed": false,
+          "Owners": [
+            1,
+            2
+          ],
+          "Replacement": 3,
+          "PlayerManifest": "3a25fb847293613528dcd852ad412798cf136de8b54200b014cb24925c4adeeb",
+          "ServerManifest": "e2b7cc9b0841644eb78f9b0144e841a3979540b1890aafe95c29cb7ff3949875"
+        }
+      ],
+      "Presets": {
+        "LegacySource": 3,
+        "Open": 3,
+        "Compiled": 3,
+        "SignedCompiled": 3,
+        "Protected": 3,
+        "Hybrid": 3
+      },
+      "ExpectedDenials": {
+        "untrusted-unsigned-compiled": 3,
+        "unenrolled-signed-compiled": 3,
+        "protected-missing-key": 3,
+        "protected-wrong-key": 3,
+        "protected-tampered-ciphertext": 3,
+        "rollback-compile-failure": 3
+      },
+      "HybridJoinReconnect": [
+        0,
+        0
+      ],
+      "MatrixSha256": "2cb01fd5fbb56926aef5a0f7ef451a79e8cefdd332a72b17c78a4f18166cb874",
+      "RoleBinaries": {
+        "GargantuanPlayer": "3a66715c534d4abc751d43c2fa3e1e1a23d32ad37d21ff0936fa59ca40e29958",
+        "GargantuanServer": "0f16db46eccc02a3fd2d1ec6efd0ede5068646888d8c86786b04e9cc9d2757bc",
+        "gargantuan-packager": "457272234516741733ab354ab4f70d23198e9089b842c056e61187d3cb1d1645"
+      }
+    }
+  },
+  "WindowsCold": [
+    {
+      "Case": "OriginalFive",
+      "Seconds": 0.53,
+      "Exit": 0
+    },
+    {
+      "Case": "SameSizeSeven",
+      "Seconds": 0.494,
+      "Exit": 0
+    },
+    {
+      "Case": "SpatialStairs",
+      "Seconds": 7.587,
+      "Exit": 0
+    },
+    {
+      "Case": "ScriptDocumentBinding",
+      "Seconds": 0.881,
+      "Exit": 0
+    },
+    {
+      "Case": "TrueVulkan",
+      "Seconds": 0.402,
+      "Exit": 0
+    },
+    {
+      "Case": "TwoDomainGui",
+      "Seconds": 0.37,
+      "Exit": 0
+    },
+    {
+      "Case": "Lighting",
+      "Seconds": 0.48,
+      "Exit": 0
+    }
+  ],
+  "WindowsReplacement": {
+    "Pin": "562a0fe7b",
+    "Full": "562a0fe7b40f6ce2a90cf42e1cebef0fd4bf120b",
+    "Cases": [
+      {
+        "Case": "RepeatedReplacement",
+        "Exit": 0,
+        "Seconds": 20.485
+      }
+    ],
+    "Phase": "Replacement",
+    "Seconds": 20.485,
+    "Error": null
+  },
+  "QuietStudy": {
+    "ArchiveSha256": "29d7c9bbdc440ab6ae61838350bae8edf597225a96f96f48fe5485d754a8ae21",
+    "Elapsed": 126.587,
+    "StartUtc": "2026-11-28T07:00:29.721510+00:00",
+    "EndUtc": "2026-11-28T07:02:40.902468+00:00",
+    "AmbientBefore": {
+      "Topology": [
+        {
+          "Group": 0,
+          "Logical": 0,
+          "Core": 0,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 1,
+          "Core": 0,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 2,
+          "Core": 2,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 3,
+          "Core": 2,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 4,
+          "Core": 4,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 5,
+          "Core": 4,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 6,
+          "Core": 6,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 7,
+          "Core": 6,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 8,
+          "Core": 8,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 9,
+          "Core": 8,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 10,
+          "Core": 10,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 11,
+          "Core": 10,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 12,
+          "Core": 12,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 13,
+          "Core": 12,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 14,
+          "Core": 14,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 15,
+          "Core": 14,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 16,
+          "Core": 16,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 17,
+          "Core": 16,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 18,
+          "Core": 18,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 19,
+          "Core": 18,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 20,
+          "Core": 20,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 21,
+          "Core": 20,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 22,
+          "Core": 22,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 23,
+          "Core": 22,
+          "LastLevelCache": 12,
+          "Numa": 0
+        }
+      ],
+      "IdleSampleSeconds": 3,
+      "BusyFraction": 0.09073
+    },
+    "AmbientAfter": {
+      "Topology": [
+        {
+          "Group": 0,
+          "Logical": 0,
+          "Core": 0,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 1,
+          "Core": 0,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 2,
+          "Core": 2,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 3,
+          "Core": 2,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 4,
+          "Core": 4,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 5,
+          "Core": 4,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 6,
+          "Core": 6,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 7,
+          "Core": 6,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 8,
+          "Core": 8,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 9,
+          "Core": 8,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 10,
+          "Core": 10,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 11,
+          "Core": 10,
+          "LastLevelCache": 0,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 12,
+          "Core": 12,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 13,
+          "Core": 12,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 14,
+          "Core": 14,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 15,
+          "Core": 14,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 16,
+          "Core": 16,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 17,
+          "Core": 16,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 18,
+          "Core": 18,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 19,
+          "Core": 18,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 20,
+          "Core": 20,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 21,
+          "Core": 20,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 22,
+          "Core": 22,
+          "LastLevelCache": 12,
+          "Numa": 0
+        },
+        {
+          "Group": 0,
+          "Logical": 23,
+          "Core": 22,
+          "LastLevelCache": 12,
+          "Numa": 0
+        }
+      ],
+      "IdleSampleSeconds": 3,
+      "BusyFraction": 0.09374
+    },
+    "PairedCompound": [
+      {
+        "Arm": "Original",
+        "Seconds": 0.28645989997312427,
+        "Sha256": "5250f753ada4cedf5b5aeb6598d118100bb5d4f1f81e42840f68cc3dfbe812fa"
+      },
+      {
+        "Arm": "Candidate",
+        "Seconds": 0.38647709996439517,
+        "Sha256": "a939cf9dd4cb01bbe3c5a8adb1fadbb484c538e252dcdefe5d768979486c3851"
+      },
+      {
+        "Arm": "Candidate",
+        "Seconds": 0.3687407998368144,
+        "Sha256": "a939cf9dd4cb01bbe3c5a8adb1fadbb484c538e252dcdefe5d768979486c3851"
+      },
+      {
+        "Arm": "Original",
+        "Seconds": 0.27085370011627674,
+        "Sha256": "5250f753ada4cedf5b5aeb6598d118100bb5d4f1f81e42840f68cc3dfbe812fa"
+      }
+    ],
+    "Settings": {
+      "EngineMask": "0xfff",
+      "Main": 4,
+      "Sampler": 18,
+      "Warmup": 192,
+      "Ticks": 256,
+      "Blocks": 6,
+      "Order": "preseeded ABBA/BAAB"
+    },
+    "OverlayIdentities": {
+      "Historical": {
+        "Source": "284443879fcecc66a0257006fcdf7d65566fef4d",
+        "OriginalEngine": "0f43758828929e453d054689e81524a662e75c9e26d8ec4d4a4089396795d4aa",
+        "Instrumented": "90601b0790447cdcf9e668c128f7d380e2424467f7ec63fdcc5f27c74e3d8c97",
+        "Compiled": [
+          "src/editor/PlaySession.cpp",
+          "src/reflection/RuntimeSchema.cpp",
+          "src/classes/Character.cpp",
+          "src/classes/WorldRoot.cpp",
+          "src/render/RenderPublisher.cpp",
+          "src/render/RenderProjection.cpp"
+        ],
+        "SourceInputs": {
+          "src/classes/Character.cpp": "df5d2c1ec683af2f6ba742be98bfbacbbcbaff2497f4f219eaa51ee11d53528c",
+          "src/classes/WorldRoot.cpp": "ae781a2bd81b7da7865671f70a47bb73a2afa21d0767bdc2456cf73058e504be",
+          "src/editor/PlaySession.cpp": "6052fb51f07175963029a8c05f7515e05ba0c87a52ca625f5e2279760e138bfa",
+          "src/reflection/RuntimeSchema.cpp": "3c19b26f775abaf0a2c97634f3e1cae91231adb1c94acd7bf98dc74fb71bbfaf",
+          "src/render/RenderProjection.cpp": "8880b2c12cdad3909b3906a31f612de0f5257483cb2e2e8ec629747c9f148d18",
+          "src/render/RenderPublisher.cpp": "7ebedc256e5ce7f27a30d4058960f7b51ec1960ea2b6ba118cfde69c0b9ac94e",
+          "tests/BenchmarkAllocationProbe.cpp": "3a4869436fa8ab848a72c423d3c6fbfbb5ebe719e5bab48ee80b4ed49f7df246",
+          "tests/BenchmarkAllocationProbe.hpp": "ae5ca16275cf271e7af01fc47268ede1a0188f466d210457d78dc25bc5a2440b",
+          "tests/SpatialOrdinaryCallProfile.hpp": "df6da5aa73a5cdea6da371e95d020c3c13f28a6161161e927d46c8ffe7cc3547",
+          "tests/SpatialOrdinaryNativeProfile.hpp": "ad1cd5b443433c1bc13f325105d81d712b64416d9bb79cbb11b5e2b3bef271c3"
+        }
+      },
+      "Repaired": {
+        "Source": "562a0fe7b40f6ce2a90cf42e1cebef0fd4bf120b",
+        "OriginalEngine": "1378d39488e60a5c2120d94ab9e2b753889d5aba4b62f68f26763e7d34028adc",
+        "Instrumented": "a5e5337df7e032e02b298573b49a32771488394c6cf8a1f6fb22a7ddcd1a3e98",
+        "Compiled": [
+          "src/editor/PlaySession.cpp",
+          "src/reflection/RuntimeSchema.cpp",
+          "src/classes/Character.cpp",
+          "src/classes/WorldRoot.cpp",
+          "src/render/RenderPublisher.cpp",
+          "src/render/RenderProjection.cpp"
+        ],
+        "SourceInputs": {
+          "src/classes/Character.cpp": "0d86e6a051e39166d15010df6fd650578fca9f2c69ad3f6f6cf137e720be9c27",
+          "src/classes/WorldRoot.cpp": "eb226c8ce8a04c45cf852271b7c722238b90be59371816627adc2c406d597b18",
+          "src/editor/PlaySession.cpp": "efaccf02f66ac88fe6e7091cec4df1dbc5d576dfd7cc5ba4a35d0efbd489ce70",
+          "src/reflection/RuntimeSchema.cpp": "b74938abdeb46915cc84aa3e93a42ffce72c17b39cc97475066d65df824461ee",
+          "src/render/RenderProjection.cpp": "3d2db246059af1dcf7adcea71ae492df6a27faf9d9e73a2e294dc0a1562cd39a",
+          "src/render/RenderPublisher.cpp": "85b6826752dbd23485c8707e9ce4ac92af6e9fb29b5cff03440c7a14f6d70791",
+          "tests/BenchmarkAllocationProbe.cpp": "3a4869436fa8ab848a72c423d3c6fbfbb5ebe719e5bab48ee80b4ed49f7df246",
+          "tests/BenchmarkAllocationProbe.hpp": "ae5ca16275cf271e7af01fc47268ede1a0188f466d210457d78dc25bc5a2440b",
+          "tests/SpatialOrdinaryCallProfile.hpp": "df6da5aa73a5cdea6da371e95d020c3c13f28a6161161e927d46c8ffe7cc3547",
+          "tests/SpatialOrdinaryNativeProfile.hpp": "ad1cd5b443433c1bc13f325105d81d712b64416d9bb79cbb11b5e2b3bef271c3"
+        }
+      }
+    }
+  },
+  "ResourceRelease": {
+    "Version": 1,
+    "Outcome": "Status",
+    "Resource": "worker-heavy",
+    "State": "Free",
+    "Generation": 694,
+    "ObservedUtc": "2026-11-28T07:03:24.795843+00:00",
+    "ChatId": null,
+    "Owner": null,
+    "Mode": null,
+    "AcquiredUtc": null,
+    "HeartbeatUtc": null,
+    "ExpiresUtc": null
+  },
+  "ReleaseAction": {
+    "Version": 1,
+    "Outcome": "Released",
+    "Resource": "worker-heavy",
+    "State": "Free",
+    "Generation": 694,
+    "ObservedUtc": "2026-11-28T07:03:24.744481+00:00",
+    "ChatId": null,
+    "Owner": null,
+    "Mode": null,
+    "AcquiredUtc": null,
+    "HeartbeatUtc": null,
+    "ExpiresUtc": null
+  }
+}

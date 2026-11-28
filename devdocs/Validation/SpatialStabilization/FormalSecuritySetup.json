@@ -1,0 +1,18 @@
+{
+  "Base": "1e89d189af82ea6897555205cbcaea4ff4f22085",
+  "Head": "562a0fe7b40f6ce2a90cf42e1cebef0fd4bf120b",
+  "CheckedOutAtInspection": "c67018291d748ca9e77ec6ad806c95221426b33e",
+  "TargetMetadata": {
+    "branch": "stabilization/spatial-final-20261128",
+    "commitSubject": "Verify the same physically saved Yard across Linux Release products",
+    "detachedHead": false,
+    "hasHead": true,
+    "isGit": true,
+    "isWorktree": true,
+    "reviewChangesSupported": true,
+    "revision": "c67018291d748ca9e77ec6ad806c95221426b33e",
+    "shortRevision": "c670182"
+  },
+  "StartResponse": "Review changes requires a non-bare Git worktree with a resolvable HEAD.",
+  "ScanId": null
+}

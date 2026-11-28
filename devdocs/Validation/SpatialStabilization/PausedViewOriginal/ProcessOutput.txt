@@ -1,0 +1,5 @@
+[Editor:PausedDomain] default Workspace 2880 0 True
+[Editor:PausedDomain] named DebugInterior 3072 0 False
+[Editor:PausedDomain] named reattachment DebugInterior 3072 0 False
+[Editor:PausedDomain] restored default Workspace 3264 0 True
+[Editor:PausedDomain] running named DebugInterior 0 3456 True

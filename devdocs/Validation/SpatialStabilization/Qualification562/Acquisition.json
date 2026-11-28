@@ -1,0 +1,38 @@
+{
+  "HistoricalEngineSHA256": "0f43758828929e453d054689e81524a662e75c9e26d8ec4d4a4089396795d4aa",
+  "CandidateSource": "562a0fe7b40f6ce2a90cf42e1cebef0fd4bf120b",
+  "CandidateEngineSHA256": "1378d39488e60a5c2120d94ab9e2b753889d5aba4b62f68f26763e7d34028adc",
+  "OriginalUTCEvents": [
+    {
+      "Event": "Start",
+      "Scene": "ordinary",
+      "TimeUtc": "2026-11-28T08:09:02.3782291Z"
+    },
+    {
+      "Event": "Exit",
+      "Scene": "ordinary",
+      "Code": 0,
+      "TimeUtc": "2026-11-28T08:58:25.4498068Z"
+    },
+    {
+      "Event": "Start",
+      "Scene": "rigid",
+      "TimeUtc": "2026-11-28T08:58:25.4568788Z"
+    },
+    {
+      "Event": "Exit",
+      "Scene": "rigid",
+      "Code": 0,
+      "TimeUtc": "2026-11-28T09:08:17.8330720Z"
+    }
+  ],
+  "OriginalAcquisitionFileSHA256": {
+    "Controller.ps1": "9641fb2d4791b96f11e8247ecbca8f04553c4e61d5598bfad054234ac322145a",
+    "UtcEvents.jsonl": "58df2dabe082b0c004501c4eb7be0cd84accd047c30bd02524e8e0bad8c179a7",
+    "ordinary/Processes.csv": "c94b85549bde4f34c6d05b73e2f2410261af3a5570df27c69f8fa16dd112ce39",
+    "ordinary/Ticks.csv.gz": "9c884218f1b502714cd620cb3c1d22af0c67c37a5ea9350e0503c1f86b431aab",
+    "rigid/Processes.csv": "d061a76f03fd03e55c2b6b85fce0064e5e33ebd1fdd50fc98787e48e65c5f948",
+    "rigid/Ticks.csv.gz": "c0e25cbba0af60075d1694add21cf66101a20671f87112ace26ae3a9e29e4575"
+  },
+  "OriginalAcquisitionArchiveSHA256": "2702c2c8bb08feca172ca4ae4f1700ce359fed3fd784aca593efcd78ebcd9aea"
+}

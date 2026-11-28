@@ -1,0 +1,71 @@
+[Spatial:YardInput] Authored project.instance.json SHA256=0159e1ffdea166d9a5b657f36500935bff2869219c3b292ea688e3af627ce766
+[Spatial:YardPackage] DedicatedServer ManifestSHA256=bd5d6c300ff7bde8e42ae08a233fd2de929aa08a9b7ba257ad653a19ab210d03
+[Spatial:YardPackage] DistributedPlayer ManifestSHA256=3c436cc8b6bd0487339350088f17ca69e3d75342e508511ce638c364b0325e8d
+builder [Spatial:FreightVisit] far actor=(0.00,6.00,0.00) deckX=20.37
+builder [Spatial:FreightVisit] near actor=(22.00,3.00,1.00)
+builder [Spatial:FreightPlatform] firstX=20.7216 nextX=21.1716 mass=64.0000 cell=(0,1,0)
+digger [Spatial:FreightVisit] far actor=(0.00,6.00,0.00) deckX=23.92
+digger [Spatial:FreightVisit] near actor=(22.00,3.00,1.00)
+digger [Spatial:FreightPlatform] firstX=24.1715 nextX=24.5715 mass=64.0000 cell=(0,1,0)
+Traceback (most recent call last):
+  File "C:\Sandbox\Codex\Workspaces\SpatialStabilizationNative-20261128\tests\SpatialConstructionYardMultiplayer.py", line 349, in <module>
+    RunYard(Parser.parse_args(),Path(Directory).resolve())
+  File "C:\Sandbox\Codex\Workspaces\SpatialStabilizationNative-20261128\tests\SpatialConstructionYardMultiplayer.py", line 336, in RunYard
+    Await(Host,"[Spatial:YardProcess] Builder returned with two persisted constructions",(First,))
+  File "C:\Sandbox\Codex\Workspaces\SpatialStabilizationNative-20261128\tests\SpatialConstructionYardMultiplayer.py", line 275, in Await
+    raise RuntimeError(f"Missing {Marker}\n{Logs}")
+RuntimeError: Missing [Spatial:YardProcess] Builder returned with two persisted constructions
+server-1.log (exit=None)
+[Content:Server] Provider=local Residency=fully-resident Project=5d72f0de4b6ff953670b2b9656849823 PackageVersion=1 TLS=not-applicable Endpoint=not-applicable
+ScriptEngine started opening libraries
+ScriptEngine finished opening libraries
+Attempting to find required instance Construction Yard.Players.PlayerRuntimeModules.DefaultNetworkServerRuntime
+Constructed engine
+[Runtime:Server] Started Construction Yard (5d72f0de4b6ff953670b2b9656849823) in explicit NetworkServer mode
+[Runtime:Server] StartupWallMilliseconds=36
+[Runtime:Luau] [Spatial:StudioPackage] Restored coincident grids and oriented stair in both domains
+[Runtime:Luau] [Spatial:StudioPackage] Restored assigned domain, rotated wedge and imported mesh
+[Runtime:Luau] [Spatial:ConstructionYard] ready edits=0 persistence=documents
+[Runtime:Luau] [Spatial:ConstructionYard] B builds a course, E excavates ahead, F enters or leaves the workshop
+Attempting to find required instance Construction Yard.Players.PlayerRuntimeModules.DefaultNetworkServerRuntime
+[Terrain:Network] Server admitted gameplay after verified terrain readiness
+Attempting to find required instance Construction Yard.Players.PlayerRuntimeModules.DefaultNetworkServerRuntime
+[Terrain:Network] Server admitted gameplay after verified terrain readiness
+WARNING: [Runtime:Luau] [Spatial:YardField] 265284588
+[Network:ServiceProfile] Class=unqualified-legacy No byte-admission profile supplied
+[Content:Server] Provider=local Residency=fully-resident Project=5d72f0de4b6ff953670b2b9656849823 PackageVersion=1 TLS=not-applicable Endpoint=not-applicable
+[Runtime:Server] StartupWallMilliseconds=36
+[Runtime:Server] [Warning] [Spatial:YardField] 265284588
+WARNING: [Runtime:Luau] [Spatial:ConstructionYard] Door request Denied
+[Runtime:Server] [Warning] [Spatial:ConstructionYard] Door request Denied
+
+first-1.log (exit=None)
+App name: GargantuanPlayer.exe
+App version: <unspecified>
+App ID: <unspecified>
+SDL revision: SDL-3.4.12-HEAD-HASH-NOTFOUND
+[Package:Runtime] Hydrated 2 trusted client code containers
+ScriptEngine started opening libraries
+ScriptEngine finished opening libraries
+Attempting to find required instance Construction Yard.Players.PlayerRuntimeModules.DefaultNetworkClientRuntime
+Attempting to find required instance Construction Yard.Players.PlayerRuntimeModules.DefaultNetworkClientRuntime
+Attempting to find required instance Construction Yard.Players.PlayerRuntimeModules.DefaultNetworkClientRuntime
+Attempting to find required instance Construction Yard.Players.PlayerRuntimeModules.DefaultNetworkClientRuntime
+Constructed engine
+[Terrain:Network] Client installed verified terrain collision before gameplay readiness
+[Package:Runtime] Started Construction Yard (5d72f0de4b6ff953670b2b9656849823); user data is isolated by ProjectId
+[Terrain:Network] Client released movement after the server confirmed admitted collision
+WARNING: [Runtime:Luau] [Spatial:FreightVisit] far actor=(0.00,6.00,0.00) deckX=20.37
+[Runtime:Player] StartupWallMilliseconds=403
+[Runtime:Diagnostic] [Warning] [Spatial:FreightVisit] far actor=(0.00,6.00,0.00) deckX=20.37
+WARNING: [Runtime:Luau] [Spatial:FreightPlatform] firstX=20.7216 nextX=21.1716 mass=64.0000 cell=(0,1,0)
+[Runtime:Diagnostic] [Warning] [Spatial:FreightPlatform] firstX=20.7216 nextX=21.1716 mass=64.0000 cell=(0,1,0)
+WARNING: [Runtime:Luau] [Spatial:FreightVisit] near actor=(22.00,3.00,1.00)
+[Runtime:Diagnostic] [Warning] [Spatial:FreightVisit] near actor=(22.00,3.00,1.00)
+WARNING: [Runtime:Luau] [Spatial:YardProcess] Verified 512-cell moving platform for builder
+[Runtime:Diagnostic] [Warning] [Spatial:YardProcess] Verified 512-cell moving platform for builder
+WARNING: [Runtime:Luau] [Spatial:YardProcess] Builder placed exterior brick
+[Runtime:Diagnostic] [Warning] [Spatial:YardProcess] Builder placed exterior brick
+ERROR: [Runtime:Task] [Spatial:YardProcess] Timeout at confirmed return; role=builder appliedDoors=1 lastQuery=nil
+[Runtime:Diagnostic] [Error] [Runtime:Task] [Spatial:YardProcess] Timeout at confirmed return; role=builder appliedDoors=1 lastQuery=nil
+

@@ -1,0 +1,29 @@
+# Executable PlayerGui code in distributed packages
+
+The accepted normal Player reproduced the missing owner GUI script on a genuine signed join. The authored `ScreenGui`, its cloned `Script`, and the owning `PlayerGui` already reached the correct client. The distributed code catalog omitted script ID `d303fd5fb32f6d92ce8de000d88a062b` and the corresponding bytecode. The independent game controller and server script both ran. Offline Player and Dedicated Server catalogs already included the authored script. [Original executable receipts](SpatialOrdinaryQualification/SignedRuntime.json)
+
+## Code selection and execution
+
+The project snapshot persists authored sources and IDs. The managed distributed package previously applied the canonical service's server-only rule before inspecting provisionable UI templates. Package signing correctly attested the resulting incomplete catalog. The client could resolve the structural clone but lacked executable content for its engine-assigned template identity.
+
+The standalone lifecycle owner supplied the shared template qualification at `250a62721`. Its qualified Windows distribution came from `8973722482fc11c77c841763504cf20b18a61c9a`. Port `6ae773931` uses the same bounded, validated direct ScreenGui roots for cloning and managed package selection. Its recipient retains the existing format, signing, catalog validation and runtime hydrators from the accepted tree. The distributed projection admits client-context Scripts and ModuleScripts within those roots. A later review found eligible descendants could sit beneath a server Script and the author could rename the StarterGui service. Change `a9992200a` visits those descendants independently of their parent's executable role and makes the eligible projection supply its canonical binding path to the catalog. [Projection](../../src/packaging/ClientPackage.cpp) · [Package capture and hydration](../../src/packaging/PackageBuilder.cpp) · [Shared template limits](../../src/gui/PlayerGuiScope.cpp)
+
+Both endpoints derive the client-code identity from the project, session, eligible script IDs, classes and paths, and the projected code digest. On join and late materialization, the authenticated player's own `PlayerGui` gates access to the clone hydrator. It checks the template ID, source version, catalog class, runtime role and session-bound digest before binding the selected representation. The canonical authored tree stays on the server. GRPL carries clone provenance and structure. Executable content comes from the validated local package. Each replacement clone runs in its owning Player VM. [GUI ownership contract](../CurrentArchitecture/PlayerGui.md) · [Player provisioning](../../src/classes/Player.cpp) · [GameSession](../../src/network/GameSession.cpp)
+
+## Process oracle
+
+The process fixture packages an authored project twice into a matching dedicated Server and distributed Player. One pair requires publisher admission and compiled code. A second isolated project uses source in digest-pinned Development and a fresh session identity. Two actual GNS Players report successful sibling ModuleScript resolution through their own GUI clones to the server. The server requests one character respawn for each. The fixture counts two executions per owner, verifies that both owners left the trusted roster and requires one execution for a newly joined owner. The client checks it sees its own GUI and no foreign PlayerGui or canonical StarterGui. Catalog and content checks cover a direct non-ScreenGui branch, the nested server Script and server-only gameplay code. Further controls reject an altered signature and a previously authorized Player from the retired project. [Executable join and respawn fixture](../../tests/PackagedPlayerGuiLifecycle.py) · [Existing release matrix and package privacy checks](../../tests/RuntimeDistributionQualification.py)
+
+The upstream product passed the original two-owner, respawn and reconnect scenario for both package types. The integrated intermediate Windows product `238e18c0c` also passed that scenario in 25.453 seconds. When the narrow oracle added a renamed service and nested client code to the authored project, the same product failed the positive catalog assertion before joining. This distinguishes the new review regression from the original failure and from signature validation.
+
+## Platform runs
+
+The integrated package fix at `1d9bd6323f855d91da69536cc86f379c952c7410` passed the nested, renamed-service case on all three native builds. Each row used newly packaged matching Player and Server binaries, two independent projects and fresh enrollment. Every original owner started the clone twice across respawn. A third owner started it once on reconnect. Project IDs, all six pairs of Player and Server manifest hashes, tool identities, original negative controls, and the trust-matrix receipts are retained in the accompanying record. [Per-platform receipts](SpatialStabilizationDelivery/SignedGui.json)
+
+| Profile | Signed and Development lifecycle | Release matrix | Rejection cases |
+| --- | ---: | ---: | ---: |
+| Windows x64 MSVC Release | 25.40 s | 6 modes × 3 builds | 6 passed |
+| Linux x86-64 Clang Release | 31.59 s | 6 modes × 3 builds | 6 passed |
+| Linux x86-64 Clang ASan and UBSan with leak detection | 52.44 s | 6 modes × 3 builds | 6 passed |
+
+Windows reports its registered CTest time. Linux reports wall time for the independent worker invocation, which includes container setup. The release matrix exercised LegacySource, Open, Compiled, SignedCompiled, Protected and Hybrid, plus a signed Hybrid Player join and reconnect. It rejected unauthorized compiled execution, absent or mismatched protection keys, altered ciphertext and a failed compile during replacement. [Matrix fixture](../../tests/RuntimeDistributionQualification.py)

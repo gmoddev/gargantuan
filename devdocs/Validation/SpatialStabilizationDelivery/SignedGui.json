@@ -1,0 +1,604 @@
+{
+  "Runtime": "1d9bd6323f855d91da69536cc86f379c952c7410",
+  "Tree": "8af602369ca58d4d9c3e4d529396f5474af25a2b",
+  "OriginalObservedCloneMissingPackagedCode": {
+    "Source": "1e89d189af82ea6897555205cbcaea4ff4f22085",
+    "ResourceId": "d303fd5fb32f6d92ce8de000d88a062b",
+    "Evidence": "../SpatialOrdinaryQualification/SignedRuntime.json",
+    "EvidenceSha256": "9eeff8119ca5470cd5c7a88582acc2b8c07da38a7dc2669264254210b4db8e44"
+  },
+  "StandaloneLifecycleControl": {
+    "Source": "8973722482fc11c77c841763504cf20b18a61c9a",
+    "Sha256": "96ed848e6a9299c88917f0bc207ee745182175782b61cb729f2163951f6494d4",
+    "Lifecycles": [
+      {
+        "Project": "b023306f1425481cb312faa68db85fc1",
+        "Signed": true,
+        "Owners": [
+          1,
+          2
+        ],
+        "Replacement": 3,
+        "PlayerManifest": "34fc7e0db673f8499ff1ab75ebc58e3f44b7e93e1a0b14b3a56ca72d89aa3a55",
+        "ServerManifest": "239e4f51dfca002184733b2433a5f0758bbac85e48a294f86f475e6396742b43"
+      },
+      {
+        "Project": "7d55cf730295408796bc9563e3f15beb",
+        "Signed": false,
+        "Owners": [
+          1,
+          2
+        ],
+        "Replacement": 3,
+        "PlayerManifest": "2eb425c5d0e79a09f1a07e5b882a490ac1080279efa756ea7b558e9348a9b319",
+        "ServerManifest": "3fe7825c075f8f58d5586ccd95cb721af5d0958fb0e187cd680ed77a119678ef"
+      }
+    ]
+  },
+  "IntermediatePositive": {
+    "Source": "238e18c0c0da0b1039cd1a83bb034526827d48f9",
+    "Sha256": "2639d030b1a355233cb966f36c80bc8f8f03ddbe8ac2a6ebccd4b1777098be76",
+    "Lifecycles": [
+      {
+        "Project": "d0340ab191fb42bf9a417d1e6475cccc",
+        "Signed": true,
+        "Owners": [
+          2,
+          1
+        ],
+        "Replacement": 3,
+        "PlayerManifest": "290b6ec305da2af6dc4055287a2b77f4d2b6444713bd4fe5adf9bdcc78bffaa4",
+        "ServerManifest": "e2078af3f45b942cd3bd7774a1fdcfbf2851f29006ef53aeb93f98499c20d502"
+      },
+      {
+        "Project": "1e51d35cdb264464acfe7f047fa93f35",
+        "Signed": false,
+        "Owners": [
+          1,
+          2
+        ],
+        "Replacement": 3,
+        "PlayerManifest": "91361b69b7c516d0664db012a3dbfa692c78c0311ddfa600366717341d4edf1d",
+        "ServerManifest": "124eaf3908b742f6bcc530b6300b2be8b55ebe62b1bb4601a5aa379fd162aa72"
+      }
+    ]
+  },
+  "IntermediateNestedRenamedControl": {
+    "Exit": 1,
+    "LastLine": "RuntimeError: RD1GuiScript",
+    "LogSha256": "a54d3d92fe3d23a6d9ec64415ee801ce8c155e3f9c3b46c8722cea33797c5dce"
+  },
+  "Final": {
+    "WindowsRelease": {
+      "Gui": {
+        "Sha256": "564b0d75b7bde2bdac1e7908237f3947de540c25f5952dc48dc03702a85fcf7e",
+        "Lifecycles": [
+          {
+            "Project": "567c19aea5ed498d981d28057aac1efa",
+            "Signed": true,
+            "Owners": [
+              1,
+              2
+            ],
+            "Replacement": 3,
+            "PlayerManifest": "e6530afc8dd9e4c32da9a0097cc61dd3b925b3bd5a21e2ebf05e18ac459eb0fb",
+            "ServerManifest": "483b60268a19d458a220512687b6aa7866e00c131215f5207cead87a541b2b6a"
+          },
+          {
+            "Project": "ac63cd0633e44b74b4770986c173dcb5",
+            "Signed": false,
+            "Owners": [
+              2,
+              1
+            ],
+            "Replacement": 3,
+            "PlayerManifest": "1841fa633312d60cef3ae59c20b854e364d1f4fe96eedddf4172da946b55170d",
+            "ServerManifest": "dc3cf325586c0dc66f2cdf8257990ac3b07324d0829932de1cffd7714d5328a6"
+          }
+        ]
+      },
+      "Matrix": {
+        "RawSha256": "17e71c7ed3a9eba017f3c04921a37fa4e696df1a32bca419d973ebacb9c3d460",
+        "Platform": "Windows-11-10.0.26200-SP0",
+        "PackagerSha256": "e7341670701f3b5d228071f286b40c27776ee15de08490f69af43d4cb39d4f22",
+        "ProfileBuilds": {
+          "LegacySource": [
+            {
+              "Exit": 0,
+              "ManifestSha256": "b14ebe1d8fde9bb9bd0acccfb2fea8541262001386e256dc8f94017ed3d9be0d",
+              "PackageBytes": 27180540,
+              "ExecutableSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "b14ebe1d8fde9bb9bd0acccfb2fea8541262001386e256dc8f94017ed3d9be0d",
+              "PackageBytes": 27180540,
+              "ExecutableSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "b14ebe1d8fde9bb9bd0acccfb2fea8541262001386e256dc8f94017ed3d9be0d",
+              "PackageBytes": 27180540,
+              "ExecutableSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba"
+            }
+          ],
+          "Open": [
+            {
+              "Exit": 0,
+              "ManifestSha256": "4679143ed33babba7a9ae28dfb3aacabbfe167a48492b188f16a5b43588f90ee",
+              "PackageBytes": 27182885,
+              "ExecutableSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "4679143ed33babba7a9ae28dfb3aacabbfe167a48492b188f16a5b43588f90ee",
+              "PackageBytes": 27182885,
+              "ExecutableSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "4679143ed33babba7a9ae28dfb3aacabbfe167a48492b188f16a5b43588f90ee",
+              "PackageBytes": 27182885,
+              "ExecutableSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba"
+            }
+          ],
+          "Compiled": [
+            {
+              "Exit": 0,
+              "ManifestSha256": "5b0b709c4a300e7743c592752ef3cbbc6d53488f801a72b31dd54f128faa9645",
+              "PackageBytes": 27183814,
+              "ExecutableSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "5b0b709c4a300e7743c592752ef3cbbc6d53488f801a72b31dd54f128faa9645",
+              "PackageBytes": 27183814,
+              "ExecutableSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "5b0b709c4a300e7743c592752ef3cbbc6d53488f801a72b31dd54f128faa9645",
+              "PackageBytes": 27183814,
+              "ExecutableSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba"
+            }
+          ],
+          "SignedCompiled": [
+            {
+              "Exit": 0,
+              "ManifestSha256": "801f1e3da5a813a126314c3710cebaf2725d5aa9a935989088b096755254cd59",
+              "PackageBytes": 27183891,
+              "ExecutableSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "801f1e3da5a813a126314c3710cebaf2725d5aa9a935989088b096755254cd59",
+              "PackageBytes": 27183891,
+              "ExecutableSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "801f1e3da5a813a126314c3710cebaf2725d5aa9a935989088b096755254cd59",
+              "PackageBytes": 27183891,
+              "ExecutableSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba"
+            }
+          ],
+          "Protected": [
+            {
+              "Exit": 0,
+              "ManifestSha256": "9f8ba3d6061f94670290077df066ca95c77189286c148bcf5bb79a0f75449203",
+              "PackageBytes": 27184666,
+              "ExecutableSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "7362da15ddb7471c45bb9c2fc25748a6dec56edea04aa20871b91dea54f098be",
+              "PackageBytes": 27184666,
+              "ExecutableSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "8d50f1694beff50918a8445110161b6c6cb48e995b71db8abd79ea52c149cadb",
+              "PackageBytes": 27184666,
+              "ExecutableSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba"
+            }
+          ],
+          "Hybrid": [
+            {
+              "Exit": 0,
+              "ManifestSha256": "e849926fe8b46d1c352cb88eb7b197c5f25c3a0e7bc252bfa5562daabbc4c826",
+              "PackageBytes": 27183854,
+              "ExecutableSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "d773a12d1e72580a43f28eddc8d1977d95c4c9d4ec278151ef7f11541c5b5a39",
+              "PackageBytes": 27183854,
+              "ExecutableSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "4d5a4680e34340262de059845eb77823bf7df7e075abebe340c8c64ba12c374a",
+              "PackageBytes": 27183854,
+              "ExecutableSha256": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba"
+            }
+          ]
+        },
+        "DeniedExitCodes": {
+          "untrusted-unsigned-compiled": 3,
+          "unenrolled-signed-compiled": 3,
+          "protected-missing-key": 3,
+          "protected-wrong-key": 3,
+          "protected-tampered-ciphertext": 3,
+          "rollback-compile-failure": 3
+        },
+        "HybridConnection": [
+          {
+            "Attempt": "join",
+            "WallMs": 3413.318,
+            "Exit": 0
+          },
+          {
+            "Attempt": "reconnect",
+            "WallMs": 3378.642,
+            "Exit": 0
+          }
+        ]
+      },
+      "SeparateRegisteredSeconds": 25.4003
+    },
+    "LinuxRelease": {
+      "Gui": {
+        "Sha256": "e35cfd349db96c3a9f5bd62719a97832e086ee806769cae519abf3584b75f692",
+        "Lifecycles": [
+          {
+            "Project": "35298fbc307b44fca006d14079841bed",
+            "Signed": true,
+            "Owners": [
+              1,
+              2
+            ],
+            "Replacement": 3,
+            "PlayerManifest": "671803cfd18f14589d2d5593c8f18bf470958c272c9a5f8c8319916d689ed2fd",
+            "ServerManifest": "e29c05fa213759c8039e531d30b4cf2cee41a22137cbc3d58333b090007d81f8"
+          },
+          {
+            "Project": "918a9a5b0928456b8eadbe50969307f5",
+            "Signed": false,
+            "Owners": [
+              1,
+              2
+            ],
+            "Replacement": 3,
+            "PlayerManifest": "8ef2f8507bca48f6cccd59a53ad38eb415f316c4494c72a9d834be1652ada8cf",
+            "ServerManifest": "8c60e46006a78a67e1238657ae3c1d63245ba5f423c8e8c7d9599e80e0052859"
+          }
+        ]
+      },
+      "GuiSeconds": 31.59,
+      "Matrix": {
+        "RawSha256": "07e9468104705cabbc76b6a093ca180e6bc1d3e568f27161b1dad6d2f13a33a1",
+        "Platform": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+        "PackagerSha256": "5d0e1b6a17b1e6dba2ac09098c8cd465c0452f54e9bfa2d06d2e498cb05884ea",
+        "ProfileBuilds": {
+          "LegacySource": [
+            {
+              "Exit": 0,
+              "ManifestSha256": "152688859cce694449707d28ca78c3decbf27e29944f88b5e7fccdb744239a74",
+              "PackageBytes": 35513802,
+              "ExecutableSha256": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "152688859cce694449707d28ca78c3decbf27e29944f88b5e7fccdb744239a74",
+              "PackageBytes": 35513802,
+              "ExecutableSha256": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "152688859cce694449707d28ca78c3decbf27e29944f88b5e7fccdb744239a74",
+              "PackageBytes": 35513802,
+              "ExecutableSha256": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47"
+            }
+          ],
+          "Open": [
+            {
+              "Exit": 0,
+              "ManifestSha256": "6b0edee7c040d37161fdbb5fc1f1a3e4c2578b063120e5948b283c737af87994",
+              "PackageBytes": 35516147,
+              "ExecutableSha256": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "6b0edee7c040d37161fdbb5fc1f1a3e4c2578b063120e5948b283c737af87994",
+              "PackageBytes": 35516147,
+              "ExecutableSha256": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "6b0edee7c040d37161fdbb5fc1f1a3e4c2578b063120e5948b283c737af87994",
+              "PackageBytes": 35516147,
+              "ExecutableSha256": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47"
+            }
+          ],
+          "Compiled": [
+            {
+              "Exit": 0,
+              "ManifestSha256": "0dbcd65b84feb0b31a961559eaaf4f1e2904d4375bb7a4533d5970cd9629f606",
+              "PackageBytes": 35517076,
+              "ExecutableSha256": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "0dbcd65b84feb0b31a961559eaaf4f1e2904d4375bb7a4533d5970cd9629f606",
+              "PackageBytes": 35517076,
+              "ExecutableSha256": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "0dbcd65b84feb0b31a961559eaaf4f1e2904d4375bb7a4533d5970cd9629f606",
+              "PackageBytes": 35517076,
+              "ExecutableSha256": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47"
+            }
+          ],
+          "SignedCompiled": [
+            {
+              "Exit": 0,
+              "ManifestSha256": "e65a543dd58490a60995266edaec24a004d5b973ed64b6c6563832a7d156d0a2",
+              "PackageBytes": 35517153,
+              "ExecutableSha256": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "e65a543dd58490a60995266edaec24a004d5b973ed64b6c6563832a7d156d0a2",
+              "PackageBytes": 35517153,
+              "ExecutableSha256": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "e65a543dd58490a60995266edaec24a004d5b973ed64b6c6563832a7d156d0a2",
+              "PackageBytes": 35517153,
+              "ExecutableSha256": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47"
+            }
+          ],
+          "Protected": [
+            {
+              "Exit": 0,
+              "ManifestSha256": "f3c58cd596c6f71c4a19bbe9176774ea2d341cc5124d744fce9d871a6eaaa70a",
+              "PackageBytes": 35517928,
+              "ExecutableSha256": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "d895b9f78c52e9c722fa14b335d7209ffc0fdc65baaa1db1228e76112e97e55c",
+              "PackageBytes": 35517928,
+              "ExecutableSha256": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "cb699442489de10991eb33a893335895bc99e1080e9be8a6c63b61da61a54d69",
+              "PackageBytes": 35517928,
+              "ExecutableSha256": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47"
+            }
+          ],
+          "Hybrid": [
+            {
+              "Exit": 0,
+              "ManifestSha256": "decd657edf614e91525d48b3bb724fd5ed882842d25a438be21f05d7440c28e1",
+              "PackageBytes": 35517116,
+              "ExecutableSha256": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "dd7b3e531051838ff12528a965224293de9d1169676841810ae58470afea9fa4",
+              "PackageBytes": 35517116,
+              "ExecutableSha256": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "17cc6627a3398043d3bc1a679e6e46cffe26265ffccefd3bc89922f494c1de29",
+              "PackageBytes": 35517116,
+              "ExecutableSha256": "c56c0475e13e258ad3d62c906616c9092ea1f580b0314391d6056df24da0bc47"
+            }
+          ]
+        },
+        "DeniedExitCodes": {
+          "untrusted-unsigned-compiled": 3,
+          "unenrolled-signed-compiled": 3,
+          "protected-missing-key": 3,
+          "protected-wrong-key": 3,
+          "protected-tampered-ciphertext": 3,
+          "rollback-compile-failure": 3
+        },
+        "HybridConnection": [
+          {
+            "Attempt": "join",
+            "WallMs": 3315.351,
+            "Exit": 0
+          },
+          {
+            "Attempt": "reconnect",
+            "WallMs": 3315.546,
+            "Exit": 0
+          }
+        ]
+      }
+    },
+    "LinuxSan": {
+      "Gui": {
+        "Sha256": "57bf324507afec272860e8da723b06f24cd287a3cd292a56b53aeea831fd28e4",
+        "Lifecycles": [
+          {
+            "Project": "70a4f89a497749fdb502e1af2461fecc",
+            "Signed": true,
+            "Owners": [
+              1,
+              2
+            ],
+            "Replacement": 3,
+            "PlayerManifest": "d6ec8dabf29d604487474468dbd71a3f7c0cbca8ea4b6194f6ac254014ce3c88",
+            "ServerManifest": "a0b4c2805fc3684cd386eba68f65d73e1cf68482258887532deb6a797dcab166"
+          },
+          {
+            "Project": "fff61535cd454c0c8dc724029f446955",
+            "Signed": false,
+            "Owners": [
+              1,
+              2
+            ],
+            "Replacement": 3,
+            "PlayerManifest": "7c463715f82d879d3c0ebbe2f94234e1bb788883bbffeeb237683c15871b5b71",
+            "ServerManifest": "b8606862a5ade939a16cdecdaf62fd33bb310289abfe02a4051a472d48c2c7c5"
+          }
+        ]
+      },
+      "GuiSeconds": 52.44,
+      "Matrix": {
+        "RawSha256": "e9b24ae4c7be61b5227b096d03d5b7b3e91c96fff6bbc4b29139652446e1620d",
+        "Platform": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+        "PackagerSha256": "f332fe139b603748358b68afd4cddfdce06367387460f09be764deb3e875aa8d",
+        "ProfileBuilds": {
+          "LegacySource": [
+            {
+              "Exit": 0,
+              "ManifestSha256": "5cc21a3d1a5e9758f018f2af1f77720cff72dc68c3a94ff54d5f1f920e32fb62",
+              "PackageBytes": 201425453,
+              "ExecutableSha256": "497339fdc3bead4efe69682f9bcb4864deae5985548c09e37e441eba77edb3f2"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "5cc21a3d1a5e9758f018f2af1f77720cff72dc68c3a94ff54d5f1f920e32fb62",
+              "PackageBytes": 201425453,
+              "ExecutableSha256": "497339fdc3bead4efe69682f9bcb4864deae5985548c09e37e441eba77edb3f2"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "5cc21a3d1a5e9758f018f2af1f77720cff72dc68c3a94ff54d5f1f920e32fb62",
+              "PackageBytes": 201425453,
+              "ExecutableSha256": "497339fdc3bead4efe69682f9bcb4864deae5985548c09e37e441eba77edb3f2"
+            }
+          ],
+          "Open": [
+            {
+              "Exit": 0,
+              "ManifestSha256": "cdbdef6556d75bb6a45293031acc5ed36b377584f8e47f3cbea31ccf3a196e7f",
+              "PackageBytes": 201427798,
+              "ExecutableSha256": "497339fdc3bead4efe69682f9bcb4864deae5985548c09e37e441eba77edb3f2"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "cdbdef6556d75bb6a45293031acc5ed36b377584f8e47f3cbea31ccf3a196e7f",
+              "PackageBytes": 201427798,
+              "ExecutableSha256": "497339fdc3bead4efe69682f9bcb4864deae5985548c09e37e441eba77edb3f2"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "cdbdef6556d75bb6a45293031acc5ed36b377584f8e47f3cbea31ccf3a196e7f",
+              "PackageBytes": 201427798,
+              "ExecutableSha256": "497339fdc3bead4efe69682f9bcb4864deae5985548c09e37e441eba77edb3f2"
+            }
+          ],
+          "Compiled": [
+            {
+              "Exit": 0,
+              "ManifestSha256": "7a636a9b6be3cb0133814555209030dd8d7946391870d9aff6577cda06b3f4ad",
+              "PackageBytes": 201428727,
+              "ExecutableSha256": "497339fdc3bead4efe69682f9bcb4864deae5985548c09e37e441eba77edb3f2"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "7a636a9b6be3cb0133814555209030dd8d7946391870d9aff6577cda06b3f4ad",
+              "PackageBytes": 201428727,
+              "ExecutableSha256": "497339fdc3bead4efe69682f9bcb4864deae5985548c09e37e441eba77edb3f2"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "7a636a9b6be3cb0133814555209030dd8d7946391870d9aff6577cda06b3f4ad",
+              "PackageBytes": 201428727,
+              "ExecutableSha256": "497339fdc3bead4efe69682f9bcb4864deae5985548c09e37e441eba77edb3f2"
+            }
+          ],
+          "SignedCompiled": [
+            {
+              "Exit": 0,
+              "ManifestSha256": "3c2617ac60b6f70b6bf61a022142c982460fa79ad66a3de8290a4ae180ee2d80",
+              "PackageBytes": 201428804,
+              "ExecutableSha256": "497339fdc3bead4efe69682f9bcb4864deae5985548c09e37e441eba77edb3f2"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "3c2617ac60b6f70b6bf61a022142c982460fa79ad66a3de8290a4ae180ee2d80",
+              "PackageBytes": 201428804,
+              "ExecutableSha256": "497339fdc3bead4efe69682f9bcb4864deae5985548c09e37e441eba77edb3f2"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "3c2617ac60b6f70b6bf61a022142c982460fa79ad66a3de8290a4ae180ee2d80",
+              "PackageBytes": 201428804,
+              "ExecutableSha256": "497339fdc3bead4efe69682f9bcb4864deae5985548c09e37e441eba77edb3f2"
+            }
+          ],
+          "Protected": [
+            {
+              "Exit": 0,
+              "ManifestSha256": "699682b8fda5ca67ad9aa5b7172919949d319064bb7907e0aba0b653e37ac82e",
+              "PackageBytes": 201429579,
+              "ExecutableSha256": "497339fdc3bead4efe69682f9bcb4864deae5985548c09e37e441eba77edb3f2"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "d198e2ef3af92c3061153953c12d5ccf1c7e36476e759e922dd5d606c565c5f9",
+              "PackageBytes": 201429579,
+              "ExecutableSha256": "497339fdc3bead4efe69682f9bcb4864deae5985548c09e37e441eba77edb3f2"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "a9fbb0f934abd90dea0b232bfde9cd2099c19c035542b7ee68cac2d3cb14b6df",
+              "PackageBytes": 201429579,
+              "ExecutableSha256": "497339fdc3bead4efe69682f9bcb4864deae5985548c09e37e441eba77edb3f2"
+            }
+          ],
+          "Hybrid": [
+            {
+              "Exit": 0,
+              "ManifestSha256": "f65cce186661a3b8cd6bdd2be5fb4a41cd648a030eb465dce9aa534bb335cc5c",
+              "PackageBytes": 201428767,
+              "ExecutableSha256": "497339fdc3bead4efe69682f9bcb4864deae5985548c09e37e441eba77edb3f2"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "e9f9e4ac87636eef7d25d7fbbd086799ae5b571822498cca415903e478542e58",
+              "PackageBytes": 201428767,
+              "ExecutableSha256": "497339fdc3bead4efe69682f9bcb4864deae5985548c09e37e441eba77edb3f2"
+            },
+            {
+              "Exit": 0,
+              "ManifestSha256": "a6baa238abd24a4d72700cd359a80c70d9b50d4da28ca8b5672a07760786f4f1",
+              "PackageBytes": 201428767,
+              "ExecutableSha256": "497339fdc3bead4efe69682f9bcb4864deae5985548c09e37e441eba77edb3f2"
+            }
+          ]
+        },
+        "DeniedExitCodes": {
+          "untrusted-unsigned-compiled": 3,
+          "unenrolled-signed-compiled": 3,
+          "protected-missing-key": 3,
+          "protected-wrong-key": 3,
+          "protected-tampered-ciphertext": 3,
+          "rollback-compile-failure": 3
+        },
+        "HybridConnection": [
+          {
+            "Attempt": "join",
+            "WallMs": 4916.069,
+            "Exit": 0
+          },
+          {
+            "Attempt": "reconnect",
+            "WallMs": 4922.702,
+            "Exit": 0
+          }
+        ]
+      }
+    }
+  }
+}

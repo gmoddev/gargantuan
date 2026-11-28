@@ -1,0 +1,11 @@
+EditorHost source 238e18c0c, normal Windows MSVC Release
+EditorHost SHA256 5166511adc618dda3c329cd18efb5a6355c556e10c2be6f1cd92dd6bc3103d60
+Fixture source c2c3b3a57
+Saved input created through the ConstructionYard sample builder, original 4af419f00 EditorHost.
+python -B tests/SpatialConstructionYardInput.py --engine <candidate EditorHost> --durable --project <previously saved constructed Yard>
+Exit code 0
+
+[Spatial:YardInput] Authored project.instance.json SHA256=457b49bd0c7de64361e01c4e0dce5f6cef144b89b672e660a69d3d2e76b43608
+[Spatial:FreightPlatform] firstX=19.0000 nextX=19.2716 mass=64.0000 cell=(0,1,0)
+[Spatial:YardInput] Both builds, both doorway crossings, excavation and Stop verified
+[Spatial:YardInput] Durable restart restored both grids and excavation

@@ -1,0 +1,17 @@
+{
+  "Profile": "merged",
+  "EngineSHA256": "5166511adc618dda3c329cd18efb5a6355c556e10c2be6f1cd92dd6bc3103d60",
+  "Observations": {
+    "cells": 128.0,
+    "terrain": -0.0106,
+    "surface": -0.0156,
+    "grid": 0.0,
+    "lower": -0.0001,
+    "upper": 0.9995,
+    "after": -0.0,
+    "character": 2.995,
+    "splitHalfMass": 8.0,
+    "splitError": 1e-07,
+    "joinError": 2e-07
+  }
+}

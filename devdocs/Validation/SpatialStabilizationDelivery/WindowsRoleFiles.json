@@ -1,0 +1,462 @@
+{
+  "Files": {
+    "RuntimeDistribution": {
+      "distributed-player-capability.json": {
+        "Bytes": 110,
+        "Sha256": "b64cf5620a04b211e80274c180da492d698224d4dcd85735b49098c86b55e2ee"
+      },
+      "GargantuanPlayer.exe": {
+        "Bytes": 14623744,
+        "Sha256": "50622ed3f31df503244eadfc93d871aedca04300cf5cc7183532c177a0608157"
+      },
+      "libcrypto-3-x64.dll": {
+        "Bytes": 5216256,
+        "Sha256": "0298564196cae6cce93e2d56457add881db6a5b0ba7c754918ed80f5233676cd"
+      },
+      "libprotobuf.dll": {
+        "Bytes": 2542080,
+        "Sha256": "8bad99650e9705473678e5daae8fe330f38512739ff81c3cc74671299e77a645"
+      },
+      "notices/argparse.txt": {
+        "Bytes": 1104,
+        "Sha256": "fe20120eadcb4492d829037e50e6947e6525e691e5dacb42132b36eb9ab60955"
+      },
+      "notices/Box3D.txt": {
+        "Bytes": 1088,
+        "Sha256": "d8455e91cc46d72163cf58a3827c7983e1ffa5b8f2de1ceaa8d08d6a4956829a"
+      },
+      "notices/GameNetworkingSockets.txt": {
+        "Bytes": 2524,
+        "Sha256": "3ab86e47caa7ead4df9ea73ed2d0777312bed3a4149f7ca301e6bb6a395c225b"
+      },
+      "notices/Gargantuan.txt": {
+        "Bytes": 16022,
+        "Sha256": "dab7436b662ee37d04025f60c8df86a0144ad37d06871933d89140d6f73bd08e"
+      },
+      "notices/GLM.txt": {
+        "Bytes": 2919,
+        "Sha256": "48a257765ea19d81252ee44cba0f0eda525c6b2dcbf483cc39015dd76a6f0a20"
+      },
+      "notices/Luau.txt": {
+        "Bytes": 1146,
+        "Sha256": "1ceedfcc375343e3ec8e56861fa73ba3bd186ed178d5d000546447d358d38949"
+      },
+      "notices/magic-enum.txt": {
+        "Bytes": 1101,
+        "Sha256": "eb20d9a8dcffa79cdc1ec1aba73b6c1ff328966330dcb478f2562669369e13ba"
+      },
+      "notices/Manifold-Authors.txt": {
+        "Bytes": 378,
+        "Sha256": "074a43d4b1626a34a0a14a036d00100524dd463604b2570c4d76c7baa63608f3"
+      },
+      "notices/Manifold.txt": {
+        "Bytes": 11357,
+        "Sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      },
+      "notices/MC33.txt": {
+        "Bytes": 1242,
+        "Sha256": "708068fcfd34f1fb8503130144bc3a5607a0e9a6d55999284afcac35e2828ef1"
+      },
+      "notices/MSVC-Runtime.txt": {
+        "Bytes": 972,
+        "Sha256": "dd84608e263736f1654e8e0ee8e8351f803c2809167be790e1f0264450812e83"
+      },
+      "notices/nlohmann-json.txt": {
+        "Bytes": 1097,
+        "Sha256": "9756d15550eb16ca4b44b68e62150bbf1627114f0f8277bb6479d2d0aac566ea"
+      },
+      "notices/openssl.txt": {
+        "Bytes": 10175,
+        "Sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
+      },
+      "notices/ProtocolBuffers.txt": {
+        "Bytes": 1762,
+        "Sha256": "7acabc6bf6725e1c06c479625bb0075eb18f417c66f1f302852eee632e1350b9"
+      },
+      "notices/SDL3.txt": {
+        "Bytes": 18533,
+        "Sha256": "84ba58ca78b2e9639330d69d602514b5b7acdc1cf61ffb1117ee869592309e08"
+      },
+      "notices/SDL3_image.txt": {
+        "Bytes": 6195,
+        "Sha256": "7da6ce03c8c75b8e2e031451de7f061c0c547e1de9cad6df31875972dca4da4e"
+      },
+      "notices/SDL3_ttf.txt": {
+        "Bytes": 32489,
+        "Sha256": "9a115d4831417a33e048866dd8f1a282bac331a1c905e5c2dbe3745f2ec166e4"
+      },
+      "notices/Tracy.txt": {
+        "Bytes": 1645,
+        "Sha256": "482a8eec0bf61f2ddabafcd6441c97a3b123c08bb2bba1423dd9bd79dbf57b7b"
+      },
+      "runtime/DefaultActionMap.luau": {
+        "Bytes": 1195,
+        "Sha256": "54ddcbb48e70946553898864d6b1b2313d566485903553c26a648be9bc099e8b"
+      },
+      "runtime/DefaultCamera.luau": {
+        "Bytes": 2045,
+        "Sha256": "d2a0502aed84665850c49eae8ab2239782c4def04fbd51bb344234e4741da6ec"
+      },
+      "runtime/DefaultCharacterAnimation.luau": {
+        "Bytes": 3000,
+        "Sha256": "07a69f9a21aea845c0426d7de6ca13fc86672984098f477316211480921e719b"
+      },
+      "runtime/DefaultCharacterAssembly.luau": {
+        "Bytes": 813,
+        "Sha256": "9b3d52070a2ab205479079ecb25324eacf084ea2e03912be0ba4a6add46b6cfc"
+      },
+      "runtime/DefaultCharacterRuntime.luau": {
+        "Bytes": 1219,
+        "Sha256": "b10b370e64a80e4c38f3116ab9b2926ca0f426eb7ef6a5363c49207e33c7bf96"
+      },
+      "runtime/DefaultInteractionRuntime.luau": {
+        "Bytes": 3453,
+        "Sha256": "6a886d0e04406b528ad486a85c490fb05752bc78ba542d4cc4c83c5316bec90e"
+      },
+      "runtime/DefaultLocomotion.luau": {
+        "Bytes": 4887,
+        "Sha256": "01ff88e43c875363e6d3b126a54d2e803c1c8aec0ddce49e1b8e9b4111735567"
+      },
+      "runtime/DefaultNetworkCharacterRuntime.luau": {
+        "Bytes": 1598,
+        "Sha256": "5b425690355b5f1361b175861503a394c02f7a718db86873b0af7711eb23f3b8"
+      },
+      "runtime/DefaultNetworkClientRuntime.luau": {
+        "Bytes": 1667,
+        "Sha256": "22e46b58d598a16c8627a2b6b59df219aa2bc533636254dbb33ab317036a1a5e"
+      },
+      "runtime/DefaultNetworkLocomotion.luau": {
+        "Bytes": 1395,
+        "Sha256": "6e38b8311bd7464f1a54e4dfb42f937fdca4e2f09cd87add7bc15553226db894"
+      },
+      "runtime/DefaultNetworkServerRuntime.luau": {
+        "Bytes": 1319,
+        "Sha256": "9109f58371ab781c2c320664c8380586caa250d040c62d14570b8f13b703979c"
+      },
+      "runtime/DefaultPlayerRuntime.luau": {
+        "Bytes": 1236,
+        "Sha256": "02d21c102c06c8d26c816a3a360e35f164aa8294ac90f7e4f1e68d0e66a4e672"
+      },
+      "runtime/GargantuanSans.ttf": {
+        "Bytes": 305608,
+        "Sha256": "797e35f7f5d6020a5c6ea13b42ecd668bcfb3bbc4baa0e74773527e5b6cb3174"
+      },
+      "runtime-distribution-capability.json": {
+        "Bytes": 126,
+        "Sha256": "db885282e957c90524dd2c36ad52b64b652a5888cd61dbbb867dd3619b290162"
+      },
+      "runtime-distribution.json": {
+        "Bytes": 3583,
+        "Sha256": "98516c6ee728eb30991c8a328fb79f5cf82b7db0dd168b883331e84f90c504fd"
+      },
+      "SDL3.dll": {
+        "Bytes": 2738176,
+        "Sha256": "cdf67d1cec3fa70e2ca6f3cbc17e155fdf8ad849e783557a4b2b79ead9b1dc1d"
+      },
+      "shaders/gui.frag.spv": {
+        "Bytes": 1780,
+        "Sha256": "cca62755a3c0352b6dcc65fa6f855ae1e421ba8d538b62a7f5b605d003393c75"
+      },
+      "shaders/gui.vert.spv": {
+        "Bytes": 1740,
+        "Sha256": "fdbaa31922ba2d636ff592128154ddc05503bfef33c67db53391509c7b0dd53f"
+      },
+      "shaders/ibl_brdf.frag.spv": {
+        "Bytes": 5248,
+        "Sha256": "7120970b6dc88ed6758b188923e2848ad42112e9dac54b5077364f8050326ff9"
+      },
+      "shaders/ibl_convolve.frag.spv": {
+        "Bytes": 10512,
+        "Sha256": "165ccfe7026ec1c9454d8e04c683b2b15c9f91af2584c01a69846f569459f61f"
+      },
+      "shaders/ibl_fullscreen.vert.spv": {
+        "Bytes": 1164,
+        "Sha256": "dc3f97b0bf58a34a07d88f92625b03fd48de909d441b5555024120244be8a153"
+      },
+      "shaders/ibl_source.frag.spv": {
+        "Bytes": 6348,
+        "Sha256": "e425052e01fb48eba22e802ab4fedfc71fbd57f97c9eb621f02faf73db2e9a02"
+      },
+      "shaders/opaque-instanced.vert.spv": {
+        "Bytes": 11696,
+        "Sha256": "ee3b8b1e0c653b346c87850e4ce325394572270a3c2f0a9f73660c8dc7a95400"
+      },
+      "shaders/opaque-portable.frag.spv": {
+        "Bytes": 48924,
+        "Sha256": "b0d5bb7cea94a8183852894fb937ee0ddd957ef34b4a91814df51950a3318fb9"
+      },
+      "shaders/opaque.frag.spv": {
+        "Bytes": 60268,
+        "Sha256": "63d2126e11b2923343f8f2d7d4f19b4a1a9171f51211d335a180b8e2226ccdaf"
+      },
+      "shaders/opaque.vert.spv": {
+        "Bytes": 10340,
+        "Sha256": "373a603afa271eededa8a0c66c0300b04b8560c15b0bd5e6c8b7915001a6e0b4"
+      },
+      "shaders/scene-resolve.frag.spv": {
+        "Bytes": 3556,
+        "Sha256": "07f173e5af2b762139d2564549a42e0da5773ef65fc31e93e523a7eeab0215b3"
+      },
+      "shaders/scene-resolve.vert.spv": {
+        "Bytes": 1164,
+        "Sha256": "dc3f97b0bf58a34a07d88f92625b03fd48de909d441b5555024120244be8a153"
+      },
+      "shaders/shadow-instanced.vert.spv": {
+        "Bytes": 3848,
+        "Sha256": "d068ff0678af27e643f8b8a182ea623bf502b01a7f2e52e9d190b13639f6596d"
+      },
+      "shaders/shadow-opaque.frag.spv": {
+        "Bytes": 252,
+        "Sha256": "d3a2d3f4239115d2744fc926736df58c11ab517e1522946d23e28408a821ccd9"
+      },
+      "shaders/shadow.frag.spv": {
+        "Bytes": 1216,
+        "Sha256": "09c877e760dc177855ebe66a5ad133348e5cfe3e6e63f82fe829ba77b74bcfc9"
+      },
+      "shaders/shadow.vert.spv": {
+        "Bytes": 5844,
+        "Sha256": "43ba5c26fd884ae18f556a5df8412837e3481bdc1ccb11ab7212606e00a5528d"
+      },
+      "shaders/sky.frag.spv": {
+        "Bytes": 11936,
+        "Sha256": "7b2fe4385b82c8a81f79b30d0c965f63b21516c73da6d7a239f6ff07e4119ec4"
+      },
+      "shaders/sky.vert.spv": {
+        "Bytes": 2268,
+        "Sha256": "717abc1ae4a6cca2040d08efe64c789cd38269ed8999a30ec140f0f999c82a86"
+      }
+    },
+    "ServerRuntimeDistribution": {
+      "GargantuanServer.exe": {
+        "Bytes": 14498304,
+        "Sha256": "0809eb62ffea137f06e9326056a9f8b09df0785e501290083c5a06a12c47adf2"
+      },
+      "libcrypto-3-x64.dll": {
+        "Bytes": 5216256,
+        "Sha256": "0298564196cae6cce93e2d56457add881db6a5b0ba7c754918ed80f5233676cd"
+      },
+      "libprotobuf.dll": {
+        "Bytes": 2542080,
+        "Sha256": "8bad99650e9705473678e5daae8fe330f38512739ff81c3cc74671299e77a645"
+      },
+      "notices/argparse.txt": {
+        "Bytes": 1104,
+        "Sha256": "fe20120eadcb4492d829037e50e6947e6525e691e5dacb42132b36eb9ab60955"
+      },
+      "notices/Box3D.txt": {
+        "Bytes": 1088,
+        "Sha256": "d8455e91cc46d72163cf58a3827c7983e1ffa5b8f2de1ceaa8d08d6a4956829a"
+      },
+      "notices/GameNetworkingSockets.txt": {
+        "Bytes": 2524,
+        "Sha256": "3ab86e47caa7ead4df9ea73ed2d0777312bed3a4149f7ca301e6bb6a395c225b"
+      },
+      "notices/Gargantuan.txt": {
+        "Bytes": 16022,
+        "Sha256": "dab7436b662ee37d04025f60c8df86a0144ad37d06871933d89140d6f73bd08e"
+      },
+      "notices/GLM.txt": {
+        "Bytes": 2919,
+        "Sha256": "48a257765ea19d81252ee44cba0f0eda525c6b2dcbf483cc39015dd76a6f0a20"
+      },
+      "notices/Luau.txt": {
+        "Bytes": 1146,
+        "Sha256": "1ceedfcc375343e3ec8e56861fa73ba3bd186ed178d5d000546447d358d38949"
+      },
+      "notices/magic-enum.txt": {
+        "Bytes": 1101,
+        "Sha256": "eb20d9a8dcffa79cdc1ec1aba73b6c1ff328966330dcb478f2562669369e13ba"
+      },
+      "notices/Manifold-Authors.txt": {
+        "Bytes": 378,
+        "Sha256": "074a43d4b1626a34a0a14a036d00100524dd463604b2570c4d76c7baa63608f3"
+      },
+      "notices/Manifold.txt": {
+        "Bytes": 11357,
+        "Sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      },
+      "notices/MC33.txt": {
+        "Bytes": 1242,
+        "Sha256": "708068fcfd34f1fb8503130144bc3a5607a0e9a6d55999284afcac35e2828ef1"
+      },
+      "notices/MSVC-Runtime.txt": {
+        "Bytes": 972,
+        "Sha256": "dd84608e263736f1654e8e0ee8e8351f803c2809167be790e1f0264450812e83"
+      },
+      "notices/nlohmann-json.txt": {
+        "Bytes": 1097,
+        "Sha256": "9756d15550eb16ca4b44b68e62150bbf1627114f0f8277bb6479d2d0aac566ea"
+      },
+      "notices/openssl.txt": {
+        "Bytes": 10175,
+        "Sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
+      },
+      "notices/ProtocolBuffers.txt": {
+        "Bytes": 1762,
+        "Sha256": "7acabc6bf6725e1c06c479625bb0075eb18f417c66f1f302852eee632e1350b9"
+      },
+      "notices/SDL3.txt": {
+        "Bytes": 18533,
+        "Sha256": "84ba58ca78b2e9639330d69d602514b5b7acdc1cf61ffb1117ee869592309e08"
+      },
+      "notices/SDL3_image.txt": {
+        "Bytes": 6195,
+        "Sha256": "7da6ce03c8c75b8e2e031451de7f061c0c547e1de9cad6df31875972dca4da4e"
+      },
+      "notices/SDL3_ttf.txt": {
+        "Bytes": 32489,
+        "Sha256": "9a115d4831417a33e048866dd8f1a282bac331a1c905e5c2dbe3745f2ec166e4"
+      },
+      "notices/Tracy.txt": {
+        "Bytes": 1645,
+        "Sha256": "482a8eec0bf61f2ddabafcd6441c97a3b123c08bb2bba1423dd9bd79dbf57b7b"
+      },
+      "runtime/DefaultActionMap.luau": {
+        "Bytes": 1195,
+        "Sha256": "54ddcbb48e70946553898864d6b1b2313d566485903553c26a648be9bc099e8b"
+      },
+      "runtime/DefaultCamera.luau": {
+        "Bytes": 2045,
+        "Sha256": "d2a0502aed84665850c49eae8ab2239782c4def04fbd51bb344234e4741da6ec"
+      },
+      "runtime/DefaultCharacterAnimation.luau": {
+        "Bytes": 3000,
+        "Sha256": "07a69f9a21aea845c0426d7de6ca13fc86672984098f477316211480921e719b"
+      },
+      "runtime/DefaultCharacterAssembly.luau": {
+        "Bytes": 813,
+        "Sha256": "9b3d52070a2ab205479079ecb25324eacf084ea2e03912be0ba4a6add46b6cfc"
+      },
+      "runtime/DefaultCharacterRuntime.luau": {
+        "Bytes": 1219,
+        "Sha256": "b10b370e64a80e4c38f3116ab9b2926ca0f426eb7ef6a5363c49207e33c7bf96"
+      },
+      "runtime/DefaultInteractionRuntime.luau": {
+        "Bytes": 3453,
+        "Sha256": "6a886d0e04406b528ad486a85c490fb05752bc78ba542d4cc4c83c5316bec90e"
+      },
+      "runtime/DefaultLocomotion.luau": {
+        "Bytes": 4887,
+        "Sha256": "01ff88e43c875363e6d3b126a54d2e803c1c8aec0ddce49e1b8e9b4111735567"
+      },
+      "runtime/DefaultNetworkCharacterRuntime.luau": {
+        "Bytes": 1598,
+        "Sha256": "5b425690355b5f1361b175861503a394c02f7a718db86873b0af7711eb23f3b8"
+      },
+      "runtime/DefaultNetworkClientRuntime.luau": {
+        "Bytes": 1667,
+        "Sha256": "22e46b58d598a16c8627a2b6b59df219aa2bc533636254dbb33ab317036a1a5e"
+      },
+      "runtime/DefaultNetworkLocomotion.luau": {
+        "Bytes": 1395,
+        "Sha256": "6e38b8311bd7464f1a54e4dfb42f937fdca4e2f09cd87add7bc15553226db894"
+      },
+      "runtime/DefaultNetworkServerRuntime.luau": {
+        "Bytes": 1319,
+        "Sha256": "9109f58371ab781c2c320664c8380586caa250d040c62d14570b8f13b703979c"
+      },
+      "runtime/DefaultPlayerRuntime.luau": {
+        "Bytes": 1236,
+        "Sha256": "02d21c102c06c8d26c816a3a360e35f164aa8294ac90f7e4f1e68d0e66a4e672"
+      },
+      "runtime/GargantuanSans.ttf": {
+        "Bytes": 305608,
+        "Sha256": "797e35f7f5d6020a5c6ea13b42ecd668bcfb3bbc4baa0e74773527e5b6cb3174"
+      },
+      "runtime-distribution-capability.json": {
+        "Bytes": 126,
+        "Sha256": "61028cc82a6f6fb848e9ed143bb66b2e9576a5b14889898380585f8484183a6f"
+      },
+      "runtime-distribution.json": {
+        "Bytes": 3583,
+        "Sha256": "7bbe965a6660753bbc75117dfddca746ac42165e2dae41e2eb0fa0ec013cc871"
+      },
+      "SDL3.dll": {
+        "Bytes": 2738176,
+        "Sha256": "cdf67d1cec3fa70e2ca6f3cbc17e155fdf8ad849e783557a4b2b79ead9b1dc1d"
+      },
+      "shaders/gui.frag.spv": {
+        "Bytes": 1780,
+        "Sha256": "cca62755a3c0352b6dcc65fa6f855ae1e421ba8d538b62a7f5b605d003393c75"
+      },
+      "shaders/gui.vert.spv": {
+        "Bytes": 1740,
+        "Sha256": "fdbaa31922ba2d636ff592128154ddc05503bfef33c67db53391509c7b0dd53f"
+      },
+      "shaders/ibl_brdf.frag.spv": {
+        "Bytes": 5248,
+        "Sha256": "7120970b6dc88ed6758b188923e2848ad42112e9dac54b5077364f8050326ff9"
+      },
+      "shaders/ibl_convolve.frag.spv": {
+        "Bytes": 10512,
+        "Sha256": "165ccfe7026ec1c9454d8e04c683b2b15c9f91af2584c01a69846f569459f61f"
+      },
+      "shaders/ibl_fullscreen.vert.spv": {
+        "Bytes": 1164,
+        "Sha256": "dc3f97b0bf58a34a07d88f92625b03fd48de909d441b5555024120244be8a153"
+      },
+      "shaders/ibl_source.frag.spv": {
+        "Bytes": 6348,
+        "Sha256": "e425052e01fb48eba22e802ab4fedfc71fbd57f97c9eb621f02faf73db2e9a02"
+      },
+      "shaders/opaque-instanced.vert.spv": {
+        "Bytes": 11696,
+        "Sha256": "ee3b8b1e0c653b346c87850e4ce325394572270a3c2f0a9f73660c8dc7a95400"
+      },
+      "shaders/opaque-portable.frag.spv": {
+        "Bytes": 48924,
+        "Sha256": "b0d5bb7cea94a8183852894fb937ee0ddd957ef34b4a91814df51950a3318fb9"
+      },
+      "shaders/opaque.frag.spv": {
+        "Bytes": 60268,
+        "Sha256": "63d2126e11b2923343f8f2d7d4f19b4a1a9171f51211d335a180b8e2226ccdaf"
+      },
+      "shaders/opaque.vert.spv": {
+        "Bytes": 10340,
+        "Sha256": "373a603afa271eededa8a0c66c0300b04b8560c15b0bd5e6c8b7915001a6e0b4"
+      },
+      "shaders/scene-resolve.frag.spv": {
+        "Bytes": 3556,
+        "Sha256": "07f173e5af2b762139d2564549a42e0da5773ef65fc31e93e523a7eeab0215b3"
+      },
+      "shaders/scene-resolve.vert.spv": {
+        "Bytes": 1164,
+        "Sha256": "dc3f97b0bf58a34a07d88f92625b03fd48de909d441b5555024120244be8a153"
+      },
+      "shaders/shadow-instanced.vert.spv": {
+        "Bytes": 3848,
+        "Sha256": "d068ff0678af27e643f8b8a182ea623bf502b01a7f2e52e9d190b13639f6596d"
+      },
+      "shaders/shadow-opaque.frag.spv": {
+        "Bytes": 252,
+        "Sha256": "d3a2d3f4239115d2744fc926736df58c11ab517e1522946d23e28408a821ccd9"
+      },
+      "shaders/shadow.frag.spv": {
+        "Bytes": 1216,
+        "Sha256": "09c877e760dc177855ebe66a5ad133348e5cfe3e6e63f82fe829ba77b74bcfc9"
+      },
+      "shaders/shadow.vert.spv": {
+        "Bytes": 5844,
+        "Sha256": "43ba5c26fd884ae18f556a5df8412837e3481bdc1ccb11ab7212606e00a5528d"
+      },
+      "shaders/sky.frag.spv": {
+        "Bytes": 11936,
+        "Sha256": "7b2fe4385b82c8a81f79b30d0c965f63b21516c73da6d7a239f6ff07e4119ec4"
+      },
+      "shaders/sky.vert.spv": {
+        "Bytes": 2268,
+        "Sha256": "717abc1ae4a6cca2040d08efe64c789cd38269ed8999a30ec140f0f999c82a86"
+      }
+    }
+  },
+  "Roots": [
+    "C:\\Sandbox\\Codex\\Workspaces\\SpatialStabilizationNative-20261128",
+    "C:\\Sandbox\\Codex\\Builds\\SpatialStabilizationNative-20261128",
+    "C:\\Sandbox\\Codex\\Builds\\SpatialStabilizationNative-20261128\\GNS",
+    "C:\\Sandbox\\Codex\\Workspaces\\Foundation11Engine\\.fetchcontent-cache\\gargantuan_sqlite_source-src",
+    "C:\\Sandbox\\Codex\\Workspaces\\SpatialConstructionProduction-20261127",
+    "C:\\Sandbox\\Codex\\Builds\\Foundation11GNS",
+    "E:\\Sandbox\\SpatialConstructionProduction-20261127"
+  ],
+  "WholeFileRanges": true
+}

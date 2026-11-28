@@ -1,0 +1,90 @@
+{
+  "Profile": "merged",
+  "EngineSHA256": "5166511adc618dda3c329cd18efb5a6355c556e10c2be6f1cd92dd6bc3103d60",
+  "Observations": [
+    {
+      "Pattern": "Solid",
+      "Cells": 128,
+      "Accepted": true,
+      "Mass": 128.0,
+      "Reason": "ok"
+    },
+    {
+      "Pattern": "Solid",
+      "Cells": 256,
+      "Accepted": true,
+      "Mass": 256.0,
+      "Reason": "ok"
+    },
+    {
+      "Pattern": "Solid",
+      "Cells": 512,
+      "Accepted": true,
+      "Mass": 512.0,
+      "Reason": "ok"
+    },
+    {
+      "Pattern": "Solid",
+      "Cells": 1024,
+      "Accepted": true,
+      "Mass": 1024.0,
+      "Reason": "ok"
+    },
+    {
+      "Pattern": "Solid",
+      "Cells": 2048,
+      "Accepted": true,
+      "Mass": 2048.0,
+      "Reason": "ok"
+    },
+    {
+      "Pattern": "Solid",
+      "Cells": 4096,
+      "Accepted": true,
+      "Mass": 512.0,
+      "Reason": "ok"
+    },
+    {
+      "Pattern": "Fragmented",
+      "Cells": 128,
+      "Accepted": true,
+      "Mass": 128.0,
+      "Reason": "ok"
+    },
+    {
+      "Pattern": "Fragmented",
+      "Cells": 256,
+      "Accepted": false,
+      "Mass": 0.0,
+      "Reason": "[BlockGrid:Motion] Assembly exceeds 128 convex hulls after merging adjacent cubes"
+    },
+    {
+      "Pattern": "Fragmented",
+      "Cells": 512,
+      "Accepted": false,
+      "Mass": 0.0,
+      "Reason": "[BlockGrid:Motion] Assembly exceeds 128 convex hulls after merging adjacent cubes"
+    },
+    {
+      "Pattern": "Fragmented",
+      "Cells": 1024,
+      "Accepted": false,
+      "Mass": 0.0,
+      "Reason": "[BlockGrid:Motion] Assembly exceeds 128 convex hulls after merging adjacent cubes"
+    },
+    {
+      "Pattern": "Fragmented",
+      "Cells": 2048,
+      "Accepted": false,
+      "Mass": 0.0,
+      "Reason": "[BlockGrid:Motion] Assembly exceeds 128 convex hulls after merging adjacent cubes"
+    },
+    {
+      "Pattern": "Fragmented",
+      "Cells": 4096,
+      "Accepted": false,
+      "Mass": 0.0,
+      "Reason": "[BlockGrid:Motion] Assembly exceeds 128 convex hulls after merging adjacent cubes"
+    }
+  ]
+}

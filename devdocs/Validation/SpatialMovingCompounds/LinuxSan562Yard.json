@@ -1,0 +1,47 @@
+{
+  "ArchiveSha256": "8f974b55f77b727b2627f89c326e0043ecf22ca21c2cdb790976613c56837fd1",
+  "ProjectFiles": {
+    ".gargantuan/assets/artifacts/9be0a730d429fc2df46815d1fbd541bb1212c587977ac2cf95b8da0c7372b97a.gasset": "9be0a730d429fc2df46815d1fbd541bb1212c587977ac2cf95b8da0c7372b97a",
+    ".gargantuan/assets/artifacts/ba9a8da249512d0968478dc841c7feb7bf451c952f9aa3e4fe5ed74e82ad3ac3.gasset": "ba9a8da249512d0968478dc841c7feb7bf451c952f9aa3e4fe5ed74e82ad3ac3",
+    ".gargantuan/assets/artifacts/db8acb5d55bc9b4caaaa0f1bf857c10268e0ceca01eb5986c07e6057e016fb6e.gasset": "db8acb5d55bc9b4caaaa0f1bf857c10268e0ceca01eb5986c07e6057e016fb6e",
+    ".gargantuan/assets/catalog.json": "9380c1eb4c32eaf8769d08f82dd540a4a77da050dd4497ba4a01bf7210797899",
+    ".gargantuan/package-audience.json": "2fa56bafe194f429edb77a7f28eaafde2d54c047d1394a42a5c7b8a0f93ff54b",
+    ".gargantuan/project.instance.json": "7d79dbf72a6d23c2ba8f52b68149c59a7974c038f6c09c6fb8c3ef224b8de6a0",
+    ".gargantuan/project.json": "51c5641a7a78546eb6164a1102b761a7b2f84ed8a57148c56a0fc411e3ffefc4",
+    ".gargantuan/runtime-distribution.json": "16f1f6fea3bb0ebb315d56f8f868046f34bdc97d3b18a269807ab20864487b6c",
+    ".gargantuan/terrain/chunks/0b86796c01a6c0f84446b22351b4ff65d8054b2243b0aba414c30d20728cc39b.gtch": "0b86796c01a6c0f84446b22351b4ff65d8054b2243b0aba414c30d20728cc39b",
+    ".gargantuan/terrain/chunks/317bf3e0fcf6510ecf7932d737a418af29856265d01333ec0fc8c5927ceacf09.gtch": "317bf3e0fcf6510ecf7932d737a418af29856265d01333ec0fc8c5927ceacf09",
+    ".gargantuan/terrain/chunks/6a11ceb441aec6a3550ec72eb93e89edd95de2d8035d1d2732a180bfc10d9777.gtch": "6a11ceb441aec6a3550ec72eb93e89edd95de2d8035d1d2732a180bfc10d9777",
+    ".gargantuan/terrain/chunks/71f52b2298c857585d07039fdc3f88dfb42f17f5ad19a59aaf4a103e63e42ff1.gtch": "71f52b2298c857585d07039fdc3f88dfb42f17f5ad19a59aaf4a103e63e42ff1",
+    ".gargantuan/terrain/chunks/8bbb3ac1cac52acc391855a5a19e2cdcbb5747a133cf3c84aa39380a236be4b7.gtch": "8bbb3ac1cac52acc391855a5a19e2cdcbb5747a133cf3c84aa39380a236be4b7",
+    ".gargantuan/terrain/chunks/af43268240adfb2642507e83f992f51efc144c1bfd2f08dc930d0c094157d429.gtch": "af43268240adfb2642507e83f992f51efc144c1bfd2f08dc930d0c094157d429",
+    ".gargantuan/terrain/chunks/de740f9b62a36e7fd6980df8cd6948750e2a5d6ff00f2eaa4f438f426b2f88a7.gtch": "de740f9b62a36e7fd6980df8cd6948750e2a5d6ff00f2eaa4f438f426b2f88a7",
+    ".gargantuan/terrain/chunks/efc527ba94d2790d5585fd8cefe3675809b04461fd66d549e7851f98b9b894d7.gtch": "efc527ba94d2790d5585fd8cefe3675809b04461fd66d549e7851f98b9b894d7",
+    ".gargantuan/terrain/manifests/e655cd3a8c8e0915d6664e0fba14123f13e4cbc11825a3c76b8b4ce8c7dee5e2.gtmf": "e655cd3a8c8e0915d6664e0fba14123f13e4cbc11825a3c76b8b4ce8c7dee5e2",
+    "assets/Visor.gltf": "75383c5d994801e4764b8fb5a3f1e99bb8250e5efcc0558994e6a5add7cce326"
+  },
+  "Binaries": {
+    "gargantuan": "1cfbf381190555496adcbd6a8974da024b14b0f363f20454856a4c9a4e16a43b",
+    "gargantuan-packager": "457272234516741733ab354ab4f70d23198e9089b842c056e61187d3cb1d1645",
+    "GargantuanPlayer": "2865aefa0cd083abde6cd5f8264c9e63b393f3bf200d353d4d7e62603298e1bd",
+    "GargantuanServer": "4ca1f1965e2a9c603359fb07d64b58eb823a1f4c6ef5d0ff5e4600d194d116b8"
+  },
+  "Cases": [
+    {
+      "Case": "PackagedMultiplayer",
+      "Exit": 0,
+      "Seconds": 20.361
+    },
+    {
+      "Case": "StudioDurable",
+      "Exit": 0,
+      "Seconds": 1.884
+    },
+    {
+      "Case": "Interlock",
+      "Exit": 0,
+      "Seconds": 1.87
+    }
+  ],
+  "SourcePreserved": true
+}

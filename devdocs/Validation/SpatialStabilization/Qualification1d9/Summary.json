@@ -1,0 +1,472 @@
+{
+  "ordinary": {
+    "Blocks": 64,
+    "Processes": 256,
+    "MedianPerProcessUs": {
+      "baseline": {
+        "50": 159.55,
+        "95": 432.4,
+        "99": 555.3
+      },
+      "current": {
+        "50": 145.3,
+        "95": 404.4,
+        "99": 521.6500000000001
+      }
+    },
+    "Attempts": {
+      "baseline": 131073,
+      "current": 131073
+    },
+    "Missing": {
+      "baseline": 231,
+      "current": 255
+    },
+    "GapTotals": {
+      "baseline": {
+        "Exact": 130842,
+        "RingTicks": 131072,
+        "Gaps": 113,
+        "PollMissing": 230,
+        "ResetGaps": 1,
+        "ResetMissing": 1,
+        "Windows": 2816,
+        "Queries": 257519
+      },
+      "current": {
+        "Exact": 130818,
+        "RingTicks": 131072,
+        "Gaps": 126,
+        "PollMissing": 254,
+        "ResetGaps": 1,
+        "ResetMissing": 1,
+        "Windows": 2816,
+        "Queries": 257442
+      }
+    },
+    "ProcessRange": {
+      "baseline": {
+        "P95Ns": [
+          378100.0,
+          432400.0,
+          539700.0
+        ],
+        "Warmup": [
+          192.0,
+          192.0,
+          192.0
+        ],
+        "Queries": [
+          1827.0,
+          2016.0,
+          2038.0
+        ],
+        "Missing": [
+          0.0,
+          0.0,
+          26.0
+        ],
+        "WallSeconds": [
+          9.4066,
+          9.5018,
+          10.7955
+        ],
+        "MainCpuMs": [
+          281.25,
+          500.0,
+          734.375
+        ],
+        "ProcessCpuMs": [
+          328.125,
+          562.5,
+          796.875
+        ],
+        "PriorityClass": [
+          32.0,
+          32.0,
+          32.0
+        ]
+      },
+      "current": {
+        "P95Ns": [
+          351200.0,
+          404400.0,
+          524800.0
+        ],
+        "Warmup": [
+          192.0,
+          192.0,
+          192.0
+        ],
+        "Queries": [
+          1846.0,
+          2014.5,
+          2038.0
+        ],
+        "Missing": [
+          0.0,
+          0.0,
+          35.0
+        ],
+        "WallSeconds": [
+          9.4004,
+          9.50355,
+          10.4271
+        ],
+        "MainCpuMs": [
+          250.0,
+          500.0,
+          687.5
+        ],
+        "ProcessCpuMs": [
+          296.875,
+          562.5,
+          765.625
+        ],
+        "PriorityClass": [
+          32.0,
+          32.0,
+          32.0
+        ]
+      }
+    },
+    "Estimated": {
+      "50": {
+        "Percent": {
+          "Mean": -7.929000025506797,
+          "Low": -9.202193862640257,
+          "High": -6.6379530857943765,
+          "UpperOne": -6.85170480509461
+        },
+        "Microseconds": {
+          "Mean": -12.7234375,
+          "Low": -14.921427323370244,
+          "High": -10.525447676629755,
+          "UpperOne": -10.88724941539798
+        }
+      },
+      "95": {
+        "Percent": {
+          "Mean": -6.495977300344581,
+          "Low": -7.798684822627311,
+          "High": -5.174863892144199,
+          "UpperOne": -5.393603138143697
+        },
+        "Microseconds": {
+          "Mean": -28.076562499999994,
+          "Low": -33.98628488153345,
+          "High": -22.166840118466535,
+          "UpperOne": -23.139614337228757
+        }
+      },
+      "99": {
+        "Percent": {
+          "Mean": -5.228918751444538,
+          "Low": -6.6033750344290985,
+          "High": -3.834235505499248,
+          "UpperOne": -4.065211551275999
+        },
+        "Microseconds": {
+          "Mean": -28.783593749999998,
+          "Low": -36.7050629120506,
+          "High": -20.862124587949396,
+          "UpperOne": -22.166043871813166
+        }
+      }
+    },
+    "OrderMeanP95Percent": {
+      "baseline": -6.518084888911062,
+      "current": -6.4738644835425445
+    },
+    "FourBlockP95Percent": {
+      "Mean": -6.495977300344581,
+      "Low": -8.177764078691983,
+      "High": -4.783387451918944,
+      "UpperOne": -5.089699627966306
+    },
+    "MissingMeanP95Percent": [
+      -7.140843615470778,
+      -5.683381469562084
+    ],
+    "MissingUpperOneP95Percent": -4.399976186215933,
+    "SupplementarySummedGroupMeanP95Percent": [
+      -6.726755516238095,
+      -6.2087832471633755
+    ],
+    "SupplementarySummedGroupUpperOneP95Percent": -5.054315644846688,
+    "SupplementaryNonnegativeGroupMeanP95Percent": [
+      -6.726755516238095,
+      -6.2087832471633755
+    ],
+    "SupplementaryNonnegativeGroupUpperOneP95Percent": -5.054315644846688,
+    "SupplementaryZeroChangesRanks": 0,
+    "P95LogSD": 0.05616685938869174,
+    "SupplementaryPhaseMeanDifferencesUs": {
+      "EngineStep": {
+        "Mean": -15.462351989746097,
+        "Low": -18.310255733982284,
+        "High": -12.614448245509907,
+        "UpperOne": -13.083229545383846
+      },
+      "PreSimulation": {
+        "Mean": -12.04095230102539,
+        "Low": -13.8653847777746,
+        "High": -10.21651982427618,
+        "UpperOne": -10.51683188001671
+      },
+      "Physics": {
+        "Mean": -0.5395187377929686,
+        "Low": -0.7194825649882333,
+        "High": -0.35955491059770384,
+        "UpperOne": -0.3891779893318874
+      },
+      "Animation": {
+        "Mean": 0.024451446533203098,
+        "Low": -0.023733105891068095,
+        "High": 0.07263599895747429,
+        "UpperOne": 0.06470454510654651
+      },
+      "RenderPublication": {
+        "Mean": -1.5149452209472658,
+        "Low": -1.7394161515065139,
+        "High": -1.2904742903880178,
+        "UpperOne": -1.3274234937536318
+      }
+    }
+  },
+  "rigid": {
+    "Blocks": 16,
+    "Processes": 64,
+    "MedianPerProcessUs": {
+      "baseline": {
+        "50": 205.35000000000002,
+        "95": 547.5999999999999,
+        "99": 708.05
+      },
+      "current": {
+        "50": 191.15,
+        "95": 525.7,
+        "99": 690.4
+      }
+    },
+    "Attempts": {
+      "baseline": 24578,
+      "current": 24576
+    },
+    "Missing": {
+      "baseline": 28,
+      "current": 28
+    },
+    "GapTotals": {
+      "baseline": {
+        "Exact": 24550,
+        "RingTicks": 24576,
+        "Gaps": 13,
+        "PollMissing": 26,
+        "ResetGaps": 2,
+        "ResetMissing": 2,
+        "Windows": 512,
+        "Queries": 48396
+      },
+      "current": {
+        "Exact": 24548,
+        "RingTicks": 24576,
+        "Gaps": 14,
+        "PollMissing": 28,
+        "ResetGaps": 0,
+        "ResetMissing": 0,
+        "Windows": 512,
+        "Queries": 48303
+      }
+    },
+    "ProcessRange": {
+      "baseline": {
+        "P95Ns": [
+          426900.0,
+          547600.0,
+          606900.0
+        ],
+        "Warmup": [
+          192.0,
+          192.0,
+          192.0
+        ],
+        "Queries": [
+          1488.0,
+          1513.0,
+          1532.0
+        ],
+        "Missing": [
+          0.0,
+          0.0,
+          5.0
+        ],
+        "WallSeconds": [
+          7.0628,
+          7.127700000000001,
+          7.2105
+        ],
+        "MainCpuMs": [
+          218.75,
+          398.4375,
+          656.25
+        ],
+        "ProcessCpuMs": [
+          281.25,
+          429.6875,
+          703.125
+        ],
+        "PriorityClass": [
+          32.0,
+          32.0,
+          32.0
+        ]
+      },
+      "current": {
+        "P95Ns": [
+          452200.0,
+          525700.0,
+          644300.0
+        ],
+        "Warmup": [
+          192.0,
+          192.0,
+          192.0
+        ],
+        "Queries": [
+          1477.0,
+          1513.0,
+          1530.0
+        ],
+        "Missing": [
+          0.0,
+          0.0,
+          6.0
+        ],
+        "WallSeconds": [
+          7.0737,
+          7.126250000000001,
+          7.2951
+        ],
+        "MainCpuMs": [
+          218.75,
+          382.8125,
+          625.0
+        ],
+        "ProcessCpuMs": [
+          281.25,
+          421.875,
+          656.25
+        ],
+        "PriorityClass": [
+          32.0,
+          32.0,
+          32.0
+        ]
+      }
+    },
+    "Estimated": {
+      "50": {
+        "Percent": {
+          "Mean": -4.563751229838712,
+          "Low": -7.440527834916083,
+          "High": -1.5975635310943412,
+          "UpperOne": -2.1308047132953285
+        },
+        "Microseconds": {
+          "Mean": -9.228125,
+          "Low": -15.1899238245852,
+          "High": -3.2663261754148003,
+          "UpperOne": -4.324732580062965
+        }
+      },
+      "95": {
+        "Percent": {
+          "Mean": -1.7080026845851823,
+          "Low": -4.620108586049406,
+          "High": 1.293014628452555,
+          "UpperOne": 0.7536293844570708
+        },
+        "Microseconds": {
+          "Mean": -9.512500000000006,
+          "Low": -25.23987564512869,
+          "High": 6.214875645128679,
+          "UpperOne": 3.422772858555712
+        }
+      },
+      "99": {
+        "Percent": {
+          "Mean": -0.5280234437472571,
+          "Low": -3.5449279618609157,
+          "High": 2.583243275120507,
+          "UpperOne": 2.0238769730825332
+        },
+        "Microseconds": {
+          "Mean": -3.4406250000000114,
+          "Low": -24.660703985306863,
+          "High": 17.77945398530684,
+          "UpperOne": 14.012223965305058
+        }
+      }
+    },
+    "OrderMeanP95Percent": {
+      "baseline": 0.25870116174137747,
+      "current": -3.6361270961660663
+    },
+    "FourBlockP95Percent": {
+      "Mean": -1.7080026845851823,
+      "Low": -7.217867354532527,
+      "High": 4.129065163555296,
+      "UpperOne": 2.5758239916852586
+    },
+    "MissingMeanP95Percent": [
+      -2.1771819376267314,
+      -1.2312423755071513
+    ],
+    "MissingUpperOneP95Percent": 1.4302737533041106,
+    "SupplementarySummedGroupMeanP95Percent": [
+      -1.8955182910992407,
+      -1.5540667837827011
+    ],
+    "SupplementarySummedGroupUpperOneP95Percent": 0.9702094823864382,
+    "SupplementaryNonnegativeGroupMeanP95Percent": [
+      -1.8955182910992407,
+      -1.5540667837827011
+    ],
+    "SupplementaryNonnegativeGroupUpperOneP95Percent": 0.9702094823864382,
+    "SupplementaryZeroChangesRanks": 0,
+    "P95LogSD": 0.056440160441194716,
+    "SupplementaryPhaseMeanDifferencesUs": {
+      "EngineStep": {
+        "Mean": -8.977665201822903,
+        "Low": -14.72561645983332,
+        "High": -3.229713943812486,
+        "UpperOne": -4.250155693707826
+      },
+      "PreSimulation": {
+        "Mean": -7.381359863281253,
+        "Low": -10.721281576955693,
+        "High": -4.041438149606813,
+        "UpperOne": -4.634379078475282
+      },
+      "Physics": {
+        "Mean": -0.07489827473958455,
+        "Low": -1.4879797214218786,
+        "High": 1.3381831719427095,
+        "UpperOne": 1.0873168650672684
+      },
+      "Animation": {
+        "Mean": 0.17610677083333334,
+        "Low": 0.08538838890357389,
+        "High": 0.2668251527630928,
+        "UpperOne": 0.25071979274023826
+      },
+      "RenderPublication": {
+        "Mean": -1.5414916992187493,
+        "Low": -2.0808993584359636,
+        "High": -1.002084040001535,
+        "UpperOne": -1.097845829023575
+      }
+    }
+  }
+}

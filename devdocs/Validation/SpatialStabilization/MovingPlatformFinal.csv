@@ -1,0 +1,3 @@
+EngineSha256,Position,PlatformX,BodyVelocityX,LocalY,FloorNormalY,HasFloor,CoincidentY,CoincidentHasFloor,HitPlatform,PreviousLocationClear,PriorActorX
+798ae3281474f8599e5e710bfa25b5367ecc50db0daf8e0bc0b7e020a0ff106f,First,120.26667,16.00000,16.99500,1.00000,true,12.00000,false,true,true,0.00000
+798ae3281474f8599e5e710bfa25b5367ecc50db0daf8e0bc0b7e020a0ff106f,Second,127.46677,16.00000,16.99500,1.00000,true,12.00000,false,true,true,120.26667

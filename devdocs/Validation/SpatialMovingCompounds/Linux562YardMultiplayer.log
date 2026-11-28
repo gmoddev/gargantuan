@@ -1,0 +1,17 @@
+[Spatial:YardInput] Authored project.instance.json SHA256=7d79dbf72a6d23c2ba8f52b68149c59a7974c038f6c09c6fb8c3ef224b8de6a0
+[Spatial:YardPackage] DedicatedServer ManifestSHA256=898ee738b0027ab7f49ba692944b84b6ca8cc480222430c6658dd66ce361ec62
+[Spatial:YardPackage] DistributedPlayer ManifestSHA256=25a146b0d83e72481981fcb4fb1d4da8336ea3a99b541fc1e4b7f15c72307026
+builder [Spatial:FreightVisit] far actor=(0.00,6.00,0.00) deckX=20.12
+builder [Spatial:FreightVisit] near actor=(22.00,3.00,1.00)
+builder [Spatial:FreightPlatform] firstX=20.4716 nextX=20.9216 mass=64.0000 cell=(0,1,0)
+digger [Spatial:FreightVisit] far actor=(0.00,6.00,0.00) deckX=23.17
+digger [Spatial:FreightVisit] near actor=(22.00,3.00,1.00)
+digger [Spatial:FreightPlatform] firstX=23.5215 nextX=24.0215 mass=64.0000 cell=(0,1,0)
+rejoin [Spatial:FreightVisit] far actor=(0.00,6.00,0.00) deckX=21.42
+rejoin [Spatial:FreightVisit] near actor=(22.00,3.00,1.00)
+rejoin [Spatial:FreightPlatform] firstX=21.1716 nextX=20.8216 mass=64.0000 cell=(0,1,0)
+restart [Spatial:FreightVisit] far actor=(0.00,6.00,0.00) deckX=20.42
+restart [Spatial:FreightVisit] near actor=(22.00,3.00,1.00)
+restart [Spatial:FreightPlatform] firstX=20.7716 nextX=21.2715 mass=64.0000 cell=(0,1,0)
+[Spatial:YardProcess] Stable surface=3421671802 field=265284588
+[Spatial:YardProcess] Two-client build, dig, door travel, reconnect and SQLite restart passed

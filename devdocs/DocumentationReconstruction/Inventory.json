@@ -189,14 +189,40 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "cmake/notices/MC33.txt",
+      "Purpose": "MC33++ v5.4 pattern data and case selection",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "cmake/notices/MSVC-Runtime.txt",
-      "Purpose": "Microsoft Visual C++ Runtime",
+      "Purpose": "Windows prerequisite for this Gargantuan game or dedicated server",
       "LastMeaningfulUpdate": null,
       "LastPathCommit": {
         "Sha": "49f6b7c5efd97bea4e10d80cbfecee69c3a6ab42",
         "Date": "2026-08-24T23:58:32-04:00",
         "Subject": "Implement standalone packaging foundation"
       },
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "cmake/notices/OpenSSL3.txt",
+      "Purpose": "OpenSSL 3.x",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
       "RelevantSourceSubsystem": [
         "Owning source not established; consult traceability matrix"
       ],
@@ -214,6 +240,19 @@
         "Date": "2026-09-02T08:54:11-04:00",
         "Subject": "Integrate production Character game sessions"
       },
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "cmake/notices/Unicode-Data.txt",
+      "Purpose": "UNICODE LICENSE V3",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
       "RelevantSourceSubsystem": [
         "Owning source not established; consult traceability matrix"
       ],
@@ -688,6 +727,19 @@
         "src/network/Scheduler.cpp",
         "tests/ReplicationBenchmark.cpp",
         "tests/ReplicationTests.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/CurrentArchitecture/BlockGridStorage.md",
+      "Purpose": "Native BlockGrid cell field and binary dataset",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/blockgrid/gameplay/PoweredGate.luau"
       ],
       "Status": "Unverified",
       "StatusLabel": "Unverified",
@@ -1220,10 +1272,13 @@
         "Subject": "Compose Input Actions and Script bindings with spatial streaming"
       },
       "RelevantSourceSubsystem": [
+        "cmake/ClangSanitizerPaths.cmake",
         "cmake/GameNetworkingSockets.cmake",
         "cmake/gns/vcpkg.json",
         "src/TraceEvent/Parsers/KernelTraceEventParser.cs",
         "src/libraries/System.Diagnostics.Process/src/System/Diagnostics/Process.Windows.cs",
+        "src/video/...",
+        "tests/ClangSanitizerPaths.py",
         "tests/Foundation3LCoreAcceptance20261021.json",
         "tests/Foundation3LFinalAcceptance.md",
         "tools/classgen",
@@ -2510,7 +2565,7 @@
       "Path": "devdocs/CurrentArchitecture/PreRunAuthoring.md",
       "Purpose": "Canonical PreRun source authoring",
       "LastMeaningfulUpdate": {
-        "Date": "2026-10-29",
+        "Date": "2026-11-27",
         "Basis": "Document-declared verification/review date; scope remains revision-specific"
       },
       "LastPathCommit": {
@@ -3698,6 +3753,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "devdocs/CurrentArchitecture/SpatialMovementAdmission.md",
+      "Purpose": "Native spatial collision demand and movement admission",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "devdocs/CurrentArchitecture/SpatialRuntimeProjectionFoundation3K.md",
       "Purpose": "Spatial runtime projection foundation 3K",
       "LastMeaningfulUpdate": {
@@ -3795,6 +3863,32 @@
         "src/editor/EditorHost.cpp",
         "src/telemetry/",
         "tests/OptionalTelemetryTests.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/CurrentArchitecture/TerrainFoundation1.md",
+      "Purpose": "Terrain Foundation 1 implementation",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/content/docs/developing/editor-host.mdx"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain subsystem contract; reverify complete prose before treating all claims as current",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/CurrentArchitecture/TerrainObject.md",
+      "Purpose": "Workspace terrain ownership and field reads",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/FoundationTests.cpp"
       ],
       "Status": "Unverified",
       "StatusLabel": "Unverified",
@@ -4241,6 +4335,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "devdocs/FutureArchitecture/PreRunExplorerService.md",
+      "Purpose": "PreRun as an Explorer service",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/PreRunBootstrapTests.cpp"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain as non-current design input; accepted decisions constrain design, not implementation proof",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "devdocs/FutureArchitecture/PreparedPropertyCommitArchitecture.md",
       "Purpose": "Prepared property commit architecture",
       "LastMeaningfulUpdate": {
@@ -4366,6 +4473,19 @@
         "Date": "2026-09-07T17:56:14-04:00",
         "Subject": "Implement semantic spatial runtime projection boundary"
       },
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Retain as non-current design input; accepted decisions constrain design, not implementation proof",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/FutureArchitecture/TerrainFoundation2.md",
+      "Purpose": "Terrain follow-on implementation assignment",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
       "RelevantSourceSubsystem": [
         "Owning source not established; consult traceability matrix"
       ],
@@ -4711,12 +4831,42 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "devdocs/Validation/GantriaUnifiedEngine.md",
+      "Purpose": "Gantria unified Engine integration",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "devdocs/Validation/GasGameplayIntegration.md",
       "Purpose": "GAS Foundation 1 and Gameplay Foundation 7 integration",
       "LastMeaningfulUpdate": null,
       "LastPathCommit": null,
       "RelevantSourceSubsystem": [
         "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/OrdinaryPhysicsAblations.md",
+      "Purpose": "Ordinary Workspace physics comparisons",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/PhysicsBackendTests.cpp",
+        "tests/SpatialConstructionStepAttribution.py",
+        "tests/SpatialConstructionStepProfile.py",
+        "tests/SpatialTransferTests.cpp",
+        "tests/terrain/TerrainCoordinatorTests.cpp"
       ],
       "Status": "Historical",
       "StatusLabel": "Historical evidence requiring preservation",
@@ -4912,6 +5062,22 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "devdocs/Validation/RuntimeDistributionFoundation1.md",
+      "Purpose": "Runtime Distribution Foundation 1 qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "assets/runtime-distribution-1/WindowsCryptoAsan.log",
+        "assets/runtime-distribution-1/WindowsCryptoRelease.log",
+        "assets/runtime-distribution-1/WindowsGsesCodec.log",
+        "tests/RuntimeDistributionQualification.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "devdocs/Validation/RuntimeFoundation6Qualification.md",
       "Purpose": "Runtime Foundation 6 qualification",
       "LastMeaningfulUpdate": null,
@@ -4939,6 +5105,653 @@
       },
       "RelevantSourceSubsystem": [
         "tests/Runtime6RealisticPublicationProbe.cpp"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/RuntimeReleaseLicensing.md",
+      "Purpose": "Player and Server release licensing",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tools/distribution/build_runtime_source.py",
+        "tools/distribution/release_inventory.py",
+        "tools/distribution/test_release_compliance.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialConstructionCampaign.md",
+      "Purpose": "Spatial Domains and BlockGrid production ledger",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/content/docs/api/block-grid-and-spatial-domains.mdx",
+        "src/content/docs/developing/block-construction.mdx",
+        "tests/blockgrid/gameplay/SpatialCost.server.luau"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialConstructionPassiveTen.md",
+      "Purpose": "Ten-trial passive frame comparison",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "include/gargantuan/runtime/SpatialDomainMember.hpp",
+        "src/classes/WorldRoot.cpp",
+        "tests/SpatialConstructionOrdinaryFrames.py",
+        "tests/SpatialConstructionWholeStep.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialConstructionQualification.md",
+      "Purpose": "Spatial construction production qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "cmake/ClangSanitizerPaths.cmake",
+        "cmake/GameNetworkingSockets.cmake",
+        "cmake/gns/NativeEgressWorker.inc",
+        "cmake/gns/ReliableServiceFeedbackBridge.cpp",
+        "src/SDL.c",
+        "src/classes/Script.cpp",
+        "src/editor/EditorViewport.cpp",
+        "src/host/server/ServerHost.cpp",
+        "src/include/gargantuan/datatypes/Signal.hpp",
+        "src/player/PlayerMain.cpp",
+        "src/server/ServerMain.cpp",
+        "src/vendor/sdl/src/SDL.c",
+        "tests/ClangSanitizerPaths.py",
+        "tests/FoundationTests.cpp",
+        "tests/GameSessionTests.cpp",
+        "tests/GasDocumentTests.cpp"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialFinalStabilization.md",
+      "Purpose": "Spatial construction final acceptance register",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/editor/PlaySession.cpp"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialJointDomains.md",
+      "Purpose": "Joints across coincident spatial domains",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/SpatialCreatorTrial.py",
+        "tests/creator/spatial/JointDomains.server.luau"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialMovingCompounds.md",
+      "Purpose": "Moving construction qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/blockgrid/Persistence.cpp",
+        "src/blockgrid/State.cpp",
+        "src/classes/BlockGridMotion.cpp",
+        "src/classes/BlockGridWorld.cpp",
+        "src/classes/SpatialDestination.cpp",
+        "src/classes/SpatialRegion.cpp",
+        "src/content/docs/api/block-grid-and-spatial-domains.mdx",
+        "src/editor/EditorHost.cpp",
+        "src/editor/PlaySession.cpp",
+        "src/network/BlockGridInterest.cpp",
+        "src/network/BlockGridPeer.cpp",
+        "src/network/BlockGridStream.cpp",
+        "src/packaging/ClientPackage.cpp",
+        "src/runtime/MutationGateway.cpp",
+        "src/runtime/SpatialDomainMember.cpp",
+        "src/serialization/GasDocument.cpp"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialMovingCompounds/WindowsCandidateGeneratedYard.txt",
+      "Purpose": "EditorHost source 238e18c0c, normal Windows MSVC Release",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/SpatialConstructionYardInput.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialOrdinaryAttribution.md",
+      "Purpose": "Ordinary Workspace slow-step attribution",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/SpatialConstructionStepAttribution.py",
+        "tests/SpatialConstructionStepProfile.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialOrdinaryBuildQualification.md",
+      "Purpose": "Ordinary Workspace build qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/CharacterNetworkingTests.cpp",
+        "tests/PackagingTests.cpp",
+        "tests/PhysicsBackendTests.cpp",
+        "tests/RuntimeDistributionQualification.py",
+        "tests/RuntimePackageCryptoTests.cpp",
+        "tests/SpatialConstructionIntegrationTests.cpp",
+        "tests/SpatialDomainLighting.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialOrdinaryNativeCounters.md",
+      "Purpose": "Ordinary Workspace native counter scope",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "assets/runtime/DefaultLocomotion.luau",
+        "tests/PrepareSpatialOrdinaryOperations.py",
+        "tests/PrepareSpatialOrdinaryProfile.py",
+        "tests/SpatialOrdinaryDiagnosticEvidence.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialOrdinaryOptimized.md",
+      "Purpose": "Ordinary Workspace whole-step qualification after runtime changes",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/SpatialConstructionPrecision.py",
+        "tests/SpatialConstructionPrecisionAnalysis.py",
+        "tests/SpatialOrdinaryIndependentAudit.py",
+        "tests/SpatialOrdinaryResume.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialOrdinaryPrecision.md",
+      "Purpose": "Ordinary Workspace whole-step measurement",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/SpatialConstructionPrecision.py",
+        "tests/SpatialConstructionPrecisionAnalysis.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialOrdinaryRecovery.md",
+      "Purpose": "Ordinary Workspace performance recovery",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/classes/Instance.cpp",
+        "src/runtime/SpatialDomainMember.cpp",
+        "tests/SpatialOrdinaryLocomotionProfile.py",
+        "tests/SpatialOrdinaryScriptCalls.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialOrdinaryStairDomain.md",
+      "Purpose": "Stock locomotion on a low step in two domains",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/SpatialOrdinaryStairDomain.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialStabilization/InterruptedProcess.md",
+      "Purpose": "Interrupted anchored process",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/editor/EditorHost.cpp",
+        "src/editor/PlaySession.cpp",
+        "tests/SpatialConstructionPrecision.py",
+        "tests/SpatialConstructionWholeStep.py",
+        "tests/SpatialStabilizationInterruptedSensitivity.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialStabilization/InterruptedSuccessorContract.md",
+      "Purpose": "Interrupted qualification and one uninterrupted replacement",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/SpatialConstructionPrecision.py",
+        "tests/SpatialConstructionPrecisionAnalysis.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialStabilization/PausedViewOriginal/ProcessOutput.txt",
+      "Purpose": "[Editor:PausedDomain] default Workspace 2880 0 True",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialStabilization/PausedViewOriginal/SameSizeProcessOutput.txt",
+      "Purpose": "[Editor:PausedDomain] default Workspace 2880 0 True",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialStabilization/PausedViewQualificationContract.md",
+      "Purpose": "Exact-product qualification after paused Play view repair",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/SpatialConstructionPrecision.py",
+        "tests/SpatialConstructionPrecisionAnalysis.py",
+        "tests/SpatialOrdinaryIndependentAudit.py",
+        "tests/SpatialPausedDomainPresentation.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialStabilizationGateReview.md",
+      "Purpose": "Independent whole-step performance review",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/SpatialInterruptedGateReview.py",
+        "tests/SpatialStabilizationGateReview.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialStabilizationPerformance.md",
+      "Purpose": "Spatial stabilization performance qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/render/RenderProjection.cpp",
+        "tests/SpatialCharacterRouteProbe.py",
+        "tests/SpatialConstructionPrecision.py",
+        "tests/SpatialConstructionPrecisionAnalysis.py",
+        "tests/SpatialConstructionStepAttribution.py",
+        "tests/SpatialConstructionStepProfile.py",
+        "tests/SpatialMovingPlatformProbe.py",
+        "tests/SpatialOrdinaryIndependentAudit.py",
+        "tests/SpatialOrdinaryScriptCalls.py",
+        "tests/SpatialPausedDomainPresentation.py",
+        "tests/SpatialRenderProjectionAblation.cpp",
+        "tests/SpatialRenderProjectionAblation.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialStabilizationPlatform.md",
+      "Purpose": "Spatial stabilization platform qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/editor/PlaySession.cpp",
+        "tests/SpatialConstructionYardInput.py",
+        "tests/SpatialConstructionYardMultiplayer.py",
+        "tests/SpatialPausedDomainPresentation.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialStabilizationSignedGui.md",
+      "Purpose": "Executable PlayerGui code in distributed packages",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/classes/Player.cpp",
+        "src/gui/PlayerGuiScope.cpp",
+        "src/network/GameSession.cpp",
+        "src/packaging/ClientPackage.cpp",
+        "src/packaging/PackageBuilder.cpp",
+        "tests/PackagedPlayerGuiLifecycle.py",
+        "tests/RuntimeDistributionQualification.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialStabilizationWindowsReplacement.md",
+      "Purpose": "Windows package replacement and recovery",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/packaging/PackageBuilder.cpp",
+        "src/packaging/WindowsPackagePublication.hpp",
+        "tests/RuntimeDistributionQualification.py",
+        "tests/WindowsPackageReplacement.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/SpatialYardRecovery.md",
+      "Purpose": "Construction Yard SQLite recovery",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/SpatialConstructionYardMultiplayer.py",
+        "tests/SpatialYardRecoverySoak.luau",
+        "tests/SpatialYardRecoverySoak.py"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/TerrainCampaign.md",
+      "Purpose": "Volumetric terrain campaign ledger",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/content/docs/developing/editor-host.mdx"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/TerrainChunkCodec.md",
+      "Purpose": "Terrain Foundation 1 native chunk artifact",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "include/gargantuan/terrain/ChunkCodec.hpp",
+        "include/gargantuan/terrain/Field.hpp",
+        "include/gargantuan/terrain/Manifest.hpp",
+        "src/filesystem/ProjectIdentity.cpp",
+        "tests/terrain/codec/ChunkCodecTests.cpp",
+        "tests/terrain/codec/TerrainManifestTests.cpp"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/TerrainFoundation1.md",
+      "Purpose": "Terrain Foundation 1 qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/terrain/TerrainRuntimeTests.cpp",
+        "tests/terrain/gameplay",
+        "tests/terrain/gameplay/AdmissionPressure.luau"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/TerrainHeightColumns.md",
+      "Purpose": "Lossless terrain height column storage",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/terrain/ChunkCodec.cpp",
+        "src/terrain/Field.cpp",
+        "src/terrain/Surface.cpp",
+        "tests/terrain/storage/HeightColumnPage.hpp",
+        "tests/terrain/storage/HeightColumnQualification.cpp"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/TerrainLodQualification.md",
+      "Purpose": "Native MC33 mixed visual density investigation",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/terrain/Surface.cpp",
+        "src/terrain/VisualDensity.cpp",
+        "src/terrain/VisualDensityOverlap.cpp",
+        "src/terrain/VisualDensityPrefetch.cpp",
+        "src/terrain/VisualDensityView.hpp",
+        "tests/terrain/lod/TerrainLodOffscreen.cpp",
+        "tests/terrain/lod/TerrainLodQualification.cpp",
+        "tests/terrain/lod/TerrainLodQualification.csv",
+        "tests/terrain/lod/TerrainVisualDensity.csv",
+        "tests/terrain/lod/TerrainVisualDensityGuard.csv",
+        "tests/terrain/lod/TerrainVisualDensityGuardRender.csv",
+        "tests/terrain/lod/TerrainVisualDensityRender.cpp",
+        "tests/terrain/lod/TerrainVisualDensityRender.csv",
+        "tests/terrain/lod/TerrainVisualDensityView.csv",
+        "tests/terrain/lod/TerrainVisualOverlapAudit.hpp"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/TerrainMaterials.md",
+      "Purpose": "Terrain material palette and render qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/TerrainMetadata.md",
+      "Purpose": "Terrain Foundation 1 active metadata qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "include/gargantuan/terrain/ActiveChunkRegistry.hpp",
+        "src/entt/entity/sparse_set.hpp",
+        "src/runtime/ExecutionDomain.cpp",
+        "src/runtime/JobSystem.cpp",
+        "src/storage/table.c",
+        "tests/terrain/metadata/ActiveChunkRegistryTests.cpp",
+        "tests/terrain/metadata/MetadataBenchmark.cpp",
+        "tests/terrain/metadata/MetadataBenchmark.csv",
+        "tests/terrain/metadata/MetadataJobProbe.cpp",
+        "tests/terrain/metadata/MetadataJobProbe.csv"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/TerrainNetworkBootstrap.md",
+      "Purpose": "Terrain Foundation 2 network qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/TerrainPersistence.md",
+      "Purpose": "Native terrain persistence qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "include/gargantuan/terrain/Persistence.hpp",
+        "tests/terrain/codec/TerrainPersistenceTests.cpp"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/TerrainPhysics.md",
+      "Purpose": "Terrain collider staging and native provider qualification",
+      "LastMeaningfulUpdate": {
+        "Date": "2026-11-26",
+        "Basis": "Document-declared verification/review date; scope remains revision-specific"
+      },
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/datatypes/CFrame.cpp",
+        "src/datatypes/Enum.cpp",
+        "src/physics/Box3DPhysicsBackend.cpp",
+        "src/physics/PhysicsBackend.cpp",
+        "src/reflection/Enums.cpp",
+        "src/scripting/ScriptSecurity.cpp",
+        "src/terrain/PhysicsStage.cpp",
+        "src/terrain/Surface.cpp",
+        "tests/terrain/physics/TerrainPhysicsStageTests.cpp"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/TerrainRuntimeScale.md",
+      "Purpose": "Terrain storage and native startup scale",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/TerrainSurface.md",
+      "Purpose": "Terrain surface and conditioning",
+      "LastMeaningfulUpdate": {
+        "Date": "2026-11-26",
+        "Basis": "Document-declared verification/review date; scope remains revision-specific"
+      },
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "src/terrain/Surface.cpp",
+        "tests/terrain/surface/TerrainSurfaceTests.cpp"
+      ],
+      "Status": "Historical",
+      "StatusLabel": "Historical evidence requiring preservation",
+      "ProposedAction": "Preserve decision/evidence, source identity and original outcome; follow current guide for behavior",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "devdocs/Validation/TerrainWireParity.md",
+      "Purpose": "Cross-platform native terrain wire qualification",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "tests/terrain/codec/RunTerrainWireQualification.sh",
+        "tests/terrain/codec/TerrainWireParity.cpp"
       ],
       "Status": "Historical",
       "StatusLabel": "Historical evidence requiring preservation",
@@ -5077,6 +5890,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "docs/adr/D05-private-team-authoring.md",
+      "Purpose": "D05: Private Team Create authoring session",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Preserve accepted decision authority and explicit amendments; acceptance is not implementation proof",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "docs/adr/GAS-Protected-Exports.md",
       "Purpose": "Protected GAS exports",
       "LastMeaningfulUpdate": null,
@@ -5100,6 +5926,45 @@
       "LastPathCommit": null,
       "RelevantSourceSubsystem": [
         "src/content/docs/developing/render-extraction.mdx"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Preserve accepted decision authority and explicit amendments; acceptance is not implementation proof",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/adr/Runtime-Distribution-1.md",
+      "Purpose": "Runtime distribution foundation",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Preserve accepted decision authority and explicit amendments; acceptance is not implementation proof",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/adr/TerrainFoundation1.md",
+      "Purpose": "World-owned terrain and private chunk execution",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Preserve accepted decision authority and explicit amendments; acceptance is not implementation proof",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/adr/TerrainNetworkBootstrap.md",
+      "Purpose": "Multiplayer terrain delivery and collision admission",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
       ],
       "Status": "Current",
       "StatusLabel": "Current and authoritative",
@@ -5229,6 +6094,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "docs/protocols/Distributed-Player-Package-v3.md",
+      "Purpose": "Distributed Player package format 3",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "assets/catalog.json"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Inspect owning source before promoting to current authority",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "docs/protocols/GAS-Authoring-v1.md",
       "Purpose": "GAS authoring and package input",
       "LastMeaningfulUpdate": null,
@@ -5257,6 +6135,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "docs/protocols/Runtime-Distribution-Package-v4.md",
+      "Purpose": "Format 4 runtime distribution",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Unverified",
+      "StatusLabel": "Unverified",
+      "ProposedAction": "Inspect owning source before promoting to current authority",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "docs/protocols/gameplay-possession.md",
       "Purpose": "Gameplay possession wire formats",
       "LastMeaningfulUpdate": null,
@@ -5267,6 +6158,19 @@
       "Status": "Unverified",
       "StatusLabel": "Unverified",
       "ProposedAction": "Inspect owning source before promoting to current authority",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/src/content/docs/api/block-grid-and-spatial-domains.mdx",
+      "Purpose": "BlockGrid and spatial domains",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Maintain source-linked developer entry point and validate links/examples",
       "ObsoleteTermMentions": []
     },
     {
@@ -5372,6 +6276,19 @@
       "RelevantSourceSubsystem": [
         "src/classes/WorldRootQueries.cpp",
         "src/datatypes/RaycastParams.cpp"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Maintain source-linked developer entry point and validate links/examples",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/src/content/docs/developing/block-construction.mdx",
+      "Purpose": "Block construction and independent spaces",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
       ],
       "Status": "Current",
       "StatusLabel": "Current and authoritative",
@@ -5849,6 +6766,19 @@
       "ObsoleteTermMentions": []
     },
     {
+      "Path": "samples/ConstructionYard/README.md",
+      "Purpose": "Construction Yard",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Maintain setup, authority and sample-specific execution limits",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "samples/CreatorCharacter/README.md",
       "Purpose": "Clockwork Wisp creator fixture",
       "LastMeaningfulUpdate": null,
@@ -5915,6 +6845,32 @@
       "LastPathCommit": null,
       "RelevantSourceSubsystem": [
         "assets/NOTICE.md"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Maintain setup, authority and sample-specific execution limits",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "samples/TerrainFoundation1/README.md",
+      "Purpose": "Terrain Foundation 1 sample",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Maintain setup, authority and sample-specific execution limits",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "samples/TerrainQuarry/README.md",
+      "Purpose": "Terrain Quarry",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
       ],
       "Status": "Current",
       "StatusLabel": "Current and authoritative",

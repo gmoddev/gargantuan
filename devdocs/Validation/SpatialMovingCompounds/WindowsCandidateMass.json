@@ -1,0 +1,9 @@
+{
+  "Profile": "merged",
+  "EngineSHA256": "5166511adc618dda3c329cd18efb5a6355c556e10c2be6f1cd92dd6bc3103d60",
+  "Observations": {
+    "comparisons": 216.0,
+    "maxCenterError": 1.8e-07,
+    "maxInertiaError": 1.2e-07
+  }
+}

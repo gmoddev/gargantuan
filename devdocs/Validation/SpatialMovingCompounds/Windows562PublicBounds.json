@@ -1,0 +1,13 @@
+{
+  "Profile": "merged",
+  "EngineSHA256": "1378d39488e60a5c2120d94ab9e2b753889d5aba4b62f68f26763e7d34028adc",
+  "Observations": {
+    "axesAccepted": 6.0,
+    "liveExtentDenied": 6.0,
+    "staticExtentDenied": 6.0,
+    "chartA": 64.0,
+    "chartB": 1.0,
+    "worldExhausted": 1.0,
+    "freedReused": 1.0
+  }
+}
