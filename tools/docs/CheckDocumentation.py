@@ -256,6 +256,8 @@ def ExtractApi() -> dict:
                       "Description": Value(Definition.get("description", '""')),
                       "Extends": Value(Definition.get("extends", '"Instance"')) if Definition["name"] != '"Instance"' else None,
                       "Abstract": Value(Definition.get("abstract", "false")),
+                      "Since": Value(Definition.get("since", '""')),
+                      "DefaultOverrides": Value(Definition.get("defaultOverrides", "{}")),
                       "ServicePolicy": Value(Definition.get("servicePolicy", '"Default"')),
                       "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior"}
             for Section in ("properties", "methods", "signals"):

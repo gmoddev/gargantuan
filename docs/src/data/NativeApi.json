@@ -1,0 +1,1990 @@
+{
+  "SourceRevision": "830f5f26ea5642c9a6d7e281db8df0fb3982e5df",
+  "Status": "QualifiedDevelopmentCandidate",
+  "Types": [
+    {
+      "Name": "Axes",
+      "Kind": "NativeBinding",
+      "EntryPoint": "OpenLibAxes",
+      "Source": "src/scripting/LibAxes.cpp",
+      "BindingLabels": [
+        "Back",
+        "Bottom",
+        "Front",
+        "Left",
+        "Right",
+        "Top",
+        "X",
+        "Y",
+        "Z",
+        "new"
+      ],
+      "SignatureCoverage": "Signatures and overloads require behavioral audit; labels alone do not establish call semantics"
+    },
+    {
+      "Name": "CFrame",
+      "Kind": "NativeBinding",
+      "EntryPoint": "OpenLibCFrame",
+      "Source": "src/scripting/LibCFrame.cpp",
+      "BindingLabels": [
+        "AngleBetween",
+        "Angles",
+        "FuzzyEq",
+        "GetComponents",
+        "Inverse",
+        "Lerp",
+        "LookVector",
+        "Orthonormalize",
+        "PointToObjectSpace",
+        "PointToWorldSpace",
+        "Position",
+        "RightVector",
+        "Rotation",
+        "ToAxisAngle",
+        "ToEulerAngles",
+        "ToEulerAnglesXYZ",
+        "ToEulerAnglesYXZ",
+        "ToObjectSpace",
+        "ToOrientation",
+        "ToWorldSpace",
+        "UpVector",
+        "VectorToObjectSpace",
+        "VectorToWorldSpace",
+        "X",
+        "XVector",
+        "Y",
+        "YVector",
+        "Z",
+        "ZVector",
+        "__add",
+        "__mul",
+        "__sub",
+        "__tostring",
+        "new"
+      ],
+      "SignatureCoverage": "Signatures and overloads require behavioral audit; labels alone do not establish call semantics"
+    },
+    {
+      "Name": "Color3",
+      "Kind": "NativeBinding",
+      "EntryPoint": "OpenLibColor3",
+      "Source": "src/scripting/LibColor3.cpp",
+      "BindingLabels": [
+        "B",
+        "G",
+        "Lerp",
+        "R",
+        "fromHSV",
+        "fromRGB",
+        "new"
+      ],
+      "SignatureCoverage": "Signatures and overloads require behavioral audit; labels alone do not establish call semantics"
+    },
+    {
+      "Name": "Enum",
+      "Kind": "NativeBinding",
+      "EntryPoint": "OpenLibEnum",
+      "Source": "src/scripting/LibEnum.cpp",
+      "BindingLabels": [
+        "Enum",
+        "EnumType",
+        "Enums.__index",
+        "Enums.__namecall",
+        "Enums.__tostring",
+        "FromName",
+        "FromValue",
+        "GetEnumItems",
+        "Name",
+        "Value",
+        "__eq",
+        "__index",
+        "__tostring"
+      ],
+      "SignatureCoverage": "Signatures and overloads require behavioral audit; labels alone do not establish call semantics"
+    },
+    {
+      "Name": "Instance",
+      "Kind": "NativeBinding",
+      "EntryPoint": "OpenLibInstance",
+      "Source": "src/scripting/LibInstance.cpp",
+      "BindingLabels": [
+        "new"
+      ],
+      "SignatureCoverage": "Signatures and overloads require behavioral audit; labels alone do not establish call semantics"
+    },
+    {
+      "Name": "Random",
+      "Kind": "NativeBinding",
+      "EntryPoint": "OpenLibRandom",
+      "Source": "src/scripting/LibRandom.cpp",
+      "BindingLabels": [
+        "Clone",
+        "NextInteger",
+        "NextNumber",
+        "NextUnitVector",
+        "Shuffle",
+        "new"
+      ],
+      "SignatureCoverage": "Signatures and overloads require behavioral audit; labels alone do not establish call semantics"
+    },
+    {
+      "Name": "RaycastParams",
+      "Kind": "NativeBinding",
+      "EntryPoint": "OpenLibRaycastParams",
+      "Source": "src/scripting/LibRaycastParams.cpp",
+      "BindingLabels": [
+        "CollisionGroup",
+        "CollisionMask",
+        "FilterDescendantsInstances",
+        "FilterType",
+        "IncludeBlockGrids",
+        "IncludeTerrain",
+        "new"
+      ],
+      "SignatureCoverage": "Signatures and overloads require behavioral audit; labels alone do not establish call semantics"
+    },
+    {
+      "Name": "UDim",
+      "Kind": "NativeBinding",
+      "EntryPoint": "OpenLibUDim",
+      "Source": "src/scripting/LibUDim.cpp",
+      "BindingLabels": [
+        "Lerp",
+        "Offset",
+        "Scale",
+        "__add",
+        "__eq",
+        "__sub",
+        "__tostring",
+        "__unm",
+        "fromOffset",
+        "fromScale",
+        "new"
+      ],
+      "SignatureCoverage": "Signatures and overloads require behavioral audit; labels alone do not establish call semantics"
+    },
+    {
+      "Name": "UDim2",
+      "Kind": "NativeBinding",
+      "EntryPoint": "OpenLibUDim2",
+      "Source": "src/scripting/LibUDim2.cpp",
+      "BindingLabels": [
+        "Height",
+        "Width",
+        "X",
+        "Y",
+        "fromOffset",
+        "fromScale",
+        "new"
+      ],
+      "SignatureCoverage": "Signatures and overloads require behavioral audit; labels alone do not establish call semantics"
+    },
+    {
+      "Name": "Signal",
+      "Kind": "NativeBinding",
+      "EntryPoint": "OpenLibSignal",
+      "Source": "src/scripting/LibSignal.cpp",
+      "BindingLabels": [
+        "Connect",
+        "Connected",
+        "Disconnect",
+        "Fire",
+        "Once",
+        "Type",
+        "Wait",
+        "__gc",
+        "new"
+      ],
+      "SignatureCoverage": "Signatures and overloads require behavioral audit; labels alone do not establish call semantics"
+    },
+    {
+      "Name": "TweenInfo",
+      "Kind": "NativeBinding",
+      "EntryPoint": "OpenLibTweenInfo",
+      "Source": "src/scripting/LibTweenInfo.cpp",
+      "BindingLabels": [
+        "DelayTime",
+        "EasingDirection",
+        "EasingStyle",
+        "RepeatCount",
+        "Reverses",
+        "Time",
+        "TweenInfo",
+        "new"
+      ],
+      "SignatureCoverage": "Signatures and overloads require behavioral audit; labels alone do not establish call semantics"
+    },
+    {
+      "Name": "Vector2",
+      "Kind": "NativeBinding",
+      "EntryPoint": "OpenLibVector2",
+      "Source": "src/scripting/LibVector2.cpp",
+      "BindingLabels": [
+        "Abs",
+        "Angle",
+        "Ceil",
+        "Cross",
+        "Dot",
+        "Floor",
+        "FuzzyEq",
+        "Lerp",
+        "Magnitude",
+        "Max",
+        "Min",
+        "Sign",
+        "Unit",
+        "X",
+        "Y",
+        "__add",
+        "__div",
+        "__eq",
+        "__mul",
+        "__sub",
+        "__tostring",
+        "__unm",
+        "new"
+      ],
+      "SignatureCoverage": "Signatures and overloads require behavioral audit; labels alone do not establish call semantics"
+    },
+    {
+      "Name": "Vector3",
+      "Kind": "NativeBinding",
+      "EntryPoint": "OpenLibVector3",
+      "Source": "src/scripting/LibVector3.cpp",
+      "BindingLabels": [
+        "Abs",
+        "Angle",
+        "Ceil",
+        "Cross",
+        "Dot",
+        "Floor",
+        "FuzzyEq",
+        "Lerp",
+        "Max",
+        "Min",
+        "Sign",
+        "Vector3",
+        "Vector3.__index",
+        "Vector3.new",
+        "__namecall"
+      ],
+      "SignatureCoverage": "Signatures and overloads require behavioral audit; labels alone do not establish call semantics"
+    },
+    {
+      "Name": "Base",
+      "Kind": "Globals",
+      "EntryPoint": "OpenLibBase",
+      "Source": "src/scripting/LibBase.cpp",
+      "BindingLabels": [
+        "_RUNTIME",
+        "game",
+        "print",
+        "warn",
+        "workspace"
+      ],
+      "SignatureCoverage": "Signatures and overloads require behavioral audit; labels alone do not establish call semantics"
+    },
+    {
+      "Name": "Require",
+      "Kind": "Globals",
+      "EntryPoint": "OpenLibRequire",
+      "Source": "src/scripting/LibRequire.cpp",
+      "BindingLabels": [],
+      "SignatureCoverage": "Signatures and overloads require behavioral audit; labels alone do not establish call semantics"
+    },
+    {
+      "Name": "Task",
+      "Kind": "Globals",
+      "EntryPoint": "OpenLibTask",
+      "Source": "src/scripting/LibTask.cpp",
+      "BindingLabels": [
+        "cancel",
+        "defer",
+        "delay",
+        "desynchronize",
+        "spawn",
+        "synchronize",
+        "wait"
+      ],
+      "SignatureCoverage": "Signatures and overloads require behavioral audit; labels alone do not establish call semantics"
+    },
+    {
+      "Name": "EnumItem",
+      "Source": "src/datatypes/Enum.cpp",
+      "BindingLabels": [
+        "EnumType",
+        "FromName",
+        "FromValue",
+        "GetEnumItems",
+        "Name",
+        "Value",
+        "__eq",
+        "__index",
+        "__tostring"
+      ],
+      "Construction": "Returned native object; no standalone constructor established"
+    },
+    {
+      "Name": "SignalConnection",
+      "Source": "src/datatypes/Signal.cpp",
+      "BindingLabels": [
+        "Connect",
+        "Connected",
+        "Disconnect",
+        "Fire",
+        "Once",
+        "Type",
+        "Wait",
+        "__gc"
+      ],
+      "Construction": "Returned native object; no standalone constructor established"
+    },
+    {
+      "Name": "AnimationTrack",
+      "Source": "src/animation/AnimationTrack.cpp",
+      "BindingLabels": [
+        "AdjustSpeed",
+        "AdjustWeight",
+        "Duration",
+        "Ended",
+        "Looped",
+        "Pause",
+        "Play",
+        "PlaybackState",
+        "Resume",
+        "RootMotionEnabled",
+        "Speed",
+        "Stop",
+        "TimePosition",
+        "Weight"
+      ],
+      "Construction": "Returned native object; no standalone constructor established"
+    },
+    {
+      "Name": "Rect",
+      "Source": "src/datatypes/Rect.cpp",
+      "BindingLabels": [
+        "Height",
+        "Max",
+        "Min",
+        "Size",
+        "Width"
+      ],
+      "Construction": "Returned native object; no standalone constructor established"
+    }
+  ],
+  "Enums": [
+    {
+      "Name": "AccessibilityRole",
+      "Items": [
+        {
+          "Name": "Automatic",
+          "Value": 0
+        },
+        {
+          "Name": "None",
+          "Value": 1
+        },
+        {
+          "Name": "Group",
+          "Value": 2
+        },
+        {
+          "Name": "Text",
+          "Value": 3
+        },
+        {
+          "Name": "Image",
+          "Value": 4
+        },
+        {
+          "Name": "Button",
+          "Value": 5
+        },
+        {
+          "Name": "TextBox",
+          "Value": 6
+        },
+        {
+          "Name": "ScrollView",
+          "Value": 7
+        }
+      ],
+      "Source": "include/gargantuan/classes/GuiBase2d.hpp"
+    },
+    {
+      "Name": "AnimationPlaybackState",
+      "Items": [
+        {
+          "Name": "Stopped",
+          "Value": 0
+        },
+        {
+          "Name": "Playing",
+          "Value": 1
+        },
+        {
+          "Name": "Paused",
+          "Value": 2
+        }
+      ],
+      "Source": "include/gargantuan/animation/AnimationTrack.hpp"
+    },
+    {
+      "Name": "AutomaticSize",
+      "Items": [
+        {
+          "Name": "None",
+          "Value": 0
+        },
+        {
+          "Name": "X",
+          "Value": 1
+        },
+        {
+          "Name": "Y",
+          "Value": 2
+        },
+        {
+          "Name": "XY",
+          "Value": 3
+        }
+      ],
+      "Source": "include/gargantuan/classes/GuiObject.hpp"
+    },
+    {
+      "Name": "CameraType",
+      "Items": [
+        {
+          "Name": "/// Camera is stationary.\n\t\tFixed",
+          "Value": 0
+        },
+        {
+          "Name": "/// Camera moves with the subject at a fixed offset and will rotate as the subject rotates.\n\t\tAttach",
+          "Value": 1
+        },
+        {
+          "Name": "/// Camera is stationary but will rotate to keep the subject in the center of the screen.\n\t\tWatch",
+          "Value": 2
+        },
+        {
+          "Name": "/// Camera moves with the subject but does not rotate automatically.\n\t\tTrack",
+          "Value": 3
+        },
+        {
+          "Name": "/// Camera moves with the subject and rotates to keep the subject in the center.\n\t\tFollow",
+          "Value": 4
+        },
+        {
+          "Name": "/// Default mode used by Gargantuan.\n\t\tCustom",
+          "Value": 5
+        },
+        {
+          "Name": "/// No default behavior. Used when developers need to script custom behavior.\n\t\tScriptable",
+          "Value": 6
+        },
+        {
+          "Name": "/// The camera has a fixed Y position",
+          "Value": 7
+        },
+        {
+          "Name": "but can be rotated around the player.\n\t\tOrbital",
+          "Value": 8
+        },
+        {
+          "Name": "/// Camera has omnidirectional movement.\n\t\tFreecam",
+          "Value": 9
+        },
+        {
+          "Name": "",
+          "Value": 10
+        }
+      ],
+      "Source": "include/gargantuan/classes/Camera.hpp"
+    },
+    {
+      "Name": "EasingDirection",
+      "Items": [
+        {
+          "Name": "In",
+          "Value": 0
+        },
+        {
+          "Name": "Out",
+          "Value": 1
+        },
+        {
+          "Name": "InOut",
+          "Value": 2
+        }
+      ],
+      "Source": "include/gargantuan/math/EasingCurves.hpp"
+    },
+    {
+      "Name": "EasingStyle",
+      "Items": [
+        {
+          "Name": "Linear",
+          "Value": 0
+        },
+        {
+          "Name": "Sine",
+          "Value": 1
+        },
+        {
+          "Name": "Back",
+          "Value": 2
+        },
+        {
+          "Name": "Quad",
+          "Value": 3
+        },
+        {
+          "Name": "Quart",
+          "Value": 4
+        },
+        {
+          "Name": "Quint",
+          "Value": 5
+        },
+        {
+          "Name": "Bounce",
+          "Value": 6
+        },
+        {
+          "Name": "Elastic",
+          "Value": 7
+        },
+        {
+          "Name": "Exponential",
+          "Value": 8
+        },
+        {
+          "Name": "Circular",
+          "Value": 9
+        },
+        {
+          "Name": "Cubic",
+          "Value": 10
+        }
+      ],
+      "Source": "include/gargantuan/math/EasingCurves.hpp"
+    },
+    {
+      "Name": "FontStyle",
+      "Items": [
+        {
+          "Name": "Normal",
+          "Value": 0
+        },
+        {
+          "Name": "Italic",
+          "Value": 1
+        }
+      ],
+      "Source": "include/gargantuan/datatypes/Font.hpp"
+    },
+    {
+      "Name": "FontWeight",
+      "Items": [
+        {
+          "Name": "Thin",
+          "Value": 100
+        },
+        {
+          "Name": "ExtraLight",
+          "Value": 200
+        },
+        {
+          "Name": "Light",
+          "Value": 300
+        },
+        {
+          "Name": "Regular",
+          "Value": 400
+        },
+        {
+          "Name": "Medium",
+          "Value": 500
+        },
+        {
+          "Name": "SemiBold",
+          "Value": 600
+        },
+        {
+          "Name": "Bold",
+          "Value": 700
+        },
+        {
+          "Name": "ExtraBold",
+          "Value": 800
+        },
+        {
+          "Name": "Heavy",
+          "Value": 900
+        }
+      ],
+      "Source": "include/gargantuan/datatypes/Font.hpp"
+    },
+    {
+      "Name": "GuiEventPhase",
+      "Items": [
+        {
+          "Name": "Capture",
+          "Value": 0
+        },
+        {
+          "Name": "Target",
+          "Value": 1
+        },
+        {
+          "Name": "Bubble",
+          "Value": 2
+        }
+      ],
+      "Source": "include/gargantuan/classes/GuiInputEvent.hpp"
+    },
+    {
+      "Name": "GuiFillDirection",
+      "Items": [
+        {
+          "Name": "Horizontal",
+          "Value": 0
+        },
+        {
+          "Name": "Vertical",
+          "Value": 1
+        }
+      ],
+      "Source": "include/gargantuan/classes/UIListLayout.hpp"
+    },
+    {
+      "Name": "GuiImageScaleType",
+      "Items": [
+        {
+          "Name": "Stretch",
+          "Value": 0
+        },
+        {
+          "Name": "Fit",
+          "Value": 1
+        }
+      ],
+      "Source": "include/gargantuan/classes/ImageLabel.hpp"
+    },
+    {
+      "Name": "GuiPointerButton",
+      "Items": [
+        {
+          "Name": "Primary",
+          "Value": 0
+        },
+        {
+          "Name": "Secondary",
+          "Value": 1
+        },
+        {
+          "Name": "Middle",
+          "Value": 2
+        },
+        {
+          "Name": "None",
+          "Value": 3
+        }
+      ],
+      "Source": "include/gargantuan/classes/GuiInputEvent.hpp"
+    },
+    {
+      "Name": "GuiPointerType",
+      "Items": [
+        {
+          "Name": "Mouse",
+          "Value": 0
+        },
+        {
+          "Name": "Touch",
+          "Value": 1
+        },
+        {
+          "Name": "Pen",
+          "Value": 2
+        }
+      ],
+      "Source": "include/gargantuan/classes/GuiInputEvent.hpp"
+    },
+    {
+      "Name": "GuiState",
+      "Items": [
+        {
+          "Name": "Idle",
+          "Value": 0
+        },
+        {
+          "Name": "Hover",
+          "Value": 1
+        },
+        {
+          "Name": "Press",
+          "Value": 2
+        },
+        {
+          "Name": "NonInteractable",
+          "Value": 3
+        },
+        {
+          "Name": "Focus",
+          "Value": 4
+        },
+        {
+          "Name": "Disabled",
+          "Value": 5
+        },
+        {
+          "Name": "Selected",
+          "Value": 6
+        }
+      ],
+      "Source": "include/gargantuan/classes/GuiObject.hpp"
+    },
+    {
+      "Name": "InputActionType",
+      "Items": [
+        {
+          "Name": "Bool",
+          "Value": 0
+        },
+        {
+          "Name": "Scalar",
+          "Value": 1
+        },
+        {
+          "Name": "Vector2",
+          "Value": 2
+        }
+      ],
+      "Source": "include/gargantuan/input/InputDefinitions.hpp"
+    },
+    {
+      "Name": "InputBindingType",
+      "Items": [
+        {
+          "Name": "Key",
+          "Value": 0
+        },
+        {
+          "Name": "MouseButton",
+          "Value": 1
+        },
+        {
+          "Name": "PointerDelta",
+          "Value": 2
+        }
+      ],
+      "Source": "include/gargantuan/input/InputDefinitions.hpp"
+    },
+    {
+      "Name": "InputSink",
+      "Items": [
+        {
+          "Name": "None",
+          "Value": 0
+        },
+        {
+          "Name": "Activate",
+          "Value": 1
+        },
+        {
+          "Name": "All",
+          "Value": 100
+        }
+      ],
+      "Source": "include/gargantuan/classes/GuiObject.hpp"
+    },
+    {
+      "Name": "KeyCode",
+      "Items": [
+        {
+          "Name": "Backspace",
+          "Value": 8
+        },
+        {
+          "Name": "Tab",
+          "Value": 9
+        },
+        {
+          "Name": "Clear",
+          "Value": 12
+        },
+        {
+          "Name": "Return",
+          "Value": 13
+        },
+        {
+          "Name": "Pause",
+          "Value": 19
+        },
+        {
+          "Name": "Escape",
+          "Value": 27
+        },
+        {
+          "Name": "Space",
+          "Value": 32
+        },
+        {
+          "Name": "QuotedDouble",
+          "Value": 34
+        },
+        {
+          "Name": "Hash",
+          "Value": 35
+        },
+        {
+          "Name": "Dollar",
+          "Value": 36
+        },
+        {
+          "Name": "Percent",
+          "Value": 37
+        },
+        {
+          "Name": "Ampersand",
+          "Value": 38
+        },
+        {
+          "Name": "Quote",
+          "Value": 39
+        },
+        {
+          "Name": "LeftParenthesis",
+          "Value": 40
+        },
+        {
+          "Name": "RightParenthesis",
+          "Value": 41
+        },
+        {
+          "Name": "Asterisk",
+          "Value": 42
+        },
+        {
+          "Name": "Plus",
+          "Value": 43
+        },
+        {
+          "Name": "Comma",
+          "Value": 44
+        },
+        {
+          "Name": "Minus",
+          "Value": 45
+        },
+        {
+          "Name": "Period",
+          "Value": 46
+        },
+        {
+          "Name": "Slash",
+          "Value": 47
+        },
+        {
+          "Name": "Zero",
+          "Value": 48
+        },
+        {
+          "Name": "One",
+          "Value": 49
+        },
+        {
+          "Name": "Two",
+          "Value": 50
+        },
+        {
+          "Name": "Three",
+          "Value": 51
+        },
+        {
+          "Name": "Four",
+          "Value": 52
+        },
+        {
+          "Name": "Five",
+          "Value": 53
+        },
+        {
+          "Name": "Six",
+          "Value": 54
+        },
+        {
+          "Name": "Seven",
+          "Value": 55
+        },
+        {
+          "Name": "Eight",
+          "Value": 56
+        },
+        {
+          "Name": "Nine",
+          "Value": 57
+        },
+        {
+          "Name": "Colon",
+          "Value": 58
+        },
+        {
+          "Name": "Semicolon",
+          "Value": 59
+        },
+        {
+          "Name": "LessThan",
+          "Value": 60
+        },
+        {
+          "Name": "Equals",
+          "Value": 61
+        },
+        {
+          "Name": "GreaterThan",
+          "Value": 62
+        },
+        {
+          "Name": "Question",
+          "Value": 63
+        },
+        {
+          "Name": "At",
+          "Value": 64
+        },
+        {
+          "Name": "LeftBracket",
+          "Value": 91
+        },
+        {
+          "Name": "BackSlash",
+          "Value": 92
+        },
+        {
+          "Name": "RightBracket",
+          "Value": 93
+        },
+        {
+          "Name": "Caret",
+          "Value": 94
+        },
+        {
+          "Name": "Underscore",
+          "Value": 95
+        },
+        {
+          "Name": "Backquote",
+          "Value": 96
+        },
+        {
+          "Name": "A",
+          "Value": 97
+        },
+        {
+          "Name": "B",
+          "Value": 98
+        },
+        {
+          "Name": "C",
+          "Value": 99
+        },
+        {
+          "Name": "D",
+          "Value": 100
+        },
+        {
+          "Name": "E",
+          "Value": 101
+        },
+        {
+          "Name": "F",
+          "Value": 102
+        },
+        {
+          "Name": "G",
+          "Value": 103
+        },
+        {
+          "Name": "H",
+          "Value": 104
+        },
+        {
+          "Name": "I",
+          "Value": 105
+        },
+        {
+          "Name": "J",
+          "Value": 106
+        },
+        {
+          "Name": "K",
+          "Value": 107
+        },
+        {
+          "Name": "L",
+          "Value": 108
+        },
+        {
+          "Name": "M",
+          "Value": 109
+        },
+        {
+          "Name": "N",
+          "Value": 110
+        },
+        {
+          "Name": "O",
+          "Value": 111
+        },
+        {
+          "Name": "P",
+          "Value": 112
+        },
+        {
+          "Name": "Q",
+          "Value": 113
+        },
+        {
+          "Name": "R",
+          "Value": 114
+        },
+        {
+          "Name": "S",
+          "Value": 115
+        },
+        {
+          "Name": "T",
+          "Value": 116
+        },
+        {
+          "Name": "U",
+          "Value": 117
+        },
+        {
+          "Name": "V",
+          "Value": 118
+        },
+        {
+          "Name": "W",
+          "Value": 119
+        },
+        {
+          "Name": "X",
+          "Value": 120
+        },
+        {
+          "Name": "Y",
+          "Value": 121
+        },
+        {
+          "Name": "Z",
+          "Value": 122
+        },
+        {
+          "Name": "LeftCurly",
+          "Value": 123
+        },
+        {
+          "Name": "Pipe",
+          "Value": 124
+        },
+        {
+          "Name": "RightCurly",
+          "Value": 125
+        },
+        {
+          "Name": "Tilde",
+          "Value": 126
+        },
+        {
+          "Name": "Delete",
+          "Value": 127
+        },
+        {
+          "Name": "KeypadZero",
+          "Value": 256
+        },
+        {
+          "Name": "KeypadOne",
+          "Value": 257
+        },
+        {
+          "Name": "KeypadTwo",
+          "Value": 258
+        },
+        {
+          "Name": "KeypadThree",
+          "Value": 259
+        },
+        {
+          "Name": "KeypadFour",
+          "Value": 260
+        },
+        {
+          "Name": "KeypadFive",
+          "Value": 261
+        },
+        {
+          "Name": "KeypadSix",
+          "Value": 262
+        },
+        {
+          "Name": "KeypadSeven",
+          "Value": 263
+        },
+        {
+          "Name": "KeypadEight",
+          "Value": 264
+        },
+        {
+          "Name": "KeypadNine",
+          "Value": 265
+        },
+        {
+          "Name": "KeypadPeriod",
+          "Value": 266
+        },
+        {
+          "Name": "KeypadDivide",
+          "Value": 267
+        },
+        {
+          "Name": "KeypadMultiply",
+          "Value": 268
+        },
+        {
+          "Name": "KeypadMinus",
+          "Value": 269
+        },
+        {
+          "Name": "KeypadPlus",
+          "Value": 270
+        },
+        {
+          "Name": "KeypadEnter",
+          "Value": 271
+        },
+        {
+          "Name": "KeypadEquals",
+          "Value": 272
+        },
+        {
+          "Name": "Up",
+          "Value": 273
+        },
+        {
+          "Name": "Down",
+          "Value": 274
+        },
+        {
+          "Name": "Right",
+          "Value": 275
+        },
+        {
+          "Name": "Left",
+          "Value": 276
+        },
+        {
+          "Name": "Insert",
+          "Value": 277
+        },
+        {
+          "Name": "Home",
+          "Value": 278
+        },
+        {
+          "Name": "End",
+          "Value": 279
+        },
+        {
+          "Name": "PageUp",
+          "Value": 280
+        },
+        {
+          "Name": "PageDown",
+          "Value": 281
+        },
+        {
+          "Name": "F1",
+          "Value": 282
+        },
+        {
+          "Name": "F2",
+          "Value": 283
+        },
+        {
+          "Name": "F3",
+          "Value": 284
+        },
+        {
+          "Name": "F4",
+          "Value": 285
+        },
+        {
+          "Name": "F5",
+          "Value": 286
+        },
+        {
+          "Name": "F6",
+          "Value": 287
+        },
+        {
+          "Name": "F7",
+          "Value": 288
+        },
+        {
+          "Name": "F8",
+          "Value": 289
+        },
+        {
+          "Name": "F9",
+          "Value": 290
+        },
+        {
+          "Name": "F10",
+          "Value": 291
+        },
+        {
+          "Name": "F11",
+          "Value": 292
+        },
+        {
+          "Name": "F12",
+          "Value": 293
+        },
+        {
+          "Name": "F13",
+          "Value": 294
+        },
+        {
+          "Name": "F14",
+          "Value": 295
+        },
+        {
+          "Name": "F15",
+          "Value": 296
+        },
+        {
+          "Name": "NumLock",
+          "Value": 300
+        },
+        {
+          "Name": "CapsLock",
+          "Value": 301
+        },
+        {
+          "Name": "ScrollLock",
+          "Value": 302
+        },
+        {
+          "Name": "RightShift",
+          "Value": 303
+        },
+        {
+          "Name": "LeftShift",
+          "Value": 304
+        },
+        {
+          "Name": "RightControl",
+          "Value": 305
+        },
+        {
+          "Name": "LeftControl",
+          "Value": 306
+        },
+        {
+          "Name": "RightAlt",
+          "Value": 307
+        },
+        {
+          "Name": "LeftAlt",
+          "Value": 308
+        },
+        {
+          "Name": "RightMeta",
+          "Value": 309
+        },
+        {
+          "Name": "LeftMeta",
+          "Value": 310
+        },
+        {
+          "Name": "LeftSuper",
+          "Value": 311
+        },
+        {
+          "Name": "RightSuper",
+          "Value": 312
+        },
+        {
+          "Name": "Mode",
+          "Value": 313
+        },
+        {
+          "Name": "Compose",
+          "Value": 314
+        },
+        {
+          "Name": "Help",
+          "Value": 315
+        },
+        {
+          "Name": "Print",
+          "Value": 316
+        },
+        {
+          "Name": "SysReq",
+          "Value": 317
+        },
+        {
+          "Name": "Break",
+          "Value": 318
+        },
+        {
+          "Name": "Menu",
+          "Value": 319
+        },
+        {
+          "Name": "Power",
+          "Value": 320
+        },
+        {
+          "Name": "Euro",
+          "Value": 321
+        },
+        {
+          "Name": "Undo",
+          "Value": 322
+        },
+        {
+          "Name": "ButtonX",
+          "Value": 1000
+        },
+        {
+          "Name": "ButtonY",
+          "Value": 1001
+        },
+        {
+          "Name": "ButtonA",
+          "Value": 1002
+        },
+        {
+          "Name": "ButtonB",
+          "Value": 1003
+        },
+        {
+          "Name": "ButtonR1",
+          "Value": 1004
+        },
+        {
+          "Name": "ButtonL1",
+          "Value": 1005
+        },
+        {
+          "Name": "ButtonR2",
+          "Value": 1006
+        },
+        {
+          "Name": "ButtonR3",
+          "Value": 1007
+        },
+        {
+          "Name": "ButtonL3",
+          "Value": 1009
+        },
+        {
+          "Name": "ButtonStart",
+          "Value": 1010
+        },
+        {
+          "Name": "ButtonSelect",
+          "Value": 1011
+        },
+        {
+          "Name": "DPadLeft",
+          "Value": 1012
+        },
+        {
+          "Name": "DPadRight",
+          "Value": 1013
+        },
+        {
+          "Name": "DPadUp",
+          "Value": 1014
+        },
+        {
+          "Name": "DPadDown",
+          "Value": 1015
+        },
+        {
+          "Name": "Thumbstick1",
+          "Value": 1016
+        },
+        {
+          "Name": "Thumbstick2",
+          "Value": 1017
+        },
+        {
+          "Name": "Thumbstick1Up",
+          "Value": 1018
+        },
+        {
+          "Name": "Thumbstick1Down",
+          "Value": 1019
+        },
+        {
+          "Name": "Thumbstick1Left",
+          "Value": 1020
+        },
+        {
+          "Name": "Thumbstick1Right",
+          "Value": 1021
+        },
+        {
+          "Name": "THumbstick2Up",
+          "Value": 1022
+        },
+        {
+          "Name": "Thumbstick2Down",
+          "Value": 1023
+        },
+        {
+          "Name": "Thumbstick2Left",
+          "Value": 1024
+        },
+        {
+          "Name": "Thumbstick2Right",
+          "Value": 1025
+        },
+        {
+          "Name": "MouseLeftButton",
+          "Value": 1026
+        },
+        {
+          "Name": "MouseRightButton",
+          "Value": 1027
+        },
+        {
+          "Name": "MouseMiddleButton",
+          "Value": 1028
+        },
+        {
+          "Name": "MousePosition",
+          "Value": 1033
+        },
+        {
+          "Name": "TouchPosition",
+          "Value": 1034
+        },
+        {
+          "Name": "MouseWheel",
+          "Value": 1035
+        },
+        {
+          "Name": "TrackpadPan",
+          "Value": 1040
+        },
+        {
+          "Name": "TrackpadPinch",
+          "Value": 1045
+        },
+        {
+          "Name": "MouseDelta",
+          "Value": 1048
+        },
+        {
+          "Name": "TouchDelta",
+          "Value": 1049
+        },
+        {
+          "Name": "TouchPinch",
+          "Value": 1050
+        },
+        {
+          "Name": "None",
+          "Value": 2048
+        }
+      ],
+      "Source": "include/gargantuan/classes/InputObject.hpp"
+    },
+    {
+      "Name": "KeyCodeStringFormat",
+      "Items": [
+        {
+          "Name": "Default",
+          "Value": 0
+        },
+        {
+          "Name": "Abbreviated",
+          "Value": 1
+        }
+      ],
+      "Source": "include/gargantuan/services/UserInputService.hpp"
+    },
+    {
+      "Name": "ModifierKey",
+      "Items": [
+        {
+          "Name": "Shift",
+          "Value": 0
+        },
+        {
+          "Name": "Ctrl",
+          "Value": 1
+        },
+        {
+          "Name": "Alt",
+          "Value": 2
+        },
+        {
+          "Name": "Meta",
+          "Value": 3
+        }
+      ],
+      "Source": "include/gargantuan/classes/InputObject.hpp"
+    },
+    {
+      "Name": "MouseBehavior",
+      "Items": [
+        {
+          "Name": "Default",
+          "Value": 0
+        },
+        {
+          "Name": "LockCenter",
+          "Value": 1
+        },
+        {
+          "Name": "LockCurrentPosition",
+          "Value": 2
+        }
+      ],
+      "Source": "include/gargantuan/services/UserInputService.hpp"
+    },
+    {
+      "Name": "NormalId",
+      "Items": [
+        {
+          "Name": "Right",
+          "Value": 0
+        },
+        {
+          "Name": "Top",
+          "Value": 1
+        },
+        {
+          "Name": "Back",
+          "Value": 2
+        },
+        {
+          "Name": "Left",
+          "Value": 3
+        },
+        {
+          "Name": "Bottom",
+          "Value": 4
+        },
+        {
+          "Name": "Front",
+          "Value": 5
+        }
+      ],
+      "Source": "include/gargantuan/datatypes/Axes.hpp"
+    },
+    {
+      "Name": "PlaybackState",
+      "Items": [
+        {
+          "Name": "Begin",
+          "Value": 0
+        },
+        {
+          "Name": "Delayed",
+          "Value": 1
+        },
+        {
+          "Name": "Playing",
+          "Value": 2
+        },
+        {
+          "Name": "Paused",
+          "Value": 3
+        },
+        {
+          "Name": "Completed",
+          "Value": 4
+        },
+        {
+          "Name": "Cancelled",
+          "Value": 5
+        }
+      ],
+      "Source": "include/gargantuan/classes/Tween.hpp"
+    },
+    {
+      "Name": "PreferredInput",
+      "Items": [
+        {
+          "Name": "KeyboardAndMouse",
+          "Value": 0
+        },
+        {
+          "Name": "Gamepad",
+          "Value": 1
+        },
+        {
+          "Name": "Touch",
+          "Value": 2
+        }
+      ],
+      "Source": "include/gargantuan/services/UserInputService.hpp"
+    },
+    {
+      "Name": "RaycastFilterType",
+      "Items": [
+        {
+          "Name": "Exclude",
+          "Value": 0
+        },
+        {
+          "Name": "Include",
+          "Value": 1
+        }
+      ],
+      "Source": "include/gargantuan/datatypes/RaycastParams.hpp"
+    },
+    {
+      "Name": "RotationOrder",
+      "Items": [
+        {
+          "Name": "XYZ",
+          "Value": 0
+        },
+        {
+          "Name": "XZY",
+          "Value": 1
+        },
+        {
+          "Name": "YZX",
+          "Value": 2
+        },
+        {
+          "Name": "YXZ",
+          "Value": 3
+        },
+        {
+          "Name": "ZXY",
+          "Value": 4
+        },
+        {
+          "Name": "ZYX",
+          "Value": 5
+        }
+      ],
+      "Source": "include/gargantuan/datatypes/CFrame.hpp"
+    },
+    {
+      "Name": "RunContext",
+      "Items": [
+        {
+          "Name": "Client",
+          "Value": 0
+        },
+        {
+          "Name": "Server",
+          "Value": 1
+        },
+        {
+          "Name": "None",
+          "Value": 2
+        }
+      ],
+      "Source": "include/gargantuan/classes/Script.hpp"
+    },
+    {
+      "Name": "ScrollingDirection",
+      "Items": [
+        {
+          "Name": "X",
+          "Value": 0
+        },
+        {
+          "Name": "Y",
+          "Value": 1
+        },
+        {
+          "Name": "XY",
+          "Value": 2
+        }
+      ],
+      "Source": "include/gargantuan/classes/ScrollingFrame.hpp"
+    },
+    {
+      "Name": "SignalType",
+      "Items": [
+        {
+          "Name": "Engine",
+          "Value": 0
+        },
+        {
+          "Name": "User",
+          "Value": 1
+        }
+      ],
+      "Source": "include/gargantuan/datatypes/Signal.hpp"
+    },
+    {
+      "Name": "SoundMixCategory",
+      "Items": [
+        {
+          "Name": "Effects",
+          "Value": 0
+        },
+        {
+          "Name": "UI",
+          "Value": 1
+        },
+        {
+          "Name": "Ambience",
+          "Value": 2
+        },
+        {
+          "Name": "Music",
+          "Value": 3
+        }
+      ],
+      "Source": "include/gargantuan/classes/Sound.hpp"
+    },
+    {
+      "Name": "SoundPlaybackState",
+      "Items": [
+        {
+          "Name": "Stopped",
+          "Value": 0
+        },
+        {
+          "Name": "Playing",
+          "Value": 1
+        },
+        {
+          "Name": "Paused",
+          "Value": 2
+        }
+      ],
+      "Source": "include/gargantuan/classes/Sound.hpp"
+    },
+    {
+      "Name": "SwipeDirection",
+      "Items": [
+        {
+          "Name": "Right",
+          "Value": 0
+        },
+        {
+          "Name": "Left",
+          "Value": 1
+        },
+        {
+          "Name": "Up",
+          "Value": 2
+        },
+        {
+          "Name": "Down",
+          "Value": 3
+        },
+        {
+          "Name": "None",
+          "Value": 4
+        }
+      ],
+      "Source": "include/gargantuan/services/UserInputService.hpp"
+    },
+    {
+      "Name": "TextXAlignment",
+      "Items": [
+        {
+          "Name": "Left",
+          "Value": 0
+        },
+        {
+          "Name": "Center",
+          "Value": 1
+        },
+        {
+          "Name": "Right",
+          "Value": 2
+        }
+      ],
+      "Source": "include/gargantuan/classes/TextLabel.hpp"
+    },
+    {
+      "Name": "TextYAlignment",
+      "Items": [
+        {
+          "Name": "Top",
+          "Value": 0
+        },
+        {
+          "Name": "Center",
+          "Value": 1
+        },
+        {
+          "Name": "Bottom",
+          "Value": 2
+        }
+      ],
+      "Source": "include/gargantuan/classes/TextLabel.hpp"
+    },
+    {
+      "Name": "UserInputState",
+      "Items": [
+        {
+          "Name": "Begin",
+          "Value": 0
+        },
+        {
+          "Name": "Change",
+          "Value": 1
+        },
+        {
+          "Name": "End",
+          "Value": 2
+        },
+        {
+          "Name": "Cancel",
+          "Value": 3
+        },
+        {
+          "Name": "None",
+          "Value": 4
+        }
+      ],
+      "Source": "include/gargantuan/classes/InputObject.hpp"
+    },
+    {
+      "Name": "UserInputType",
+      "Items": [
+        {
+          "Name": "// The left mouse button.\n\t\tMouseButton1",
+          "Value": 0
+        },
+        {
+          "Name": "// The right mouse button.\n\t\tMouseButton2",
+          "Value": 1
+        },
+        {
+          "Name": "// The middle mouse button.\n\t\tMouseButton3",
+          "Value": 2
+        },
+        {
+          "Name": "// The mouse wheel.\n\t\tMouseWheel",
+          "Value": 3
+        },
+        {
+          "Name": "// Fires changed events each time the player's cursor position changes\n\t\t// and when the mouse enters/leaves the game window.\n\t\tMouseMovement",
+          "Value": 4
+        },
+        {
+          "Name": "Touch",
+          "Value": 7
+        },
+        {
+          "Name": "Keyboard",
+          "Value": 8
+        },
+        {
+          "Name": "Focus",
+          "Value": 9
+        },
+        {
+          "Name": "Accelerometer",
+          "Value": 10
+        },
+        {
+          "Name": "Gyro",
+          "Value": 11
+        },
+        {
+          "Name": "Gamepad1",
+          "Value": 12
+        },
+        {
+          "Name": "Gamepad2",
+          "Value": 13
+        },
+        {
+          "Name": "Gamepad3",
+          "Value": 14
+        },
+        {
+          "Name": "Gamepad4",
+          "Value": 15
+        },
+        {
+          "Name": "Gamepad5",
+          "Value": 16
+        },
+        {
+          "Name": "Gamepad6",
+          "Value": 17
+        },
+        {
+          "Name": "Gamepad7",
+          "Value": 18
+        },
+        {
+          "Name": "Gamepad8",
+          "Value": 19
+        },
+        {
+          "Name": "TextInput",
+          "Value": 20
+        },
+        {
+          "Name": "InputMethod",
+          "Value": 20
+        },
+        {
+          "Name": "None",
+          "Value": 23
+        }
+      ],
+      "Source": "include/gargantuan/classes/InputObject.hpp"
+    },
+    {
+      "Name": "ZIndexBehavior",
+      "Items": [
+        {
+          "Name": "Sibling",
+          "Value": 0
+        },
+        {
+          "Name": "Global",
+          "Value": 1
+        }
+      ],
+      "Source": "include/gargantuan/classes/LayerCollector.hpp"
+    }
+  ],
+  "SourceHashes": {
+    "src/scripting/LibAxes.cpp": "9b7e8407525002b28e8319bfa3d39c1634d8b6b3d06173ccb902230502d44eb9",
+    "src/scripting/LibBase.cpp": "7088ad9f7742599c4b154de5254b3150d201420fdeb5a9dc3d268c25f97d59e3",
+    "src/scripting/LibCFrame.cpp": "60983819bcdf7cd453fbd426633eaf828dc6ef82ba9801984ed110cf3cc23291",
+    "src/scripting/LibColor3.cpp": "7ddb1e39f52adc3bcec4a71b8c5e7d5facdbbd15a8d95ad6d7f86ab6c4ec47c7",
+    "src/scripting/LibEnum.cpp": "63037cf4ed1cd2ffc237d6dfa29941c5ac157441e0979def10dd007a80fe91a1",
+    "src/scripting/LibInstance.cpp": "a038029344f4ddd4ecc52a9db020172ec273fc7dbc374a4868a2c881f68c8564",
+    "src/scripting/LibRandom.cpp": "827c6f00490d40872dae96e2d33f38ea472119d2068677ee2d809f264d3cbf45",
+    "src/scripting/LibRaycastParams.cpp": "5d9e5c8a54933dda883e1339bbbb394542d40a3376ad1492bd5705f1a8021fa1",
+    "src/scripting/LibRequire.cpp": "ed6178c5b9985d4e56ef4f2b4b1d93b0d64ebf797fb398349e26ee70f33187e7",
+    "src/scripting/LibSignal.cpp": "4fdbba860e4fb0e8a28159357d9bce00eb21798a8df7eb7c583b0b4dadc90b2f",
+    "src/scripting/LibTask.cpp": "92a33143be591c4f086b1b619fd277058c32fb038ee02f2d997574fa4e73660b",
+    "src/scripting/LibTweenInfo.cpp": "a9ce08dc8a2130c9fd29b6efbcd372583a75a33c2bbccb683c1cdf5e020df3a0",
+    "src/scripting/LibUDim.cpp": "c1ab312c95a6ef370411fc9daf2abda2eb1ecd3c1237e665305ecb5c9fd60efc",
+    "src/scripting/LibUDim2.cpp": "068a334666f776fa234b9624a5693997805ff56b81cfa47d6694230cf5929cb2",
+    "src/scripting/LibVector2.cpp": "76e0d48389cf74a2cd6b76bae5110a1f77510bacd7846ed02bca60bbe85a9124",
+    "src/scripting/LibVector3.cpp": "7ca2955f4c65901c87e725475227a985cda37cbdbd959f2d7fcca2b6ce0ab00d"
+  }
+}
