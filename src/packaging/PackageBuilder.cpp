@@ -1829,9 +1829,6 @@ namespace gargantuan {
 			return Result;
 		}
 		if (Audience != PackageAudience::Trusted) throw std::invalid_argument("Unknown package audience");
-		auto Root = std::static_pointer_cast<Instance>(World);
-		blockgrid::SegmentCapture Grids;
-		Result.ProjectJson = InstanceSerialization::Serialize(ProjectValue.InstanceFileFormat,Root,TerrainManifest,DomainBindings,&Grids);
 		Result.GridSegments=std::move(Grids.Parts);
 		if (Result.ProjectJson.size() > MaximumProjectSnapshotBytes)
 			throw std::length_error("Project snapshot exceeds the package byte limit");
