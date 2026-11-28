@@ -1,0 +1,9 @@
+{
+  "Profile": "original",
+  "EngineSHA256": "a62153f7657927d20e9a9d8bd2ffc6c8b0b7575b4afd736dd6a38b0324e7afce",
+  "Observations": {
+    "comparisons": 216.0,
+    "maxCenterError": 1.8e-07,
+    "maxInertiaError": 1.2e-07
+  }
+}

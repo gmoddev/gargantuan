@@ -1,0 +1,54 @@
+{
+  "Desktop": "StudioStudy9f684df0a06843178bce23c1436954e8",
+  "Machine": "HOSTPC",
+  "DefaultSHA256": "5b95d3e7a15286a32c84e03248a9f4dd9e85633217373e23156008c68d16b3e6",
+  "Phases": [
+    {
+      "Desktop": "StudioStudy9f684df0a06843178bce23c1436954e8",
+      "Mode": "PreRunWrite",
+      "Sha256": {
+        "Host.exe": "2a617464ef0277953e1df295989b2edbb35eafac1591eeada9ffe856dcc6eddc",
+        "Host.dll": "517fee5770779dea8b1240bdca055d125db385e8db68792ecad8cddda7145c70",
+        "LuiRuntime.dll": "23a4c0fc708bf5b0b9b8a3f2c94fa2912fa29a9f9cdd0a4f9721e378e003d63e",
+        "gargantuan.exe": "798ae3281474f8599e5e710bfa25b5367ecc50db0daf8e0bc0b7e020a0ff106f",
+        "lui.json": "f249575d58563361145df86dbf5e68b145d6a5843d5a610eaae58c8f7d3087f9"
+      },
+      "ObserverExit": 0,
+      "HostExit": 0
+    },
+    {
+      "Desktop": "StudioStudy9f684df0a06843178bce23c1436954e8",
+      "Mode": "PreRunRead",
+      "Sha256": {
+        "Host.exe": "2a617464ef0277953e1df295989b2edbb35eafac1591eeada9ffe856dcc6eddc",
+        "Host.dll": "517fee5770779dea8b1240bdca055d125db385e8db68792ecad8cddda7145c70",
+        "LuiRuntime.dll": "23a4c0fc708bf5b0b9b8a3f2c94fa2912fa29a9f9cdd0a4f9721e378e003d63e",
+        "gargantuan.exe": "798ae3281474f8599e5e710bfa25b5367ecc50db0daf8e0bc0b7e020a0ff106f",
+        "lui.json": "f249575d58563361145df86dbf5e68b145d6a5843d5a610eaae58c8f7d3087f9"
+      },
+      "ObserverExit": 0,
+      "HostExit": 0
+    }
+  ],
+  "Scripts": [
+    {
+      "Id": "default",
+      "Name": "Default",
+      "SHA256": "5b95d3e7a15286a32c84e03248a9f4dd9e85633217373e23156008c68d16b3e6"
+    },
+    {
+      "Id": "s2",
+      "Name": "SecondCheck",
+      "SHA256": "cc530ccc144cb7d9baf7c714f1f1523d2620e1009326d038ceca94cdc29d406d"
+    },
+    {
+      "Id": "s1",
+      "Name": "FirstCheck",
+      "SHA256": "527ff23a9be35ec8fb58ae2cd713a54fd94a7cee2e0eeba3c342f64ca07889fd"
+    }
+  ],
+  "CollectionSHA256": "f9baad2a33e51a51f6449d79d044c86b48e2230c37c4ea36c16bf32d07373535",
+  "SaveAsExact": true,
+  "GasRoundTripExact": true
+}
+

@@ -1,0 +1,3 @@
+[Spatial:YardInput] Authored project.instance.json SHA256=7d79dbf72a6d23c2ba8f52b68149c59a7974c038f6c09c6fb8c3ef224b8de6a0
+[Spatial:YardInterlock] holders=3 maxConcurrent=2 cancel=1 deferred=1 expired=2 denied=1 resumed=true mass=64
+[Spatial:YardInterlock] holders=3 maxConcurrent=2 cancel=1 deferred=1 expired=2 denied=1 resumed=true mass=64

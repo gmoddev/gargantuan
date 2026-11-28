@@ -1,0 +1,20 @@
+{
+  "EditorHostSHA256": "ec39cd5036d6569985af9b07f5e8fb48dfc43bab051d8a513b787ec9b34d48b4",
+  "DefaultLocomotionSHA256": "3d7235e898fca2f32e94c34238216c3350c5d9765cc51b6260fb92bb549c9b3f",
+  "GroundedWindowTicks": 120,
+  "Key": "D",
+  "Workspace": {
+    "X": 218.525,
+    "Y": 1.995,
+    "Z": 100.0,
+    "MaximumY": 2.995,
+    "Climbed": true
+  },
+  "SpatialRegion": {
+    "X": 201.005,
+    "Y": 1.995,
+    "Z": 100.0,
+    "MaximumY": 1.995,
+    "Climbed": false
+  }
+}

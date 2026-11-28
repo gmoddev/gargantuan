@@ -11,7 +11,9 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
+#include "gargantuan/services/Players.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -41,13 +43,27 @@ namespace {
 		std::shared_ptr<BlockGrid> Grid;
 		std::shared_ptr<Part> Removable;
 		std::set<std::array<int, 3>> Cells;
+		blockgrid::Cell EditedCell=Removed;
 	};
 
-	Scene Author(const std::shared_ptr<Workspace> &Space, std::string_view Case) {
+	Scene Author(const std::shared_ptr<Workspace> &Space, std::string_view Case, unsigned MovingCells) {
 		Scene Value;
 		Value.Collection->SetName("BenchmarkConstruction");
 		Value.Collection->SetParent(Space);
 		if (Case == "Empty") return Value;
+		if (MovingCells) {
+			const int Height=std::max(1,int(MovingCells/256)), Depth=std::min(16,int(MovingCells/16));
+			Value.EditedCell={-8,Height-1,-Depth/2};
+			Value.Grid=std::make_shared<BlockGrid>();
+			Value.Grid->SetName("Construction");
+			Value.Grid->SetCellSize(.5f);
+			blockgrid::Field Field;
+			const std::array Fill{blockgrid::Write{{{-8,0,-Depth/2},{8,Height,Depth/2}},{blockgrid::Stone,0}}};
+			Require(Field.Apply(Fill) && Field.GetOccupiedCount()==MovingCells,"moving grid authoring failed");
+			Value.Grid->RestoreField(std::move(Field));
+			Value.Grid->SetParent(Value.Collection);
+			return Value;
+		}
 		std::vector<blockgrid::Write> Writes;
 		for (int Z = -4; Z < 4; ++Z)
 			for (int Y = 0; Y < 8; ++Y)
@@ -152,13 +168,46 @@ namespace {
 			);
 	}
 
-	void Run(std::string_view Case, std::uint16_t Port) {
+	void VerifyMoving(const std::shared_ptr<Workspace>& Space, const std::shared_ptr<BlockGrid>& Grid,
+		blockgrid::Cell Corner,unsigned Count,bool Edited) {
+		const auto State=Grid->GetAssemblyProjection();
+		Require(Grid->IsReplicaMaterialization() && State && State->Dynamic &&
+			std::abs(State->Mass-(Count-unsigned(Edited))*.125f)<.025f &&
+			glm::length(State->LinearVelocity)>.2f && glm::length(State->AngularVelocity)>.1f,
+			"replica moving state or mass differs from the authored body");
+		const auto Cell=blockgrid::Cell{Corner.X+1,Corner.Y,Corner.Z};
+		const auto Center=(glm::vec3(Cell.X,Cell.Y,Cell.Z)+.5f)*.5f;
+		RaycastParams Params; Params.IncludeBlockGrids=true;
+		Params.FilterType=Enums::RaycastFilterType::Include;
+		Params.FilterDescendantsInstances.Values={Grid};
+		const auto Hit=Space->ResolveRaycast(State->Pose.PointToWorldSpace(Center+glm::vec3(0,2,0)),
+			State->Pose.VectorToWorldSpace({0,-4,0}),Params);
+		Require(Hit.GridInstance==Grid && Hit.Cell==std::optional(glm::ivec3(Cell.X,Cell.Y,Cell.Z)),
+			"moving replica ray disagrees with the installed cell and pose");
+	}
+
+	void Run(std::string_view Case, std::uint16_t Port, unsigned MovingCells) {
 		auto World = std::make_shared<DataModel>();
 		auto Space = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
-		auto SceneValue = Author(Space, Case);
+		auto SceneValue = Author(Space, Case, MovingCells);
 		HeadlessRenderer ServerView({64, 64}), ClientView({64, 64});
 		Engine Runtime(World, &ServerView, nullptr, {.Mode = RuntimeMode::NetworkServer, .AdmitSpatialContent = true});
 		Runtime.ProcessService->Alive = true;
+		if (MovingCells) {
+			Space->SetGravity(0);
+			Runtime.Players->SetCharacterAutoLoads(false);
+			auto Motion=[&](std::optional<std::pair<blockgrid::Point,blockgrid::Point>> Velocities) {
+				auto Edit=std::make_shared<blockgrid::EditRequest>();
+				Edit->ExpectedRevision=SceneValue.Grid->GetBlockRevision();
+				Edit->Motion=blockgrid::MotionEdit{true,Velocities};
+				const auto Result=MutationGateway{}.Apply(
+					SubmitBlockGridEditCommand{SceneValue.Grid->GetObjectId(),World->GetObjectId(),Edit},
+					ScriptSecurityContext::CoreTrusted());
+				Require(Result.Succeeded(),Result.Message);
+			};
+			Motion({});
+			Motion(std::pair{blockgrid::Point{.65f,0,0},blockgrid::Point{0,.25f,0}});
+		}
 		auto Out = std::make_shared<GameNetworkingSocketsTransport>();
 		auto In = std::make_shared<GameNetworkingSocketsTransport>();
 		const auto Limits = GameSessionConfiguration::DefaultLimits();
@@ -174,10 +223,25 @@ namespace {
 		);
 		std::uint64_t Tick{}, StartTick{};
 		double ServerUs{}, ClientUs{};
+		std::optional<ConnectionId> SurveyPeer;
+		const auto SurveyLeaf=blockgrid::LeafOrigin(SceneValue.EditedCell);
+		const glm::vec3 SurveyLocal=(glm::vec3(SurveyLeaf.X,SurveyLeaf.Y,SurveyLeaf.Z)+
+			float(blockgrid::LeafSide)/2.f)*.5f;
+		const blockgrid::Region SurveyWindow{
+			{SurveyLeaf.X-8,SurveyLeaf.Y-8,SurveyLeaf.Z-8},{SurveyLeaf.X+16,SurveyLeaf.Y+16,SurveyLeaf.Z+16}};
 		auto Start = Clock::now();
 		Require(Server.Start().Succeeded() && Client.Start().Succeeded(), "unable to start private loopback trial");
 		auto Pump = [&] {
 			const auto T = ++Tick;
+			if (MovingCells) {
+				Space->StepPhysics(1./60,std::nullopt);
+				// Keep the surveyor on a single grid-local leaf while the real authoritative body
+				// translates and rotates. A fixed camera is a different regional streaming workload.
+				if (SurveyPeer) {
+					const std::array Focus{SceneValue.Grid->GetCFrame().PointToWorldSpace(SurveyLocal)};
+					Require(Server.SetTrustedReplicationFocus(*SurveyPeer,Focus),"moving survey focus failed");
+				}
+			}
 			auto Mark = Clock::now();
 			(void)Server.Poll();
 			Server.Step(T);
@@ -212,8 +276,11 @@ namespace {
 		const auto Accepted = Server.GetPeerIdentities();
 		const auto Connection = Client.GetPrimaryConnection();
 		Require(Accepted.size() == 1 && Connection, "missing single admitted peer");
-		const std::array Focus{glm::vec3(0, 4, 0)};
-		Require(Server.SetTrustedReplicationFocus(Accepted.front().Connection, Focus), "construction interest failed");
+		if (MovingCells) SurveyPeer=Accepted.front().Connection;
+		else {
+			const std::array Focus{glm::vec3(0,4,0)};
+			Require(Server.SetTrustedReplicationFocus(Accepted.front().Connection,Focus),"construction interest failed");
+		}
 		auto ReplicaSpace = std::dynamic_pointer_cast<Workspace>(RemoteRuntime->DataModel->GetService("Workspace"));
 		std::shared_ptr<Instance> Replica;
 		auto Ready = [&](bool Edited) {
@@ -223,13 +290,15 @@ namespace {
 				return Replica->GetChildren().size() ==
 					   SceneValue.Cells.size() - (Edited && SceneValue.Removable ? 1 : 0);
 			auto Grid = std::dynamic_pointer_cast<BlockGrid>(Replica->FindFirstChild("Construction", false));
-			return Grid && Grid->HasReplicaField() &&
-				   Grid->GetField().Get(Removed).Definition == (Edited ? blockgrid::Air : blockgrid::Stone);
+			if (!Grid || !Grid->HasReplicaField()) return false;
+			try { Grid->RequireReplicaCoverage(MovingCells?SurveyWindow:blockgrid::SingleCell(SceneValue.EditedCell)); }
+			catch (const std::runtime_error &) { return false; }
+			return Grid->GetField().Get(SceneValue.EditedCell).Definition == (Edited ? blockgrid::Air : blockgrid::Stone);
 		};
 		Wait([&] { return Ready(false); });
 		Stamp ServerStart, ClientStart;
 		ServerStart.HasPacketObservation = ClientStart.HasPacketObservation = true;
-		auto Finish = [&](std::string_view Phase) {
+		auto Finish = [&](std::string_view Phase,unsigned ObservedPoses=0) {
 			for (int I = 0; I < 8; ++I)
 				Pump();
 			const auto ServerNow = Capture(*Out, Accepted.front().Connection);
@@ -237,12 +306,13 @@ namespace {
 			Json Row{
 				{"Representation", Case},
 				{"Phase", Phase},
-				{"Occupied", SceneValue.Cells.size()},
+				{"Occupied", MovingCells?MovingCells:SceneValue.Cells.size()},
 				{"PumpCalls", Tick - StartTick},
 				{"ElapsedUs", Microseconds(Start)},
 				{"ServerPumpUs", ServerUs},
 				{"ClientPumpUs", ClientUs}
 			};
+			if (MovingCells) Row["DistinctPosesIn40Ticks"]=ObservedPoses;
 			WriteTransport(Row, "Server", ServerStart, ServerNow);
 			WriteTransport(Row, "Client", ClientStart, ClientNow);
 			std::cout << Row.dump() << '\n';
@@ -252,13 +322,42 @@ namespace {
 			ServerUs = ClientUs = 0;
 		};
 		Finish("Join");
-		Verify(SceneValue, ReplicaSpace, Replica, false);
-		Start = Clock::now();
-		Finish("Idle");
+		auto Installed=[&]{return std::dynamic_pointer_cast<BlockGrid>(Replica->FindFirstChild("Construction",false));};
+		if (MovingCells) {
+			VerifyMoving(ReplicaSpace,Installed(),SceneValue.EditedCell,MovingCells,false);
+			const auto Grid=Installed();
+			const auto Geometry=Grid->GetField().GetGeometryRevision();
+			const auto AuthoredGeometry=SceneValue.Grid->GetField().GetGeometryRevision();
+			const auto First=*Grid->GetAssemblyProjection();
+			std::set<std::uint64_t> Poses;
+			Start=Clock::now();
+			for (int I=0;I<40;++I) {
+				Pump();
+				if (Installed()!=Grid || !Grid->HasReplicaField() ||
+					Grid->GetField().GetGeometryRevision()!=Geometry ||
+					SceneValue.Grid->GetField().GetGeometryRevision()!=AuthoredGeometry)
+					throw std::runtime_error("pose-only survey changed topology: "+Json({
+						{"Tick",Tick},{"StableIdentity",Installed()==Grid},{"Available",Grid->HasReplicaField()},
+						{"ReplicaBefore",Geometry},{"ReplicaAfter",Grid->GetField().GetGeometryRevision()},
+						{"AuthoredBefore",AuthoredGeometry},{"AuthoredAfter",SceneValue.Grid->GetField().GetGeometryRevision()}}).dump());
+				Grid->RequireReplicaCoverage(SurveyWindow);
+				const auto State=Grid->GetAssemblyProjection();
+				Require(State && State->Revision>=First.Revision,"moving projection regressed");
+				Poses.insert(State->Revision);
+			}
+			const auto Latest=*Grid->GetAssemblyProjection();
+			Require(Poses.size()>=3 && Latest.Pose.Position.x>First.Pose.Position.x+.1f &&
+				Latest.Pose.Rotation!=First.Pose.Rotation,"moving GNS peer failed to progress");
+			Finish("Motion",static_cast<unsigned>(Poses.size()));
+		} else {
+			Verify(SceneValue, ReplicaSpace, Replica, false);
+			Start = Clock::now();
+			Finish("Idle");
+		}
 		Start = Clock::now();
 		if (SceneValue.Grid) {
 			auto Edit = std::make_shared<blockgrid::EditRequest>();
-			Edit->Writes.push_back({blockgrid::SingleCell(Removed), {}});
+			Edit->Writes.push_back({blockgrid::SingleCell(SceneValue.EditedCell), {}});
 			MutationGateway Gateway;
 			Require(
 				Gateway
@@ -273,7 +372,15 @@ namespace {
 			SceneValue.Removable->Destroy();
 		Wait([&] { return Ready(true); });
 		Finish("Delete");
-		Verify(SceneValue, ReplicaSpace, Replica, true);
+		if (MovingCells) {
+			const auto Grid=Installed();
+			VerifyMoving(ReplicaSpace,Grid,SceneValue.EditedCell,MovingCells,true);
+			Start=Clock::now();
+			SceneValue.Grid->Destroy();
+			Wait([&]{return !Installed();});
+			Require(Grid->GetDestroyed() || !Grid->HasReplicaField(),"retired moving shell retained geometry");
+			Finish("Retire");
+		} else Verify(SceneValue, ReplicaSpace, Replica, true);
 		Client.Stop();
 		Server.Stop();
 		RemoteRuntime->Destroy();
@@ -281,14 +388,16 @@ namespace {
 	}
 }
 int main(int Count, char **Args) try {
-	if (Count != 3) throw std::invalid_argument("expected Empty, BlockGrid or Parts and a private loopback port");
+	if (Count != 3 && Count != 4) throw std::invalid_argument("expected case, loopback port and optional moving cell count");
 	const std::string Case = Args[1];
 	const auto Port = std::stoul(Args[2]);
+	const auto Cells=Count==4?std::stoul(Args[3]):0ul;
+	const bool Moving=Case=="Moving" && (Cells==128 || Cells==256 || Cells==512 || Cells==1024 || Cells==2048 || Cells==4096);
 	Require(
-		(Case == "Empty" || Case == "BlockGrid" || Case == "Parts") && Port && Port < 65536, "invalid trial arguments"
+		(Moving || (!Cells && (Case == "Empty" || Case == "BlockGrid" || Case == "Parts"))) && Port && Port < 65536, "invalid trial arguments"
 	);
 	gargantuan::BootstrapNativeRuntimeSchema();
-	Run(Case, static_cast<std::uint16_t>(Port));
+	Run(Case, static_cast<std::uint16_t>(Port),static_cast<unsigned>(Cells));
 } catch (const std::exception &Error) {
 	std::cerr << "[Spatial:NetworkBenchmark] " << Error.what() << '\n';
 	return 1;

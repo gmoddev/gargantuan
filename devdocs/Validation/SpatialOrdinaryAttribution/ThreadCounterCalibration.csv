@@ -1,0 +1,9 @@
+Trial,Work,WallNs,ScheduledCycles,ContextSwitches,WaitReasonBitmap,MappedHardwareCounters,Hardware0,Hardware1,Hardware2,Hardware3,Hardware4,Hardware5,Hardware6,Hardware7,Hardware8,Hardware9,Hardware10,Hardware11,Hardware12,Hardware13,Hardware14,Hardware15
+1,Sleep5ms,5477800,211932,1,64,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+1,Busy1.5ms,1500100,6308484,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+2,Sleep5ms,5059800,167160,1,64,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+2,Busy1.5ms,1500100,6304494,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+3,Sleep5ms,5473600,184716,1,64,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+3,Busy1.5ms,1500100,6306006,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+4,Sleep5ms,5160100,228900,1,64,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+4,Busy1.5ms,1500100,6363840,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0

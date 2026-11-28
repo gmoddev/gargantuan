@@ -1,0 +1,405 @@
+{
+  "AASameSections": {
+    "Current": {
+      "Archive": "ec39cd5036d6569985af9b07f5e8fb48dfc43bab051d8a513b787ec9b34d48b4",
+      "Relink": "347b70cefb60601a48d7dbb71ce152b6738a53854534eddbbff6696efc8b0a39",
+      "Sections": {
+        ".data": {
+          "DifferentBytes": 0,
+          "Identical": true,
+          "RelinkSize": 1024512,
+          "Size": 1024512
+        },
+        ".pdata": {
+          "DifferentBytes": 0,
+          "Identical": true,
+          "RelinkSize": 420324,
+          "Size": 420324
+        },
+        ".rdata": {
+          "DifferentBytes": 2,
+          "Identical": false,
+          "RelinkSize": 2095026,
+          "Size": 2095026
+        },
+        ".reloc": {
+          "DifferentBytes": 0,
+          "Identical": true,
+          "RelinkSize": 62632,
+          "Size": 62632
+        },
+        ".rsrc": {
+          "DifferentBytes": 0,
+          "Identical": true,
+          "RelinkSize": 480,
+          "Size": 480
+        },
+        ".text": {
+          "DifferentBytes": 0,
+          "Identical": true,
+          "RelinkSize": 10499953,
+          "Size": 10499953
+        }
+      }
+    },
+    "Historical": {
+      "Archive": "0f43758828929e453d054689e81524a662e75c9e26d8ec4d4a4089396795d4aa",
+      "Relink": "0b5c0c436d527a5bbcd65b2a28be0b3c205c10f22882d0fdd8a2a056b58a8b65",
+      "Sections": {
+        ".data": {
+          "DifferentBytes": 0,
+          "Identical": true,
+          "RelinkSize": 962560,
+          "Size": 962560
+        },
+        ".pdata": {
+          "DifferentBytes": 0,
+          "Identical": true,
+          "RelinkSize": 392136,
+          "Size": 392136
+        },
+        ".rdata": {
+          "DifferentBytes": 3,
+          "Identical": false,
+          "RelinkSize": 1979106,
+          "Size": 1979106
+        },
+        ".reloc": {
+          "DifferentBytes": 0,
+          "Identical": true,
+          "RelinkSize": 59564,
+          "Size": 59564
+        },
+        ".rsrc": {
+          "DifferentBytes": 0,
+          "Identical": true,
+          "RelinkSize": 480,
+          "Size": 480
+        },
+        ".text": {
+          "DifferentBytes": 0,
+          "Identical": true,
+          "RelinkSize": 9742001,
+          "Size": 9742001
+        }
+      }
+    }
+  },
+  "CharacterNetworking": [
+    {
+      "ExeSha256": "1f803979b9e2ee79637670aa9b08ffb8703aa964edf04e05a2769c4fb78b52ea",
+      "Exit": 0,
+      "FailedChecks": 0,
+      "FirstLines": [
+        "Character networking tests passed"
+      ],
+      "Graph": "284443879fcecc66a0257006fcdf7d65566fef4d",
+      "LastLines": [
+        "Character networking tests passed"
+      ],
+      "Name": "Character-Historical",
+      "Seconds": 0.21439,
+      "Source": "284443879fcecc66a0257006fcdf7d65566fef4d"
+    },
+    {
+      "ExeSha256": "806bdf8b19df738f390fbd6a840e8ba42d55b866e04eb98abda25fb62de3064d",
+      "Exit": 1,
+      "FailedChecks": 88,
+      "FirstLines": [
+        "FAIL: prediction history admits each entry through its fixed ceiling",
+        "FAIL: prediction history admits each entry through its fixed ceiling",
+        "FAIL: prediction history admits each entry through its fixed ceiling"
+      ],
+      "Graph": "d28a2ad74f59dd65d80c66aed924cb2dd10ff476",
+      "LastLines": [
+        "FAIL: predicted action advances through each registered interval",
+        "FAIL: prediction uses the same complete interval convention with no post-completion root motion",
+        "88 Character networking checks failed"
+      ],
+      "Name": "Character-Stock",
+      "Seconds": 0.12959,
+      "Source": "5b6db615b7c503a612c1d41d6db9d06ea1b9bd8e"
+    },
+    {
+      "ExeSha256": "b1ec754b953792548e3e24fdc3a2107f8478a84473d53e07da6ce94f375a25cc",
+      "Exit": 0,
+      "FailedChecks": 0,
+      "FirstLines": [
+        "Character networking tests passed"
+      ],
+      "Graph": "d28a2ad74f59dd65d80c66aed924cb2dd10ff476",
+      "LastLines": [
+        "Character networking tests passed"
+      ],
+      "Name": "Character-Candidate",
+      "Seconds": 0.20066,
+      "Source": "4af419f004b94aa85379c163ccc23f27d68311c0"
+    }
+  ],
+  "CleanedScratch": {
+    "ActiveJobs": 0,
+    "AttachedContainers": 0,
+    "Generation": 692,
+    "ObservedUtc": "2026-11-28T04:13:07.1636193Z",
+    "Owner": "ordinary-workspace-performance-20261128",
+    "PrivateTestVolume": "codex-ordinary-sanitizer-test-scratch-692",
+    "VolumeRemoved": true
+  },
+  "GitTree": "21e3853157fe2451283ba6f2cdc7729417f80c95",
+  "Input": {
+    "Linux ASan+UBSan": {
+      "ArchiveSha256": "81812448b377cc40be4f342c325319e7c4d5ed6093f3015a34639c66119a232c",
+      "PathContentSetSha256": "079b858c57d7b7870f6ea07c71aed6de2b3e0853acacdcd5d8f3feb982abf6ce",
+      "Replaced": 325,
+      "VerifiedTrackedFiles": 2045
+    },
+    "Linux Release": {
+      "ArchiveSha256": "81812448b377cc40be4f342c325319e7c4d5ed6093f3015a34639c66119a232c",
+      "PathContentSetSha256": "079b858c57d7b7870f6ea07c71aed6de2b3e0853acacdcd5d8f3feb982abf6ce",
+      "Replaced": 325,
+      "VerifiedTrackedFiles": 2045
+    },
+    "Windows": {
+      "ArchiveSha256": "bbbe2ba78ddc24f88cc8e4cd8db8f382876cad7b4236a097a8b6e7141f1e8514",
+      "PathContentSetSha256": "079b858c57d7b7870f6ea07c71aed6de2b3e0853acacdcd5d8f3feb982abf6ce",
+      "Replaced": 2,
+      "VerifiedTrackedFiles": 2045
+    }
+  },
+  "LinuxOutputs": {
+    "LinuxBinaries.sha256": [
+      "7a41bafc1ca8cdea992209b4d457ea78068223304487a6c826f2944827732e07  /build/gargantuan",
+      "646520e7402684475735a4c8e51b807c2ea42567b3c3f5ac6ba466c2ee991701  /build/gargantuan_spatial_transfer_tests",
+      "2c1be7e1ddb97a48dbeac0c852bf8d397ddcc49783167ded7422cd41e6d826b1  /build/gargantuan_spatial_session_transfer_tests"
+    ],
+    "LinuxInstrumentedPackages.sha256": [
+      "545bb52e1a780b8494d86b8e07e61beaf3bb6f2d4a4368ba6d558fde328b9770  /proof/RuntimePackages.tar"
+    ],
+    "LinuxReleasePackages.sha256": [
+      "778e5ccce7a0a9dae201f4516dda7c5f748c907cac01428093f3eeb07d2985fd  /proof/RuntimeDistribution.tar"
+    ]
+  },
+  "LinuxVulkan": [
+    "apiVersion         = 1.3.274",
+    "deviceName         = llvmpipe (LLVM 17.0.6, 256 bits)",
+    "driverInfo         = Mesa 24.0.5-1ubuntu1 (LLVM 17.0.6)",
+    "[Spatial:Lighting] Local shadow 331 pixels, local lamp 14542 pixels, foreign differences 0",
+    "[Spatial:ConstructionGpu] VisiblePixels=874 MovedPixels=1771 HiddenResidual=0 DeletedResidual=0",
+    "[Spatial:ConstructionGpu] SparseRemovedPixels=528 SparseRestoredPixels=528 RebuildResidual=0",
+    "[Spatial:ViewportGpu] red=3844 blue=3844 retired=0"
+  ],
+  "PerThreadHardware": [
+    {
+      "ContextSwitches": 0,
+      "Cycles": 22974032,
+      "EnableErrors": [
+        0
+      ],
+      "PositiveCycleRows": 47,
+      "Product": "Historical",
+      "ReadErrors": [
+        0
+      ],
+      "Rows": 47,
+      "SlotTotals": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "Slots": [
+        0
+      ],
+      "Trace": "single Engine thread, no system ETW trace or counter reconfiguration"
+    },
+    {
+      "ContextSwitches": 0,
+      "Cycles": 28014105,
+      "EnableErrors": [
+        0
+      ],
+      "PositiveCycleRows": 46,
+      "Product": "Current",
+      "ReadErrors": [
+        0
+      ],
+      "Rows": 46,
+      "SlotTotals": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "Slots": [
+        0
+      ],
+      "Trace": "single Engine thread, no system ETW trace or counter reconfiguration"
+    }
+  ],
+  "PrivateNativeComparison": {
+    "AlignedSteps": 6144,
+    "Blocks": 6,
+    "EngineCache": 0,
+    "EngineMask": "0xfff",
+    "FramesPerRun": 256,
+    "Harness": "e52c4ea7c51b93fc101bf7d99d3a6abbc46d0e16",
+    "MainCpu": 4,
+    "RawZipSha256": "16359f25c66e80eb3a22d114d2c91eb69ba83faf7a2273964fc8231ece68939a",
+    "Runs": 24,
+    "SamplerCache": 12,
+    "SamplerCpu": 18,
+    "Warmup": 192
+  },
+  "RelWithDebInfoCacheBeforePackaging": {
+    "Sha256": "9cc40dae63be58ab5ecf35c5b310161f764f29e95e6a8fa92c4d31c04d7ded66",
+    "Source": "4af419f004b94aa85379c163ccc23f27d68311c0",
+    "TarBytes": 951808000
+  },
+  "RuntimeFileSets": [
+    {
+      "Bytes": 25741012,
+      "Directory": "RuntimeDistribution",
+      "Files": 56,
+      "PathAndSha256": "f48a12438a6e5d73ff83c16cc231cd17248867e83ca3d79987b91d33d033adc5",
+      "Platform": "Windows Release"
+    },
+    {
+      "Bytes": 25617510,
+      "Directory": "ServerRuntimeDistribution",
+      "Files": 55,
+      "PathAndSha256": "2649e066a0512be4e9998bca29d5d5b17c0ac4ae49538f6adbcf8870868ca9fd",
+      "Platform": "Windows Release"
+    }
+  ],
+  "SchemaMachineEvidence": {
+    "Final": {
+      "FullFunctionReportSha256": "31501002fb2e2ce18ec902777f64862fca80dab990610f934556c134c5b26e84",
+      "Functions": {
+        "GetActiveRegistry": {
+          "InstructionListingLines": 21,
+          "LockedInstructions": [
+            "000000000000002D: lock inc    dword ptr [rax+8]"
+          ]
+        },
+        "GetActiveRegistryReference": {
+          "InstructionListingLines": 40,
+          "LockedInstructions": []
+        },
+        "GetActiveRuntimeSchemaRegistry": {
+          "InstructionListingLines": 5,
+          "LockedInstructions": []
+        }
+      },
+      "ObjectBytes": 3142139,
+      "ObjectSha256": "5ed687ed0a7fbef0dde8d5653b6707ef2d02a13c034eb54fdd65c2053b18962a"
+    },
+    "Stock": {
+      "FullFunctionReportSha256": "b6e9669cb2a54f0ee605afbed48493d0a62352d25b2adf58eb346aa8c261bc39",
+      "Functions": {
+        "GetActiveRegistry": {
+          "InstructionListingLines": 52,
+          "LockedInstructions": [
+            "000000000000003F: lock inc    dword ptr [rax+8]"
+          ]
+        },
+        "GetActiveRuntimeSchemaRegistry": {
+          "InstructionListingLines": 66,
+          "LockedInstructions": [
+            "000000000000003C: lock inc    dword ptr [rax+8]",
+            "0000000000000054: lock xadd   dword ptr [rbx+8],eax",
+            "0000000000000066: lock xadd   dword ptr [rbx+0Ch],edi"
+          ]
+        }
+      },
+      "ObjectBytes": 3142984,
+      "ObjectSha256": "b026e534ef1b1a7c6fc74a6ce69e30cb13805eab3883d68a4610853abb85839b"
+    }
+  },
+  "Source": "4af419f004b94aa85379c163ccc23f27d68311c0",
+  "VendorGitlinks": {
+    "vendor/argparse": "d924b84eba1f0f0adf38b20b7b4829f6f65b6570",
+    "vendor/box3d": "8441b4a06d6d09dcfb0b0f704df4d847d1437b92",
+    "vendor/glaze": "7521e2ab262acd7a0d625354e26876cd9c35a231",
+    "vendor/glm": "8d1fd52e5ab5590e2c81768ace50c72bae28f2ed",
+    "vendor/json": "2e23687092840a66876b4bea48060bd79595ea4b",
+    "vendor/luau": "3fc82b1071ab387531175869afc4fb528464afa4",
+    "vendor/magicenum": "61173726dbdfb0ea2ce87f0c474e89dea2690a5a",
+    "vendor/sdl": "f87239e71e42da91ca317a12eefb82cfbf3393eb",
+    "vendor/sdl_image": "0ee698ef02cf38026c476e28157c182685861d18",
+    "vendor/sdl_ttf": "a42434b8c96daaf7650dbd0befe480c090d1c2eb",
+    "vendor/tracy": "05cceee0df3b8d7c6fa87e9638af311dbabc63cb"
+  },
+  "WindowsEditorHostClosureFiles": 35,
+  "WindowsNormalElapsedSeconds": {
+    "AffectedNative": 155.2,
+    "Configure": 33.75,
+    "EditorHost": 551.93,
+    "Seed": 38.29
+  },
+  "WindowsProductSuiteClosureFiles": 147,
+  "WindowsVulkan": [
+    {
+      "Assertions": [
+        "[Spatial:ConstructionGpu] VisiblePixels=874 MovedPixels=1771 HiddenResidual=0 DeletedResidual=0",
+        "[Spatial:ConstructionGpu] SparseRemovedPixels=528 SparseRestoredPixels=528 RebuildResidual=0"
+      ],
+      "Exit": 0,
+      "Name": "Grid",
+      "Seconds": 0.40248999999999996
+    },
+    {
+      "Assertions": [
+        "[Spatial:ViewportGpu] red=3844 blue=3844 retired=0"
+      ],
+      "Exit": 0,
+      "Name": "Viewports",
+      "Seconds": 0.3436557
+    },
+    {
+      "Assertions": [
+        "[Spatial:Lighting] Local shadow 331 pixels, local lamp 14543 pixels, foreign differences 0"
+      ],
+      "Exit": 0,
+      "Name": "Lighting",
+      "Seconds": 0.45463359999999997
+    }
+  ],
+  "WorkerRelease": {
+    "AcquiredUtc": null,
+    "ChatId": null,
+    "ExpiresUtc": null,
+    "Generation": 692,
+    "HeartbeatUtc": null,
+    "Mode": null,
+    "ObservedUtc": "2026-11-28T04:13:09.001077+00:00",
+    "Outcome": "Status",
+    "Owner": null,
+    "Resource": "worker-heavy",
+    "State": "Free",
+    "Version": 1
+  }
+}

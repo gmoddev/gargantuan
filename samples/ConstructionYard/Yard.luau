@@ -156,6 +156,47 @@ if Durable then
 	end
 end
 local PendingDoors = {}
+local FreightHolds = {}
+
+-- A confirmed network landing requires a stationary destination chart. The public
+-- freight service parks until every outstanding return to the outdoor yard finishes.
+local function EndDoor(Player, Request)
+	if PendingDoors[Player] ~= Request then return end
+	PendingDoors[Player] = nil
+	if FreightHolds[Request] then
+		FreightHolds[Request] = nil
+		if not next(FreightHolds) then Space:SetAttribute("FreightLandingHeld", false) end
+	end
+end
+
+local function BeginDoor(Player, Request, Destination, Landing, Margin)
+	PendingDoors[Player] = Request
+	if Destination == Space then
+		local First = not next(FreightHolds)
+		FreightHolds[Request] = true
+		if First then
+			Space:SetAttribute("FreightLandingHeld", true)
+			local Platform = Space.FreightPlatform
+			if Platform.MotionMode == "Dynamic" then
+				Platform:SetMotionMode("Static", Platform:GetRevision())
+			end
+		end
+	end
+	if PendingDoors[Player] ~= Request then return nil, "Canceled" end
+	return Player:RequestSpatialTransfer(Destination, CFrame.new(Landing), Landing - Margin, Landing + Margin)
+end
+
+local function CancelDoor(Player)
+	local Request = PendingDoors[Player]
+	if not Request then return end
+	Request.Canceled = true
+	if Request.Ticket then
+		Request.Ticket:Cancel()
+		-- A native transfer already applying may finish asynchronously.
+		if Request.Ticket:GetStatus() == "Pending" then return end
+	end
+	EndDoor(Player, Request)
+end
 
 local function UseDoor(Player, Avatar, Inside)
 	if PendingDoors[Player] then return end
@@ -171,20 +212,24 @@ local function UseDoor(Player, Avatar, Inside)
 	if not FloorHit then return end
 	local Landing = FloorHit.Position + V(0, math.max(Avatar.CapsuleHeight, Avatar.RootPart.Size.Y) * 0.5 + 1, 0)
 	local Margin = V(4, math.max(5, Avatar.CapsuleHeight + 1), 4)
-	local Ticket, Failure = Player:RequestSpatialTransfer(Destination, CFrame.new(Landing), Landing - Margin, Landing + Margin)
-	if not Ticket then
-		warn("[Spatial:ConstructionYard] Door request " .. tostring(Failure))
+	local Request = {}
+	local Ok, Ticket, Failure = pcall(BeginDoor, Player, Request, Destination, Landing, Margin)
+	if not Ok or not Ticket then
+		EndDoor(Player, Request)
+		warn("[Spatial:ConstructionYard] Door request " .. tostring(if Ok then Failure else Ticket))
 		return
 	end
-	PendingDoors[Player] = Ticket
+	Request.Ticket = Ticket
+	if Request.Canceled then Ticket:Cancel() end
 	task.spawn(function()
 		local Status = Ticket:GetStatus()
 		while Status == "Pending" do
 			task.wait(0.03)
 			Status = Ticket:GetStatus()
 		end
-		if PendingDoors[Player] ~= Ticket then return end
-		PendingDoors[Player] = nil
+		if PendingDoors[Player] ~= Request then return end
+		EndDoor(Player, Request)
+		if Request.Canceled then return end
 		if Status == "Applied" then
 			if Player == Players.LocalPlayer then
 				Space.CurrentSpatialRegion = Avatar.RootPart.SpatialRegion
@@ -225,17 +270,12 @@ local LocalInput = Actions.ActionBegan:Connect(function(Name)
 	local LocalPlayer = Players.LocalPlayer
 	if LocalPlayer then UseTool(LocalPlayer, Name) end
 end)
-local Removing = Players.PlayerRemoving:Connect(function(Player)
-	local Ticket = PendingDoors[Player]
-	if Ticket then
-		PendingDoors[Player] = nil
-		Ticket:Cancel()
-	end
-end)
+local Removing = Players.PlayerRemoving:Connect(CancelDoor)
 script.Destroying:Connect(function()
 	Remote:Disconnect()
 	LocalInput:Disconnect()
 	Removing:Disconnect()
+	for Player in PendingDoors do CancelDoor(Player) end
 end)
 if not Faulted then
 	print(string.format("[Spatial:ConstructionYard] ready edits=%d persistence=%s", #History, if Durable then "documents" else "session"))

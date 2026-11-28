@@ -1,0 +1,82 @@
+{
+  "Block": 35,
+  "Run": 4,
+  "ObservedRetryTicks": 1024,
+  "ExistingMissing": 0,
+  "AdditionalZeroThrough0": {
+    "PositionP95Nanoseconds": [
+      251800,
+      251800
+    ],
+    "AdverseMeanPercentRange": [
+      -7.743064346957428,
+      -7.0888832836010955
+    ],
+    "AdverseOneSided95UpperPercent": -5.00236215982493
+  },
+  "SubstitutedZeroThrough0": {
+    "PositionP95Nanoseconds": [
+      251800,
+      251800
+    ],
+    "AdverseMeanPercentRange": [
+      -7.743064346957428,
+      -7.0888832836010955
+    ],
+    "AdverseOneSided95UpperPercent": -5.00236215982493
+  },
+  "AdditionalZeroThrough21": {
+    "PositionP95Nanoseconds": [
+      251700,
+      298800
+    ],
+    "AdverseMeanPercentRange": [
+      -7.743350645349051,
+      -6.9645756194408035
+    ],
+    "AdverseOneSided95UpperPercent": -4.875208564236072
+  },
+  "SubstitutedZeroThrough21": {
+    "PositionP95Nanoseconds": [
+      231300,
+      301100
+    ],
+    "AdverseMeanPercentRange": [
+      -7.804250436363869,
+      -6.959002062022238
+    ],
+    "AdverseOneSided95UpperPercent": -4.836044795563145
+  },
+  "AdditionalZeroThrough48": {
+    "PositionP95Nanoseconds": [
+      251700,
+      405200
+    ],
+    "AdverseMeanPercentRange": [
+      -7.743350645349051,
+      -6.742912144241019
+    ],
+    "AdverseOneSided95UpperPercent": -4.6484848676246
+  },
+  "SubstitutedZeroThrough48": {
+    "PositionP95Nanoseconds": [
+      210800,
+      445900
+    ],
+    "AdverseMeanPercentRange": [
+      -7.8710722709108225,
+      -6.673151664931988
+    ],
+    "AdverseOneSided95UpperPercent": -4.501229202056621
+  },
+  "OmitAffectedBlockDiagnostic": {
+    "Blocks": 63,
+    "ExactChangePercent": -7.094595117134679,
+    "ExactUpperPercent": -5.134418187202536,
+    "AdverseMeanPercentRange": [
+      -7.3849717311173055,
+      -6.74380126327253
+    ],
+    "AdverseOneSided95UpperPercent": -4.71176845759005
+  }
+}

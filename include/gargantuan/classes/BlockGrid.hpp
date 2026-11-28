@@ -53,6 +53,9 @@ namespace gargantuan {
 		void SetAdmission(blockgrid::Field::Admission BeforeCommit);
 		void PushGridHit(lua_State* L, blockgrid::Cell Cell, glm::vec3 Position, glm::vec3 Normal) const;
 	  private:
+		[[nodiscard]] bool ResolveLocalSpatialWorld(std::shared_ptr<WorldRoot> &World) const override {
+			return ResolveExplicitSpatialWorld(*this, World);
+		}
 		friend class MutationGateway;
 		friend class PreparedGridTransfer;
 		friend class WorldRoot;

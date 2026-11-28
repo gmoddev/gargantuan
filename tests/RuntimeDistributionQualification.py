@@ -232,11 +232,39 @@ def PackageExecutable(Package):
     raise RuntimeError(f"Packaged native executable missing for format {Manifest['PackageFormatVersion']}")
 
 
+def CheckPrivateSymbols(Receipt, Project, Package):
+    Reported = Receipt.get("PrivateDiagnosticsPath")
+    Require(isinstance(Reported, str) and bool(Reported), "Hybrid publication omitted its private diagnostic receipt")
+    Symbols = Path(Reported)
+    Require(Symbols.is_absolute() and Symbols.is_file() and not Symbols.is_symlink() and
+            Symbols.resolve().parent == Package.resolve().parent, "Private symbols must be a separate sibling file")
+    Manifest = ReadJson(Package / "game.package.json")
+    Distribution = Manifest["RuntimeDistribution"]
+    Index = ReadJson(Symbols)
+    Require(Index["Format"] == "GargantuanPrivateScriptSymbols" and Index["Version"] == 1 and
+            Index["ManifestSha256"] == Receipt["ManifestSha256"] and Index["ProjectId"] == Manifest["ProjectId"] and
+            Index["Revision"] == Manifest["Revision"] and Index["ReleaseId"] == Distribution["ReleaseId"] and
+            Index["Compiler"] == Distribution["Compiler"], "Private symbols identify a different package or compiler")
+    Id = ResourceId("RD1Procedural")
+    World = ReadJson(Project / ".gargantuan" / "project.instance.json")
+    NodeValue, NodePath = next((NodeValue, NodePath) for NodeValue, NodePath in WalkNodes(World)
+                               if NodeValue["Properties"].get("SourceId", {}).get("String") == Id)
+    Source = NodeValue["Properties"]["Source"]["String"].encode("utf-8")
+    Require(Index["Scripts"] == [{"Id": Id, "Path": list(NodePath), "Class": NodeValue["ClassName"],
+                                  "SourceSha256": hashlib.sha256(Source).hexdigest()}],
+            "Private symbols do not identify the exact authored procedural script")
+    Hash, Size = Digest(Symbols), Symbols.stat().st_size
+    Require(not any(File.is_file() and (File.name == Symbols.name or
+                    (File.stat().st_size == Size and Digest(File) == Hash)) for File in Package.rglob("*")),
+            "Private symbols entered the delivered package")
+    return Hash
+
+
 def Build(Options, Name, Target, Preset, Project, Output, PolicyFile, Reports, Enrollment,
-          Signed=False, Protected=False, Legacy=False, Deny=False):
+          Signed=False, Protected=False, Legacy=False, Deny=False, Configuration="Release"):
     Distribution = Options.ServerDistribution if Target == "DedicatedServer" else Options.PlayerDistribution
     Command = [Options.Packager, "build", "--project", Project, "--output", Output, "--runtime", Distribution,
-               "--configuration", "Release"]
+               "--configuration", Configuration]
     if not Legacy:
         Policy = {"Version": 1, "Target": Target, "Preset": Preset, "PublisherTrust": "DigestOnly", "ModLoading": "Disabled"}
         if Signed:
@@ -257,6 +285,8 @@ def Build(Options, Name, Target, Preset, Project, Output, PolicyFile, Reports, E
         Require(Receipt and Receipt["Ok"] and Receipt["ManifestSha256"] == Hash, f"Missing exact package receipt for {Name}")
         if "PrivateDiagnosticsPath" in Receipt:
             Timing["PrivateDiagnosticsPath"] = Receipt["PrivateDiagnosticsPath"]
+        if Preset == "Hybrid":
+            Timing["PrivateDiagnosticsSha256"] = CheckPrivateSymbols(Receipt, Project, Output)
     Timing.update({"ManifestSha256": Hash, "PackageBytes": sum(File.stat().st_size for File in Output.rglob("*") if File.is_file()),
                    "ExecutableSha256": Digest(PackageExecutable(Output))})
     return Timing, OutputText
@@ -290,7 +320,8 @@ def CheckPackage(Output, Preset, Signed, Legacy=False, Distributed=False):
         Require(Manifest["PackageFormatVersion"] == 4, "Managed package is not format 4")
         Catalog = ReadJson(Output / "content" / "runtime-scripts.json")
         ById = {Row["Id"]: Row for Row in Catalog["Scripts"]}
-        Expected = {"RD1Craft": "Source", "RD1Controller": "Compiled", "RD1Procedural": "Protected", "RD1GuiScript": "Compiled", "RD1GuiModule": "Compiled"}
+        Expected = {"RD1Craft": "Source", "RD1Controller": "Compiled", "RD1Procedural": "Protected",
+                    "RD1GuiScript": "Compiled", "RD1GuiModule": "Compiled"}
         for Name, MixedRepresentation in Expected.items():
             Id = ResourceId(Name)
             Desired = MixedRepresentation if Preset == "Hybrid" else "Source" if Preset == "Open" else Preset

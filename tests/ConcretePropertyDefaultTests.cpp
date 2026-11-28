@@ -1,4 +1,5 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
+#include <algorithm>
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Frame.hpp"
 #include "gargantuan/classes/ImageButton.hpp"
@@ -347,6 +348,10 @@ namespace {
 		Require(!Call("GetSchema", {{"SchemaDiscoveryVersion", 8}}).at("Ok").get<bool>(), "unknown discovery version fails closed");
 		const auto Schema = Call("GetSchema", {{"SchemaDiscoveryVersion", 7}}).at("Result");
 		Require(Schema.at("SchemaDiscoveryVersion") == 7, "explicit v7 enables authoritative effective defaults");
+		const auto &Sides = Schema.at("NativeEnums").at("NormalId");
+		Require(std::any_of(Sides.begin(), Sides.end(), [](const Json &Item) {
+			return Item.at("Name") == "Top" && Item.at("Value") == 1;
+		}), "v7 supplies the native enum name and value used by the PreRun binding viewer");
 		std::vector<std::shared_ptr<Instance>> Targets;
 		for (std::size_t Index = 0; Index < 257; ++Index) Targets.push_back(World->FindFirstChild("Target" + std::to_string(Index), true));
 		const auto Write = [&](const std::shared_ptr<Instance> &Object, std::string Name = "BackgroundTransparency") {

@@ -468,12 +468,100 @@ namespace {
 			G:Destroy()
 		)");
 	}
+	void TestRetirementObservers() {
+		auto Realm=std::make_shared<DataModel>();
+		auto Space=std::dynamic_pointer_cast<Workspace>(Realm->GetService("Workspace"));
+		const auto Server=ScriptSecurityContext::ServerRuntime();
+		Run(Realm,RuntimeMode::Offline,Server,R"(
+			local Room=Instance.new("SpatialRegion")
+			Room.Name="Dock"
+			Room.Parent=workspace
+			local G=Instance.new("BlockGrid")
+			G.Name="Lift"
+			G.Parent=workspace
+			G.SpatialRegion=Room
+			G:SetBlock(Vector3.zero,"Stone")
+			G:SetMotionMode("Dynamic",G:GetRevision())
+		)");
+		auto Room=std::dynamic_pointer_cast<SpatialRegion>(Space->FindFirstChild("Dock",false));
+		auto Grid=std::dynamic_pointer_cast<BlockGrid>(Space->FindFirstChild("Lift",false));
+		Check(Room && Grid && Room->GetRegisteredBlockGridCount()==1,"assigned lift was not in its chart");
+		bool Released=false;
+		const auto OnRelease=Grid->GetPropertyChangedSignal("MotionMode")->Once([&](auto) {
+			Released=true;
+			Grid->SetSpatialRegion(std::nullopt);
+		});
+		Grid->SetParent(nullptr);
+		Check(Released && !Grid->GetSpatialRegion() && Grid->GetMotionMode()=="Static" &&
+			Room->GetRegisteredBlockGridCount()==0,"detached lift retained an assignment or a body");
+		Grid->SetParent(Room);
+		Run(Realm,RuntimeMode::Offline,Server,R"(
+			local G=workspace:FindFirstChild("Dock"):FindFirstChild("Lift")
+			G:SetMotionMode("Dynamic",G:GetRevision())
+		)");
+		bool Rejoined=false;
+		const auto OnRejoin=Grid->GetPropertyChangedSignal("MotionMode")->Once([&](auto) {
+			Rejoined=true;
+			Room->SetParent(Space);
+		});
+		Room->SetParent(nullptr);
+		const auto Domains=Realm->GetSpatialRegions();
+		Check(Rejoined && Domains.size()==1 && Domains.front()==Room && Room->GetRegisteredBlockGridCount()==1 &&
+			Grid->GetMotionMode()=="Static","reattached chart lost its engine registration or restored retired motion");
+		Realm->Destroy();
+	}
+	void TestMovingGridBudgets() {
+		auto World = std::make_shared<DataModel>();
+		Run(World, RuntimeMode::Offline, ScriptSecurityContext::ServerRuntime(), R"(
+			local V = Vector3.new
+			local function Grid(Unit)
+				local G = Instance.new("BlockGrid")
+				G.CellSize = Unit
+				G.Parent = game.Workspace
+				return G
+			end
+			local G = Grid(1)
+			G:Fill(V(0,0,0), V(16,8,16), "Stone")
+			G:SetMotionMode("Dynamic", G:GetRevision())
+			local State = G:GetAssemblyState()
+			assert(math.abs(State.Mass - 2048) < .01 and (State.LocalCenterOfMass-V(8,4,8)).Magnitude < .001)
+			local Before = G:GetRevision()
+			assert(not pcall(function() G:SetBlock(V(16,0,0), "Brick") end))
+			assert(G:GetRevision() == Before and G:GetBlock(V(16,0,0)) == nil)
+			G:RemoveBlock(V(0,0,0))
+			assert(math.abs(G:GetAssemblyState().Mass - 2047) < .01)
+			G:SetBlock(V(16,0,0), "Brick")
+			assert(math.abs(G:GetAssemblyState().Mass - 2048) < .01)
+			G:Destroy()
+
+			local H = Grid(.5)
+			H:Fill(V(0,0,0),V(16,16,16),"Brick")
+			H:SetMotionMode("Dynamic",H:GetRevision())
+			Before = H:GetRevision()
+			assert(math.abs(H:GetAssemblyState().Mass-512)<.01 and not pcall(function() H:SetBlock(V(16,0,0),"Stone") end))
+			assert(H:GetRevision()==Before and H:GetBlock(V(16,0,0))==nil)
+			H:Destroy()
+
+			local F = Grid(1)
+			local E = F:BeginEdit()
+			for I = 0,127 do E:SetBlock(V(2*(I%16),0,2*math.floor(I/16)), "Stone") end
+			E:Commit()
+			F:SetMotionMode("Dynamic",F:GetRevision())
+			Before = F:GetRevision()
+			assert(math.abs(F:GetAssemblyState().Mass-128)<.01)
+			assert(not pcall(function() F:SetBlock(V(0,0,16), "Stone") end))
+			assert(F:GetRevision()==Before and F:GetBlock(V(0,0,16))==nil and F.MotionMode=="Dynamic")
+			F:Destroy()
+		)");
+	}
 }
 int main() try {
 	using namespace gargantuan;
 	BootstrapNativeRuntimeSchema();
 	TestAssetDefinitions();
 	TestMovingGrid();
+	TestMovingGridBudgets();
+	TestRetirementObservers();
 	TestGridTransfers();
 	auto World=std::make_shared<DataModel>();
 	std::ifstream Example(GARGANTUAN_BLOCKGRID_EXAMPLE,std::ios::binary);

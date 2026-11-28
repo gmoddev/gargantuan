@@ -1,0 +1,16 @@
+ScriptEngine started opening libraries
+ScriptEngine finished opening libraries
+Attempting to find required instance Instance.Players.PlayerRuntimeModules.DefaultNetworkServerRuntime
+Constructed engine
+Attempting to find required instance Instance.Players.PlayerRuntimeModules.DefaultNetworkServerRuntime
+ScriptEngine started opening libraries
+ScriptEngine finished opening libraries
+Attempting to find required instance Instance.Players.PlayerRuntimeModules.DefaultNetworkClientRuntime
+Attempting to find required instance Instance.Players.PlayerRuntimeModules.DefaultNetworkClientRuntime
+Attempting to find required instance Instance.Players.PlayerRuntimeModules.DefaultNetworkClientRuntime
+Attempting to find required instance Instance.Players.PlayerRuntimeModules.DefaultNetworkClientRuntime
+Constructed engine
+Destroying engine
+Destroying engine
+{"Representation":"Moving","Phase":"Join","Occupied":128,"PumpCalls":26,"ElapsedUs":89654.2,"ServerPumpUs":3289.1000000000004,"ClientPumpUs":6769.8,"DistinctPosesIn40Ticks":0,"ServerPayloadBytes":8960,"ServerMessages":29,"ServerNativePackets":13,"ServerNativePacketBytes":10241,"ClientPayloadBytes":567,"ClientMessages":5,"ClientNativePackets":4,"ClientNativePacketBytes":887}
+[Spatial:NetworkBenchmark] motion alone retired or rebuilt the installed grid field

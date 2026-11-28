@@ -501,18 +501,18 @@ namespace {
 		{
 			EditorHost Host("terrain-palette-test");
 			std::uint64_t Request = 0;
-			const auto Call = [&](std::string_view Method, const Json &Parameters = Json::object()) {
+			const auto Call = [&](std::string_view Method, const Json &Parameters) {
 				return Json::parse(Host.HandleRequest(Json{
 					{"Version", EditorHostProtocolVersion}, {"RequestId", std::to_string(++Request)},
 					{"SessionToken", "terrain-palette-test"}, {"Method", Method}, {"Params", Parameters},
 				}.dump()));
 			};
-			const auto Handshake = Call("Handshake");
+			const auto Handshake = Call("Handshake", Json::object());
 			Require(std::ranges::any_of(Handshake.at("Result").at("Capabilities"),
 				[](const Json &Capability) { return Capability == "TerrainMaterialBindingsV1"; }),
 				"Studio discovers compatible terrain material binding support");
 			const auto Opened = Call("OpenProject", {{"Root", Directory.Root.generic_string()}});
-			const auto Snapshot = Call("GetSnapshot");
+			const auto Snapshot = Call("GetSnapshot", Json::object());
 			const auto &Objects = Snapshot.at("Result").at("Snapshot").at("Objects");
 			const auto Target = std::ranges::find_if(Objects, [](const Json &Object) {
 				return Object.at("ClassName") == "Workspace";
@@ -525,8 +525,8 @@ namespace {
 			Require(Call("SetAttribute", Change).at("Error").at("Code") == "Conflict",
 				"A stale Studio revision cannot change the project palette");
 			Change["ExpectedRevision"] = Revision;
-			Require(Call("SetAttribute", Change).at("Ok") == true && Call("Undo").at("Ok") == true &&
-				Call("SaveProject").at("Ok") == true, "Studio can edit, undo and save palette bindings");
+			Require(Call("SetAttribute", Change).at("Ok") == true && Call("Undo", Json::object()).at("Ok") == true &&
+				Call("SaveProject", Json::object()).at("Ok") == true, "Studio can edit, undo and save palette bindings");
 		}
 		DiskFilesystem Filesystem(Directory.Root);
 		const auto World = Project::FromGasOrigin(&Filesystem).DeserializeGame();
@@ -548,7 +548,7 @@ namespace {
 		const TestProjectDirectory Directory;
 		EditorHost Host("terrain-grid-test");
 		std::uint64_t Request = 0;
-		const auto Call = [&](std::string_view Method, const Json &Parameters = Json::object()) {
+		const auto Call = [&](std::string_view Method, const Json &Parameters) {
 			return Json::parse(Host.HandleRequest(Json{
 				{"Version", EditorHostProtocolVersion}, {"RequestId", std::to_string(++Request)},
 				{"SessionToken", "terrain-grid-test"}, {"Method", Method}, {"Params", Parameters},
@@ -565,10 +565,10 @@ namespace {
 			Json Params{{"Destination", Root}, {"Name", "Terrain grid profile"}};
 			if (Spacing != 1.0) Params["TerrainSampleSpacing"] = Spacing;
 			Require(Call("CreateProject", Params).at("Ok") == true &&
-				Call("GetTerrainAuthoringState").at("Result").at("SampleSpacing") == Spacing,
+				Call("GetTerrainAuthoringState", Json::object()).at("Result").at("SampleSpacing") == Spacing,
 				"Creator selects the exact terrain spacing at project creation");
-			Require(Call("SaveProject").at("Ok") == true && Call("OpenProject", {{"Root", Root}}).at("Ok") == true &&
-				Call("GetTerrainAuthoringState").at("Result").at("SampleSpacing") == Spacing,
+			Require(Call("SaveProject", Json::object()).at("Ok") == true && Call("OpenProject", {{"Root", Root}}).at("Ok") == true &&
+				Call("GetTerrainAuthoringState", Json::object()).at("Result").at("SampleSpacing") == Spacing,
 				"Empty saved terrain retains its authored sample spacing when reopened");
 		}
 	}
@@ -755,20 +755,21 @@ namespace {
 		const auto ProjectValue = Project::fromInit(&Filesystem, "Terrain brush qualification");
 		EditorHost Host("terrain-brush-test");
 		std::uint64_t Request = 0;
-		const auto Call = [&](std::string_view Method, const Json &Parameters = Json::object()) {
+		const auto Call = [&](std::string_view Method, const Json &Parameters) {
 			return Json::parse(Host.HandleRequest(Json{
 				{"Version", EditorHostProtocolVersion}, {"RequestId", std::to_string(++Request)},
 				{"SessionToken", "terrain-brush-test"}, {"Method", Method}, {"Params", Parameters},
 			}.dump()));
 		};
-		const auto ReadState = [&] { return Call("GetTerrainAuthoringState").at("Result"); };
+		const auto ReadState = [&] { return Call("GetTerrainAuthoringState", Json::object()).at("Result"); };
 		Require(Call("OpenProject", {{"Root", Directory.Root.generic_string()}}).at("Ok") == true &&
-			Call("GetSnapshot").at("Ok") == true, "Open terrain brush project");
+			Call("GetSnapshot", Json::object()).at("Ok") == true, "Open terrain brush project");
 		const auto Initial = ReadState();
 		const auto Scope = Initial.at("Scope");
 		Require(Initial.at("TerrainRevision") == "0" && Initial.at("EditingAvailable") == true,
 			"Empty project exposes canonical terrain authoring state");
 		std::uint32_t TerrainFrames = 0;
+		Json SurfaceFrame;
 		std::vector<std::uint8_t> Pixels;
 		if (LatestFrameMailbox::IsSupported()) {
 			Host.SetViewportCaptureForTesting([&](RenderPublicationPtr Publication) {
@@ -777,8 +778,10 @@ namespace {
 				Pixels.resize(static_cast<std::size_t>(Width) * Height * 4);
 				return EditorViewportCaptureView{.Width = Width, .Height = Height, .BgraPixels = Pixels};
 			});
-			Require(Call("OpenViewportTransport", {{"Transport", "LatestFrameMailbox"}, {"Version", 2},
-				{"PixelFormat", "BGRA8"}}).at("Ok") == true &&
+			const auto Transport = Call("OpenViewportTransport", {{"Transport", "LatestFrameMailbox"}, {"Version", 2},
+				{"PixelFormat", "BGRA8"}});
+			SurfaceFrame = {{"Mailbox", Transport.at("Result").at("Name")}};
+			Require(Transport.at("Ok") == true &&
 				Call("ConfigureViewport", {{"Width", 64}, {"Height", 64}}).at("Ok") == true &&
 				Call("StartViewportPresentation", {{"FrameRateMode", "Adaptive"}}).at("Ok") == true,
 				"Set up a bounded edit viewport");
@@ -811,7 +814,7 @@ namespace {
 			{"Brush", Oversized}}).at("Error").at("Code") == "TerrainBrushLimit",
 			"Brush footprint fails before admission without reducing resolution");
 		const auto FillTicket = Submit("SubmitTerrainBrush", {{"Brush", Fill}});
-		Require(Call("SaveProject").at("Error").at("Code") == "TerrainEditPending",
+		Require(Call("SaveProject", Json::object()).at("Error").at("Code") == "TerrainEditPending",
 			"Pending terrain cannot race scene persistence");
 		const auto Filled = Await(FillTicket);
 		Require(Filled.at("Status") == "Committed" && Filled.at("TerrainRevision") == "1" &&
@@ -827,7 +830,17 @@ namespace {
 		const auto Hit = Call("RaycastTerrainSurface", Ray);
 		Require(Hit.at("Ok") == true && Hit.at("Result").at("Hit").at("Position")[1].get<double>() > 11.0,
 			"Terrain surface targeting sees the admitted native collider");
-		Require(Call("SaveProject").at("Ok") == true, "Save the filled terrain");
+		if (LatestFrameMailbox::IsSupported()) {
+			const auto View = Call("GetViewportPresentationState", Json::object()).at("Result");
+			SurfaceFrame["FrameNumber"] = View.at("LatestSequence");
+			SurfaceFrame["Generation"] = View.at("Generation");
+			SurfaceFrame["CameraRevision"] = View.at("CameraRevision");
+			auto Pointed = Ray;
+			Pointed["DisplayedFrame"] = SurfaceFrame;
+			Require(Call("RaycastTerrainSurface", Pointed).at("Result").at("Hit") == Hit.at("Result").at("Hit"),
+				"the displayed terrain frame resolves the same physical surface");
+		}
+		Require(Call("SaveProject", Json::object()).at("Ok") == true, "Save the filled terrain");
 		const auto FilledDigest = ProjectValue.GetPersistedTerrainManifest();
 		Require(FilledDigest.has_value(), "Fill persisted as a canonical terrain manifest");
 		Require(Call("SubmitTerrainBrush", {{"Scope", Scope}, {"ExpectedTerrainRevision", "0"},
@@ -837,16 +850,16 @@ namespace {
 		Json Paint{{"Shape", "Box"}, {"Mode", "Paint"}, {"Center", {-0.2, 9.2, 10.1}},
 			{"HalfExtent", {1.3, 1.3, 1.3}}, {"Material", 5}};
 		Require(Await(Submit("SubmitTerrainBrush", {{"Brush", Paint}})).at("TerrainRevision") == "2" &&
-			Call("SaveProject").at("Ok") == true, "Commit and save bounded Box paint");
+			Call("SaveProject", Json::object()).at("Ok") == true, "Commit and save bounded Box paint");
 		const auto PaintedDigest = ProjectValue.GetPersistedTerrainManifest();
 		Require(PaintedDigest && PaintedDigest != FilledDigest, "Paint changes the canonical terrain closure");
 		const auto Undone = Await(Submit("UndoTerrainEdit", Json::object()));
 		Require(Undone.at("TerrainRevision") == "3" && Undone.at("CanRedo") == true &&
-			Call("SaveProject").at("Ok") == true && ProjectValue.GetPersistedTerrainManifest() == FilledDigest,
+			Call("SaveProject", Json::object()).at("Ok") == true && ProjectValue.GetPersistedTerrainManifest() == FilledDigest,
 			"Undo restores the exact previously saved sample bytes");
 		const auto Redone = Await(Submit("RedoTerrainEdit", Json::object()));
 		Require(Redone.at("TerrainRevision") == "4" && Redone.at("CanUndo") == true &&
-			Call("SaveProject").at("Ok") == true && ProjectValue.GetPersistedTerrainManifest() == PaintedDigest,
+			Call("SaveProject", Json::object()).at("Ok") == true && ProjectValue.GetPersistedTerrainManifest() == PaintedDigest,
 			"Redo restores the exact painted sample bytes");
 
 		Paint["Center"] = {90.0, 9.2, 10.1};
@@ -868,6 +881,14 @@ namespace {
 		const auto LocalScope = Local.at("Scope");
 		Require(LocalScope != Scope && Local.at("TerrainRevision") == "0" && Local.at("CanUndo") == false,
 			"an independently selected terrain starts empty and cannot replay the default terrain history");
+		if (LatestFrameMailbox::IsSupported()) {
+			auto Coincident = Ray;
+			Coincident["Scope"] = LocalScope;
+			Coincident["ExpectedTerrainRevision"] = Local.at("TerrainRevision");
+			Coincident["DisplayedFrame"] = SurfaceFrame;
+			Require(Call("RaycastTerrainSurface", Coincident).at("Error").at("Code") == "StaleFrame",
+				"a current domain address cannot reuse a retired chart's terrain image");
+		}
 		Require(Call("RaycastTerrainSurface", Ray).at("Error").at("Code") == "StaleTerrainScope",
 			"an old default viewport ray cannot target the new domain");
 		const auto LocalSubmit = Call("SubmitTerrainBrush", {{"Scope", LocalScope}, {"ExpectedTerrainRevision", "0"},

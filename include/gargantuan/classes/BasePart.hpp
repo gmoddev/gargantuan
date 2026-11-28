@@ -33,6 +33,9 @@ namespace gargantuan {
 		friend class network::GameSession;
 
 	  private:
+		[[nodiscard]] bool ResolveLocalSpatialWorld(std::shared_ptr<WorldRoot> &World) const override {
+			return ResolveExplicitSpatialWorld(*this, World);
+		}
 		void SetSimulationCFrame(const gargantuan::CFrame &Value, bool Exact = false);
 		void SetCharacterPresentationOffset(std::optional<gargantuan::CFrame> Value);
 

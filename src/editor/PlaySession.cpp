@@ -475,6 +475,7 @@ namespace gargantuan {
 			throw;
 		}
 		if (RuntimeEngine->Script && RuntimeEngine->Script->GetPausedRootLine()) {
+			// A stepped line can switch charts while the simulation clock is held.
 			const auto View = RuntimeEngine->Workspace->GetCurrentSpatialRegion().value_or(nullptr);
 			if (View != PreviousView || (View && View->GetSpatialActivation() != PreviousActivation))
 				RequestRenderFullResync();
@@ -580,8 +581,8 @@ namespace gargantuan {
 	std::vector<RenderPublicationPtr> PlaySession::TakeRenderPublications() {
 		if (AwaitingRenderFullResync && RuntimeEngine && DebugClock &&
 			(IsRootDebugPaused() || DebugClock->IsHeld(SimulationTimeline::Hold::Gameplay))) {
-			// A resized or replaced presentation sink needs a new full publication.
-			// Keep the runtime clock, scripts, and resize event parked while extracting it.
+			// Project the selected chart into a new sink or after a stepped chart change.
+			// Keep the runtime clock, scripts, and resize event parked during extraction.
 			const auto [Width, Height] = RuntimeRenderer->GetViewportSize();
 			const auto Camera = RuntimeEngine->Workspace->GetCurrentCamera();
 			const auto Selected = RuntimeEngine->Workspace->GetCurrentSpatialRegion();

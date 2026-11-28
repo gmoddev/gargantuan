@@ -277,6 +277,16 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	}
 	const bool NetworkTerrain = ClientEndpoint && (!Payload->TerrainArtifacts.empty() || !Payload->WorkspaceTerrainManifest.empty());
 	const bool SpatialContent = Payload->SpatialContent;
+	if (SpatialContent && (!Distributed || !ClientEndpoint || !network::IsLoopbackTransportEndpoint(*ClientEndpoint))) {
+		std::cerr << "[Spatial:Package] Packaged spatial sessions require a distributed Player and a loopback endpoint.\n";
+		return 7;
+	}
+	if (NetworkTerrain && (Payload->Inspection.Configuration != PackageConfiguration::Development ||
+		!network::IsLoopbackTransportEndpoint(*ClientEndpoint))) {
+		std::cerr << "[Terrain:Network] Terrain delivery currently requires a loopback Development package.\n";
+		ReportFarmResult(7, "terrain_policy");
+		return 7;
+	}
 
 	const bool Headless = Program.is_used("--headless");
 	if (!SDL_Init(Headless ? SDL_INIT_EVENTS : SDL_INIT_VIDEO)) {

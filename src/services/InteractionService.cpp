@@ -429,6 +429,7 @@ namespace gargantuan {
 	InteractionService::QueryResult
 	InteractionService::QueryNearest(const glm::vec3 &Origin, const std::shared_ptr<Player> &PlayerValue) const {
 		QueryResult Result;
+		if (SpatialCells.empty()) return Result;
 		auto Center = PositionToCell(Origin);
 		const auto Domain = PlayerValue ? PlayerWorld(PlayerValue) : PhysicsWorkspace.lock();
 		if (!Center || !Domain) return Result;

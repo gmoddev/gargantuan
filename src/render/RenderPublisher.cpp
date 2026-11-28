@@ -1341,21 +1341,33 @@ namespace gargantuan {
 		LastProfile = {};
 		if (LastPublicationId == std::numeric_limits<RenderPublicationId>::max())
 			throw std::overflow_error("RenderPublication identity exhausted and will not roll over");
-		const auto CurrentScope = World.GetReplicationScopeId();
-		if (!CurrentScope.IsValid()) throw std::invalid_argument("RenderPublication requires a live DataModel scope");
+		const auto Realm = World.GetDataModel();
+		if (!Realm || World.GetDestroyed() || World.IsDestroying() || Realm->GetDestroyed() || Realm->IsDestroying())
+			throw std::invalid_argument("RenderPublication requires a live WorldRoot and DataModel scope");
 		const auto Camera = BuildCamera(CameraInput, ViewportWidth, ViewportHeight);
 		std::optional<std::shared_ptr<AssetService>> Assets;
 		auto GetAssets = [&]() {
 			if (!Assets) Assets = FindAssetService(World);
 			return Assets->get();
 		};
+		const auto BeginVisualAssetObservation = [&] {
+			const auto *Service = GetAssets();
+			VisualAssetChangeSequence = Service ? Service->ReadChanges(0).NextSequence : 0;
+		};
 
-		if (PublishedWorld != &World || Scope != CurrentScope) {
+		const auto Activation = World.GetSpatialActivation();
+		if (PublishedWorld != &World || PublishedWorldActivation != Activation || PublishedWorldLifetime.expired() ||
+			PublishedRealm.owner_before(Realm) || Realm.owner_before(PublishedRealm)) {
+			const auto CurrentScope = Realm->GetObjectId();
+			if (!CurrentScope.IsValid()) throw std::invalid_argument("RenderPublication requires a live DataModel scope");
 			ClearVisualDependencies();
 			VisualAssetChangeSequence = 0;
 			VisualIncomplete = false;
 			if (Scope.IsValid()) Dirty->ReleaseConsumer(DirtyConsumer, Scope);
 			PublishedWorld = &World;
+			PublishedWorldLifetime = World.weak_from_this();
+			PublishedWorldActivation = Activation;
+			PublishedRealm = Realm;
 			PublishedGrids.clear();
 			Scope = CurrentScope;
 			FullResyncRequested = true;
@@ -1459,6 +1471,7 @@ namespace gargantuan {
 					if (StructuralVisual(*It)) Pending.push_back(*It);
 			}
 			LastProfile.VisualTraversalObjects = Visited;
+			if (!Visuals.empty() || VisualOverflow) BeginVisualAssetObservation();
 			if (VisualOverflow) {
 				VisualIncomplete = true;
 				Result->VisualAttachmentsComplete = false;
@@ -1493,11 +1506,6 @@ namespace gargantuan {
 					ClearVisualDependencies();
 				}
 				else VisualIncomplete = false;
-			}
-			if (auto Model = World.GetDataModel()) {
-				const auto Service = Model->FindService("AssetService");
-				if (auto Assets = Service ? std::dynamic_pointer_cast<AssetService>(*Service) : nullptr)
-					VisualAssetChangeSequence = Assets->ReadChanges(VisualAssetChangeSequence).NextSequence;
 			}
 			std::vector<std::shared_ptr<DeformableBody>> OrderedDeformables;
 			OrderedDeformables.reserve(World.SoftBodies.size());
@@ -1555,8 +1563,9 @@ namespace gargantuan {
 			for (const auto &[Texture, State] : OrderedTextures)
 				Result->TextureCreates.push_back({Texture, State.Revision, State.Width, State.Height, State.Format, State.Pixels});
 			const auto Limit = Dirty->GetLimits().MaximumPublicationBytes;
-			auto Grids = World.HasBlockGrids() ? PrepareBlockGrids(World, *Result,
-				Limit - std::min(Limit, EstimatePublicationBytes(*Result))) : GridMeshes{};
+			GridMeshes Grids;
+			if (World.HasBlockGrids()) PrepareBlockGrids(World, *Result,
+				Limit - std::min(Limit, EstimatePublicationBytes(*Result)), Grids);
 			for (const auto &[Object, Grid] : Grids) Replacement.emplace(Object, Grid.Item);
 			auto Terrain = PrepareTerrain(*Result);
 			if (!Terrain) {
@@ -1589,16 +1598,11 @@ namespace gargantuan {
 
 		if (FullResyncRequested || DirtyBatch.FullResyncRequired) return FullResync();
 		std::vector<ObjectId> VisualAssetDirty;
-		if (auto Model = World.GetDataModel()) {
-			const auto Service = Model->FindService("AssetService");
-			if (auto Assets = Service ? std::dynamic_pointer_cast<AssetService>(*Service) : nullptr) {
-				auto Changes = Assets->ReadChanges(VisualAssetChangeSequence);
+		if (!VisualDependencies.empty() || VisualIncomplete) {
+			if (const auto *Service = GetAssets()) {
+				auto Changes = Service->ReadChanges(VisualAssetChangeSequence);
 				VisualAssetChangeSequence = Changes.NextSequence;
-				// Physics can create AssetService after the first Part-only render
-				// publication. With no indexed visual attachments there is no asset
-				// dependent state to rebuild; the cursor is already advanced above.
-				if (Changes.RescanRequired && (!VisualDependencies.empty() || VisualIncomplete))
-					return FullResync();
+				if (Changes.RescanRequired) return FullResync();
 				for (const auto &Change : Changes.Changes)
 					if (const auto Dependents = VisualAssetDependents.find(Change.Reference);
 						Dependents != VisualAssetDependents.end())
@@ -1638,33 +1642,32 @@ namespace gargantuan {
 			DirtyObjects.assign(Expanded.begin(), Expanded.end());
 			DirtyObjects.reserve(DirtyObjects.size() + PendingAnimationObjects.size());
 		}
-		for (const auto &Record : DirtyBatch.Records)
-			if (const auto Dependents = VisualSourceDependents.find(Record.Object);
-				Dependents != VisualSourceDependents.end())
-				for (const auto Object : Dependents->second) {
-					DirtyObjects.emplace_back(Object, Record.Domains | RenderUpdateDomain::Transform);
-					++LastProfile.VisualDependencyExpansions;
-				}
+		// Capture contains unique sorted object IDs, as does the hierarchy expansion map.
+		// Only newly appended dependents or animation marks can disturb that order.
+		const auto CapturedObjects = DirtyObjects.size();
+		if (!VisualSourceDependents.empty()) {
+			for (const auto &Record : DirtyBatch.Records)
+				if (const auto Dependents = VisualSourceDependents.find(Record.Object);
+					Dependents != VisualSourceDependents.end())
+					for (const auto Object : Dependents->second) {
+						DirtyObjects.emplace_back(Object, Record.Domains | RenderUpdateDomain::Transform);
+						++LastProfile.VisualDependencyExpansions;
+					}
+		}
 		for (const auto Object : VisualAssetDirty)
 			DirtyObjects.emplace_back(Object, RenderUpdateDomain::Geometry | RenderUpdateDomain::Material);
-		std::ranges::sort(DirtyObjects, {}, &std::pair<ObjectId, RenderUpdateDomain>::first);
-		std::vector<std::pair<ObjectId, RenderUpdateDomain>> MergedDirty;
-		MergedDirty.reserve(DirtyObjects.size());
-		for (const auto &[Object, Domains] : DirtyObjects) {
-			if (!MergedDirty.empty() && MergedDirty.back().first == Object)
-				MergedDirty.back().second = MergedDirty.back().second | Domains;
-			else MergedDirty.emplace_back(Object, Domains);
-		}
-		DirtyObjects = std::move(MergedDirty);
-		if (!PendingAnimationObjects.empty()) {
+		for (const auto Object : PendingAnimationObjects)
+			DirtyObjects.emplace_back(Object, RenderUpdateDomain::AnimationPose);
+		if (CapturedObjects != DirtyObjects.size()) {
 			std::ranges::sort(DirtyObjects, {}, &std::pair<ObjectId, RenderUpdateDomain>::first);
-			for (const auto Object : PendingAnimationObjects) {
-				const auto Position = std::lower_bound(DirtyObjects.begin(), DirtyObjects.end(), Object,
-					[](const auto &Entry, ObjectId Value) { return Entry.first < Value; });
-				if (Position != DirtyObjects.end() && Position->first == Object)
-					Position->second = Position->second | RenderUpdateDomain::AnimationPose;
-				else DirtyObjects.insert(Position, {Object, RenderUpdateDomain::AnimationPose});
+			std::size_t Count = 0;
+			for (const auto &Entry : DirtyObjects) {
+				if (Count && DirtyObjects[Count - 1].first == Entry.first)
+					DirtyObjects[Count - 1].second = DirtyObjects[Count - 1].second | Entry.second;
+				else
+					DirtyObjects[Count++] = Entry;
 			}
+			DirtyObjects.resize(Count);
 		}
 		if (ProfilingEnabled)
 			LastProfile.DirtyExpansionNanoseconds = ProfileNanoseconds(ProfileClock::now() - ExpansionStart);
@@ -1682,15 +1685,14 @@ namespace gargantuan {
 										  (HasRenderUpdateDomain(Record.Domains, RenderUpdateDomain::Transform) &&
 											  LocalLightOwners.contains(Record.Object));
 									  });
-		auto Environment = PublishedEnvironment;
+		Result->Frame = {ViewportWidth, ViewportHeight, 1.0f, Camera, PublishedEnvironment};
 		if (EnvironmentDirty) {
 			auto Candidate = BuildEnvironmentState(World, Result->Diagnostics);
 			if (!HasPublishedEnvironment || !Equal(Candidate, PublishedEnvironment)) {
-				Environment = std::move(Candidate);
+				Result->Frame.Environment = std::move(Candidate);
 				Result->EnvironmentChanged = true;
 			}
 		}
-		Result->Frame = {ViewportWidth, ViewportHeight, 1.0f, Camera, Environment};
 		for (const auto &Diagnostic : DirtyBatch.Diagnostics)
 			Result->Diagnostics.push_back({RenderExtractionIssue::PublicationOverflow, {}, Diagnostic});
 		Result->Updates.reserve(DirtyObjects.size());
@@ -1720,6 +1722,9 @@ namespace gargantuan {
 					HasRenderUpdateDomain(Domains, RenderUpdateDomain::Hierarchy) ||
 					HasRenderUpdateDomain(Domains, RenderUpdateDomain::Geometry) ||
 					HasRenderUpdateDomain(Domains, RenderUpdateDomain::Material);
+				// The first attachment reads authoritative assets during extraction. Start its
+				// journal cursor before that read so changes racing extraction remain observable.
+				if (VisualDependencies.empty() && !VisualIncomplete) BeginVisualAssetObservation();
 				if (RefreshIndex && !IndexVisual(AttachmentMeshValue)) {
 					VisualIncomplete = true;
 					Dirty->RequestFullResync(Scope, "AttachmentMesh dependency index exceeded its bound");
@@ -1933,9 +1938,11 @@ namespace gargantuan {
 		Result->TextureCreates = PendingTextureCreates;
 		Result->TextureUpdates = PendingTextureUpdates;
 		Result->TextureRemoves = PendingTextureRemoves;
-		const auto Limit = Dirty->GetLimits().MaximumPublicationBytes;
-		auto Grids = World.HasBlockGrids() || !PublishedGrids.empty() ? PrepareBlockGrids(World, *Result,
-			Limit - std::min(Limit, EstimatePublicationBytes(*Result))) : GridMeshes{};
+		std::optional<GridMeshes> Grids;
+		if (World.HasBlockGrids() || !PublishedGrids.empty()) {
+			const auto Limit = Dirty->GetLimits().MaximumPublicationBytes;
+			PrepareBlockGrids(World, *Result, Limit - std::min(Limit, EstimatePublicationBytes(*Result)), Grids.emplace());
+		}
 		auto Terrain = PrepareTerrain(*Result);
 		if (!Terrain) {
 			Dirty->RequestFullResync(Scope, "Incremental render publication exceeds its byte limit");
@@ -1946,11 +1953,11 @@ namespace gargantuan {
 				ProfileNanoseconds(ProfileClock::now() - FinalConstructionStart);
 		const auto ReconciliationStart = ProfilingEnabled ? ProfileClock::now() : ProfileClock::time_point{};
 		try {
-			PublishedItems.reserve(PublishedItems.size() + Result->Creates.size());
+			if (!Result->Creates.empty()) PublishedItems.reserve(PublishedItems.size() + Result->Creates.size());
 			for (const auto &Remove : Result->Removes) PublishedItems.erase(Remove.Object);
 			for (const auto &Create : Result->Creates) PublishedItems.emplace(Create.Item.Object, Create.Item);
 			for (const auto &Update : Result->Updates) PublishedItems.at(Update.Object) = Update.Item;
-			PublishedGrids = std::move(Grids);
+			if (Grids) PublishedGrids = std::move(*Grids);
 			for (const auto Object : DeformableCacheRemoves) PublishedDeformables.erase(Object);
 			for (const auto &[Object, State] : DeformableCacheUpdates)
 				PublishedDeformables.insert_or_assign(Object, State);

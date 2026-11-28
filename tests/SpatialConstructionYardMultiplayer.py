@@ -3,6 +3,7 @@
 """Exercise the authored Yard actions with relocated Players and a restarted SQLite-backed Server."""
 import argparse
 from contextlib import ExitStack, contextmanager
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -12,7 +13,8 @@ import sys
 import tempfile
 import time
 
-from SpatialConstructionPackageSession import Build, ConsoleCapture, ManagedEnvironment, Run
+from SpatialConstructionPackageSession import Build, ConsoleCapture, ManagedEnvironment
+from SpatialConstructionYardInput import PlatformWitness, PrepareProject
 
 Samples = Path(__file__).resolve().parents[1] / "samples"
 sys.path.insert(0, str(Samples / "TerrainQuarry"))
@@ -45,6 +47,7 @@ local function Surface()
 end
 '''
 
+FreightVisit = (Samples.parent / "tests/blockgrid/gameplay/YardFreightVisit.luau").read_text(encoding="utf-8")
 ServerProbe = TerrainProof + r'''
 local Probe = game.ReplicatedStorage.YardProcessProbe
 local Players = game:GetService("Players")
@@ -53,6 +56,7 @@ local Cell = Vector3.new(-2,2,-5)
 local Roles = {}
 local First, Second, DigConfirmed, HasReturn
 local Restored
+''' + FreightVisit + r'''
 task.spawn(function()
 	local Store=game:GetService("DataStoreService"):GetDocumentStore("ConstructionYard")
 	local LastStatus
@@ -109,13 +113,14 @@ Probe.OnPlayerEvent:Connect(function(Player, Kind)
 end)
 '''
 
-ClientProbe = TerrainProof + r'''
+ClientProbe = TerrainProof + PlatformWitness + r'''
 local Space = game.Workspace
 local Player = game:GetService("Players").LocalPlayer
 local Probe = game.ReplicatedStorage.YardProcessProbe
 local Actions = game.ReplicatedStorage.YardRequest
 local Cell = Vector3.new(-2,2,-5)
 local Role, DigVisible, Rejoined, RestoredSurface
+local TourStage
 local AppliedDoors=0
 Actions.OnClientEvent:Connect(function(Value)
 	if Value=="DoorApplied" then AppliedDoors+=1 end
@@ -123,6 +128,7 @@ end)
 Probe.OnClientEvent:Connect(function(Value, Expected)
 	if Value=="dig-visible" then DigVisible=true
 	elseif Value=="rejoined" then Rejoined=true
+	elseif Value=="near-freight" or Value=="original-yard" then TourStage=Value
 	else Role=Value; RestoredSurface=Expected end
 end)
 local function Wait(Label, Predicate)
@@ -150,6 +156,33 @@ end
 task.spawn(function()
 	Wait("join role",function() if not Role then Probe:TryFireServer("join") end return Role end)
 	Wait("outdoor character and construction",Outside)
+	Wait("far freight read correctly denied", function()
+		local Grid=Space:FindFirstChild("FreightPlatform")
+		if not Grid or Grid.MotionMode~="Dynamic" then return false end
+		local Ok,Problem=pcall(function() return Grid:GetBlock(Vector3.new(0,1,0)) end)
+		if Ok or not string.find(tostring(Problem),"outside installed replica coverage",1,true) then return false end
+		warn(string.format("[Spatial:FreightVisit] far actor=(%.2f,%.2f,%.2f) deckX=%.2f",
+			Player.Character.Position.X,Player.Character.Position.Y,Player.Character.Position.Z,Grid:GetAssemblyState().CFrame.Position.X))
+		return true
+	end)
+	local PreviousPossession=Player.PossessedEntity
+	local CartName="FreightInspector"..tostring(Player.PlayerId)
+	Wait("possess the authorized freight inspection cart",function()
+		if TourStage~="near-freight" then Probe:TryFireServer("freight-visit") end
+		local Cart=Player.PossessedEntity
+		return TourStage=="near-freight" and Cart and Cart.Name==CartName and Cart.Parent==Space and
+			(Cart.Position-Vector3.new(22,3,1)).Magnitude<.01
+	end)
+	Wait("replicated freight platform motion, mass and cell hit",function() return ObserveMovingPlatform(Space) end)
+	local Focus=Player.PossessedEntity
+	warn(string.format("[Spatial:FreightVisit] near actor=(%.2f,%.2f,%.2f)",
+		Focus.Position.X,Focus.Position.Y,Focus.Position.Z))
+	Wait("return to Yard controls",function()
+		if TourStage~="original-yard" then Probe:TryFireServer("freight-return") end
+		return TourStage=="original-yard" and Outside() and Player.PossessedEntity==PreviousPossession and
+			not Space:FindFirstChild(CartName,false)
+	end)
+	warn("[Spatial:YardProcess] Verified 512-cell moving platform for "..Role)
 	if Role=="builder" then
 		Send(Actions,"YardBuild")
 		Wait("outdoor brick",function() return Tile(Space.RetainingWall) end)
@@ -243,16 +276,30 @@ def Await(Owner, Marker, Others=()):
         time.sleep(.05)
 
 
+def ReportPlatform(Role, Owner):
+    Log=Owner[1].read_text(encoding="utf-8",errors="replace")
+    Rows=re.findall(r"\[Spatial:FreightPlatform\][^\r\n]*",Log)
+    if not Rows: raise RuntimeError(f"{Role} completed without a freight platform observation")
+    for Stage in ("far","near"):
+        Visits=re.findall(r"\[Spatial:FreightVisit\] "+Stage+r" actor=[^\r\n]*",Log)
+        if not Visits: raise RuntimeError(f"{Role} omitted its {Stage} viewer position")
+        print(f"{Role} {Visits[-1]}",flush=True)
+    print(f"{Role} {Rows[-1]}",flush=True)
+
+
 def RunYard(Options, Root):
-    Project = Root / "Yard"
-    Run([sys.executable, "-B", Samples / "ConstructionYard" / "BuildProject.py",
-         "--engine", Options.engine.resolve(), "--project", Project], Root)
+    Project = PrepareProject(Options.engine.resolve(strict=True), Root, Options.project)
     AddObserver(Options.engine.resolve(), Project)
     Policies = Samples / "ConstructionYard"
-    Server, _ = Build(Options.packager, Project, Options.server_runtime, "DedicatedServer", Root, "Development",
+    Server, ServerMetadata = Build(Options.packager, Project, Options.server_runtime, "DedicatedServer", Root, "Development",
                       Policies / "DedicatedServer.json")
-    Player, _ = Build(Options.packager, Project, Options.player_runtime, "DistributedPlayer", Root, "Development",
+    Player, PlayerMetadata = Build(Options.packager, Project, Options.player_runtime, "DistributedPlayer", Root, "Development",
                       Policies / "DistributedPlayer.json")
+    if ServerMetadata["ClientCodeIdentity"]!=PlayerMetadata["ClientCodeIdentity"]:
+        raise RuntimeError("The relocated Yard pair disagrees on client code identity")
+    for Package in (Server,Player):
+        Digest=hashlib.sha256((Package/"game.package.json").read_bytes()).hexdigest()
+        print(f"[Spatial:YardPackage] {Package.name} ManifestSHA256={Digest}",flush=True)
     Env = ManagedEnvironment()
     Exe = ".exe" if os.name == "nt" else ""
     Database = Root / "yard.sqlite"
@@ -271,20 +318,25 @@ def RunYard(Options, Root):
             First = Processes.enter_context(Launch(ClientArgs,Root,Env,f"first-{Round}"))
             if Round == 2:
                 Await(First,"[Spatial:YardProcess] Fresh Server replayed both constructions",(Host,))
+                ReportPlatform("restart",First)
                 Surfaces = re.findall(r"\[Spatial:YardSurface\] (\d+)",First[1].read_text(errors="replace"))
                 Fields = re.findall(r"\[Spatial:YardField\] (\d+)",Host[1].read_text(errors="replace"))
                 if not Surfaces or not Fields or (Surfaces[-1], Fields[-1]) != DigSignature:
                     raise RuntimeError("Restart diverged from the observed client surface or authoritative terrain samples")
+                print(f"[Spatial:YardProcess] Stable surface={Surfaces[-1]} field={Fields[-1]}",flush=True)
                 break
             Await(First,"[Spatial:YardProcess] Builder placed exterior brick",(Host,))
+            ReportPlatform("builder",First)
             with Launch(ClientArgs,Root,Env,"second") as Second:
                 Await(Second,"[Spatial:YardProcess] Second Player observed the brick and excavated replicated terrain",(Host,First))
+                ReportPlatform("digger",Second)
                 Await(Host,"[Spatial:YardField] ",(First,Second))
                 DigSignature = (re.findall(r"\[Spatial:YardSurface\] (\d+)",Second[1].read_text(errors="replace"))[-1],
                                 re.findall(r"\[Spatial:YardField\] (\d+)",Host[1].read_text(errors="replace"))[-1])
             Await(Host,"[Spatial:YardProcess] Builder returned with two persisted constructions",(First,))
             Rejoin = Processes.enter_context(Launch(ClientArgs,Root,Env,"rejoin"))
             Await(Rejoin,"[Spatial:YardProcess] Reconnected Player materialized the edited yard",(Host,First))
+            ReportPlatform("rejoin",Rejoin)
     print("[Spatial:YardProcess] Two-client build, dig, door travel, reconnect and SQLite restart passed")
 
 
@@ -292,5 +344,6 @@ if __name__ == "__main__":
     Parser = argparse.ArgumentParser(description=__doc__)
     for Name in ("engine", "packager", "player-runtime", "server-runtime"):
         Parser.add_argument("--" + Name, type=Path, required=True)
+    Parser.add_argument("--project", type=Path, help="Package a temporary copy of this saved Construction Yard")
     with tempfile.TemporaryDirectory(prefix="gym-") as Directory:
         RunYard(Parser.parse_args(),Path(Directory).resolve())

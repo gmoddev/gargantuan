@@ -209,12 +209,17 @@ namespace gargantuan {
 	}
 
 	std::shared_ptr<const RuntimeSchemaRegistry> RuntimeSchemaLifecycle::GetActiveRegistry() const {
+		(void)GetActiveRegistryReference();
+		return ActiveRegistry;
+	}
+
+	const RuntimeSchemaRegistry &RuntimeSchemaLifecycle::GetActiveRegistryReference() const {
 		if (!ActiveRegistry)
 			throw std::logic_error(
 				"Runtime schema lifecycle has no active registry during " +
 				std::string(GetRuntimeSchemaLifecyclePhaseName(Phase))
 			);
-		return ActiveRegistry;
+		return *ActiveRegistry;
 	}
 
 	void RuntimeSchemaLifecycle::RequireRuntimeReady(std::string_view operation) const {
@@ -376,7 +381,7 @@ namespace gargantuan {
 	const RuntimeSchemaLifecycle &GetRuntimeSchemaLifecycle() { return GetMutableRuntimeSchemaLifecycle(); }
 
 	const RuntimeSchemaRegistry &GetActiveRuntimeSchemaRegistry() {
-		return *GetMutableRuntimeSchemaLifecycle().GetActiveRegistry();
+		return GetMutableRuntimeSchemaLifecycle().GetActiveRegistryReference();
 	}
 
 	std::string_view GetRuntimeSchemaLifecyclePhaseName(RuntimeSchemaLifecyclePhase phase) {

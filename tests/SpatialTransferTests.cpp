@@ -13,6 +13,7 @@
 #include "gargantuan/terrain/Field.hpp"
 
 #include <array>
+#include <cmath>
 #include <iostream>
 #include <source_location>
 #include <stdexcept>
@@ -358,6 +359,37 @@ namespace {
 		);
 	}
 
+	void TestHeldCommandSurvivesOrdinaryReadback() {
+		Pair P;
+		auto &Realm = P.Authority;
+		Realm.Source->SetGravity(0.f);
+		Realm.Actor->SetLinearDamping(0.f);
+		Realm.Actor->ApplyImpulse({8, 0, 0});
+		Realm.Protect();
+		(void)Packet(P.Begin(), SpatialTransferPhase::Offer);
+		const auto Start = Realm.Actor->GetPosition();
+		Realm.Source->StepPhysics(1. / 30., std::nullopt);
+		Check(Realm.Protection->Reservations.HoldsMember(Realm.Actor->GetObjectId()) &&
+			Realm.Actor->GetPosition() == Start && Realm.Actor->GetLinearVelocity() == glm::vec3(0),
+			"anchored subject moved during two reserved substeps");
+
+		(void)Packet(P.Server.Cancel(), SpatialTransferPhase::Cancel);
+		Realm.Protection->Retire();
+		Realm.Actor->SetAnchored(false);
+		Realm.Source->StepPhysics(1. / 60., std::nullopt);
+		const float ReleasedVelocity = Realm.Actor->GetLinearVelocity().x;
+		Check(ReleasedVelocity > 0.f && Realm.Actor->GetPosition().x > Start.x,
+			"unanchoring lost the held impulse or failed to publish the first dynamic state");
+		Realm.Source->StepPhysics(1. / 60., std::nullopt);
+		Check(std::abs(Realm.Actor->GetLinearVelocity().x - ReleasedVelocity) < .0001f,
+			"the held impulse was consumed more than once");
+		Realm.Actor->SetAnchored(true);
+		Realm.Source->StepPhysics(1. / 60., std::nullopt);
+		const auto Anchored = Realm.Actor->GetPosition();
+		Realm.Source->StepPhysics(1. / 60., std::nullopt);
+		Check(Realm.Actor->GetPosition() == Anchored, "reanchored subject kept moving");
+	}
+
 	void CharacterAdmission() {
 		using enum SpatialTransferPhase;
 		{
@@ -668,6 +700,7 @@ int main() try {
 	CheckAudienceFrames();
 	CheckedHandoff();
 	PreventBypasses();
+	TestHeldCommandSurvivesOrdinaryReadback();
 	CharacterAdmission();
 	Failures();
 	std::cout << "[Network:SpatialTransfer] Independent native realms, portable proof, bilateral holds and revocation "

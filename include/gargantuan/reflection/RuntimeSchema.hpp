@@ -229,9 +229,15 @@ namespace gargantuan {
 		[[nodiscard]] bool IsFrozen() const { return State == RuntimeSchemaRegistryState::Frozen; }
 
 	  private:
+		struct ClassNameHash {
+			using is_transparent = void;
+			std::size_t operator()(std::string_view Name) const noexcept { return std::hash<std::string_view>{}(Name); }
+		};
+		using ShortClassIndex = std::unordered_map<std::string, SchemaId, ClassNameHash, std::equal_to<>>;
 		std::unordered_map<SchemaId, SchemaDefinition, SchemaIdHash> DefinitionsById;
 		std::unordered_map<std::type_index, SchemaId> ClassIdsByType;
 		std::unordered_map<std::string, SchemaId> IdsByCanonicalName;
+		ShortClassIndex ClassIdsByShortName;
 		std::size_t CustomSchemaPayloadBytes = 0;
 		RuntimeSchemaRegistryState State = RuntimeSchemaRegistryState::Building;
 

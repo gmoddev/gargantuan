@@ -1,0 +1,155 @@
+{
+  "A": {
+    "EditorHostSHA256": "ec39cd5036d6569985af9b07f5e8fb48dfc43bab051d8a513b787ec9b34d48b4",
+    "Pin": "d28a2ad74f59dd65d80c66aed924cb2dd10ff476"
+  },
+  "B": {
+    "Compiled": [
+      "src/classes/WorldRoot.cpp"
+    ],
+    "EditorHostSHA256": "5fba1d52ca3985e1688b448678ed06c346abb67b770c452e7b75ad961251b518",
+    "LinkResponseSHA256": "bcfcdb0e0aac4d0a38a046112a9565a306cc7fa91736b2d4ccb5179aa9e983c2",
+    "OriginalGraph": "d28a2ad74f59dd65d80c66aed924cb2dd10ff476",
+    "Pin": "9489330c656ab33bbed435c6dcbabdb59da17cf8",
+    "PrivateCompileFlags": [],
+    "PrivateLinkFlags": [],
+    "SourcesAndHeadersSHA256": {
+      "src/classes/WorldRoot.cpp": "b24ad955caad42d0abbdb5d6c7e276a337b6f4fee1b605f884f9b86943fcfe7d"
+    }
+  },
+  "C": {
+    "Compiled": [
+      "src/classes/WorldRoot.cpp"
+    ],
+    "EditorHostSHA256": "6aaca69bdcbfeaaa6f3db2a39f63ca33047d80d5ba6d153e17e76f301fbd732f",
+    "LinkResponseSHA256": "7b4270718ddc13691bdb7d049f37dd2b19edd9a2a28285ec6758df4e77a37b85",
+    "OriginalGraph": "d28a2ad74f59dd65d80c66aed924cb2dd10ff476",
+    "Pin": "060446f6396088d99873c6cc297d69c7dacf5144",
+    "PrivateCompileFlags": [],
+    "PrivateLinkFlags": [],
+    "SourcesAndHeadersSHA256": {
+      "src/classes/WorldRoot.cpp": "d69f4e8f19fd98d37c54c6215101980e062447978519d1cd7287182a3db45201"
+    }
+  },
+  "D": {
+    "Compiled": [
+      "src/classes/WorldRoot.cpp",
+      "src/terrain/EditCoordinator.cpp"
+    ],
+    "EditorHostSHA256": "a1692f4a0aea22deb5bc8003c49281def0c0c66a7b30692ccd6c4e5802e94505",
+    "LinkResponseSHA256": "97c3f0f408767ca766864a1825a33d1c20c5a4a0279e1e0c73512baf89c0b2b5",
+    "OriginalGraph": "d28a2ad74f59dd65d80c66aed924cb2dd10ff476",
+    "Pin": "fd59e18519ec86a4e36b431591457e2c0b040abb",
+    "PrivateCompileFlags": [],
+    "PrivateLinkFlags": [],
+    "SourcesAndHeadersSHA256": {
+      "src/classes/WorldRoot.cpp": "8f777157ae05e0383685c88e3982a7e642a0b4f65f5479c09c623d0a734bb1b7",
+      "src/terrain/EditCoordinator.cpp": "ef6fb6a6f135a199280421e0be9e2bc4656976fac927ca138010842b4f9159a6",
+      "src/terrain/EditCoordinator.hpp": "480fea53e79f79f6332cf6824f72ed66325ab0acbb7b0cbf55f9dc6117f939ae",
+      "src/terrain/TerrainRuntime.hpp": "ba7925610faf626d18a42c79d553c6830305a8dcbe57eaccf7b4e457ea668507"
+    }
+  },
+  "E": {
+    "Compiled": [
+      "src/classes/WorldRoot.cpp",
+      "src/terrain/EditCoordinator.cpp"
+    ],
+    "EditorHostSHA256": "b755993f21c07a73cce26deeddc016b25b3d0d3db5014b49bca13d8788c0277d",
+    "LinkResponseSHA256": "3b71298749a554fc7dc563f5059931d23048bac285bc03d9a49de75473d4b3d3",
+    "OriginalGraph": "d28a2ad74f59dd65d80c66aed924cb2dd10ff476",
+    "Pin": "1f28dd2ca6aed077a1e30b5236a4000d1ca0165a",
+    "PrivateCompileFlags": [],
+    "PrivateLinkFlags": [],
+    "SourcesAndHeadersSHA256": {
+      "include/gargantuan/classes/WorldRoot.hpp": "143479874b95096d7a6f52176bd0d1e9079e3751482010df34996918ff226892",
+      "src/classes/WorldRoot.cpp": "7813dc66b8df566d7b8277d61860515b4b0e64ebbfba5bda5ff83ebc17ad9194",
+      "src/terrain/EditCoordinator.cpp": "ef6fb6a6f135a199280421e0be9e2bc4656976fac927ca138010842b4f9159a6",
+      "src/terrain/EditCoordinator.hpp": "480fea53e79f79f6332cf6824f72ed66325ab0acbb7b0cbf55f9dc6117f939ae",
+      "src/terrain/TerrainRuntime.hpp": "ba7925610faf626d18a42c79d553c6830305a8dcbe57eaccf7b4e457ea668507"
+    }
+  },
+  "OriginalVersusUnmodifiedRelink": {
+    "RelinkSHA256": "347b70cefb60601a48d7dbb71ce152b6738a53854534eddbbff6696efc8b0a39",
+    "Sections": {
+      ".data": {
+        "Bytes": 1024512,
+        "DifferingBytes": 0,
+        "OriginalSHA256": "f876a14a42ab8d1d3d9fefdc484c5fb3c2fd38f82e6d8afe6211743714f07e36",
+        "RelativeAddress": 12603392,
+        "RelinkSHA256": "f876a14a42ab8d1d3d9fefdc484c5fb3c2fd38f82e6d8afe6211743714f07e36"
+      },
+      ".pdata": {
+        "Bytes": 420352,
+        "DifferingBytes": 0,
+        "OriginalSHA256": "2066c8575f84139f6ad16f59adbf3099515d357f27c6ae90e20ff8d70ac3a1c7",
+        "RelativeAddress": 14397440,
+        "RelinkSHA256": "2066c8575f84139f6ad16f59adbf3099515d357f27c6ae90e20ff8d70ac3a1c7"
+      },
+      ".rdata": {
+        "Bytes": 2095104,
+        "DifferingBytes": 2,
+        "OriginalSHA256": "43bc0937ae970762ad48f51073b08a68305f22867207b76376f90fb7ad141412",
+        "RelativeAddress": 10506240,
+        "RelinkSHA256": "876c97b8bbdf47becead8278ea116e2dedac8378dc7d21b72d6348e9d0a78837"
+      },
+      ".reloc": {
+        "Bytes": 62976,
+        "DifferingBytes": 0,
+        "OriginalSHA256": "aa17950af90118c33bfefcfd0331045f5c4595a73a9c749c1fbec7fb314faff1",
+        "RelativeAddress": 14823424,
+        "RelinkSHA256": "aa17950af90118c33bfefcfd0331045f5c4595a73a9c749c1fbec7fb314faff1"
+      },
+      ".rsrc": {
+        "Bytes": 512,
+        "DifferingBytes": 0,
+        "OriginalSHA256": "e3b13ebef365d3ed9c6b3efd42bde2faa67ca9445e752337fbcb794f16234e4c",
+        "RelativeAddress": 14819328,
+        "RelinkSHA256": "e3b13ebef365d3ed9c6b3efd42bde2faa67ca9445e752337fbcb794f16234e4c"
+      },
+      ".text": {
+        "Bytes": 10500096,
+        "DifferingBytes": 0,
+        "OriginalSHA256": "f3406294c9edc674e4bd9f5f18f0b722daf4dcfc24c89c831d20380d682c5053",
+        "RelativeAddress": 4096,
+        "RelinkSHA256": "f3406294c9edc674e4bd9f5f18f0b722daf4dcfc24c89c831d20380d682c5053"
+      }
+    }
+  },
+  "SharedRuntimeAndDLLsSHA256": {
+    "SDL3.dll": "93a5c07a190c8e01352a34894ecbc70d39bc9f1ed5bb7cb81e61a15dcb2c5beb",
+    "libcrypto-3-x64.dll": "0298564196cae6cce93e2d56457add881db6a5b0ba7c754918ed80f5233676cd",
+    "libprotobuf.dll": "8bad99650e9705473678e5daae8fe330f38512739ff81c3cc74671299e77a645",
+    "libprotobufd.dll": "be450e85ee93c80f3021846097bc495a58262ae74785569c7cb52581eb81ad6a",
+    "runtime/DefaultActionMap.luau": "54ddcbb48e70946553898864d6b1b2313d566485903553c26a648be9bc099e8b",
+    "runtime/DefaultCamera.luau": "d2a0502aed84665850c49eae8ab2239782c4def04fbd51bb344234e4741da6ec",
+    "runtime/DefaultCharacterAnimation.luau": "07a69f9a21aea845c0426d7de6ca13fc86672984098f477316211480921e719b",
+    "runtime/DefaultCharacterAssembly.luau": "9b3d52070a2ab205479079ecb25324eacf084ea2e03912be0ba4a6add46b6cfc",
+    "runtime/DefaultCharacterRuntime.luau": "b10b370e64a80e4c38f3116ab9b2926ca0f426eb7ef6a5363c49207e33c7bf96",
+    "runtime/DefaultInteractionRuntime.luau": "6a886d0e04406b528ad486a85c490fb05752bc78ba542d4cc4c83c5316bec90e",
+    "runtime/DefaultLocomotion.luau": "3d7235e898fca2f32e94c34238216c3350c5d9765cc51b6260fb92bb549c9b3f",
+    "runtime/DefaultNetworkCharacterRuntime.luau": "5b425690355b5f1361b175861503a394c02f7a718db86873b0af7711eb23f3b8",
+    "runtime/DefaultNetworkClientRuntime.luau": "22e46b58d598a16c8627a2b6b59df219aa2bc533636254dbb33ab317036a1a5e",
+    "runtime/DefaultNetworkLocomotion.luau": "6e38b8311bd7464f1a54e4dfb42f937fdca4e2f09cd87add7bc15553226db894",
+    "runtime/DefaultNetworkServerRuntime.luau": "9109f58371ab781c2c320664c8380586caa250d040c62d14570b8f13b703979c",
+    "runtime/DefaultPlayerRuntime.luau": "02d21c102c06c8d26c816a3a360e35f164aa8294ac90f7e4f1e68d0e66a4e672",
+    "runtime/GargantuanSans.ttf": "797e35f7f5d6020a5c6ea13b42ecd668bcfb3bbc4baa0e74773527e5b6cb3174",
+    "shaders/gui.frag.spv": "cca62755a3c0352b6dcc65fa6f855ae1e421ba8d538b62a7f5b605d003393c75",
+    "shaders/gui.vert.spv": "fdbaa31922ba2d636ff592128154ddc05503bfef33c67db53391509c7b0dd53f",
+    "shaders/ibl_brdf.frag.spv": "7120970b6dc88ed6758b188923e2848ad42112e9dac54b5077364f8050326ff9",
+    "shaders/ibl_convolve.frag.spv": "165ccfe7026ec1c9454d8e04c683b2b15c9f91af2584c01a69846f569459f61f",
+    "shaders/ibl_fullscreen.vert.spv": "dc3f97b0bf58a34a07d88f92625b03fd48de909d441b5555024120244be8a153",
+    "shaders/ibl_source.frag.spv": "e425052e01fb48eba22e802ab4fedfc71fbd57f97c9eb621f02faf73db2e9a02",
+    "shaders/opaque-instanced.vert.spv": "ee3b8b1e0c653b346c87850e4ce325394572270a3c2f0a9f73660c8dc7a95400",
+    "shaders/opaque-portable.frag.spv": "b0d5bb7cea94a8183852894fb937ee0ddd957ef34b4a91814df51950a3318fb9",
+    "shaders/opaque.frag.spv": "63d2126e11b2923343f8f2d7d4f19b4a1a9171f51211d335a180b8e2226ccdaf",
+    "shaders/opaque.vert.spv": "373a603afa271eededa8a0c66c0300b04b8560c15b0bd5e6c8b7915001a6e0b4",
+    "shaders/scene-resolve.frag.spv": "07f173e5af2b762139d2564549a42e0da5773ef65fc31e93e523a7eeab0215b3",
+    "shaders/scene-resolve.vert.spv": "dc3f97b0bf58a34a07d88f92625b03fd48de909d441b5555024120244be8a153",
+    "shaders/shadow-instanced.vert.spv": "d068ff0678af27e643f8b8a182ea623bf502b01a7f2e52e9d190b13639f6596d",
+    "shaders/shadow-opaque.frag.spv": "d3a2d3f4239115d2744fc926736df58c11ab517e1522946d23e28408a821ccd9",
+    "shaders/shadow.frag.spv": "09c877e760dc177855ebe66a5ad133348e5cfe3e6e63f82fe829ba77b74bcfc9",
+    "shaders/shadow.vert.spv": "43ba5c26fd884ae18f556a5df8412837e3481bdc1ccb11ab7212606e00a5528d",
+    "shaders/sky.frag.spv": "7b2fe4385b82c8a81f79b30d0c965f63b21516c73da6d7a239f6ff07e4119ec4",
+    "shaders/sky.vert.spv": "717abc1ae4a6cca2040d08efe64c789cd38269ed8999a30ec140f0f999c82a86"
+  }
+}

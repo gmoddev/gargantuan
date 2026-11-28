@@ -289,6 +289,7 @@ namespace gargantuan {
 
 	void WorldRoot::ReadbackOrderedParts(bool RecountAcceptedDynamics) {
 		if (!RecountAcceptedDynamics) {
+			if (AcceptedDynamicBodyCountKnown && AcceptedDynamicBodyCount == 0) return;
 			for (const auto &Part : Parts) {
 				if (!Part || Part->GetDestroyed() || Part->IsDestroying() ||
 					Part->PublishedPhysicsState.Description.Anchored) continue;
@@ -467,7 +468,15 @@ namespace gargantuan {
 	void WorldRoot::TrackPart(const std::shared_ptr<BasePart> &Part) {
 		if (!Part || Part->GetDestroyed() || Part->IsDestroying()) return;
 		const auto Id = Part->GetObjectId();
-		TrackedParts[Id] = Part;
+		const bool IsMeshPart = dynamic_cast<const MeshPart *>(Part.get()) != nullptr;
+		if (TrackedParts.insert_or_assign(Id, Part).second && IsMeshPart) {
+			++TrackedMeshPartCount;
+			if (TrackedMeshPartCount == 1) {
+				// CreatePartBody reads the current asset. Observe only edits made after this admission.
+				if (const auto Assets = CollisionAssets.lock())
+					CollisionAssetChangeSequence = Assets->ReadChanges(0).NextSequence;
+			}
+		}
 		if (PhysicsConnections.contains(Id)) return;
 		auto MarkDirty = [this, Id](std::monostate) {
 			if (!ShuttingDownPhysics && TrackedParts.contains(Id)) (void)MarkPartDirty(Id);
@@ -494,7 +503,7 @@ namespace gargantuan {
 			Connections.push_back(Part->GetPropertyChangedSignal(std::string(Name))->Connect(MarkDirty));
 		if (Part->FindProperty("Shape"))
 			Connections.push_back(Part->GetPropertyChangedSignal("Shape")->Connect(MarkDirty));
-		if (std::dynamic_pointer_cast<MeshPart>(Part)) {
+		if (IsMeshPart) {
 			for (const std::string_view Name : {"Mesh", "CollisionMode"})
 				Connections.push_back(Part->GetPropertyChangedSignal(std::string(Name))->Connect(MarkDirty));
 		}
@@ -610,7 +619,7 @@ namespace gargantuan {
 		RemoveDynamicReadback(Object);
 		DirtyBodies.erase(Object);
 		FailedMeshUpdatesLogged.erase(Object);
-		TrackedParts.erase(Object);
+		if (TrackedParts.erase(Object) && dynamic_cast<const MeshPart *>(Part.get())) --TrackedMeshPartCount;
 		if (auto Connections = PhysicsConnections.find(Object); Connections != PhysicsConnections.end()) {
 			for (const auto &Connection : Connections->second) Connection->Disconnect();
 			PhysicsConnections.erase(Connections);
@@ -760,12 +769,16 @@ namespace gargantuan {
 		// They cannot own an AssetService, and GetDataModel needs shared ownership.
 		if (weak_from_this().expired()) return;
 		auto DataModelValue = GetDataModel();
+		const auto Previous = CollisionAssets.lock();
+		// Keep first service materialization and replacement observable even in a world of primitives.
+		if (TrackedMeshPartCount == 0 && Previous && !Previous->GetDestroyed() && !Previous->IsDestroying() &&
+			DataModelValue && Previous->GetParent().value_or(nullptr) == DataModelValue) return;
 		auto Assets = DataModelValue ? std::dynamic_pointer_cast<AssetService>(DataModelValue->GetService("AssetService")) : nullptr;
-		if (Assets != CollisionAssets.lock()) {
+		if (Assets != Previous) {
 			CollisionAssets = Assets;
 			CollisionAssetChangeSequence = 0;
 		}
-		if (!Assets) return;
+		if (!Assets || TrackedMeshPartCount == 0) return;
 		const auto Changes = Assets->ReadChanges(CollisionAssetChangeSequence);
 		CollisionAssetChangeSequence = Changes.NextSequence;
 		if (Changes.RescanRequired) {
@@ -889,15 +902,18 @@ namespace gargantuan {
 	}
 
 	void WorldRoot::ApplyPendingImpulses() {
-		const auto Realm=GetDataModel();
-		const auto Transfer=Realm?Realm->GetSpatialTransferProtection():nullptr;
+		std::optional<std::shared_ptr<network::SpatialTransferProtection>> Transfer;
 		for (const auto &Part : Parts) {
-			if (Transfer && Part && Transfer->Reservations.HoldsMember(Part->GetObjectId())) continue;
 			if (!Part || Part->GetDestroyed() || Part->IsDestroying()) continue;
 			if (!Part->PendingLinearVelocity && !Part->PendingAngularVelocity && !Part->PendingAwake &&
 				!HasImpulse(Part->AccumulatedImpulse) && !HasImpulse(Part->AccumulatedAngularImpulse) &&
 				Part->AccumulatedPointImpulses.empty() && !HasImpulse(Part->AccumulatedForce) &&
 				!HasImpulse(Part->AccumulatedTorque)) continue;
+			if (!Transfer) {
+				const auto Realm = GetDataModel();
+				Transfer.emplace(Realm ? Realm->GetSpatialTransferProtection() : nullptr);
+			}
+			if (*Transfer && (*Transfer)->Reservations.HoldsMember(Part->GetObjectId())) continue;
 			auto Found = PartBodies.find(Part->GetObjectId());
 			if (Found == PartBodies.end()) continue;
 			const auto Body = Found->second;
@@ -1015,6 +1031,7 @@ namespace gargantuan {
 		DirtyConstraints.clear();
 		FailedConstraintUpdatesLogged.clear();
 		TrackedParts.clear();
+		TrackedMeshPartCount = 0;
 		CollisionAssets.reset();
 		TrackedDeformables.clear();
 		TrackedSoftBodyMaterials.clear();
@@ -1065,16 +1082,35 @@ namespace gargantuan {
 		return (*State->Positions)[VertexIndex];
 	}
 
-	std::shared_ptr<WorldRoot> WorldRoot::GetEffectiveWorld(const Instance &Member) {
-		for (const Instance *Current = &Member; Current; Current = Current->ParentReference.lock().get()) {
-			if (const auto *Assigned = dynamic_cast<const SpatialDomainMember *>(Current);
-				Assigned && Assigned->HasAssignedRegion())
-				return Assigned->ResolveAssignedWorld(*Current);
-			if (dynamic_cast<const ViewportFrame *>(Current)) return {};
-			if (const auto *World = dynamic_cast<const WorldRoot *>(Current))
-				return std::static_pointer_cast<WorldRoot>(const_cast<WorldRoot *>(World)->shared_from_this());
+	bool WorldRoot::ResolveLocalSpatialWorld(std::shared_ptr<WorldRoot> &World) const {
+		World = std::static_pointer_cast<WorldRoot>(const_cast<WorldRoot *>(this)->shared_from_this());
+		return true;
+	}
+
+	bool WorldRoot::FindEffectiveWorld(
+		const Instance &Member, std::shared_ptr<WorldRoot> &World, const Instance *RequiredAncestor
+	) {
+		std::shared_ptr<Instance> Parent;
+		for (const Instance *Current = &Member; Current; Current = Parent.get()) {
+			if (Current == RequiredAncestor) RequiredAncestor = nullptr;
+			if (Current->ResolveLocalSpatialWorld(World)) {
+				// An explicit assignment can precede the character that owns a RootPart.
+				while (RequiredAncestor && (Parent = Current->ParentReference.lock())) {
+					Current = Parent.get();
+					if (Current == RequiredAncestor) RequiredAncestor = nullptr;
+				}
+				if (RequiredAncestor) World.reset();
+				return true;
+			}
+			Parent = Current->ParentReference.lock();
 		}
-		return {};
+		return RequiredAncestor != nullptr;
+	}
+
+	std::shared_ptr<WorldRoot> WorldRoot::GetEffectiveWorld(const Instance &Member) {
+		std::shared_ptr<WorldRoot> World;
+		(void)FindEffectiveWorld(Member, World);
+		return World;
 	}
 
 	WorldRoot::WorldRoot() : Physics(PhysicsWorldConfig{.Gravity = {0.0f, -Gravity, 0.0f}}) {
@@ -1289,6 +1325,12 @@ namespace gargantuan {
 		if (!TerrainRuntimeValue || !TerrainEditTickets) return;
 		if (const auto Realm=GetDataModel()) if (const auto Guard=Realm->GetSpatialTransferProtection(); Guard && Guard->Reservations.HoldsDomain(GetObjectId())) return;
 		const auto *TerrainPhysics = GetTerrainPhysics();
+		if (!TerrainRuntimeValue->NeedsPoll() && (TerrainPhysics->IsHealthy() || TerrainEditTickets->ProviderFailureLogged))
+			return;
+		if (const auto Realm = GetDataModel()) {
+			const auto Guard = Realm->GetSpatialTransferProtection();
+			if (Guard && Guard->Reservations.HoldsDomain(GetObjectId())) return;
+		}
 		auto &Records = TerrainEditTickets->Records;
 		for (auto &Completion : TerrainRuntimeValue->Poll()) {
 			Completion.Ticket += TerrainTicketBase;

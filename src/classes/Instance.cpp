@@ -496,9 +496,14 @@ namespace gargantuan {
 
 	std::shared_ptr<DataModel> Instance::GetDataModel() const {
 		if (auto Owner = OwningDataModel.lock()) return Owner;
-		std::shared_ptr<Instance> root = const_cast<Instance *>(this)->shared_from_this();
-		while (auto parent = root->ParentReference.lock()) root = std::move(parent);
-		return std::dynamic_pointer_cast<DataModel>(root);
+		auto Root = ParentReference.lock();
+		if (!Root) {
+			// A detached prediction world can be stack-owned. Only a DataModel can be its own realm.
+			const auto *Realm = dynamic_cast<const DataModel *>(this);
+			return Realm ? std::static_pointer_cast<DataModel>(const_cast<DataModel *>(Realm)->shared_from_this()) : nullptr;
+		}
+		while (auto Parent = Root->ParentReference.lock()) Root = std::move(Parent);
+		return std::dynamic_pointer_cast<DataModel>(Root);
 	}
 
 	void Instance::PublishReplicationSubtree(ObjectId scope) {
@@ -1577,9 +1582,8 @@ namespace gargantuan {
 	int Instance::LNewIndex(lua_State *L, Instance *self) {
 		return InvokeNativeCallback(L, [L, self] {
 			const char *key = luaL_checkstring(L, 2);
-			const auto ClassName = InstanceClassName(self);
 			if (self && self->GetDestroyed())
-				luaL_error(L, "Cannot set %s.%s on destroyed Instance '%s'", ClassName.c_str(), key, self->Name.c_str());
+				luaL_error(L, "Cannot set %s.%s on destroyed Instance '%s'", InstanceClassName(self).c_str(), key, self->Name.c_str());
 
 			if (key && self) {
 				const auto *property = self->FindProperty(key);
@@ -1589,20 +1593,20 @@ namespace gargantuan {
 							luaL_error(L, "Current script context cannot write property %s", key);
 						if (!property->IsStack(L, 3))
 							luaL_error(L, "Cannot set %s.%s: expected %s, got %s",
-								ClassName.c_str(), key, property->ReflectedTypedef.c_str(), luaL_typename(L, 3));
+								InstanceClassName(self).c_str(), key, property->ReflectedTypedef.c_str(), luaL_typename(L, 3));
 						// Validate enum identity before native conversion loses the source tag.
 						if (property->NativeEnumType && StackValue<EnumItem>::Is(L, 3)) {
 							const auto Item = StackValue<EnumItem>::From(L, 3);
 							if (!Item.EnumType || Item.EnumType->Name != *property->NativeEnumType ||
 								!Item.EnumType->FromValue(Item.Value))
 								luaL_error(L, "Cannot set %s.%s: expected Enum.%s",
-									ClassName.c_str(), key, property->NativeEnumType->c_str());
+									InstanceClassName(self).c_str(), key, property->NativeEnumType->c_str());
 						}
 						auto value = property->FromStack(L, 3);
 						const auto status = self->ApplyPropertyMutation(key, value);
 						if (status != MutationStatus::Success)
 							luaL_error(L, "Cannot set %s.%s on '%s': %s",
-								ClassName.c_str(), key, self->Name.c_str(), GetMutationStatusDescription(status));
+								InstanceClassName(self).c_str(), key, self->Name.c_str(), GetMutationStatusDescription(status));
 						return 0;
 					} else {
 						luaL_error(L, "Property %s is read-only", key);

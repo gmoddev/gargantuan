@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Replay the Construction Yard controls against the normal Engine EditorHost."""
 import argparse
+import hashlib
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,7 +14,8 @@ Samples = Path(__file__).resolve().parents[1] / "samples"
 sys.path.insert(0, str(Samples / "TerrainQuarry"))
 from BuildProject import EditorHost
 
-Proof = r'''
+PlatformWitness = (Samples.parent / "tests/blockgrid/gameplay/ObserveYardPlatform.luau").read_text(encoding="utf-8")
+Proof = PlatformWitness + r'''
 local World = game.Workspace
 local Workshop = World.Workshop
 local Wall = World.RetainingWall
@@ -27,7 +30,7 @@ Run.PostSimulation:Connect(function()
     local Avatar = if Player then Player.Character else nil
     if not Avatar or not Avatar.RootPart then return end
     local Inside = Avatar.RootPart.SpatialRegion == Workshop and World.CurrentSpatialRegion == Workshop
-    if Stage == 0 and World:FindFirstChild("OutdoorMarker") and Workshop:FindFirstChild("WorkshopMarker") then
+    if Stage == 0 and World:FindFirstChild("OutdoorMarker") and Workshop:FindFirstChild("WorkshopMarker") and ObserveMovingPlatform(World) then
         Stage = 1
         print("[Spatial:YardInput] ready")
     elseif Stage == 1 and Wall:GetBlock(Target) then
@@ -64,6 +67,19 @@ Connection = game:GetService("RunService").PostSimulation:Connect(function()
     end
 end)
 '''
+
+def PrepareProject(Engine, Root, SavedProject=None):
+    Project = Root / "Yard"
+    if SavedProject:
+        shutil.copytree(SavedProject.resolve(strict=True), Project)
+    else:
+        subprocess.run([sys.executable, "-B", str(Samples / "ConstructionYard" / "BuildProject.py"),
+                        "--engine", str(Engine), "--project", str(Project)], check=True, timeout=90)
+    with (Project / ".gargantuan" / "project.instance.json").open("rb") as Document:
+        Digest = hashlib.file_digest(Document, "sha256").hexdigest()
+    print(f"[Spatial:YardInput] Authored project.instance.json SHA256={Digest}", flush=True)
+    return Project
+
 
 def Verify(Engine, Project, Mode="Disabled", Replay=False):
     with EditorHost(Engine) as Host:
@@ -116,6 +132,15 @@ def Verify(Engine, Project, Mode="Disabled", Replay=False):
         Cell = Host.Call("ReadBlockGridCell", Scope=Snapshot["Cursor"]["Scope"], Object=Wall, Cell=[-2, 2, -5])
         if Cell["Definition"] != "Air":
             raise RuntimeError("Edit world retained the runtime wall cell after Stop")
+        End=Host.Call("GetSnapshot")["Snapshot"]
+        Deck=next(Obj for Obj in End["Objects"] if Obj["Name"]=="FreightPlatform")
+        Properties=Deck["EditorProperties"]
+        Marker=Host.Call("ReadBlockGridCell",Scope=End["Cursor"]["Scope"],Object=Deck["Id"],Cell=[0,1,0])
+        if (Properties["MotionMode"]["Value"]!="Static" or Properties["CFrame"]["Value"]!=[19,4,0,1,0,0,0,1,0,0,0,1] or
+                Marker["Definition"]!="Stone"):
+            raise RuntimeError("Runtime platform motion or geometry leaked into the saved document")
+        if not Replay:
+            print(next(Message for Message in Messages if "[Spatial:FreightPlatform]" in Message))
         print("[Spatial:YardInput] Durable restart restored both grids and excavation" if Replay else
               "[Spatial:YardInput] Both builds, both doorway crossings, excavation and Stop verified")
 
@@ -124,22 +149,18 @@ if __name__ == "__main__":
     Parser = argparse.ArgumentParser(description=__doc__)
     Parser.add_argument("--engine", type=Path, required=True)
     Parser.add_argument("--durable", action="store_true", help="Use a fresh SQLite profile and verify a fresh process replays it")
-    Parser.add_argument("--project", type=Path, help="Reuse a saved Construction Yard in a fresh EditorHost process")
+    Parser.add_argument("--project", type=Path, help="Open a temporary copy of this saved Construction Yard")
     Args = Parser.parse_args()
     Executable = Args.engine.resolve(strict=True)
-    if Args.project:
-        Verify(Executable, Args.project.resolve(strict=True))
-    else:
-        with tempfile.TemporaryDirectory(prefix="gsc-") as Root:
-            Destination = Path(Root) / "Yard"
-            subprocess.run([sys.executable, "-B", str(Samples / "ConstructionYard" / "BuildProject.py"),
-                            "--engine", str(Executable), "--project", str(Destination)], check=True, timeout=90)
-            if Args.durable:
-                DataRoot = Path(Root) / "PlayData"
-                DataRoot.mkdir()
-                os.environ["GARGANTUAN_STUDIO_PLAY_DATA_ROOT"] = str(DataRoot)
-                Verify(Executable, Destination, "Persistent")
-                Verify(Executable, Destination, "Persistent", Replay=True)
-            else:
-                Verify(Executable, Destination)
+    with tempfile.TemporaryDirectory(prefix="gsc-") as Directory:
+        Root = Path(Directory)
+        Destination = PrepareProject(Executable, Root, Args.project)
+        if Args.durable:
+            DataRoot = Root / "PlayData"
+            DataRoot.mkdir()
+            os.environ["GARGANTUAN_STUDIO_PLAY_DATA_ROOT"] = str(DataRoot)
+            Verify(Executable, Destination, "Persistent")
+            Verify(Executable, Destination, "Persistent", Replay=True)
+        else:
+            Verify(Executable, Destination)
 

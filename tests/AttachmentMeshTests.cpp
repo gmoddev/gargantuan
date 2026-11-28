@@ -388,7 +388,19 @@ int main() {
 		Visual->SetMesh(AccessoryImport.Record->Reference.Value);
 		Visual->SetCFrame(CFrame(0.0f, 0.0f, 2.0f));
 		Visual->SetSize({1.0f, 2.0f, 1.0f});
-		Visual->SetParent(Socket);
+		const auto Camera = MakeLookAtRenderCameraInput({0, 0, 0}, {0, 0, -4}, {0, 1, 0});
+		{
+			RenderPublisher LateVisual;
+			auto Resolver = std::make_shared<SemanticSpatialResolver>(Assets);
+			LateVisual.SetSpatialResolver(Resolver);
+			(void)LateVisual.Publish(*World, Camera, 640, 360);
+			(void)LateVisual.Publish(*World, Camera, 640, 360);
+			Visual->SetParent(Socket);
+			const auto Joined = LateVisual.Publish(*World, Camera, 640, 360);
+			const auto Next = LateVisual.Publish(*World, Camera, 640, 360);
+			Check(!Joined->FullResync && FindCreate(*Joined, Visual->GetObjectId()) && !Next->FullResync,
+				"first attachment after idle frames reads current assets and starts incremental observation");
+		}
 		auto Spatial = std::make_shared<SemanticSpatialResolver>(Assets);
 		// Match EditorHost's lazy resolver: the producer discovers the visual;
 		// this test does not manually register the socket or accessory.
@@ -396,7 +408,6 @@ int main() {
 		Publisher.SetSpatialResolver(Spatial);
 		auto MeshChanges = Assets->DrainMeshChanges();
 		Publisher.SetAssetMeshChanges(std::move(MeshChanges.Creates), std::move(MeshChanges.Removes));
-		const auto Camera = MakeLookAtRenderCameraInput({0, 0, 0}, {0, 0, -4}, {0, 1, 0});
 		auto First = Publisher.Publish(*World, Camera, 640, 360);
 		const auto FirstVisual = FindCreate(*First, Visual->GetObjectId());
 		const auto Semantic = Spatial->ResolveAttachment(Visual);

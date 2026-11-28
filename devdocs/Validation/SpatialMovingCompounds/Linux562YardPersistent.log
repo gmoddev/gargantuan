@@ -1,0 +1,4 @@
+[Spatial:YardInput] Authored project.instance.json SHA256=7d79dbf72a6d23c2ba8f52b68149c59a7974c038f6c09c6fb8c3ef224b8de6a0
+[Spatial:FreightPlatform] firstX=19.0000 nextX=19.2716 mass=64.0000 cell=(0,1,0)
+[Spatial:YardInput] Both builds, both doorway crossings, excavation and Stop verified
+[Spatial:YardInput] Durable restart restored both grids and excavation

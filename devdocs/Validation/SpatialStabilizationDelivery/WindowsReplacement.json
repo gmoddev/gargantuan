@@ -1,0 +1,144 @@
+{
+  "Runtime": "1d9bd6323f855d91da69536cc86f379c952c7410",
+  "Toolchain": "MSVC 14.51.36231 x64 Release",
+  "WindowsBuild": "10.0.26200",
+  "Products": {
+    "gargantuan-packager.exe": "e7341670701f3b5d228071f286b40c27776ee15de08490f69af43d4cb39d4f22",
+    "RuntimeDistribution/GargantuanPlayer.exe": "152573fe52c41ee7858c1142b31b62a9f8d128d1ab96a6e04aeeac029a3c3eba",
+    "ServerRuntimeDistribution/GargantuanServer.exe": "ba7f4d097f8c25f295768ddc252784b3df47d63131238a6cbd902ac23ba01d1a"
+  },
+  "Before": {
+    "AcceptedRuntimeEquivalent": "4af419f004b94aa85379c163ccc23f27d68311c0",
+    "AcceptedPackagerSha256": "25b3414730b176ec20981ced33d3ae9484a78bc7787c1cad0b874fa9be58d79c",
+    "HeldFile": {
+      "Old": "ee4f225f4717ca95ae3dc2771bce598a698d026026d2bf362d5b21abf4feac9f",
+      "AfterRefusal": "ee4f225f4717ca95ae3dc2771bce598a698d026026d2bf362d5b21abf4feac9f",
+      "AfterRestart": "7fe73807f7593c1bc0a87f43226286697180b94f47fc522544e5ceacc8bc96c7",
+      "BlockedExit": 3,
+      "ReleasedExit": 0
+    },
+    "HeldLogSha256": "f7fff1172ffe3d9927c98ec64295cfaa76f08fe8955699df7c880f8e801e317a",
+    "UnicodeError": "[error][Package:Packaging] BuildFailed: The package build failed; the previous valid destination was preserved. (Finalize: The filename, directory name, or volume label syntax is incorrect.)"
+  },
+  "SuccessfulFullRuns": [
+    {
+      "Fixture": "282b90bb85af6a2de9dae5de262320a57c40fd9a",
+      "LogSha256": "e18a68ab9164c119ebd1fc7d129ff34fe242843f0e36246e4e2f9f81b7113b7f",
+      "PhasesSeconds": {
+        "redirected-ancestor-refused": 0.062,
+        "publish-0": 0.453,
+        "start-0": 0.5,
+        "publish-1": 0.61,
+        "start-1": 0.39,
+        "publish-2": 0.641,
+        "start-2": 0.25,
+        "publish-3": 0.641,
+        "start-3": 0.234,
+        "publish-4": 0.687,
+        "start-4": 0.25,
+        "publish-5": 0.672,
+        "start-5": 0.235,
+        "publish-6": 0.656,
+        "start-6": 0.234,
+        "publish-7": 0.657,
+        "start-7": 0.265,
+        "publish-8": 0.672,
+        "start-8": 0.25,
+        "publish-9": 0.672,
+        "start-9": 0.25,
+        "publish-10": 0.672,
+        "start-10": 0.265,
+        "publish-11": 0.61,
+        "start-11": 0.281,
+        "sustained-hold-refused": 2.703,
+        "verify-prior": 0.187,
+        "concurrent-writer-refused": 0.062,
+        "conflicting-recovery-preserved": 0.063,
+        "fresh-process-restore-then-staging-failure": 0.437,
+        "recovered-overwrite": 0.953,
+        "recovered-integrity": 0.188,
+        "relocated-integrity": 0.234,
+        "relocated-start": 0.234
+      }
+    },
+    {
+      "Fixture": "cc51a3a00",
+      "LogSha256": "7215780c37c82db9f403e3731782c1ff96d361a286f466604941841294a44344",
+      "PhasesSeconds": {
+        "redirected-ancestor-refused": 0.062,
+        "publish-0": 0.453,
+        "start-0": 0.266,
+        "publish-1": 0.641,
+        "start-1": 0.234,
+        "publish-2": 0.609,
+        "start-2": 0.266,
+        "publish-3": 0.672,
+        "start-3": 0.25,
+        "publish-4": 0.64,
+        "start-4": 0.235,
+        "publish-5": 0.656,
+        "start-5": 0.234,
+        "publish-6": 0.641,
+        "start-6": 0.266,
+        "publish-7": 0.64,
+        "start-7": 0.282,
+        "publish-8": 0.671,
+        "start-8": 0.282,
+        "publish-9": 0.75,
+        "start-9": 0.265,
+        "publish-10": 0.641,
+        "start-10": 0.25,
+        "publish-11": 0.609,
+        "start-11": 0.297,
+        "temporary-hold-published": 0.813,
+        "sustained-hold-refused": 2.625,
+        "verify-prior": 0.187,
+        "concurrent-writer-refused": 0.062,
+        "conflicting-recovery-preserved": 0.063,
+        "fresh-process-restore-then-staging-failure": 0.406,
+        "recovered-overwrite": 0.656,
+        "recovered-integrity": 0.172,
+        "relocated-integrity": 0.187,
+        "relocated-start": 0.25
+      },
+      "ManifestSha256": {
+        "Release": "17f196029a21ecb538c16886406019ed702e15a1f68a1324f36c97d902eb0e5a",
+        "Development": "a6a87e3796be3b2418ce27630d212b5b5a7474b5058175ef040c4a261db96c16",
+        "AfterRecovery": "a6a87e3796be3b2418ce27630d212b5b5a7474b5058175ef040c4a261db96c16",
+        "RelocatedRelease": "17f196029a21ecb538c16886406019ed702e15a1f68a1324f36c97d902eb0e5a"
+      }
+    }
+  ],
+  "SeparateCTest": {
+    "Case": "gargantuan_windows_package_replacement",
+    "TimeSeconds": 16.4433,
+    "Status": "passed",
+    "JunitSha256": "4d8290b41b6accc3eedf5884464a962e3a68feb48b2f19223a96d6991eeb191f"
+  },
+  "RegeneratedSourceControl": {
+    "OriginalDifferenceCount": 3,
+    "Old": [
+      [
+        "Children.4.Children.1.Properties.SourceId.String",
+        "9d6c6d67286c474291ecb2408e8db193",
+        "aeabb31e39705452ace715b5b669a8c9"
+      ],
+      [
+        "Children.4.Children.2.Properties.SourceId.String",
+        "592632bead183c2d33cb1b5b4c5ce0dc",
+        "5b58b65cbba64d470bb74d30421a1a9f"
+      ],
+      [
+        "Children.4.Children.3.Properties.SourceId.String",
+        "3da7ac04512f1176f0a0b4cc538b2ae3",
+        "4dc33b65068b90f877d01d9effa870c8"
+      ]
+    ],
+    "FixedDifferenceCount": 0,
+    "New": []
+  },
+  "PreAncestorGuardAcceptedAnAliasedDestination": {
+    "Source": "238e18c0c0da0b1039cd1a83bb034526827d48f9",
+    "LogSha256": "a239ba929448fe9df0a7048d6970ebe8fae3c440e79550b351a45822338619b1"
+  }
+}

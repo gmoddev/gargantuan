@@ -5,6 +5,7 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 
 #include <chrono>
+#include <algorithm>
 #include <any>
 #include <filesystem>
 #include <fstream>
@@ -100,6 +101,24 @@ int main() {
 			ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success ||
 			std::any_cast<int>(health->Read(custom.get())) != 75) {
 			std::cerr << "Custom class property mutation was rejected\n";
+			return 1;
+		}
+		const auto &Active = *lifecycle.GetActiveRegistry();
+		const auto Classes = Active.EnumerateClasses();
+		for (const auto *Class : Classes) {
+			const auto Matches = std::ranges::count(Classes, Class->ClassName, &SchemaClassDefinition::ClassName);
+			if (Active.FindClassByName(Class->CanonicalName) != Class ||
+				Active.FindClassByName(Class->ClassName) != (Matches == 1 ? Class : nullptr)) {
+				std::cerr << "[Schema:Bootstrap] Native or project class lookup differs from the frozen definitions\n";
+				return 1;
+			}
+		}
+		if (Active.FindClassByName("Folder") || Active.FindClassByName("DataModel") ||
+			!Active.FindClassByName("Engine.Folder") || !Active.FindClassByName("Game.Folder") ||
+			Active.FindClassByName("AChild") != Active.FindClassByName("Game.AChild") ||
+			Active.FindClassByName("BootstrapState") || Active.FindClassByName("PartState") ||
+			Active.FindClassByName("MissingClass")) {
+			std::cerr << "[Schema:Bootstrap] Frozen short class names lost their identity or ambiguity\n";
 			return 1;
 		}
 		auto collidingName = InstanceClassRegistry::ConstructByName("Game.Folder");

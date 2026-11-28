@@ -27,6 +27,7 @@ namespace gargantuan::terrain {
         [[nodiscard]] std::expected<EditTicket, EditStatus> Submit(EditRequest Request,
             std::optional<Revision> ExpectedRevision = std::nullopt);
         [[nodiscard]] bool Cancel(EditTicket Ticket) noexcept;
+        [[nodiscard]] bool NeedsPoll() const noexcept { return Edits && Edits->NeedsPoll(); }
         [[nodiscard]] std::vector<EditReceipt> Poll();
         [[nodiscard]] std::shared_ptr<const RenderState> CaptureRender() const noexcept;
         [[nodiscard]] const PhysicsStage &GetPhysicsStage() const noexcept { return *Physics; }

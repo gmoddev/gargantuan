@@ -1,0 +1,90 @@
+{
+  "Profile": "original",
+  "EngineSHA256": "a62153f7657927d20e9a9d8bd2ffc6c8b0b7575b4afd736dd6a38b0324e7afce",
+  "Observations": [
+    {
+      "Pattern": "Solid",
+      "Cells": 128,
+      "Accepted": true,
+      "Mass": 128.0,
+      "Reason": "ok"
+    },
+    {
+      "Pattern": "Solid",
+      "Cells": 256,
+      "Accepted": false,
+      "Mass": 0.0,
+      "Reason": "[BlockGrid:Motion] A dynamic assembly requires 1 to 128 occupied cells with collision enabled"
+    },
+    {
+      "Pattern": "Solid",
+      "Cells": 512,
+      "Accepted": false,
+      "Mass": 0.0,
+      "Reason": "[BlockGrid:Motion] A dynamic assembly requires 1 to 128 occupied cells with collision enabled"
+    },
+    {
+      "Pattern": "Solid",
+      "Cells": 1024,
+      "Accepted": false,
+      "Mass": 0.0,
+      "Reason": "[BlockGrid:Motion] A dynamic assembly requires 1 to 128 occupied cells with collision enabled"
+    },
+    {
+      "Pattern": "Solid",
+      "Cells": 2048,
+      "Accepted": false,
+      "Mass": 0.0,
+      "Reason": "[BlockGrid:Motion] A dynamic assembly requires 1 to 128 occupied cells with collision enabled"
+    },
+    {
+      "Pattern": "Solid",
+      "Cells": 4096,
+      "Accepted": false,
+      "Mass": 0.0,
+      "Reason": "[BlockGrid:Motion] A dynamic assembly requires 1 to 128 occupied cells with collision enabled"
+    },
+    {
+      "Pattern": "Fragmented",
+      "Cells": 128,
+      "Accepted": true,
+      "Mass": 128.0,
+      "Reason": "ok"
+    },
+    {
+      "Pattern": "Fragmented",
+      "Cells": 256,
+      "Accepted": false,
+      "Mass": 0.0,
+      "Reason": "[BlockGrid:Motion] A dynamic assembly requires 1 to 128 occupied cells with collision enabled"
+    },
+    {
+      "Pattern": "Fragmented",
+      "Cells": 512,
+      "Accepted": false,
+      "Mass": 0.0,
+      "Reason": "[BlockGrid:Motion] A dynamic assembly requires 1 to 128 occupied cells with collision enabled"
+    },
+    {
+      "Pattern": "Fragmented",
+      "Cells": 1024,
+      "Accepted": false,
+      "Mass": 0.0,
+      "Reason": "[BlockGrid:Motion] A dynamic assembly requires 1 to 128 occupied cells with collision enabled"
+    },
+    {
+      "Pattern": "Fragmented",
+      "Cells": 2048,
+      "Accepted": false,
+      "Mass": 0.0,
+      "Reason": "[BlockGrid:Motion] A dynamic assembly requires 1 to 128 occupied cells with collision enabled"
+    },
+    {
+      "Pattern": "Fragmented",
+      "Cells": 4096,
+      "Accepted": false,
+      "Mass": 0.0,
+      "Reason": "[BlockGrid:Motion] A dynamic assembly requires 1 to 128 occupied cells with collision enabled"
+    }
+  ]
+}

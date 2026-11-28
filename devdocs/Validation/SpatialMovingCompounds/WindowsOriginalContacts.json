@@ -1,0 +1,14 @@
+{
+  "Profile": "original",
+  "EngineSHA256": "a62153f7657927d20e9a9d8bd2ffc6c8b0b7575b4afd736dd6a38b0324e7afce",
+  "Observations": {
+    "cells": 128.0,
+    "terrain": -0.0106,
+    "surface": -0.0156,
+    "grid": 0.0,
+    "lower": -0.0,
+    "upper": 1.0,
+    "after": -0.0,
+    "character": 2.995
+  }
+}

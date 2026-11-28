@@ -14,7 +14,7 @@ namespace gargantuan::blockgrid {
 		const auto Bounded=[](glm::vec3 V,float Limit){return glm::all(glm::lessThanEqual(glm::abs(V),glm::vec3(Limit)));};
 		if (P.Version!=AssemblyProjection::CurrentVersion || !P.Revision || !Bounded(P.Pose.Position,CoordinateLimit) ||
 			!Bounded(P.LinearVelocity,1e6f) || !Bounded(P.AngularVelocity,1e6f) || !Bounded(P.LocalCenterOfMass,256) ||
-			!(P.Mass>=0 && P.Mass<=2'048.f)) return false;
+			!(P.Mass>=0 && P.Mass<=MaximumAssemblyMass)) return false;
 		for (unsigned I=0;I<3;++I) {
 			if (!Bounded(P.Pose.Rotation[I],1.0001f) || !Bounded(P.LocalInertia[I],1e8f) || P.LocalInertia[I][I]<0) return false;
 			for (unsigned J=0;J<3;++J) {

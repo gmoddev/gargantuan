@@ -1,0 +1,18 @@
+ScriptEngine started opening libraries
+ScriptEngine finished opening libraries
+Attempting to find required instance Instance.Players.PlayerRuntimeModules.DefaultNetworkServerRuntime
+Constructed engine
+Attempting to find required instance Instance.Players.PlayerRuntimeModules.DefaultNetworkServerRuntime
+ScriptEngine started opening libraries
+ScriptEngine finished opening libraries
+Attempting to find required instance Instance.Players.PlayerRuntimeModules.DefaultNetworkClientRuntime
+Attempting to find required instance Instance.Players.PlayerRuntimeModules.DefaultNetworkClientRuntime
+Attempting to find required instance Instance.Players.PlayerRuntimeModules.DefaultNetworkClientRuntime
+Attempting to find required instance Instance.Players.PlayerRuntimeModules.DefaultNetworkClientRuntime
+Constructed engine
+Destroying engine
+Destroying engine
+{"Representation":"Moving","Phase":"Join","Occupied":256,"PumpCalls":25,"ElapsedUs":87525.8,"ServerPumpUs":3841.0,"ClientPumpUs":7138.5999999999995,"DistinctPosesIn40Ticks":0,"ServerPayloadBytes":8989,"ServerMessages":25,"ServerNativePackets":13,"ServerNativePacketBytes":10214,"ClientPayloadBytes":735,"ClientMessages":6,"ClientNativePackets":4,"ClientNativePacketBytes":887}
+{"Representation":"Moving","Phase":"Motion","Occupied":256,"PumpCalls":48,"ElapsedUs":146231.1,"ServerPumpUs":4155.800000000001,"ClientPumpUs":14345.999999999995,"DistinctPosesIn40Ticks":10,"ServerPayloadBytes":8769,"ServerMessages":59,"ServerNativePackets":23,"ServerNativePacketBytes":11698,"ClientPayloadBytes":1848,"ClientMessages":11,"ClientNativePackets":12,"ClientNativePacketBytes":2868}
+{"Representation":"Moving","Phase":"Delete","Occupied":256,"PumpCalls":12,"ElapsedUs":36294.7,"ServerPumpUs":1326.4999999999998,"ClientPumpUs":3828.7999999999997,"DistinctPosesIn40Ticks":0,"ServerPayloadBytes":2421,"ServerMessages":16,"ServerNativePackets":6,"ServerNativePacketBytes":3207,"ClientPayloadBytes":504,"ClientMessages":3,"ClientNativePackets":2,"ClientNativePacketBytes":478}
+{"Representation":"Moving","Phase":"Retire","Occupied":256,"PumpCalls":10,"ElapsedUs":28098.1,"ServerPumpUs":416.7,"ClientPumpUs":575.6000000000001,"DistinctPosesIn40Ticks":0,"ServerPayloadBytes":45,"ServerMessages":1,"ServerNativePackets":1,"ServerNativePacketBytes":257,"ClientPayloadBytes":0,"ClientMessages":0,"ClientNativePackets":1,"ClientNativePacketBytes":239}

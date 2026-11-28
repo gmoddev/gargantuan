@@ -1748,6 +1748,7 @@ namespace gargantuan::network {
 				}
 				FinishServerPeer(Connection, std::move(*Identity));
 			}
+
 		}
 
 		void AcceptClientSession(ConnectionId Connection, const GameSessionServerAccepted &Accepted) {

@@ -11,12 +11,37 @@
 #include <bit>
 #include <glm/geometric.hpp>
 #include <limits>
+#include <optional>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 #include <cmath>
 
 namespace gargantuan {
 	namespace {
+		enum class ResourceOperation { None, Create, Update, Remove };
+
+		template<class Identity, class Hash>
+		class ResourceOperations {
+		  public:
+			explicit ResourceOperations(std::size_t Count) {
+				if (Count) Operations.emplace().reserve(Count);
+			}
+
+			bool Record(Identity Id, ResourceOperation Operation) {
+				return Operations->emplace(Id, Operation).second;
+			}
+
+			[[nodiscard]] ResourceOperation Get(Identity Id) const {
+				if (!Operations) return ResourceOperation::None;
+				const auto Found = Operations->find(Id);
+				return Found == Operations->end() ? ResourceOperation::None : Found->second;
+			}
+
+		  private:
+			std::optional<std::unordered_map<Identity, ResourceOperation, Hash>> Operations;
+		};
+
 		bool IsFinite(const glm::vec2 &Value) { return std::isfinite(Value.x) && std::isfinite(Value.y); }
 		bool IsFinite(const glm::vec3 &Value) { return std::isfinite(Value.x) && std::isfinite(Value.y) && std::isfinite(Value.z); }
 		bool IsFinite(const glm::vec4 &Value) {
@@ -228,15 +253,15 @@ namespace gargantuan {
 		if (std::ranges::adjacent_find(TouchedObjectScratch) != TouchedObjectScratch.end())
 			throw std::invalid_argument("Render publication contains duplicate object operations");
 
-		std::unordered_set<RenderMeshIdentity, RenderMeshIdentityHash> TouchedMeshes;
-		TouchedMeshes.reserve(Publication.MeshCreates.size() + Publication.MeshVertexUpdates.size() + Publication.MeshRemoves.size());
+		ResourceOperations<RenderMeshIdentity, RenderMeshIdentityHash> MeshChanges(
+			Publication.MeshCreates.size() + Publication.MeshVertexUpdates.size() + Publication.MeshRemoves.size());
 		for (const auto &Remove : Publication.MeshRemoves)
-			if (!Remove.Mesh.IsValid() || !TouchedMeshes.insert(Remove.Mesh).second)
+			if (!Remove.Mesh.IsValid() || !MeshChanges.Record(Remove.Mesh, ResourceOperation::Remove))
 				throw std::invalid_argument("Render publication contains an invalid or duplicate mesh operation");
 		for (const auto &Create : Publication.MeshCreates) {
 			if (!Create.Mesh.IsValid() || Create.TopologyRevision == 0 || Create.VertexRevision == 0 ||
 				!Create.Vertices || !Create.Indices || Create.Vertices->empty() || Create.Indices->empty() ||
-				!IsValid(Create.Bounds) || !TouchedMeshes.insert(Create.Mesh).second)
+				!IsValid(Create.Bounds) || !MeshChanges.Record(Create.Mesh, ResourceOperation::Create))
 				throw std::invalid_argument("Render publication mesh creation is invalid");
 			for (const auto &Vertex : *Create.Vertices) if (!IsValid(Vertex))
 				throw std::invalid_argument("Render publication rejects non-finite mesh vertices");
@@ -265,23 +290,21 @@ namespace gargantuan {
 		}
 		for (const auto &Update : Publication.MeshVertexUpdates) {
 			if (!Update.Mesh.IsValid() || Update.VertexRevision == 0 || !Update.Vertices || Update.Vertices->empty() ||
-				!IsValid(Update.Bounds) || !TouchedMeshes.insert(Update.Mesh).second)
+				!IsValid(Update.Bounds) || !MeshChanges.Record(Update.Mesh, ResourceOperation::Update))
 				throw std::invalid_argument("Render publication mesh update is invalid");
 			for (const auto &Vertex : *Update.Vertices) if (!IsValid(Vertex))
 				throw std::invalid_argument("Render publication rejects non-finite deformable vertices");
 		}
 
-		std::unordered_set<RenderTextureIdentity, RenderTextureIdentityHash> TouchedTextures;
-		TouchedTextures.reserve(
-			Publication.TextureCreates.size() + Publication.TextureUpdates.size() + Publication.TextureRemoves.size()
-		);
+		ResourceOperations<RenderTextureIdentity, RenderTextureIdentityHash> TextureChanges(
+			Publication.TextureCreates.size() + Publication.TextureUpdates.size() + Publication.TextureRemoves.size());
 		for (const auto &Remove : Publication.TextureRemoves)
-			if (!Remove.Texture.IsValid() || !TouchedTextures.insert(Remove.Texture).second)
+			if (!Remove.Texture.IsValid() || !TextureChanges.Record(Remove.Texture, ResourceOperation::Remove))
 				throw std::invalid_argument("Render publication contains an invalid or duplicate texture operation");
 		for (const auto &Create : Publication.TextureCreates) {
 			if (!Create.Texture.IsValid() || Create.Revision == 0 ||
 				!HasExactTextureBytes(Create.Width, Create.Height, Create.Format, Create.Pixels) ||
-				!TouchedTextures.insert(Create.Texture).second)
+				!TextureChanges.Record(Create.Texture, ResourceOperation::Create))
 				throw std::invalid_argument("Render publication texture creation is invalid");
 		}
 		for (const auto &Update : Publication.TextureUpdates) {
@@ -292,25 +315,20 @@ namespace gargantuan {
 			}); Created != Publication.TextureCreates.end()) Format = Created->Format;
 			if (!Update.Texture.IsValid() || Update.Revision == 0 ||
 				!HasExactTextureBytes(Update.Width, Update.Height, Format, Update.Pixels) ||
-				!TouchedTextures.insert(Update.Texture).second)
+				!TextureChanges.Record(Update.Texture, ResourceOperation::Update))
 				throw std::invalid_argument("Render publication texture update is invalid");
 		}
 
-		std::unordered_set<RenderTextureIdentity, RenderTextureIdentityHash> CreatedTextures;
-		CreatedTextures.reserve(Publication.TextureCreates.size());
-		for (const auto &Create : Publication.TextureCreates) CreatedTextures.insert(Create.Texture);
-		std::unordered_set<RenderTextureIdentity, RenderTextureIdentityHash> RemovedTextures;
-		RemovedTextures.reserve(Publication.TextureRemoves.size());
-		for (const auto &Remove : Publication.TextureRemoves) RemovedTextures.insert(Remove.Texture);
 		const auto TextureExistsAfterPublication = [&](const RenderTextureIdentity &Texture) {
-			if (CreatedTextures.contains(Texture)) return true;
-			return !Publication.FullResync && Textures.contains(Texture) && !RemovedTextures.contains(Texture);
+			const auto Change = TextureChanges.Get(Texture);
+			return Change == ResourceOperation::Create ||
+				(!Publication.FullResync && Change != ResourceOperation::Remove && Textures.contains(Texture));
 		};
 		const auto TextureMatchesSkyFace = [&](const RenderSkyFaceState &Face, std::uint32_t Dimension) {
 			for (const auto &Create : Publication.TextureCreates)
 				if (Create.Texture == Face.Texture)
 					return Create.Revision == Face.ContentRevision && Create.Width == Dimension && Create.Height == Dimension;
-			if (Publication.FullResync || RemovedTextures.contains(Face.Texture)) return false;
+			if (Publication.FullResync || TextureChanges.Get(Face.Texture) == ResourceOperation::Remove) return false;
 			const auto Existing = Textures.find(Face.Texture);
 			if (Existing == Textures.end() || Existing->second.Width != Dimension || Existing->second.Height != Dimension)
 				return false;
@@ -448,20 +466,15 @@ namespace gargantuan {
 			}
 		}
 
-		std::unordered_set<RenderMeshIdentity, RenderMeshIdentityHash> CreatedMeshes;
-		CreatedMeshes.reserve(Publication.MeshCreates.size());
-		for (const auto &Create : Publication.MeshCreates) CreatedMeshes.insert(Create.Mesh);
-		std::unordered_set<RenderMeshIdentity, RenderMeshIdentityHash> RemovedMeshes;
-		RemovedMeshes.reserve(Publication.MeshRemoves.size());
-		for (const auto &Remove : Publication.MeshRemoves) RemovedMeshes.insert(Remove.Mesh);
 		const auto MeshExistsAfterPublication = [&](const RenderMeshIdentity &Mesh) {
-			if (CreatedMeshes.contains(Mesh)) return true;
-			return !Publication.FullResync && Meshes.contains(Mesh) && !RemovedMeshes.contains(Mesh);
+			const auto Change = MeshChanges.Get(Mesh);
+			return Change == ResourceOperation::Create ||
+				(!Publication.FullResync && Change != ResourceOperation::Remove && Meshes.contains(Mesh));
 		};
 		const auto MeshIndexCountAfterPublication = [&](const RenderMeshIdentity &Mesh) -> std::optional<std::size_t> {
 			for (const auto &Create : Publication.MeshCreates) if (Create.Mesh == Mesh) return Create.Indices->size();
 			if (!Publication.FullResync) if (const auto Existing = Meshes.find(Mesh); Existing != Meshes.end() &&
-				!RemovedMeshes.contains(Mesh)) return Existing->second.IndexCount;
+				MeshChanges.Get(Mesh) != ResourceOperation::Remove) return Existing->second.IndexCount;
 			return std::nullopt;
 		};
 		const auto PrimitiveRangesFit = [&](const auto &Object) {

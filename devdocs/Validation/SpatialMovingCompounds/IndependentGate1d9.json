@@ -1,0 +1,99 @@
+{
+  "ordinary": {
+    "Blocks": 64,
+    "Processes": 256,
+    "Totals": {
+      "baseline": {
+        "Exact": 130842,
+        "PollMissing": 230,
+        "ResetMissing": 1,
+        "EngineStepNs": 26406645100
+      },
+      "current": {
+        "Exact": 130818,
+        "PollMissing": 254,
+        "ResetMissing": 1,
+        "EngineStepNs": 24379963700
+      }
+    },
+    "TwoSided95": [
+      -7.798684822203891,
+      -5.17486389257967
+    ],
+    "Bounds": {
+      "Exact": {
+        "MeanLow": -6.495977300344581,
+        "MeanHigh": -6.495977300344581,
+        "Upper95": -5.393603138123001
+      },
+      "AllShortOrLong": {
+        "MeanLow": -7.140843615470778,
+        "MeanHigh": -5.683381469562084,
+        "Upper95": -4.399976186191816
+      },
+      "ObservedGroupSums": {
+        "MeanLow": -6.726755516238095,
+        "MeanHigh": -6.2087832471633755,
+        "Upper95": -5.054315644825009
+      },
+      "ZeroPermitted": {
+        "MeanLow": -6.726755516238095,
+        "MeanHigh": -6.2087832471633755,
+        "Upper95": -5.054315644825009
+      }
+    },
+    "Pass": true
+  },
+  "rigid": {
+    "Blocks": 16,
+    "Processes": 64,
+    "Totals": {
+      "baseline": {
+        "Exact": 24550,
+        "PollMissing": 26,
+        "ResetMissing": 2,
+        "EngineStepNs": 6156293200
+      },
+      "current": {
+        "Exact": 24548,
+        "PollMissing": 28,
+        "ResetMissing": 0,
+        "EngineStepNs": 5935658100
+      }
+    },
+    "TwoSided95": [
+      -4.620108584525311,
+      1.2930146268339724
+    ],
+    "Bounds": {
+      "Exact": {
+        "MeanLow": -1.7080026845851823,
+        "MeanHigh": -1.7080026845851823,
+        "Upper95": 0.753629384284823
+      },
+      "AllShortOrLong": {
+        "MeanLow": -2.1771819376267314,
+        "MeanHigh": -1.2312423755071513,
+        "Upper95": 1.4302737531177039
+      },
+      "ObservedGroupSums": {
+        "MeanLow": -1.8955182910992407,
+        "MeanHigh": -1.5540667837827011,
+        "Upper95": 0.9702094822097554
+      },
+      "ZeroPermitted": {
+        "MeanLow": -1.8955182910992407,
+        "MeanHigh": -1.5540667837827011,
+        "Upper95": 0.9702094822097554
+      }
+    },
+    "Pass": true
+  },
+  "Inputs": {
+    "Processes.csv": "bac367245e9c45cab16cfcadab2d28e84f0abed80891c9e46d28e77a75943c64",
+    "Ticks.csv.gz": "c2bed9d7e93c422faf135f2e5c497a61cc759e250245d092b6679f03ba28f0d5"
+  },
+  "HistoricalEngine": "0f43758828929e453d054689e81524a662e75c9e26d8ec4d4a4089396795d4aa",
+  "CandidateEngine": "798ae3281474f8599e5e710bfa25b5367ecc50db0daf8e0bc0b7e020a0ff106f"
+}
+

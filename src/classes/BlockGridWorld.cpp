@@ -40,31 +40,6 @@ namespace gargantuan {
 		std::uint8_t QueryProxyMask(const BlockGrid& Grid) {
 			return Participation(Grid.GetCanCollide() && !Grid.IsDynamicAssembly(),Grid.GetCanQuery());
 		}
-		template<class Snapshot>
-		std::shared_ptr<const std::vector<PhysicsConvexChild>> AssemblyHulls(const BlockGrid& Grid,const Snapshot& Source) {
-			if (!Grid.GetCanCollide() || !Source.GetOccupiedCount() || Source.GetOccupiedCount()>MaximumPhysicsAssemblyHulls)
-				throw std::length_error("[BlockGrid:Motion] A dynamic assembly requires 1 to 128 occupied cells with collision enabled");
-			auto Result=std::make_shared<std::vector<PhysicsConvexChild>>();
-			Result->reserve(Source.GetOccupiedCount());
-			const auto V=[](const blockgrid::Point& P){return glm::vec3(P[0],P[1],P[2]);};
-			const float Size=Grid.GetCellSize();
-			Source.ForEachLeaf([&](blockgrid::Cell Base,const blockgrid::Leaf& Page) {
-				Page.ForEachOccupied([&](unsigned X,unsigned Y,unsigned Z,blockgrid::Block B) {
-					const auto& D=Source.GetDefinition(B.Definition);
-					const glm::vec3 Min(Base.X+int(X),Base.Y+int(Y),Base.Z+int(Z));
-					if (D.Geometry==blockgrid::Shape::Mesh || glm::any(glm::greaterThan(glm::abs(Min),glm::vec3(64.f))))
-						throw std::invalid_argument("[BlockGrid:Motion] Dynamic cells require built-in convex geometry within 64 cells of the grid origin");
-					if (!D.CanCollide) return;
-					for (const auto& P:blockgrid::GetGeometry(D.Geometry,B.Orientation).Collision) {
-						if (Result->size()>=MaximumPhysicsAssemblyHulls) throw std::length_error("[BlockGrid:Motion] Assembly hull capacity exhausted");
-						Result->push_back({P.Kind==blockgrid::PieceKind::Box?PhysicsShapeKind::Box:PhysicsShapeKind::Wedge,
-							CFrame((Min+V(P.Center))*Size,Rotation(P.Orientation)),V(P.Size)*Size});
-					}
-				});
-			});
-			if (Result->empty()) throw std::invalid_argument("[BlockGrid:Motion] Assembly has no physical hulls");
-			return Result;
-		}
 		PhysicsBodyDesc AssemblyBody(const BlockGrid& Grid,const std::shared_ptr<const std::vector<PhysicsConvexChild>>& Hulls) {
 			PhysicsBodyDesc D;
 			D.Transform=Grid.GetCFrame(); D.Shape={PhysicsShapeKind::ConvexAssembly,glm::vec3(1),{},Hulls};
@@ -133,6 +108,51 @@ namespace gargantuan {
 				return Boxes;
 		}
 
+		PhysicsConvexChild LocalConvex(const BlockGridBox& Box, float CellSize) {
+			const auto& B = Box.Cells;
+			const glm::vec3 Min(B[0], B[1], B[2]), Max(B[3], B[4], B[5]);
+			if (Box.Geometry == blockgrid::Shape::Cube)
+				return {PhysicsShapeKind::Box, CFrame((Min + Max) * (CellSize * .5f)), (Max - Min) * CellSize};
+			const auto& Piece = blockgrid::GetGeometry(Box.Geometry, Box.Orientation).Collision[Box.Piece];
+			const auto Vector = [](blockgrid::Point P) { return glm::vec3(P[0], P[1], P[2]); };
+			return {Piece.Kind == blockgrid::PieceKind::Wedge ? PhysicsShapeKind::Wedge : PhysicsShapeKind::Box,
+				CFrame((Min + Vector(Piece.Center)) * CellSize, Rotation(Piece.Orientation)), Vector(Piece.Size) * CellSize};
+		}
+
+		template<class Snapshot>
+		std::shared_ptr<const std::vector<PhysicsConvexChild>> AssemblyHulls(const BlockGrid& Grid, const Snapshot& Source) {
+			if (!Grid.GetCanCollide() || !Source.GetOccupiedCount() || Source.GetOccupiedCount() > blockgrid::MaximumAssemblyCells)
+				throw std::length_error("[BlockGrid:Motion] A collidable assembly requires 1 to 4096 occupied cells");
+			auto Hulls = std::make_shared<std::vector<PhysicsConvexChild>>();
+			float Mass = 0.f;
+			Source.ForEachLeaf([&](blockgrid::Cell Base, const blockgrid::Leaf& Leaf) {
+				// All semantic owners, including decorative cells, must fit the moving grid's local bounds.
+				const auto InRange = [](int Coordinate) { return Coordinate >= -64 && Coordinate <= 64; };
+				const bool WholeLeafFits = InRange(Base.X) && InRange(Base.X + int(Side) - 1) &&
+					InRange(Base.Y) && InRange(Base.Y + int(Side) - 1) && InRange(Base.Z) && InRange(Base.Z + int(Side) - 1);
+				if (!WholeLeafFits || Leaf.HasCustomCells()) {
+					Leaf.ForEachOccupied([&](unsigned X, unsigned Y, unsigned Z, blockgrid::Block Block) {
+						if (!InRange(Base.X + int(X)) || !InRange(Base.Y + int(Y)) || !InRange(Base.Z + int(Z)) ||
+							Source.GetDefinition(Block.Definition).Geometry == blockgrid::Shape::Mesh)
+							throw std::invalid_argument("[BlockGrid:Motion] Dynamic cells require built-in convex geometry within 64 cells of the grid origin");
+					});
+				}
+				bool Available = true;
+				const auto Boxes = LeafBoxes(Base, Leaf, Source, Participation(true, false), Grid, Available);
+				if (!Available || Boxes.size() > MaximumPhysicsAssemblyHulls - Hulls->size())
+					throw std::length_error("[BlockGrid:Motion] Assembly exceeds 128 convex hulls after merging adjacent cubes");
+				for (const auto& Box : Boxes) {
+					auto Child = LocalConvex(Box, Grid.GetCellSize());
+					Mass += Child.Size.x * Child.Size.y * Child.Size.z * (Child.Kind == PhysicsShapeKind::Wedge ? .5f : 1.f);
+					if (Mass > blockgrid::MaximumAssemblyMass)
+						throw std::length_error("[BlockGrid:Motion] Assembly exceeds the supported mass of 2048");
+					Hulls->push_back(std::move(Child));
+				}
+			});
+			if (Hulls->empty()) throw std::invalid_argument("[BlockGrid:Motion] Assembly has no physical hulls");
+			return Hulls;
+		}
+
 		template <typename Snapshot>
 		bool PrepareTopology(BlockGridWorldState &State, BlockGridParticipant &Member, const Snapshot &Cells,
 			const std::function<bool()>& AdmitMotion={},std::optional<std::uint8_t> OverrideMask={}) {
@@ -175,23 +195,19 @@ namespace gargantuan {
 		}
 
 		PhysicsBodyDesc DescribeBox(const BlockGrid &Grid, const BlockGridBox &Box) {
-			const auto& Bounds=Box.Cells;
-			const glm::vec3 Min(Bounds[0], Bounds[1], Bounds[2]), Max(Bounds[3], Bounds[4], Bounds[5]);
 			const auto Pose = Grid.GetCFrame();
 			const float Size = Grid.GetCellSize();
 			PhysicsBodyDesc Result;
-			Result.Transform = CFrame(Pose.PointToWorldSpace((Min + Max) * (Size * 0.5f)), Pose.Rotation);
-			Result.Shape = {PhysicsShapeKind::Box, (Max - Min) * Size};
 			if (Box.Geometry==blockgrid::Shape::Mesh) {
-				Result.Transform.Rotation=Pose.Rotation*Rotation(Box.Orientation);
+				const auto& B = Box.Cells;
+				const glm::vec3 Min(B[0], B[1], B[2]);
+				Result.Transform = CFrame(Pose.PointToWorldSpace((Min + .5f) * Size), Pose.Rotation * Rotation(Box.Orientation));
 				Result.Shape={PhysicsShapeKind::StaticTriangleMesh,glm::vec3(Size),Box.Mesh};
-			} else if (Box.Geometry!=blockgrid::Shape::Cube) {
-				const auto& Piece=blockgrid::GetGeometry(Box.Geometry,Box.Orientation).Collision[Box.Piece];
-				const auto V=[](const blockgrid::Point& P){return glm::vec3(P[0],P[1],P[2]);};
-				const auto& B=blockgrid::Basis(Piece.Orientation);
-				Result.Transform=CFrame(Pose.PointToWorldSpace((Min+V(Piece.Center))*Size),
-					Pose.Rotation*glm::mat3(V(B[0]),V(B[1]),V(B[2])));
-				Result.Shape={Piece.Kind==blockgrid::PieceKind::Wedge?PhysicsShapeKind::Wedge:PhysicsShapeKind::Box,V(Piece.Size)*Size};
+			} else {
+				const auto Child = LocalConvex(Box, Size);
+				Result.Transform = CFrame(Pose.PointToWorldSpace(Child.Local.Position),
+					Box.Geometry == blockgrid::Shape::Cube ? Pose.Rotation : Pose.Rotation * Child.Local.Rotation);
+				Result.Shape = {Child.Kind, Child.Size};
 			}
 			Result.Anchored = true;
 			Result.CanCollide = (Box.Participation&1)!=0;

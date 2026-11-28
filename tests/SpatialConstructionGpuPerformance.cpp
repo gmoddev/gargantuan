@@ -30,7 +30,7 @@ namespace {
 	void Require(bool Ok, const char *Message) {
 		if (!Ok) throw std::runtime_error(Message);
 	}
-	void Run(bool Solid, bool UseGrid, bool Sample) {
+	void Run(bool Solid, bool UseGrid, bool Sample, unsigned MovingCells=0) {
 		SDL_SetHintWithPriority(SDL_HINT_GPU_DRIVER, "vulkan", SDL_HINT_OVERRIDE);
 		Require(SDL_Init(SDL_INIT_VIDEO), SDL_GetError());
 		struct Video {
@@ -42,16 +42,21 @@ namespace {
 		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
 		auto FolderValue = std::make_shared<Folder>();
 		FolderValue->SetParent(World);
-		const int Xs = Solid ? 8 : 16, Ys = Solid ? 4 : 1, Zs = Solid ? 8 : 32;
-		const glm::vec3 Center(Xs * .5f, Ys * .5f, Zs * .5f);
+		const int Xs = MovingCells ? 16 : Solid ? 8 : 16;
+		const int Ys = MovingCells ? std::max(1u,MovingCells/256) : Solid ? 4 : 1;
+		const int Zs = MovingCells ? std::min(16u,MovingCells/16) : Solid ? 8 : 32;
+		const float Unit = MovingCells==4096 ? .5f : 1.f;
+		const glm::vec3 Center = glm::vec3(Xs, Ys, Zs) * (.5f*Unit);
+		if (MovingCells) World->SetGravity(0.f);
 		const auto Camera = MakeLookAtRenderCameraInput(Center + glm::vec3(11, 26, 32), Center, {0, 1, 0}, 52);
 		EditorViewportRenderer View(Width, Height);
 		RenderPublisher Publisher;
 		std::vector<std::uint8_t> Blank, Pixels, Initial;
-		auto Stage = [&](const char *Name, unsigned Frames) {
+		auto Stage = [&](const char *Name, unsigned Frames, bool Advance=false) {
 			auto Measurements = Json::array();
 			const auto Before = EditorViewportRendererTestAccess::GetMetrics(View);
 			for (unsigned I = 0; I < Frames; ++I) {
+				if (Advance) World->StepPhysics(1./60.,std::nullopt);
 				const auto Start = std::chrono::steady_clock::now();
 				auto Publication = Publisher.Publish(*World, Camera, Width, Height);
 				const auto PublishUs =
@@ -91,6 +96,7 @@ namespace {
 				{"VertexBufferCreates", After.VertexBufferCreations - Before.VertexBufferCreations},
 				{"Frames", std::move(Measurements)}
 			};
+			if (MovingCells) Row["MovingCells"]=MovingCells;
 			std::cout << Row.dump() << std::endl;
 			if (Sample) {
 				std::string Ack;
@@ -101,7 +107,7 @@ namespace {
 		std::vector<blockgrid::Write> Writes;
 		std::shared_ptr<BlockGrid> Grid;
 		std::shared_ptr<Part> Removed;
-		const blockgrid::Cell Target{Xs - 2, Ys - 1, Zs - 2};
+		const blockgrid::Cell Target{Xs - (MovingCells?1:2), Ys - 1, Zs - (MovingCells?1:2)};
 		for (int Z = 0; Z < Zs; ++Z)
 			for (int Y = 0; Y < Ys; ++Y)
 				for (int X = 0; X < Xs; ++X) {
@@ -118,19 +124,40 @@ namespace {
 						if (Cell == Target) Removed = Piece;
 					}
 				}
-		Require(Writes.size() == 256, "invalid authored geometry");
+		Require(Writes.size() == (MovingCells?MovingCells:256), "invalid authored geometry");
 		if (UseGrid) {
 			Grid = std::make_shared<BlockGrid>();
+			Grid->SetCellSize(Unit);
 			blockgrid::Field Field;
-			Require(Field.Apply(Writes), "grid construction failed");
+			if (MovingCells) {
+				const std::array Fill{blockgrid::Write{{{0,0,0},{Xs,Ys,Zs}}, {blockgrid::Stone,0}}};
+				Require(Field.Apply(Fill),"scale fill failed");
+			} else Require(Field.Apply(Writes), "grid construction failed");
 			Grid->RestoreField(std::move(Field));
 			Grid->SetParent(FolderValue);
+			if (MovingCells) {
+				auto Edit=std::make_shared<blockgrid::EditRequest>();
+				Edit->Motion=blockgrid::MotionEdit{true}; Edit->ExpectedRevision=Grid->GetBlockRevision();
+				Require(MutationGateway{}.Apply(SubmitBlockGridEditCommand{Grid->GetObjectId(),Game->GetObjectId(),Edit},
+					ScriptSecurityContext::CoreTrusted()).Succeeded(),"moving render fixture failed activation");
+				Edit=std::make_shared<blockgrid::EditRequest>(); Edit->ExpectedRevision=Grid->GetBlockRevision();
+				Edit->Motion=blockgrid::MotionEdit{true,std::pair{blockgrid::Point{8,0,0},blockgrid::Point{0,.4f,0}}};
+				Require(MutationGateway{}.Apply(SubmitBlockGridEditCommand{Grid->GetObjectId(),Game->GetObjectId(),Edit},
+					ScriptSecurityContext::CoreTrusted()).Succeeded(),"moving render fixture failed velocity");
+			}
 		}
 		Stage("Cold", 1);
 		Initial = Pixels;
 		Require(Initial != Blank, "geometry produced no pixels");
-		Stage("Warm", 105);
+		Stage("Warm", MovingCells?12:105);
 		Require(Pixels == Initial, "stationary frames changed");
+		if (MovingCells) {
+			const auto Revision=Grid->GetField().GetGeometryRevision();
+			Stage("Moving",30,true);
+			Require(Pixels!=Initial && Grid->GetField().GetGeometryRevision()==Revision &&
+				Grid->GetAssemblyProjection()->Dynamic, "actual rigid motion did not move pixels with stable cell geometry");
+			Initial=Pixels;
+		}
 		if (Grid) {
 			auto Edit = std::make_shared<blockgrid::EditRequest>();
 			Edit->Writes.push_back({blockgrid::SingleCell(Target), {}});
@@ -157,6 +184,13 @@ namespace {
 	}
 }
 int main(int Count, char **Args) try {
+	if (Count==3 && std::string_view(Args[1])=="moving") {
+		const auto Cells=std::stoul(Args[2]);
+		Require(Cells==128 || Cells==256 || Cells==512 || Cells==1024 || Cells==2048 || Cells==4096, "invalid moving size");
+		gargantuan::BootstrapNativeRuntimeSchema();
+		Run(true,true,false,static_cast<unsigned>(Cells));
+		return 0;
+	}
 	if (Count != 3 && Count != 4)
 		throw std::invalid_argument("expected solid|checkerboard grid|parts [--sample-counters]");
 	const std::string Layout = Args[1], Representation = Args[2];

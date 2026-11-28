@@ -19,10 +19,15 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <vector>
 
 using namespace gargantuan;
 
 namespace {
+	std::filesystem::path AbsolutePath(std::string_view Utf8) {
+		return std::filesystem::absolute(std::filesystem::u8path(Utf8)).lexically_normal();
+	}
+
 	std::optional<std::string> ValueAfter(int argc, char *argv[], std::string_view Name) {
 		for (int Index = 2; Index + 1 < argc; ++Index)
 			if (std::string_view(argv[Index]) == Name) return argv[Index + 1];
@@ -144,7 +149,7 @@ namespace {
 		try {
 			std::optional<RuntimeDistributionRequest> Policy;
 			if (PolicyPath) {
-				std::ifstream PolicyFile(*PolicyPath, std::ios::binary);
+				std::ifstream PolicyFile(std::filesystem::u8path(*PolicyPath), std::ios::binary);
 				std::array<char, 8193> Buffer{};
 				PolicyFile.read(Buffer.data(), static_cast<std::streamsize>(Buffer.size()));
 				if (PolicyFile.gcount() == 0 || PolicyFile.gcount() == Buffer.size() || PolicyFile.bad())
@@ -156,14 +161,14 @@ namespace {
 					throw RuntimeDistributionError("AudienceViolation", "The requested target and audience disagree.");
 				Audience = Requested;
 			}
-			const auto ProjectPath = std::filesystem::absolute(*ProjectRoot).lexically_normal();
-			const auto OutputPath = std::filesystem::absolute(*Output).lexically_normal();
-			const auto DistributionPath = RuntimeRoot ? std::filesystem::absolute(*RuntimeRoot).lexically_normal()
+			const auto ProjectPath = AbsolutePath(*ProjectRoot);
+			const auto OutputPath = AbsolutePath(*Output);
+			const auto DistributionPath = RuntimeRoot ? AbsolutePath(*RuntimeRoot)
 				: Paths::GetExecutableDirectory() / (Policy && Policy->Target == RuntimeDistributionTarget::DedicatedServer ?
 					"ServerRuntimeDistribution" : "RuntimeDistribution");
 			std::optional<Gas::Document> GasPlace;
 			if (GasInput) {
-				auto Parsed = ReadGasPlace(std::filesystem::absolute(*GasInput).lexically_normal());
+				auto Parsed = ReadGasPlace(AbsolutePath(*GasInput));
 				if (!Parsed) return GasFailure(Parsed.error().Message);
 				GasPlace = std::move(*Parsed);
 			} else {
@@ -211,7 +216,7 @@ namespace {
 					{"TotalBytes", Result.Size.TotalBytes}, {"ProjectBytes", Result.Size.ProjectBytes},
 				};
 				if (!Result.PrivateDiagnosticsPath.empty())
-					Receipt["PrivateDiagnosticsPath"] = Result.PrivateDiagnosticsPath.generic_string();
+					Receipt["PrivateDiagnosticsPath"] = Paths::ToGenericUtf8(Result.PrivateDiagnosticsPath);
 				std::cout << Receipt.dump() << '\n';
 			}
 			if (!Result.Ok) return 3;
@@ -246,8 +251,8 @@ namespace {
 			return 2;
 		}
 		try {
-			const auto ProjectPath = std::filesystem::absolute(*ProjectRoot).lexically_normal();
-			const auto OutputPath = std::filesystem::absolute(*Output).lexically_normal();
+			const auto ProjectPath = AbsolutePath(*ProjectRoot);
+			const auto OutputPath = AbsolutePath(*Output);
 			const auto TrustedPreRun = BootstrapProjectRuntimeSchema(ProjectPath);
 			DiskFilesystem Filesystem(ProjectPath);
 			auto ProjectValue = Project::fromExisting(&Filesystem);
@@ -269,9 +274,9 @@ namespace {
 			return 2;
 		}
 		try {
-			auto Parsed = ReadGasPlace(std::filesystem::absolute(*GasInput).lexically_normal());
+			auto Parsed = ReadGasPlace(AbsolutePath(*GasInput));
 			if (!Parsed) return GasFailure(Parsed.error().Message);
-			const auto ProjectPath = std::filesystem::absolute(*ProjectRoot).lexically_normal();
+			const auto ProjectPath = AbsolutePath(*ProjectRoot);
 			DiskFilesystem Filesystem(ProjectPath);
 			auto ProjectValue = Project::FromGasOrigin(&Filesystem);
 			auto Loaded = LoadGasPlace(ProjectValue, *Parsed);
@@ -306,7 +311,7 @@ namespace {
 				"[--expected-manifest-sha256 <digest>] [--require-package-publisher]\n";
 			return 2;
 		}
-		auto Diagnostics = PackageBuilder::Validate(std::filesystem::absolute(argv[2]).lexically_normal(), Audience, Admission);
+		auto Diagnostics = PackageBuilder::Validate(AbsolutePath(argv[2]), Audience, Admission);
 		PrintDiagnostics(Diagnostics);
 		return std::ranges::any_of(
 				   Diagnostics,
@@ -322,7 +327,7 @@ namespace {
 			return 2;
 		}
 		std::vector<PackageDiagnostic> Diagnostics;
-		auto Inspection = PackageBuilder::Inspect(std::filesystem::absolute(argv[2]).lexically_normal(), Diagnostics);
+		auto Inspection = PackageBuilder::Inspect(AbsolutePath(argv[2]), Diagnostics);
 		if (!Inspection) {
 			PrintDiagnostics(Diagnostics);
 			return 3;
@@ -346,7 +351,7 @@ namespace {
 	}
 }
 
-int main(int argc, char *argv[]) {
+static int RunPackager(int argc, char *argv[]) {
 	if (!SDL_Init(0)) {
 		std::cerr << "[error][Package:Runtime] SDL platform support could not initialize.\n";
 		return 1;
@@ -369,3 +374,20 @@ int main(int argc, char *argv[]) {
 	std::cerr << "Unknown gargantuan-packager command.\n";
 	return 2;
 }
+
+#if defined(_WIN32)
+int wmain(int Count, wchar_t *WideArgs[]) {
+	std::vector<std::string> Utf8;
+	std::vector<char *> Arguments;
+	Utf8.reserve(Count);
+	for (int Index = 0; Index < Count; ++Index)
+		Utf8.push_back(Paths::ToUtf8(WideArgs[Index]));
+	for (auto &Value : Utf8) Arguments.push_back(Value.data());
+	Arguments.push_back(nullptr);
+	return RunPackager(Count, Arguments.data());
+}
+#else
+int main(int Count, char *Args[]) {
+	return RunPackager(Count, Args);
+}
+#endif

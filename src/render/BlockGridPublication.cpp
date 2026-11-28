@@ -183,9 +183,8 @@ namespace gargantuan {
 		}
 	}
 
-	RenderPublisher::GridMeshes RenderPublisher::PrepareBlockGrids(const WorldRoot &World, RenderPublication &Result,
-		std::size_t Budget) const {
-		GridMeshes Next;
+	void RenderPublisher::PrepareBlockGrids(const WorldRoot &World, RenderPublication &Result,
+		std::size_t Budget, GridMeshes &Next) const {
 		World.ForEachBlockGrid([&](const BlockGrid &Grid) {
 			const auto &Field = Grid.GetField();
 			if (!Grid.GetVisible() || !Field.GetOccupiedCount()) return;
@@ -277,6 +276,5 @@ namespace gargantuan {
 				Result.Removes.push_back({Id});
 			}
 		}
-		return Next;
 	}
 }

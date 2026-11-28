@@ -1020,7 +1020,7 @@ if(BUILD_TESTING)
 	add_executable(gargantuan_spatial_construction_benchmark EXCLUDE_FROM_ALL "tests/SpatialConstructionPerformance.cpp")
 	target_link_libraries(gargantuan_spatial_construction_benchmark PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_spatial_construction_motion_benchmark EXCLUDE_FROM_ALL "tests/SpatialConstructionMotionPerformance.cpp")
-	target_link_libraries(gargantuan_spatial_construction_motion_benchmark PRIVATE gargantuan_core nlohmann_json)
+	target_link_libraries(gargantuan_spatial_construction_motion_benchmark PRIVATE gargantuan_core nlohmann_json box3d::box3d)
 	add_executable(gargantuan_spatial_construction_gpu_benchmark EXCLUDE_FROM_ALL "tests/SpatialConstructionGpuPerformance.cpp")
 	target_link_libraries(gargantuan_spatial_construction_gpu_benchmark PRIVATE gargantuan_core nlohmann_json)
 	if(GARGANTUAN_WITH_GNS)
@@ -1064,6 +1064,12 @@ if(BUILD_TESTING)
 				--engine $<TARGET_FILE:gargantuan>)
 		set_tests_properties(gargantuan_spatial_construction_yard PROPERTIES LABELS "spatial;blockgrid;headless;sample" TIMEOUT 120)
 		if(GARGANTUAN_WITH_GNS)
+			add_test(NAME gargantuan_packaged_player_gui_lifecycle
+				COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/PackagedPlayerGuiLifecycle.py"
+					--packager "$<TARGET_FILE:gargantuan_packager>" --player-distribution "$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution"
+					--server-distribution "$<TARGET_FILE_DIR:gargantuan_server>/ServerRuntimeDistribution"
+					--sample "${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame")
+			set_tests_properties(gargantuan_packaged_player_gui_lifecycle PROPERTIES LABELS "packaging;network;gui" TIMEOUT 180)
 			add_test(NAME gargantuan_spatial_creator_network
 				COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialCreatorTrial.py"
 					--network --engine $<TARGET_FILE:gargantuan> --packager $<TARGET_FILE:gargantuan_packager>
@@ -1105,6 +1111,10 @@ if(BUILD_TESTING)
 					COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialDomainLighting.py"
 						--engine $<TARGET_FILE:gargantuan>)
 				set_tests_properties(gargantuan_spatial_domain_lighting PROPERTIES LABELS "spatial;editor;graphical" TIMEOUT 65)
+				add_test(NAME gargantuan_spatial_paused_domain_view
+					COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialPausedDomainPresentation.py"
+						--engine $<TARGET_FILE:gargantuan> --same-size)
+				set_tests_properties(gargantuan_spatial_paused_domain_view PROPERTIES LABELS "spatial;editor;graphical" TIMEOUT 65)
 			endif()
 		endif()
 	endif()
@@ -2192,6 +2202,13 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_viewport_frame COMMAND gargantuan_viewport_frame_tests)
 	add_test(NAME gargantuan_first_complete_game COMMAND gargantuan_first_complete_game_tests)
 	add_test(NAME gargantuan_packaging COMMAND gargantuan_packaging_tests)
+	if(WIN32 AND GARGANTUAN_SPATIAL_TEST_PYTHON)
+		add_test(NAME gargantuan_windows_package_replacement
+			COMMAND "${GARGANTUAN_SPATIAL_TEST_PYTHON}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/WindowsPackageReplacement.py"
+				--packager "$<TARGET_FILE:gargantuan_packager>" --runtime "$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution"
+				--sample "${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame")
+		set_tests_properties(gargantuan_windows_package_replacement PROPERTIES LABELS "packaging;windows" TIMEOUT 120)
+	endif()
 	add_test(NAME gargantuan_packaging_editor_host COMMAND gargantuan_packaging_editor_host_tests)
 	add_test(NAME gargantuan_packaging_benchmark_smoke COMMAND gargantuan_packaging_benchmark --quick)
 	find_program(GARGANTUAN_LIFECYCLE_TEST_PYTHON NAMES python3 python)

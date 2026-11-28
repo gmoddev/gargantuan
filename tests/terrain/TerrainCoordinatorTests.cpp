@@ -3,6 +3,7 @@
 #include "gargantuan/runtime/JobSystem.hpp"
 #include "terrain/EditCoordinator.hpp"
 
+#include <array>
 #include <iostream>
 #include <stdexcept>
 
@@ -60,10 +61,12 @@ namespace {
         JobSystem Jobs(2, JobSystem::StartPolicy::OnFirstSubmission);
         EditCoordinator Coordinator(World, Jobs);
         RecordingPublisher Publisher;
+        Require(!Coordinator.NeedsPoll(), "fresh terrain has no poll work");
         const auto First = Coordinator.Submit(Brush(14.21)).value();
         const auto Overlap = Coordinator.Submit(Brush(16.42)).value();
         const auto Disjoint = Coordinator.Submit(Brush(142.81)).value();
-        Require(World.GetRevision() == 0 && Coordinator.GetPendingCount() == 3, "no early field publication");
+        Require(World.GetRevision() == 0 && Coordinator.GetPendingCount() == 3 && Coordinator.NeedsPoll(),
+            "unpublished jobs keep the coordinator pollable");
         Jobs.Drain();
         const auto Receipts = Coordinator.Poll(Publisher);
         Require(Receipts.size() == 3 && Receipts[0].Ticket == First && Receipts[0].Status == EditStatus::Committed,
@@ -75,6 +78,7 @@ namespace {
             "field and publisher share committed revision");
         Require(World.Read({14, 14, 16})->Density < 0 && Coordinator.GetActiveCount() == 2,
             "resident chunks own committed visual candidates");
+        Require(!Coordinator.NeedsPoll(), "materialized terrain alone has no poll work");
 
         auto Paint = Brush(14.21, BrushMode::Paint);
         Paint.Material = 223145;
@@ -123,6 +127,29 @@ namespace {
             World.GetRevision() == 0 && Coordinator.GetActiveCount() == 0, "stage is discarded after commit denial");
     }
 
+    void TestPollAfterLastReaderReleases() {
+        Field World;
+        JobSystem Jobs(1, JobSystem::StartPolicy::OnFirstSubmission);
+        EditCoordinator Coordinator(World, Jobs);
+        RecordingPublisher Publisher;
+        const SamplePoint Point{0, 1, 0};
+        const std::array Keys{GetChunkKey(Point)};
+        const auto Write = [&](Sample Value) {
+            auto Candidate = Field::Prepare(World.Capture(Keys).value(), std::array{SampleWrite{Point, Value}}).value();
+            Require(World.Commit(std::move(Candidate)).has_value(), "single-sample edit committed");
+        };
+        {
+            const auto Reader = World.Capture(Keys).value();
+            Write({-102, 65});
+            Write(AirSample);
+            Require(Coordinator.NeedsPoll() && Coordinator.Poll(Publisher).empty() && World.GetStats().Entries == 1,
+                "retirement retains the cleared chunk version while a snapshot exists");
+        }
+        Require(Coordinator.NeedsPoll() && Coordinator.Poll(Publisher).empty() &&
+            World.GetStats().Entries == 0 && !Coordinator.NeedsPoll(),
+            "idle poll reclaims the version after the last reader releases");
+    }
+
     void TestRetirementWhileJobsRun() {
         JobSystem Jobs(1, JobSystem::StartPolicy::OnFirstSubmission);
         {
@@ -155,6 +182,7 @@ int main() try {
     TestCompleteAndStale();
     TestDenialAndCancellation();
     TestFieldAdmissionRollback();
+    TestPollAfterLastReaderReleases();
     TestRetirementWhileJobsRun();
     TestPostCommitProviderFault();
     std::cout << "[Terrain:CoordinatorTests] Passed\n";
