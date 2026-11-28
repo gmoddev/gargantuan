@@ -81,13 +81,22 @@ def VerifyScene(Scene, Processes, Raw):
             raise ValueError("Unexpected source identity or run order")
         Ticks = list(map(int,Sample["StepNanoseconds"].split()))
         Groups = [tuple(map(int,G.split(":"))) for G in Sample["OmittedGroupsStartCountTotal"].split()]
+        ResetGaps = [tuple(map(int,G.split(":"))) for G in Sample["ResetGapsStartCount"].split()]
+        AllGaps = sorted([(Start,Count) for Start,Count,_ in Groups]+ResetGaps)
         Attempted, Missing = int(Process["Attempted"]), int(Process["Missing"])
-        if (int(Process["Warmup"])<192 or Attempted<Target or len(Ticks)+Missing!=Attempted or
+        RingTicks = int(Process["RingTicks"])
+        if (int(Process["Warmup"])<192 or RingTicks<Target or len(Ticks)+Missing!=Attempted or
+                int(Process["EndSimulationTick"])-int(Process["StartSimulationTick"])!=Attempted or
                 len(Ticks)!=int(Process["Exact"]) or len(Groups)!=int(Process["Gaps"]) or
-                sum(Count for _,Count,_ in Groups)!=Missing or
+                len(ResetGaps)!=int(Process["ResetGaps"]) or
+                sum(Count for _,Count,_ in Groups)!=int(Process["PollMissing"]) or
+                sum(Count for _,Count in ResetGaps)!=int(Process["ResetMissing"]) or
+                int(Process["PollMissing"])+len(Ticks)!=RingTicks or
+                sum(Count for _,Count in AllGaps)!=Missing or
                 sum(Ticks)+sum(Total for _,_,Total in Groups)!=int(Process["EngineStepNs"]) or
-                any(Start<0 or Count<2 or Total<=0 or Start+Count>Attempted for Start,Count,Total in Groups) or
-                any(A[0]+A[1]>B[0] for A,B in zip(Groups,Groups[1:]))):
+                any(Count<2 or Total<=0 for _,Count,Total in Groups) or
+                any(Start<0 or Count<1 or Start+Count>Attempted for Start,Count in AllGaps) or
+                any(A[0]+A[1]>B[0] for A,B in zip(AllGaps,AllGaps[1:]))):
             raise ValueError("Raw observations disagree with native count or nanosecond totals")
         for P in (50,95,99):
             if int(Process[f"P{P}Ns"])!=Quantile(Ticks,P/100):
@@ -146,7 +155,7 @@ def Analyze(Processes):
         MaxSD = math.sqrt(sum(max((Low-Center)**2,(High-Center)**2) for Low,High in zip(Lo,Hi))/(Count-1))
         MissingUpper = Percent(statistics.mean(Hi)+Critical(Count-1,.95)*MaxSD/math.sqrt(Count))
     Result = {
-        "Blocks":Count, "Processes":len(Processes), "MedianPerProcessUs":{}, "Attempts":{}, "Missing":{},
+        "Blocks":Count, "Processes":len(Processes), "MedianPerProcessUs":{}, "Attempts":{}, "Missing":{}, "GapTotals":{},
         "ProcessRange":{}, "Estimated":{}, "OrderMeanP95Percent":{}, "FourBlockP95Percent":{},
         "MissingMeanP95Percent":MissingMean, "MissingUpperOneP95Percent":MissingUpper,
         "P95LogSD":statistics.stdev(Values),
@@ -157,6 +166,8 @@ def Analyze(Processes):
             P:statistics.median(int(Row[f"P{P}Ns"])/1000 for Row in Matched) for P in (50,95,99)}
         Result["Attempts"][Name]=sum(int(Row["Attempted"]) for Row in Matched)
         Result["Missing"][Name]=sum(int(Row["Missing"]) for Row in Matched)
+        Result["GapTotals"][Name]={Key:sum(int(Row[Key]) for Row in Matched)
+            for Key in ("Exact","RingTicks","Gaps","PollMissing","ResetGaps","ResetMissing","Windows","Queries")}
         Result["ProcessRange"][Name]={
             Key:[min(float(Row[Key]) for Row in Matched),statistics.median(float(Row[Key]) for Row in Matched),
                  max(float(Row[Key]) for Row in Matched)]

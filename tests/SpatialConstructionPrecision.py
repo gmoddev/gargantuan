@@ -186,12 +186,15 @@ def Measure(Win, Binary, Project, Args):
 def ReadSteps(Win, Host, Process, Main, Session, Args):
     def Reset():
         Host.Call("ConfigureStreamingDiagnostics", PlaySessionId=Session, Enabled=False)
-        State = Host.Call("ConfigureStreamingDiagnostics", PlaySessionId=Session, Enabled=True)["Diagnostics"]["Execution"]
+        Diagnostics = Host.Call("ConfigureStreamingDiagnostics", PlaySessionId=Session, Enabled=True)["Diagnostics"]
+        State = Diagnostics["Execution"]
         if State["Accounting"] != "EditorPlayInclusiveWallTimeV1" or State["Samples"] != 0:
             raise ValueError("Native sample ring did not reset")
+        return int(Diagnostics["SimulationTick"])
 
     def Snapshot():
-        return Host.Call("GetStreamingDiagnostics", PlaySessionId=Session, MaximumUnits=0, MaximumTimingSamples=0)["Diagnostics"]["Execution"]
+        Diagnostics = Host.Call("GetStreamingDiagnostics", PlaySessionId=Session, MaximumUnits=0, MaximumTimingSamples=0)["Diagnostics"]
+        return int(Diagnostics["SimulationTick"]), Diagnostics["Execution"]
 
     Warm = 0
     while Warm < Args.warmup:
@@ -199,33 +202,42 @@ def ReadSteps(Win, Host, Process, Main, Session, Args):
         Target = min(48, Args.warmup - Warm)
         time.sleep(Target * .0075)
         Deadline = time.monotonic() + 3
-        while (Count := Snapshot()["Samples"]) < Target:
+        while (Count := Snapshot()[1]["Samples"]) < Target:
             if time.monotonic() > Deadline:
                 raise TimeoutError("EditorHost did not progress during warmup")
             time.sleep(.004)
         Warm += Count
 
-    Ticks, Groups, WindowsCount, Queries = [], [], 0, 0
+    Ticks, Groups, ResetGaps = [], [], []
+    WindowsCount = Queries = 0
+    FirstTick = LastTick = None
     WallStart = time.perf_counter_ns()
     ProcessStart, MainStart = Win.Times(Process, False)[1], Win.Times(Main, True)[1]
     Deadline = time.monotonic() + Args.frames * .04 + 15
     PhaseTotals = {Name: 0 for Name in Phases}
     Observed = 0
     while Observed < Args.frames:
-        Reset()
+        WindowStart = Reset()
+        if FirstTick is None:
+            FirstTick = WindowStart
+        elif WindowStart < LastTick:
+            raise ValueError("Simulation tick regressed between counter windows")
+        elif WindowStart > LastTick:
+            ResetGaps.append((LastTick-FirstTick,WindowStart-LastTick))
+        LastTick = WindowStart
         WindowsCount += 1
         Count = Total = Maximum = 0
         while Count < 48 and Observed < Args.frames:
             if time.monotonic() > Deadline:
                 raise TimeoutError("Timed EditorHost stopped progressing")
             time.sleep(Args.poll_ms / 1000)
-            State = Snapshot()
+            AbsoluteTick,State = Snapshot()
             Queries += 1
             Current = State["Samples"]
             Stats = State["Phases"]["EngineStep"]
             NewTotal, NewMax = Stats["TotalNanoseconds"], Stats["MaximumNanoseconds"]
             Gap, Duration = Current - Count, NewTotal - Total
-            if Current >= 60 or Gap < 0 or Duration < 0 or NewMax < Maximum:
+            if Current >= 60 or Gap < 0 or Duration < 0 or NewMax < Maximum or AbsoluteTick-LastTick!=Gap:
                 raise RuntimeError("Cannot establish the number of stepped frames")
             if Gap == 0:
                 if Duration or NewMax != Maximum:
@@ -237,8 +249,9 @@ def ReadSteps(Win, Host, Process, Main, Session, Args):
             else:
                 if Duration <= 0 or Duration > Gap * NewMax:
                     raise ValueError("Unobserved step group has an impossible total")
-                Groups.append((Observed, Gap, Duration))
+                Groups.append((LastTick-FirstTick, Gap, Duration))
             Observed += Gap
+            LastTick = AbsoluteTick
             Count, Total, Maximum = Current, NewTotal, NewMax
         for Name in Phases:
             PhaseTotals[Name] += State["Phases"][Name]["TotalNanoseconds"]
@@ -247,27 +260,33 @@ def ReadSteps(Win, Host, Process, Main, Session, Args):
     Win.VerifyAffinity(Process, Main, Args.engine_mask, Args.main_cpu)
     Priority = Win.Kernel.GetPriorityClass(Process)
     Win.Check(Priority)
-    Missing = sum(Gap for _, Gap, _ in Groups)
-    if len(Ticks) + Missing != Observed or sum(Ticks) + sum(Sum for _, _, Sum in Groups) != PhaseTotals["EngineStep"]:
+    PollMissing = sum(Gap for _, Gap, _ in Groups)
+    ResetMissing = sum(Gap for _, Gap in ResetGaps)
+    Missing = PollMissing + ResetMissing
+    Attempted = LastTick-FirstTick
+    if (len(Ticks) + PollMissing != Observed or len(Ticks) + Missing != Attempted or
+            sum(Ticks) + sum(Sum for _, _, Sum in Groups) != PhaseTotals["EngineStep"]):
         raise ValueError("Native steps or durations are unaccounted for")
     if not Ticks:
         raise ValueError("No individually timed steps")
     Sorted = sorted(Ticks)
-    Rank = math.ceil(Observed * .95)
-    return dict(PriorityClass=Priority, Warmup=Warm, Attempted=Observed, Exact=len(Ticks), Missing=Missing, Gaps=len(Groups),
+    Rank = math.ceil(Attempted * .95)
+    return dict(PriorityClass=Priority, Warmup=Warm, StartSimulationTick=FirstTick, EndSimulationTick=LastTick,
+                Attempted=Attempted, RingTicks=Observed, Exact=len(Ticks), Missing=Missing,
+                PollMissing=PollMissing, ResetMissing=ResetMissing, Gaps=len(Groups), ResetGaps=len(ResetGaps),
                 Windows=WindowsCount, Queries=Queries, WallSeconds=round(Wall/1e9,4),
                 MainCpuMs=round(MainCpu/1e6,3), ProcessCpuMs=round(ProcessCpu/1e6,3),
                 P50Ns=Quantile(Ticks,.5), P95Ns=Quantile(Ticks,.95), P99Ns=Quantile(Ticks,.99),
                 LowerP95Ns=Sorted[max(0,Rank-Missing-1)] if Rank>Missing else 0,
                 UpperP95Ns=Sorted[Rank-1] if Rank<=len(Sorted) else float("inf"),
-                **{Name+"Ns": Value for Name,Value in PhaseTotals.items()}), Ticks, Groups
+                **{Name+"Ns": Value for Name,Value in PhaseTotals.items()}), Ticks, Groups, ResetGaps
 
 
 def Main():
     Parser = argparse.ArgumentParser(description=__doc__)
     for Name in ("baseline", "current", "output"):
         Parser.add_argument("--"+Name,type=Path,required=True)
-    Parser.add_argument("--blocks",type=int,default=48,help="Fresh processes per symmetric block: ABBA or BAAB")
+    Parser.add_argument("--blocks",type=int,default=64,help="Number of symmetric ABBA or BAAB four-process blocks")
     Parser.add_argument("--frames",type=int,default=1024)
     Parser.add_argument("--warmup",type=int,default=192)
     Parser.add_argument("--poll-ms",type=float,default=4)
@@ -297,18 +316,19 @@ def Main():
             Args.output/"Ticks.csv.gz","xt",encoding="utf-8",newline="") as Raw, tempfile.TemporaryDirectory(prefix="gpp-") as Projects:
         Table = None
         Samples = csv.writer(Raw)
-        Samples.writerow(("Block","Run","Profile","StepNanoseconds","OmittedGroupsStartCountTotal"))
+        Samples.writerow(("Block","Run","Profile","StepNanoseconds","OmittedGroupsStartCountTotal","ResetGapsStartCount"))
         for Block,First in enumerate(Starts,1):
             Second = "current" if First=="baseline" else "baseline"
             for Run,Name in enumerate((First,Second,Second,First),1):
-                Result,Ticks,Groups = Measure(Win,Paths[Name],Path(Projects)/f"B{Block}R{Run}",Args)
+                Result,Ticks,Groups,ResetGaps = Measure(Win,Paths[Name],Path(Projects)/f"B{Block}R{Run}",Args)
                 Row = dict(Scene=Args.scene,Block=Block,Run=Run,Profile=Name,EngineSHA256=Hashes[Name],**Result)
                 if Table is None:
                     Table=csv.DictWriter(Summary,fieldnames=Row.keys())
                     Table.writeheader()
                 Table.writerow(Row)
                 Samples.writerow((Block,Run,Name," ".join(map(str,Ticks)),
-                                  " ".join(f"{Start}:{Gap}:{Total}" for Start,Gap,Total in Groups)))
+                                  " ".join(f"{Start}:{Gap}:{Total}" for Start,Gap,Total in Groups),
+                                  " ".join(f"{Start}:{Gap}" for Start,Gap in ResetGaps)))
                 Raw.flush()
                 Summary.flush()
                 print(f"block {Block}/{Args.blocks} run {Run} {Name} p95={Result['P95Ns']/1000:g} us "
