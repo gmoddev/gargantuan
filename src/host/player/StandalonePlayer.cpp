@@ -432,6 +432,7 @@ namespace gargantuan::host {
 					EngineProviderConfiguration Providers;
 					Providers.AudioEnabled = Graphics != nullptr;
 					Providers.AudioOutput = App.GetAudioOutput();
+					Providers.EnableDefaultInteractionPresentation = Device.GetCapabilities().Graphical;
 					Providers.DeferStartup = true;
 					Providers.Mode = Joining ? RuntimeMode::NetworkClient : RuntimeMode::Offline;
 					Providers.AdmitNetworkTerrain = Joining && Terrain;

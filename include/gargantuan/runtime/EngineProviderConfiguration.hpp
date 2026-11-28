@@ -29,6 +29,7 @@ namespace gargantuan {
 		bool ExperimentalTerrainVisualDensity = false;
 		bool AdmitSpatialContent = false;
 		std::shared_ptr<IAudioOutput> AudioOutput;
+		bool EnableDefaultInteractionPresentation = false;
 		bool DeferStartup = false;
 	};
 }

@@ -141,7 +141,9 @@ namespace gargantuan {
 				"[Player:Session] Network client runtime requires a trusted LocalPlayer association"
 			);
 		Interaction->AttachRuntime(
-			DataModel, Players, ActionMap, Spatial, Renderer && Renderer->GetCapabilities().Graphical
+			DataModel, Players, ActionMap, Spatial,
+			Renderer && Renderer->GetCapabilities().Graphical &&
+				(dynamic_cast<HeadlessRenderer *>(Renderer) == nullptr || ProviderConfiguration.EnableDefaultInteractionPresentation)
 		);
 		Assets->ConfigureBuiltInFont(DefaultGuiFont);
 		Gui = std::make_shared<GuiRuntime>(DataModel, DefaultGuiFont);
