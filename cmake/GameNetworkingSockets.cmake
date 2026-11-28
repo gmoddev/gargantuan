@@ -41,6 +41,7 @@ FetchContent_Declare(
 	GIT_PROGRESS TRUE
 )
 FetchContent_MakeAvailable(GameNetworkingSockets)
+GargantuanAddSanitizerSource(GameNetworkingSockets "${gamenetworkingsockets_SOURCE_DIR}")
 include("${CMAKE_CURRENT_LIST_DIR}/gns/ApplyServiceFairness.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/gns/ApplyReliableServiceFeedback.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/gns/ApplyPreciseSenderWake.cmake")
