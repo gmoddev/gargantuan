@@ -4,6 +4,10 @@
 
 #include "gargantuan/editor/PlaySession.hpp"
 #include "gargantuan/runtime/SimulationTimeline.hpp"
+#include "gargantuan/runtime/ApplicationPresentation.hpp"
+#include "gargantuan/render/ApplicationDisplay.hpp"
+#include "gargantuan/filesystem/Paths.hpp"
+#include "packaging/ApplicationTemplate.hpp"
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Script.hpp"
@@ -51,6 +55,127 @@ namespace gargantuan {
 			// The first live GUI publication reinstates ownership after Continue.
 			Publisher.SetUiFrame(std::move(Fitted));
 		}
+	}
+
+	struct PlaySession::PlayApplication {
+		std::unique_ptr<ApplicationPresentation> Presentation;
+		WorldFactory Open;
+		std::unique_ptr<PlaySession> Child;
+		RenderPublisher Publisher;
+		ApplicationDisplay Display;
+		std::chrono::steady_clock::time_point Last = std::chrono::steady_clock::now();
+		std::uint32_t Width, Height;
+		bool Preparing = false;
+		GuiApplicationFrame Published{}, Displayed{};
+		RenderPublicationId LastPublication = InvalidRenderPublicationId;
+	};
+
+	PlaySession::PlaySession(PlaySessionId SessionId, std::uint64_t Revision, std::uint32_t Width, std::uint32_t Height,
+		std::string Template, AssetRuntimeSnapshot Assets, bool AudioEnabled, WorldFactory Open)
+		: Id(SessionId), State(PlaySessionState::Starting), LaunchAuthoringRevision(Revision) {
+		auto Graph = application_template::Load(Template);
+		auto Service = std::dynamic_pointer_cast<AssetService>(Graph.World->GetService("AssetService"));
+		Service->LoadRuntimeAssetSnapshot(application_template::SelectAssets(Template, Assets));
+		Application = std::make_unique<PlayApplication>();
+		auto &App = *Application;
+		App.Open = std::move(Open);
+		App.Width = Width;
+		App.Height = Height;
+		App.Presentation = std::make_unique<ApplicationPresentation>(Graph.World, Graph.Entry,
+			Paths::GetExecutableDirectory() / "runtime" / "GargantuanSans.ttf",
+			[this](std::string Level, std::string Message) { AddDiagnostic(std::move(Level), "Application", std::move(Message)); },
+			AudioEnabled);
+		if (!App.Presentation->HasMainMenu()) {
+			App.Presentation.reset();
+			App.Child = App.Open(Width, Height, {});
+		}
+		State = PlaySessionState::Running;
+		Step();
+	}
+
+	const ApplicationPresentation *PlaySession::GetApplication() const {
+		return Application ? Application->Presentation.get() : nullptr;
+	}
+
+	std::shared_ptr<DataModel> PlaySession::GetWorld() const {
+		return Application && Application->Child ? Application->Child->GetWorld() : RuntimeWorld;
+	}
+
+	void PlaySession::StepApplication() {
+		auto &App = *Application;
+		auto *Menu = App.Presentation.get();
+		if (Menu) {
+			Menu->Gui.SetViewport({App.Width, App.Height, 1.0f, {}});
+			const auto Now = std::chrono::steady_clock::now();
+			Menu->Step(std::chrono::duration<float>(Now - App.Last).count());
+			App.Last = Now;
+			if (Menu->QuitRequested) { Stop(); return; }
+			Menu->Sessions.PumpCatalog(*Menu);
+			Menu->Sessions.Commit(*Menu, [&](SessionCommand Command) {
+				switch (Command) {
+				case SessionCommand::StartLocal:
+					if (!std::exchange(App.Preparing, true)) return false;
+					App.Child = App.Open(App.Width, App.Height, Menu->GetAudioOutput());
+					App.Preparing = false;
+					break;
+				case SessionCommand::Leave:
+					App.Child.reset();
+					Menu->ReturnToMenu();
+					App.Publisher.RequestFullResync();
+					break;
+				case SessionCommand::Pause:
+				case SessionCommand::Resume: {
+					auto &Child = *App.Child;
+					const bool Held = Command == SessionCommand::Pause;
+					if (Held) (void)Child.ProcessEvent(FocusEvent{false});
+					Child.DebugClock->SetHeld(SimulationTimeline::Hold::Gameplay, Held);
+					Child.RuntimeEngine->Audio->SetPlaybackHeld(Held);
+					break;
+				}
+				case SessionCommand::Join: throw SessionAdmissionFailure::UnsupportedTopology;
+				}
+				return true;
+			}, [&] { App.Preparing = false; App.Child.reset(); });
+			if (Menu->GameplayInputReleasePending) {
+				if (App.Child) (void)App.Child->ProcessEvent(FocusEvent{false});
+				Menu->GameplayInputReleasePending = false;
+			}
+			if (Menu->QuitRequested) { Stop(); return; }
+		}
+		bool PublishedGame = false;
+		if (App.Child) {
+			auto &Child = *App.Child;
+			if (!Menu || !Menu->Sessions.IsPaused()) Child.Step();
+			else if (auto Storage = Child.RuntimeEngine->Script->GetPersistenceRuntime()) Storage->Pump();
+			for (auto &Diagnostic : Child.DrainDiagnostics())
+				AddDiagnostic(std::move(Diagnostic.Severity), std::move(Diagnostic.Category),
+					std::move(Diagnostic.Message), std::move(Diagnostic.Source));
+			if (Child.GetState() != PlaySessionState::Running) { Stop(); return; }
+			for (auto &Frame : Child.TakeRenderPublications()) {
+				if (!Menu) QueuePublication(std::move(Frame));
+				else {
+					if (Frame->FullResync) App.Publisher.RequestFullResync();
+					Menu->Gui.Publish(App.Publisher);
+					QueuePublication(App.Display.Compose(Frame, *App.Publisher.PublishPresentation(App.Width, App.Height), true));
+				}
+				PublishedGame = true;
+			}
+		}
+		if (!Menu) return;
+		Menu->FlushPresentation();
+		if (!PublishedGame) {
+			Menu->Gui.Publish(App.Publisher);
+			QueuePublication(App.Display.Compose({}, *App.Publisher.PublishPresentation(App.Width, App.Height), App.Child != nullptr));
+		}
+		if (!PendingRenderPublications.empty()) {
+			App.LastPublication = PendingRenderPublications.back()->Id;
+			App.Published = Menu->Gui.GetApplicationFrame();
+		}
+	}
+
+	void PlaySession::AcknowledgePresentation(RenderPublicationId Publication) {
+		if (auto *App = Application.get(); App && App->Presentation && App->LastPublication == Publication &&
+			App->Presentation->Gui.AcknowledgeApplicationFrame(App->Published)) App->Displayed = App->Published;
 	}
 
 	struct PlaySession::ExecutionProfile {
@@ -113,7 +238,8 @@ namespace gargantuan {
 		std::shared_ptr<IPersistenceProvider> Persistence,
 		const InstanceSerialization::TerrainSceneAdmission &AdmitTerrain,
 		PlayScriptSources Sources,
-		const InstanceSerialization::DomainTerrainAdmission &AdmitDomains,const blockgrid::SegmentMap* GridSegments
+		const InstanceSerialization::DomainTerrainAdmission &AdmitDomains,const blockgrid::SegmentMap* GridSegments,
+		std::shared_ptr<IAudioOutput> SharedAudio, bool ApplicationChild
 	) : Id(SessionId), State(PlaySessionState::Starting), LaunchAuthoringRevision(AuthoringRevision) {
 		if (Id.Value == 0 || AuthoringRevision == 0) throw std::invalid_argument("Play session identity and revision must be nonzero");
 		std::istringstream Input(std::move(LaunchContents));
@@ -165,6 +291,7 @@ namespace gargantuan {
 		RuntimeRenderer = std::make_unique<HeadlessRenderer>(Vector2(Width, Height),
 			HeadlessRenderer::PublicationMode::DeferredGpuPresentation);
 		EngineProviderConfiguration Providers{.AudioEnabled = AudioEnabled};
+		Providers.AudioOutput = std::move(SharedAudio);
 		Providers.Persistence = std::move(Persistence);
 		RuntimeEngine = std::make_unique<Engine>(
 			RuntimeWorld,
@@ -177,6 +304,8 @@ namespace gargantuan {
 		if (Sources.DebugSourceId) {
 			if (!DebugTarget || !RuntimeEngine->Script->ArmRootScriptDebug(DebugTarget))
 				throw std::invalid_argument("[Editor:PlayDebugger] Script cannot start as a managed local root");
+		}
+		if (ApplicationChild || Sources.DebugSourceId) {
 			DebugClock = std::make_shared<SimulationTimeline>();
 			RuntimeEngine->SetDevelopmentClock([Clock = DebugClock] { return Clock->Now(); });
 		}
@@ -196,13 +325,14 @@ namespace gargantuan {
 		State = PlaySessionState::Running;
 		AddDiagnostic("Information", "Runtime", "Play session is running");
 		Step();
-		if (DebugClock && !IsRootDebugPaused())
+		if (Sources.DebugSourceId && !IsRootDebugPaused())
 			AddDiagnostic("Warning", "Runtime", "The selected Script produced no executable root entry pause");
 	}
 
 	PlaySession::~PlaySession() { Stop(); }
 
 	void PlaySession::Step() {
+		if (Application && State == PlaySessionState::Running) { StepApplication(); return; }
 		if (State != PlaySessionState::Running || !RuntimeEngine || IsRootDebugPaused()) return;
 		if (Profile) Profile->Step(*RuntimeEngine);
 		else RuntimeEngine->Step();
@@ -210,34 +340,47 @@ namespace gargantuan {
 			DebugClock->SetHeld(SimulationTimeline::Hold::Debugger, true);
 			++DebugPauseSerial;
 		}
-		if (auto Publication = RuntimeRenderer->TakeLastPublication()) {
-			if (AwaitingRenderFullResync && !Publication->FullResync) {
-				// The requested full publication has not reached the renderer yet.
-			} else if (PendingRenderPublications.size() == MaximumPendingRenderPublications) {
-				PendingRenderPublications.clear();
-				AwaitingRenderFullResync = true;
-				RuntimeEngine->RenderPublishing.RequestFullResync();
-			} else {
-				if (Publication->FullResync) AwaitingRenderFullResync = false;
-				PendingRenderPublications.push_back(std::move(Publication));
-			}
-		}
+		QueuePublication(RuntimeRenderer->TakeLastPublication());
 		if (!RuntimeEngine->ProcessService->Alive) {
 			AddDiagnostic("Information", "Runtime", "Runtime requested exit");
 			Stop();
 		}
 	}
 
+	void PlaySession::QueuePublication(RenderPublicationPtr Publication) {
+		if (Publication) {
+			if (AwaitingRenderFullResync && !Publication->FullResync) {
+				// The requested full publication has not reached the renderer yet.
+			} else if (PendingRenderPublications.size() == MaximumPendingRenderPublications) {
+				RequestRenderFullResync();
+			} else {
+				if (Publication->FullResync) AwaitingRenderFullResync = false;
+				PendingRenderPublications.push_back(std::move(Publication));
+			}
+		}
+	}
+
 	HostEventResult PlaySession::ProcessEvent(const HostEvent &Event) {
+		if (Application && State == PlaySessionState::Running) {
+			auto &App = *Application;
+			if (auto *Menu = App.Presentation.get()) {
+				const bool Consumed = Menu->ProcessEvent(Event, App.Displayed);
+				if (Consumed || !Menu->GameplayInputEnabled || Menu->Sessions.IsPaused())
+					return {Consumed, Menu->Gui.SynchronizeTextInput()};
+			}
+			return App.Child ? App.Child->ProcessEvent(Event) : HostEventResult{};
+		}
 		if (State != PlaySessionState::Running || !RuntimeEngine || IsRootDebugPaused()) return {};
 		return RuntimeEngine->ProcessEvent(Event);
 	}
 
 	bool PlaySession::IsRootDebugPaused() const {
+		if (Application && Application->Child) return Application->Child->IsRootDebugPaused();
 		return DebugClock && DebugClock->IsHeld(SimulationTimeline::Hold::Debugger);
 	}
 
 	std::optional<PlayRootDebugPause> PlaySession::GetRootDebugPause() const {
+		if (Application && Application->Child) return Application->Child->GetRootDebugPause();
 		if (!IsRootDebugPaused() || !DebugSource || !RuntimeEngine || !RuntimeEngine->Script) return std::nullopt;
 		auto Source = *DebugSource;
 		Source.Line = RuntimeEngine->Script->GetPausedRootLine();
@@ -245,6 +388,7 @@ namespace gargantuan {
 	}
 
 	bool PlaySession::ResumeRootDebug(std::uint32_t Serial, bool Step) {
+		if (Application && Application->Child) return Application->Child->ResumeRootDebug(Serial, Step);
 		const auto Pause = GetRootDebugPause();
 		if (!Pause || Pause->Serial != Serial || !Pause->CanResume || DebugPauseSerial == UINT32_MAX) return false;
 		try {
@@ -264,6 +408,7 @@ namespace gargantuan {
 	}
 
 	void PlaySession::SetStreamingDiagnosticsEnabled(bool Enabled) {
+		if (Application && Application->Child) return Application->Child->SetStreamingDiagnosticsEnabled(Enabled);
 		if (!RuntimeEngine || State != PlaySessionState::Running) return;
 		auto NewProfile = Enabled && !Profile ? std::make_unique<ExecutionProfile>() : nullptr;
 		RuntimeEngine->SetStreamingDiagnosticsEnabled(Enabled);
@@ -272,6 +417,7 @@ namespace gargantuan {
 	}
 
 	PlayStreamingDiagnostics PlaySession::GetStreamingDiagnostics(ResidencyDiagnosticQuery Query) const {
+		if (Application && Application->Child) return Application->Child->GetStreamingDiagnostics(Query);
 		PlayStreamingDiagnostics Result;
 		if (RuntimeEngine) {
 			Result.Streaming = RuntimeEngine->GetStreamingDiagnostics(Query);
@@ -281,6 +427,7 @@ namespace gargantuan {
 	}
 
 	std::shared_ptr<InputService> PlaySession::GetInputForInspection() const {
+		if (Application && Application->Child) return Application->Child->GetInputForInspection();
 		if (State != PlaySessionState::Running || !RuntimeEngine || !RuntimeWorld) return {};
 		const auto &Input = RuntimeEngine->Input;
 		if (!Input || Input->GetDestroyed() || Input->GetReplicationScopeId() != RuntimeWorld->GetObjectId()) return {};
@@ -288,6 +435,13 @@ namespace gargantuan {
 	}
 
 	void PlaySession::Resize(std::uint32_t Width, std::uint32_t Height) {
+		if (Application) {
+			Application->Width = Width;
+			Application->Height = Height;
+			if (Application->Child) Application->Child->Resize(Width, Height);
+			RequestRenderFullResync();
+			return;
+		}
 		if (State != PlaySessionState::Running || !RuntimeRenderer) return;
 		RuntimeRenderer->Resize(static_cast<int>(Width), static_cast<int>(Height));
 		if (IsRootDebugPaused()) {
@@ -299,6 +453,7 @@ namespace gargantuan {
 	void PlaySession::Stop() {
 		if (State == PlaySessionState::Stopped || State == PlaySessionState::Stopping) return;
 		State = PlaySessionState::Stopping;
+		Application.reset();
 		DebugSource.reset();
 		DebugPendingResize.reset();
 		Profile.reset();
@@ -325,7 +480,8 @@ namespace gargantuan {
 	}
 
 	std::vector<RenderPublicationPtr> PlaySession::TakeRenderPublications() {
-		if (AwaitingRenderFullResync && IsRootDebugPaused()) {
+		if (AwaitingRenderFullResync && RuntimeEngine && DebugClock &&
+			(IsRootDebugPaused() || DebugClock->IsHeld(SimulationTimeline::Hold::Gameplay))) {
 			// A resized or replaced presentation sink needs a new full publication.
 			// Keep the runtime clock, scripts, and resize event parked while extracting it.
 			const auto [Width, Height] = RuntimeRenderer->GetViewportSize();
@@ -348,6 +504,11 @@ namespace gargantuan {
 	}
 
 	void PlaySession::RequestRenderFullResync() {
+		if (Application) {
+			Application->Displayed = {};
+			Application->Publisher.RequestFullResync();
+			if (Application->Child) Application->Child->RequestRenderFullResync();
+		}
 		PendingRenderPublications.clear();
 		AwaitingRenderFullResync = true;
 		if (RuntimeEngine) RuntimeEngine->RenderPublishing.RequestFullResync();

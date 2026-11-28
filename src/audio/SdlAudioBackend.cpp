@@ -9,6 +9,7 @@ namespace gargantuan {
 		constexpr SDL_AudioSpec Specification{SDL_AUDIO_F32, 2, 48'000};
 		class SdlAudioOutput final : public IAudioOutput, public std::enable_shared_from_this<SdlAudioOutput> {
 		  public:
+			explicit SdlAudioOutput(SDL_AudioDeviceID Borrowed) : Device(Borrowed) {}
 			SdlAudioOutput() {
 				if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
 					Diagnostic = SDL_GetError();
@@ -19,7 +20,7 @@ namespace gargantuan {
 				if (!Device) Diagnostic = SDL_GetError();
 			}
 			~SdlAudioOutput() override {
-				if (Device) SDL_CloseAudioDevice(Device);
+				if (OwnsAudioSubsystem && Device) SDL_CloseAudioDevice(Device);
 				if (OwnsAudioSubsystem) SDL_QuitSubSystem(SDL_INIT_AUDIO);
 			}
 			std::unique_ptr<IAudioBackend> OpenStream() override;
@@ -125,6 +126,9 @@ namespace gargantuan {
 	}
 
 	std::shared_ptr<IAudioOutput> CreateSdlAudioOutput() { return std::make_shared<SdlAudioOutput>(); }
+	std::shared_ptr<IAudioOutput> CreateSdlAudioOutput(std::uint32_t Device) {
+		return std::make_shared<SdlAudioOutput>(Device);
+	}
 
 	std::unique_ptr<IAudioBackend> CreateSdlAudioBackend() {
 		return CreateSdlAudioOutput()->OpenStream();

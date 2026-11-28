@@ -24,6 +24,8 @@
 namespace gargantuan {
 	class IPersistenceProvider;
 	class SimulationTimeline;
+	class IAudioOutput;
+	class ApplicationPresentation;
 	struct PlaySessionId { std::uint64_t Value = 0; };
 	enum class PlaySessionState { Stopped, Starting, Running, Stopping, Failed };
 
@@ -101,8 +103,16 @@ namespace gargantuan {
 			const InstanceSerialization::TerrainSceneAdmission &AdmitTerrain = {},
 			PlayScriptSources Sources = {},
 			const InstanceSerialization::DomainTerrainAdmission &AdmitDomains = {},
-			const blockgrid::SegmentMap* GridSegments=nullptr
+			const blockgrid::SegmentMap* GridSegments=nullptr,
+			std::shared_ptr<IAudioOutput> SharedAudio = {},
+			bool ApplicationChild = false
 		);
+		using WorldFactory = std::function<std::unique_ptr<PlaySession>(
+			std::uint32_t, std::uint32_t, std::shared_ptr<IAudioOutput>)>;
+		PlaySession(PlaySessionId Id, std::uint64_t Revision, std::uint32_t Width, std::uint32_t Height,
+			std::string Template, AssetRuntimeSnapshot Assets, bool AudioEnabled, WorldFactory Open);
+		void AcknowledgePresentation(RenderPublicationId Publication);
+		[[nodiscard]] const ApplicationPresentation *GetApplication() const;
 		~PlaySession();
 
 		PlaySession(const PlaySession &) = delete;
@@ -117,7 +127,7 @@ namespace gargantuan {
 		void RequestRenderFullResync();
 		void SetStreamingDiagnosticsEnabled(bool Enabled);
 		[[nodiscard]] PlayStreamingDiagnostics GetStreamingDiagnostics(ResidencyDiagnosticQuery Query = {}) const;
-		[[nodiscard]] std::shared_ptr<DataModel> GetWorld() const { return RuntimeWorld; }
+		[[nodiscard]] std::shared_ptr<DataModel> GetWorld() const;
 		// Native inspection must use the evaluator actually owned by RuntimeEngine.
 		// Never resolve a replacement service by class/name in the mutable graph.
 		[[nodiscard]] std::shared_ptr<InputService> GetInputForInspection() const;
@@ -129,6 +139,10 @@ namespace gargantuan {
 		bool ResumeRootDebug(std::uint32_t Serial, bool Step);
 
 	  private:
+		struct PlayApplication;
+		std::unique_ptr<PlayApplication> Application;
+		void StepApplication();
+		void QueuePublication(RenderPublicationPtr Publication);
 		void AddDiagnostic(std::string Severity, std::string Category, std::string Message,
 			std::optional<PlayScriptFailureLocation> Source = std::nullopt);
 

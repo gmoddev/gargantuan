@@ -132,6 +132,10 @@ const function assembleProperties(state: GenerationState)
 		if property.writeLevel then
 			state.definitionProperties:line(`.SetWritePermission(Enums::Permission::{property.writeLevel})`)
 		end
+		if property.authoringOnly then
+			state.definitionProperties:line(".SetReadDomains({ScriptExecutionDomain::Core, ScriptExecutionDomain::Studio})")
+			state.definitionProperties:line(".SetWriteDomains({ScriptExecutionDomain::Core, ScriptExecutionDomain::Studio})")
+		end
 
 		if property.overrideRead or property.overrideWrite then
 			if property.overrideRead then

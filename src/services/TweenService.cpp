@@ -8,6 +8,7 @@
 #include "gargantuan/datatypes/Vector2.hpp"
 #include "gargantuan/gui/PlayerGuiScope.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
+#include "gargantuan/runtime/ApplicationPresentation.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/ServicePolicy.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
@@ -133,6 +134,10 @@ namespace gargantuan {
 	}
 
 	bool TweenRuntime::IsOwnerLive(const Tween &Value) const {
+		if (const auto *App = Engine.GetApplicationPresentation()) {
+			const auto &Owner = Value.Sequence ? Value.Context : GetCurrentScriptSecurityContext();
+			if (!App->IsOwnerCurrent(Owner.IssuingScript, Owner.ExecutionGeneration)) return false;
+		}
 		if (!Value.HasOwner) return true;
 		const auto Owner = Value.Owner.lock();
 		return Owner && !Owner->GetDestroyed() && !Owner->IsDestroying();

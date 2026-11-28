@@ -102,6 +102,9 @@ namespace gargantuan {
 
 	void Sound::Play() {
 		AssertCanMutate();
+		const auto &Context = GetCurrentScriptSecurityContext();
+		PlaybackOwner = Context.IssuingScript;
+		OwnerGeneration = Context.ExecutionGeneration;
 		if (PlaybackState != Enums::SoundPlaybackState::Stopped) SetRuntimeTimePosition(0.0f, true);
 		AdvanceGeneration(PlayGeneration);
 		SetRuntimePlaybackState(Enums::SoundPlaybackState::Playing);

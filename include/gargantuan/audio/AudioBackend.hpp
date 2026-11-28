@@ -35,5 +35,7 @@ namespace gargantuan {
 		[[nodiscard]] virtual std::unique_ptr<IAudioBackend> OpenStream() = 0;
 	};
 	[[nodiscard]] std::shared_ptr<IAudioOutput> CreateSdlAudioOutput();
+	// Attach streams to a caller-owned SDL logical playback device.
+	[[nodiscard]] std::shared_ptr<IAudioOutput> CreateSdlAudioOutput(std::uint32_t Device);
 	[[nodiscard]] std::unique_ptr<IAudioBackend> CreateSdlAudioBackend();
 }

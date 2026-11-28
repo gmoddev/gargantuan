@@ -169,6 +169,20 @@ namespace gargantuan {
 		}
 	};
 
+	int ApplicationSession::RequestReconnect(lua_State *L, Instance *Receiver) {
+		auto *App = Caller(L, Receiver);
+		if (!App || !App->Sessions.Disconnected || App->Sessions.LastEndpoint.empty() || lua_gettop(L) != 1) {
+			auto Op = std::make_shared<Operation>();
+			Op->Result = !App ? Reply{"NotAuthorized", "The local application owns this operation."} :
+				Reply{"WrongState", "There is no previous disconnected session."};
+			return Operation::Push(L, std::move(Op));
+		}
+		lua_createtable(L, 0, 2);
+		StringField(L, "Kind", "Direct");
+		StringField(L, "Address", App->Sessions.LastEndpoint.c_str());
+		return Request(L, Receiver, SessionCommand::Join);
+	}
+
 	int ApplicationSession::Request(lua_State *L, Instance *Receiver, SessionCommand Command) {
 		auto *App = Caller(L, Receiver);
 		auto Op = std::make_shared<Operation>();
@@ -294,6 +308,10 @@ namespace gargantuan {
 
 	std::string_view ApplicationSession::GetJoinAddress() const { return Pending ? std::string_view(Pending->Address) : std::string_view{}; }
 
+	bool ApplicationSession::IsLeaving() const {
+		return Pending && Pending->Command == SessionCommand::Leave;
+	}
+
 	void ApplicationSession::RetireDisconnected() {
 		Active = Remote = Paused = false;
 		Disconnected = true;
@@ -309,8 +327,10 @@ namespace gargantuan {
 			PauseOwners.empty() && Active && Paused) {
 			(void)Execute(SessionCommand::Resume);
 			Paused = false;
+			App.NotifyPause(false);
 		}
 		if (!Pending) return;
+		const bool PreviouslyPaused = Paused;
 		auto Op = Pending;
 		Reply Outcome{};
 		if (!Op->SaveId.empty() && !Op->Slot && (!Op->CancelRequested || Op->ReadingSlot) && Catalog) {
@@ -350,7 +370,9 @@ namespace gargantuan {
 				} else if (!Execute(Op->Command)) return;
 				switch (Op->Command) {
 				case SessionCommand::StartLocal: case SessionCommand::Join:
-					Active = true; Paused = false; ActiveSlot = Op->Slot; Remote = Op->Command == SessionCommand::Join; Disconnected = false; break;
+					Active = true; Paused = false; ActiveSlot = Op->Slot; Remote = Op->Command == SessionCommand::Join;
+					LastEndpoint = Remote ? Op->Address : std::string{};
+					Disconnected = false; break;
 				case SessionCommand::Leave: Active = Remote = Paused = false; PauseOwners.clear(); ActiveSlot.reset(); break;
 				case SessionCommand::Pause: case SessionCommand::Resume: break;
 				}
@@ -367,12 +389,15 @@ namespace gargantuan {
 				case SessionAdmissionFailure::Disconnected: Outcome = {"Disconnected", "The connection closed before the session was ready."}; break;
 				case SessionAdmissionFailure::TimedOut: Outcome = {"TimedOut", "The connection did not become ready in time."}; break;
 				case SessionAdmissionFailure::InvalidOptions: Outcome = {"InvalidOptions", "The direct connection target is invalid."}; break;
+				case SessionAdmissionFailure::SaveFailed: Outcome = {"SaveFailed", "A pending world write failed while leaving."}; break;
+				case SessionAdmissionFailure::UnknownOutcome: Outcome = {"UnknownOutcome", "A world write requires reconciliation."}; break;
 				}
 			} catch (const std::exception &) { Outcome = {"StartupFailed", "The host could not complete the session operation."}; }
 		}
 		Pending.reset();
 		if (!Outcome.Succeeded() && (Op->Command == SessionCommand::StartLocal || Op->Command == SessionCommand::Join)) DiscardStart();
 		Op->Result = Outcome;
+		if (PreviouslyPaused != Paused) App.NotifyPause(Paused);
 		Op->Completed->Fire(Outcome);
 		Op->Completed->DisconnectAll();
 	}

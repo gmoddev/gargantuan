@@ -62,6 +62,7 @@ namespace gargantuan {
 			std::weak_ptr<Script> Owner;
 			std::shared_ptr<PersistenceHandle> Handle;
 			std::shared_ptr<WorkerResult> Work;
+			bool Mutation;
 		};
 		std::shared_ptr<IPersistenceProvider> Provider;
 		std::shared_ptr<PersistenceResultBudget> ResultBudget = std::make_shared<PersistenceResultBudget>();
@@ -152,6 +153,7 @@ namespace gargantuan {
 		Request.Deadline = PersistenceClock::now() + Timeout;
 		Request.RequestId = Runtime->RequestPrefix + "-" + std::to_string(++Runtime->Sequence);
 		auto Work = std::make_shared<WorkerResult>();
+		const bool Mutation = IsPersistenceMutation(Request.Operation);
 		try {
 			Runtime->Workers.Submit([Provider = Runtime->Provider, Work, Request = std::move(Request),
 				Stop = Handle->Stop.get_token()] {
@@ -162,8 +164,15 @@ namespace gargantuan {
 			Handle->ReleaseReservation();
 			return Reject(PersistenceStatus::Unavailable);
 		}
-		Runtime->Entries.push_back({std::move(Owner), Handle, std::move(Work)});
+		Runtime->Entries.push_back({std::move(Owner), Handle, std::move(Work), Mutation});
 		return Handle;
+	}
+
+	std::vector<std::shared_ptr<PersistenceHandle>> PersistenceRuntime::GetPendingWrites() const {
+		RequireMain();
+		std::vector<std::shared_ptr<PersistenceHandle>> Pending;
+		for (const auto &Entry : Runtime->Entries) if (Entry.Mutation) Pending.push_back(Entry.Handle);
+		return Pending;
 	}
 
 	void PersistenceRuntime::Pump() {

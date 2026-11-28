@@ -1,3 +1,5 @@
+#include "packaging/ApplicationTemplate.hpp"
+#include "gargantuan/runtime/ApplicationPresentation.hpp"
 // Copyright (c) 2026 Team Fireworks
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -1620,6 +1622,8 @@ namespace gargantuan {
 			ViewportFrameNumber = ViewportLatestFrameMailbox->Publish(
 				Captured.Width, Captured.Height, Captured.BgraPixels, Metadata
 			);
+			if (Metadata.Mode == LatestFrameMailboxLayout::Mode::Play && ActivePlaySession)
+				ActivePlaySession->AcknowledgePresentation(Metadata.SourceRevision);
 			if (Metadata.Mode == LatestFrameMailboxLayout::Mode::Edit && EditEpoch == PresentedEditEpoch) {
 				if (CapturingGui) RecordGuiPreviewFrame(ViewportFrameNumber);
 				else PresentedEditFrames[ViewportFrameNumber % PresentedEditFrames.size()] = {
@@ -1888,7 +1892,7 @@ namespace gargantuan {
 					"OptimisticProjectRevision", "CreateInstanceInitialProperties", "CreateScriptWithSource",
 					"ReadScriptSource", "WriteScriptSource", "ScriptDocumentBinding", "PreRunSource", "PreRunCollectionV1", "ValidatePreRun",
 					"CustomServiceDeclarations", "ReplicatedStorage",
-					"PlaySession", "DiagnosticStream", "PlayScriptFailureLocation", "PlayRootDebug", "SendPlayInput", "StreamingDiagnostics", "PlayInputInspection", "PlayPersistence",
+					"PlaySession", "ApplicationPlay", "DiagnosticStream", "PlayScriptFailureLocation", "PlayRootDebug", "SendPlayInput", "StreamingDiagnostics", "PlayInputInspection", "PlayPersistence",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
 					"AdvancedMaterialMetadata",
 					"AnimationRig", "AnimationPreview", "AnimationPreviewBlend", "CharacterComposition",
@@ -1934,6 +1938,7 @@ namespace gargantuan {
 					{"CharacterCompositionVersion", 1},
 					{"PlayPersistenceVersion", 1},
 					{"PlayScriptFailureLocationVersion", 1},
+					{"ApplicationPlayVersion", 1},
 					{"PlayRootDebugVersion", 1},
 					{"PlayPersistentStorage", SupportsDurableLocalPersistence()},
 					{"Capabilities", std::move(capabilities)},
@@ -2272,10 +2277,14 @@ namespace gargantuan {
 			}
 
 			if (method == "StartPlaySession") {
-				if (!HasOnlyFields(parameters, {"PersistenceMode", "IncludeScriptFailureLocations", "DebugRoot"}) ||
+				if (!HasOnlyFields(parameters, {"PersistenceMode", "IncludeScriptFailureLocations", "DebugRoot", "LaunchMode"}) ||
 					(parameters.contains("PersistenceMode") && !parameters["PersistenceMode"].is_string()) ||
 					(parameters.contains("IncludeScriptFailureLocations") && !parameters["IncludeScriptFailureLocations"].is_boolean()))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Invalid Play launch parameters"));
+				if (parameters.contains("LaunchMode") && (!parameters["LaunchMode"].is_string() ||
+					(parameters["LaunchMode"] != "Application" && parameters["LaunchMode"] != "Gameplay")))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Invalid Play launch mode"));
+				const bool LaunchApplication = parameters.value("LaunchMode", std::string("Gameplay")) == "Application";
 				const auto PersistenceMode = parameters.value("PersistenceMode", std::string("Disabled"));
 				const bool NodeMode = PersistenceMode == "NodeDevelopment";
 				if (PersistenceMode != "Disabled" && PersistenceMode != "Disposable" && PersistenceMode != "Persistent" && !NodeMode)
@@ -2336,30 +2345,47 @@ namespace gargantuan {
 				}
 				const auto Id = PlaySessionId{NextPlaySessionId++};
 				try {
-					auto Snapshot = CurrentProject->CaptureGame(World, World->GetAuthoritativeRevision());
-					const auto Reader = terrain::BudgetDocumentTerrainReads(
-						[&Snapshot](const terrain::TerrainArtifactId &Artifact, std::size_t Maximum) {
-							const auto Artifacts = Snapshot.Terrain ? std::span<const terrain::TerrainArtifact>(Snapshot.Terrain->Artifacts)
-								: std::span<const terrain::TerrainArtifact>{};
-							if (terrain::FindTerrainArtifact(Artifacts, Artifact))
-								return terrain::ReadCapturedTerrainArtifact(Artifacts, Artifact, Maximum);
-							for (const auto &[Node, Capture] : Snapshot.Domains)
-								if (terrain::FindTerrainArtifact(Capture.Artifacts, Artifact))
-									return terrain::ReadCapturedTerrainArtifact(Capture.Artifacts, Artifact, Maximum);
-							return std::expected<std::vector<std::uint8_t>, terrain::TerrainPersistenceError>(
-								std::unexpected(terrain::TerrainPersistenceError::MissingArtifact));
-						});
-					const auto AdmitTerrain = terrain::GetSceneTerrainAdmission(CurrentProject->Identity, Reader);
-					const auto AdmitDomains = terrain::GetDomainTerrainAdmission(CurrentProject->Identity, Reader);
+					auto Snapshot = std::make_shared<Project::PersistenceSnapshot>(
+						CurrentProject->CaptureGame(World, World->GetAuthoritativeRevision()));
+					const auto Entry = LaunchApplication ? World->GetApplicationEntry() : std::string{};
 					auto ScriptSources = (DebugSourceId || parameters.value("IncludeScriptFailureLocations", false))
 						? CapturePlayScriptSources(*CurrentProject, World) : PlayScriptSources{};
 					ScriptSources.DebugSourceId = DebugSourceId;
-					auto NewPlaySession = std::make_unique<PlaySession>(
-						Id, std::move(Snapshot.Contents), CurrentProject->InstanceFileFormat,
-						CurrentProject->Root, ViewportWidth == 0 ? 720 : ViewportWidth,
-						ViewportHeight == 0 ? 540 : ViewportHeight, Snapshot.Revision, std::move(Snapshot.Assets),
-						AudioEnabled && !DebugSourceId, std::move(Persistence), AdmitTerrain, std::move(ScriptSources), AdmitDomains,&Snapshot.GridSegments
-					);
+					const auto Open = [Snapshot, Id, Format = CurrentProject->InstanceFileFormat, Root = CurrentProject->Root,
+						ProjectIdentity = CurrentProject->Identity, EnableAudio = AudioEnabled && !DebugSourceId,
+						ScriptSources = std::move(ScriptSources), Persistence, Lifecycle = !Entry.empty()]
+						(std::uint32_t Width, std::uint32_t Height, std::shared_ptr<IAudioOutput> Output) {
+						const auto Reader = terrain::BudgetDocumentTerrainReads(
+							[Snapshot](const terrain::TerrainArtifactId &Artifact, std::size_t Maximum) {
+								const auto Artifacts = Snapshot->Terrain ? std::span<const terrain::TerrainArtifact>(Snapshot->Terrain->Artifacts)
+									: std::span<const terrain::TerrainArtifact>{};
+								if (terrain::FindTerrainArtifact(Artifacts, Artifact))
+									return terrain::ReadCapturedTerrainArtifact(Artifacts, Artifact, Maximum);
+								for (const auto &[Node, Capture] : Snapshot->Domains)
+									if (terrain::FindTerrainArtifact(Capture.Artifacts, Artifact))
+										return terrain::ReadCapturedTerrainArtifact(Capture.Artifacts, Artifact, Maximum);
+								return std::expected<std::vector<std::uint8_t>, terrain::TerrainPersistenceError>(
+									std::unexpected(terrain::TerrainPersistenceError::MissingArtifact));
+							});
+						const auto AdmitTerrain = terrain::GetSceneTerrainAdmission(ProjectIdentity, Reader);
+						const auto AdmitDomains = terrain::GetDomainTerrainAdmission(ProjectIdentity, Reader);
+						return std::make_unique<PlaySession>(
+							Id, Lifecycle ? Snapshot->Contents : std::move(Snapshot->Contents), Format,
+							Root, Width,
+							Height, Snapshot->Revision, Lifecycle ? Snapshot->Assets : std::move(Snapshot->Assets),
+							EnableAudio, Persistence, AdmitTerrain, ScriptSources, AdmitDomains,&Snapshot->GridSegments, std::move(Output), Lifecycle
+						);
+					};
+					const auto Width = ViewportWidth ? ViewportWidth : 720;
+					const auto Height = ViewportHeight ? ViewportHeight : 540;
+					std::unique_ptr<PlaySession> NewPlaySession;
+					if (Entry.empty()) NewPlaySession = Open(Width, Height, {});
+					else {
+						auto Template = application_template::Extract(Snapshot->Contents, Entry);
+						auto Assets = std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
+						NewPlaySession = std::make_unique<PlaySession>(Id, Snapshot->Revision, Width, Height,
+							std::move(Template), Assets->CaptureRuntimeAssets(), AudioEnabled, Open);
+					}
 					AdvanceViewportGeneration();
 					ActivePlaySession = std::move(NewPlaySession);
 					LastPlaySessionId = Id;
@@ -2370,7 +2396,7 @@ namespace gargantuan {
 						{"PlaySessionId", std::to_string(Id.Value)},
 						{"State", GetPlaySessionStateName(LastPlaySessionState)},
 						{"PersistenceMode", PersistenceMode},
-						{"LaunchAuthoritativeRevision", Snapshot.Revision},
+						{"LaunchAuthoritativeRevision", Snapshot->Revision},
 						{"ViewportGeneration", ViewportGeneration},
 						{"Diagnostics", EncodePlayDiagnostics(ActivePlaySession->DrainDiagnostics())},
 					};
@@ -2490,10 +2516,15 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GetPlaySessionState takes no parameters"));
 				auto State = ActivePlaySession ? ActivePlaySession->GetState() : LastPlaySessionState;
 				auto Id = ActivePlaySession ? ActivePlaySession->GetId() : LastPlaySessionId;
-				return SerializeBoundedResponse(SuccessResponse(requestId, {
+				Json Result = {
 					{"PlaySessionId", Id.Value == 0 ? Json(nullptr) : Json(std::to_string(Id.Value))},
 					{"State", GetPlaySessionStateName(State)}, {"Active", ActivePlaySession != nullptr},
-				}));
+				};
+				if (const auto *App = ActivePlaySession ? ActivePlaySession->GetApplication() : nullptr) {
+					Result["Application"] = {{"MenuVisible", App->IsMainMenuVisible()},
+						{"WorldActive", App->Sessions.IsActive()}, {"GameplayPaused", App->Sessions.IsPaused()}};
+				}
+				return SerializeBoundedResponse(SuccessResponse(requestId, std::move(Result)));
 			}
 
 			if (method == "ConfigureStreamingDiagnostics" || method == "GetStreamingDiagnostics") {
@@ -4687,6 +4718,8 @@ namespace gargantuan {
 					if (ViewportProjection.GetLastPublicationId() != LastViewportPublication->Id)
 						(void)ViewportProjection.Apply(*LastViewportPublication);
 					auto frame = ViewportRenderer->Capture(LastViewportPublication);
+					if (ActivePlaySession && PlayIdentity.is_string())
+						ActivePlaySession->AcknowledgePresentation(LastViewportPublication->Id);
 					if (ViewportFrameRing) {
 						const auto timestamp = static_cast<std::uint64_t>(
 							std::chrono::duration_cast<std::chrono::nanoseconds>(

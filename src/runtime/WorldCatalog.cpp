@@ -32,6 +32,7 @@ namespace gargantuan {
 			for (const auto &Row : Document->at("Slots")) {
 				WorldSlot Slot{Row.at("SaveId").get<std::string>(), Row.at("WorldId").get<std::string>(),
 					Row.at("Name").get<std::string>(), Row.at("Seed").get<std::string>()};
+				Slot.Initializing = Row.value("Initializing", false);
 				Slot.Baseline = Row.value("Baseline", "");
 				Slot.Compatible = Slot.Baseline == Baseline && !Baseline.empty();
 				if (!ProjectId::Parse(Slot.SaveId) || !ProjectId::Parse(Slot.WorldId) || !Ids.insert(Slot.SaveId).second ||
@@ -43,7 +44,7 @@ namespace gargantuan {
 		PersistenceBytes Encode(const std::vector<WorldSlot> &Slots) {
 			Json Rows = Json::array();
 			for (const auto &Slot : Slots) Rows.push_back({{"SaveId", Slot.SaveId}, {"WorldId", Slot.WorldId},
-				{"Name", Slot.Name}, {"Seed", Slot.Seed}, {"Baseline", Slot.Baseline}});
+				{"Name", Slot.Name}, {"Seed", Slot.Seed}, {"Baseline", Slot.Baseline}, {"Initializing", Slot.Initializing}});
 			const auto Text = Json{{"Version", 1}, {"Slots", std::move(Rows)}}.dump();
 			const auto *Begin = reinterpret_cast<const std::byte *>(Text.data());
 			return {Begin, Begin + Text.size()};
@@ -66,6 +67,7 @@ namespace gargantuan {
 		if (Handle) throw std::logic_error("World catalog is busy");
 		Action = Requested;
 		Argument = std::move(Value);
+		CurrentPhase = Phase::Reading;
 		Writing = false;
 		Cancelled = false;
 		if (Action == WorldCatalogAction::Create) {
@@ -86,43 +88,73 @@ namespace gargantuan {
 		const auto &Current = Handle->Poll();
 		if (Current.Status == PersistenceStatus::Pending) return std::nullopt;
 		auto Terminal = std::move(Handle);
-		if (SlotStorage) {
-			SlotStorage.reset();
-			auto Commit = std::exchange(PendingCommit, {});
-			if (Current.Status != PersistenceStatus::Ok) return WorldCatalogResult{.Code = Code(Current.Status)};
-			Handle = Storage.Submit(std::move(*Commit));
+		const auto OpenReserved = [&] {
+			CurrentPhase = Phase::Opening;
+			SlotStorage = std::make_unique<PersistenceRuntime>(Open(NewSlot, true), Application);
+			// The provider verifies its private profile identity on open. This read
+			// merely forces that open on the worker. Its value belongs to gameplay.
+			Handle = SlotStorage->Submit({.Store = "WorldAdmission", .Key = "Profile"});
+		};
+		if (CurrentPhase == Phase::Reserving) {
+			if (Current.Status != PersistenceStatus::Ok) return WorldCatalogResult{.Code = Code(Current.Status),
+				.RecoveryId = Current.Status == PersistenceStatus::UnknownOutcome ? NewSlot.SaveId : ""};
+			OpenReserved();
 			return std::nullopt;
 		}
-		if (Writing) {
-			if (Current.Status == PersistenceStatus::Ok) return WorldCatalogResult{.Items = {NewSlot}};
-			return WorldCatalogResult{.Code = Code(Current.Status),
-				.RecoveryId = Current.Status == PersistenceStatus::UnknownOutcome ? NewSlot.SaveId : ""};
+		if (CurrentPhase == Phase::Opening) {
+			SlotStorage.reset();
+			if (Current.Status != PersistenceStatus::Ok && Current.Status != PersistenceStatus::Missing)
+				return WorldCatalogResult{.Code = Code(Current.Status), .RecoveryId = NewSlot.SaveId};
+			CurrentPhase = Phase::ReadingReservation;
+			Handle = Storage.Submit(RootRequest());
+			return std::nullopt;
 		}
-		if (Cancelled) return WorldCatalogResult{.Code = "Cancelled"};
+		if (CurrentPhase == Phase::Publishing) {
+			if (Current.Status == PersistenceStatus::Ok) return WorldCatalogResult{.Items = {NewSlot}};
+			return WorldCatalogResult{.Code = Code(Current.Status), .RecoveryId = NewSlot.SaveId};
+		}
+		if (Cancelled && !Writing) return WorldCatalogResult{.Code = "Cancelled"};
 		if (Current.Status != PersistenceStatus::Ok && Current.Status != PersistenceStatus::Missing)
 			return WorldCatalogResult{.Code = Code(Current.Status)};
 		const auto Revision = Current.Record ? Current.Record->Revision : 0;
 		std::vector<WorldSlot> Slots;
 		try { if (Current.Record) Slots = Decode(*Current.Record, Baseline); }
 		catch (const std::exception &) { return WorldCatalogResult{.Code = "Incompatible"}; }
-		if (Action == WorldCatalogAction::Create) {
-			if (Slots.size() == MaximumSlots) return WorldCatalogResult{.Code = "StorageFull"};
-			Slots.push_back(NewSlot);
+		const auto StoreSlots = [&](Phase Next) {
 			auto Request = RootRequest();
 			Request.Operation = PersistenceOperation::Put;
 			Request.ExpectedRevision = Revision;
 			Request.Payload = Encode(Slots);
 			Writing = true;
-			PendingCommit = std::move(Request);
-			SlotStorage = std::make_unique<PersistenceRuntime>(Open(NewSlot, true), Application);
-			const auto *Bytes = reinterpret_cast<const std::byte *>(NewSlot.WorldId.data());
-			Handle = SlotStorage->Submit({.Operation = PersistenceOperation::Put, .Store = "WorldAdmission", .Key = "Profile",
-				.Payload = PersistenceBytes(Bytes, Bytes + NewSlot.WorldId.size()), .ExpectedRevision = 0});
+			CurrentPhase = Next;
+			Handle = Storage.Submit(std::move(Request));
+		};
+		if (CurrentPhase == Phase::ReadingReservation) {
+			auto Found = std::ranges::find(Slots, NewSlot.SaveId, &WorldSlot::SaveId);
+			if (Found == Slots.end() || Found->WorldId != NewSlot.WorldId)
+				return WorldCatalogResult{.Code = "Incompatible", .RecoveryId = NewSlot.SaveId};
+			if (!Found->Initializing) return WorldCatalogResult{.Items = {*Found}};
+			Found->Initializing = false;
+			NewSlot = *Found;
+			StoreSlots(Phase::Publishing);
+			return std::nullopt;
+		}
+		if (Action == WorldCatalogAction::Create) {
+			if (Slots.size() == MaximumSlots) return WorldCatalogResult{.Code = "StorageFull"};
+			NewSlot.Initializing = true;
+			Slots.push_back(NewSlot);
+			StoreSlots(Phase::Reserving);
 			return std::nullopt;
 		}
 		if (Action == WorldCatalogAction::Resolve) {
 			auto Found = std::ranges::find(Slots, Argument, &WorldSlot::SaveId);
 			if (Found == Slots.end()) return WorldCatalogResult{.Code = "NotFound"};
+			if (Found->Initializing && Found->Compatible) {
+				NewSlot = *Found;
+				Writing = true;
+				OpenReserved();
+				return std::nullopt;
+			}
 			return WorldCatalogResult{.Items = {*Found}};
 		}
 		std::size_t Offset = 0;

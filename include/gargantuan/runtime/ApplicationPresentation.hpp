@@ -35,6 +35,7 @@ namespace gargantuan {
 		[[nodiscard]] bool IsOwnerCurrent(ObjectId Owner, std::uint64_t Generation) const;
 		void TrackConnection(const std::shared_ptr<SignalConnection> &Connection);
 		void SetGameplayInput(bool Enabled);
+		void NotifyPause(bool Held);
 		ApplicationSession Sessions;
 		[[nodiscard]] std::shared_ptr<IAudioOutput> GetAudioOutput() const { return Output; }
 		bool QuitRequested = false;

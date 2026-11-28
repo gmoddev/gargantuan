@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Team Fireworks
 // SPDX-License-Identifier: MPL-2.0
 #include "StandalonePlayer.hpp"
+#include "gargantuan/render/ApplicationDisplay.hpp"
 #include "PackagedClient.hpp"
 #include "host/common/PackagedHost.hpp"
 #if defined(GARGANTUAN_WITH_GNS)
@@ -20,80 +21,6 @@
 #include <iostream>
 
 namespace gargantuan::host {
-	namespace {
-		class ApplicationDisplay final {
-		  public:
-			RenderPublicationPtr Compose(const RenderPublicationPtr &Gameplay, const RenderPublication &App, bool HasWorld) {
-				auto Frame = Gameplay ? std::make_shared<RenderPublication>(*Gameplay) : std::make_shared<RenderPublication>();
-				Frame->FullResync = Gameplay ? Gameplay->FullResync : !HasWorld && App.FullResync;
-				if (LastId == std::numeric_limits<RenderPublicationId>::max())
-					throw std::overflow_error("[Lifecycle:Display] Publication identity exhausted");
-				Frame->BaseId = Frame->FullResync ? InvalidRenderPublicationId : LastId;
-				Frame->Id = ++LastId;
-				if (Gameplay) LastWorldFrame = Gameplay->Frame;
-				if (!Gameplay) {
-					Frame->Frame = HasWorld ? LastWorldFrame : App.Frame;
-					Frame->Frame.ViewportWidth = App.Frame.ViewportWidth;
-					Frame->Frame.ViewportHeight = App.Frame.ViewportHeight;
-					Frame->EnvironmentChanged = Frame->FullResync;
-				}
-				if (!HasWorld) { WorldUi.reset(); WorldViews.reset(); }
-				if (Gameplay && (Gameplay->UiChanged || Gameplay->FullResync)) WorldUi = Gameplay->SharedUi;
-				if (Gameplay && (Gameplay->Viewports || Gameplay->FullResync)) WorldViews = Gameplay->Viewports;
-				if (App.UiChanged || App.FullResync) AppUi = App.SharedUi;
-				if (App.Viewports || App.FullResync) AppViews = App.Viewports;
-				bool AdmissionChanged = false;
-				if (Frame->FullResync || Frame->Viewports || App.Viewports) {
-					auto Views = std::make_shared<RenderViewportScenes>();
-					if (AppViews) *Views = *AppViews;
-					if (WorldViews) {
-						const auto Available = MaximumRenderViewports - Views->size();
-						Views->insert(Views->end(), WorldViews->begin(), WorldViews->begin() + std::min(Available, WorldViews->size()));
-					}
-					std::vector<ObjectId> Next;
-					for (const auto &Scene : *Views) Next.push_back(Scene->Viewport);
-					AdmissionChanged = Next != AdmittedViews;
-					AdmittedViews = std::move(Next);
-					Frame->Viewports = std::move(Views);
-				}
-				if (Frame->FullResync || Frame->UiChanged || App.UiChanged || AdmissionChanged) {
-					auto Ui = std::make_shared<RenderUiFrame>();
-					if (WorldUi) *Ui = *WorldUi;
-					Ui->ViewportWidth = App.Frame.ViewportWidth;
-					Ui->ViewportHeight = App.Frame.ViewportHeight;
-					if (AppUi) {
-						for (const auto &Batch : AppUi->Batches) {
-							auto &Copy = Ui->Batches.emplace_back(Batch);
-							if (Copy.Texture) Copy.Texture->Generation |= ApplicationTextureGeneration;
-						}
-					}
-					std::erase_if(Ui->Batches, [&](const auto &Batch) {
-						return Batch.Viewport.IsValid() && std::ranges::find(AdmittedViews, Batch.Viewport) == AdmittedViews.end();
-					});
-					Frame->SharedUi = std::move(Ui);
-					Frame->UiChanged = true;
-				}
-				const auto AppendTextures = [](auto &World, const auto &Application) {
-					for (const auto &Item : World)
-						if (Item.Texture.Generation & ApplicationTextureGeneration)
-							throw std::overflow_error("[Lifecycle:Display] Texture generation exhausted");
-					for (const auto &Item : Application)
-						World.emplace_back(Item).Texture.Generation |= ApplicationTextureGeneration;
-				};
-				AppendTextures(Frame->TextureCreates, App.TextureCreates);
-				AppendTextures(Frame->TextureUpdates, App.TextureUpdates);
-				AppendTextures(Frame->TextureRemoves, App.TextureRemoves);
-				return Frame;
-			}
-		  private:
-			static constexpr std::uint32_t ApplicationTextureGeneration = 1u << 31;
-			RenderPublicationId LastId{};
-			RenderFrameState LastWorldFrame;
-			std::vector<ObjectId> AdmittedViews;
-			std::shared_ptr<const RenderUiFrame> WorldUi, AppUi;
-			std::shared_ptr<const RenderViewportScenes> WorldViews, AppViews;
-		};
-	}
 
 	int RunStandalonePlayer(ApplicationPresentation &App, BaseRenderer &Device,
 		const RuntimePackagePayload &Package, const std::filesystem::path &Root, const std::filesystem::path &Profile, int MaximumFrames) {
@@ -119,6 +46,8 @@ namespace gargantuan::host {
 			HandshakeTick = 0;
 		};
 		std::shared_ptr<PersistenceHandle> StorageAdmission;
+		std::optional<std::vector<std::shared_ptr<PersistenceHandle>>> ClosingWrites;
+		bool UncertainWrite = false;
 		const auto DiscardStart = [&] {
 			StopConnection();
 			PreparingSession.reset();
@@ -146,17 +75,33 @@ namespace gargantuan::host {
 					if (!Size->Width || !Size->Height) continue;
 					Device.Resize(Size->Width, Size->Height);
 					if (Session) (void)Session->ProcessEvent(Event);
+					if (PreparingSession) (void)PreparingSession->ProcessEvent(Event);
 					App.Gui.SetViewport({Size->Width, Size->Height, 1.0f, {}});
 					Displayed = {};
 				} else {
 					const bool Stale = EventTime < DisplayedSince && !std::holds_alternative<FocusEvent>(Event);
 					if (Stale) {
-						(void)App.Gui.ProcessEvent(Event, {});
+						const bool Release = std::visit([](const auto &Value) {
+							if constexpr (requires { Value.State; }) return Value.State == ButtonState::Released;
+							else if constexpr (requires { Value.Action; }) return Value.Action == TouchPointerAction::Up ||
+								Value.Action == TouchPointerAction::Cancel;
+							else if constexpr (requires { Value.Axis; }) return Value.Value == 0;
+							else return false;
+						}, Event);
+						if (Release) {
+							(void)App.ProcessEvent(Event, {});
+							if (Session) {
+								// Retire physical state without dispatching a click to a newer GUI.
+								if (Session->Gui) Session->Gui->ClearTransientState();
+								(void)Session->UserInputService->ProcessEvent(Event);
+								(void)Session->Input->ProcessEvent(Event, true);
+							}
+						} else (void)App.Gui.ProcessEvent(Event, {});
 						continue;
 					}
 					const bool Consumed = App.ProcessEvent(Event, Displayed);
 					if (App.GameplayInputReleasePending) ReleaseGameplayInput();
-					if (Session && !Consumed && App.GameplayInputEnabled && !App.Sessions.IsPaused()) {
+					if (Session && !Consumed && App.GameplayInputEnabled && !App.Sessions.IsPaused() && !App.Sessions.IsLeaving()) {
 						const auto Result = Session->ProcessEvent(Event);
 						if (Result.Command) Platform.Apply(*Result.Command);
 					}
@@ -181,11 +126,8 @@ namespace gargantuan::host {
 							PreparingSession->Script->GetPersistenceRuntime()->Pump();
 							const auto Status = StorageAdmission->Poll().Status;
 							if (Status == PersistenceStatus::Pending) return false;
-							const auto &Record = StorageAdmission->Poll().Record;
-							const auto *Data = Record ? std::get_if<PersistenceBytes>(&Record->Payload) : nullptr;
-							const auto *Slot = App.Sessions.GetStartingSlot();
-							if (Status != PersistenceStatus::Ok || !Data || !Slot || Data->size() != Slot->WorldId.size() ||
-								std::memcmp(Data->data(), Slot->WorldId.data(), Data->size()) != 0) throw SessionAdmissionFailure::Unavailable;
+							if (Status != PersistenceStatus::Ok && Status != PersistenceStatus::Missing)
+								throw SessionAdmissionFailure::Unavailable;
 							StorageAdmission.reset();
 						}
 						if (!PreparingSession->AdvanceStartup()) return false;
@@ -257,7 +199,21 @@ namespace gargantuan::host {
 					PreparingWorld.reset();
 					return false;
 				}
-				case SessionCommand::Leave:
+				case SessionCommand::Leave: {
+					if (UncertainWrite) throw SessionAdmissionFailure::UnknownOutcome;
+					if (const auto Storage = Session->Script->GetPersistenceRuntime()) {
+						if (!ClosingWrites) ClosingWrites = Storage->GetPendingWrites();
+						Storage->Pump();
+						bool Failed = false;
+						for (const auto &Write : *ClosingWrites) {
+							const auto Status = Write->Poll().Status;
+							if (Status == PersistenceStatus::Pending) return false;
+							UncertainWrite |= Status == PersistenceStatus::UnknownOutcome;
+							Failed |= Status != PersistenceStatus::Ok;
+						}
+						if (UncertainWrite) throw SessionAdmissionFailure::UnknownOutcome;
+						if (Failed) throw SessionAdmissionFailure::SaveFailed;
+					}
 					ReleaseGameplayInput();
 					StopConnection();
 					Session.reset();
@@ -265,7 +221,9 @@ namespace gargantuan::host {
 					Surface.reset();
 					Clock.reset();
 					AppPublisher.RequestFullResync();
+					App.ReturnToMenu();
 					break;
+				}
 				case SessionCommand::Pause:
 				case SessionCommand::Resume:
 					if (Command == SessionCommand::Pause && !App.Sessions.IsPaused())
@@ -276,25 +234,34 @@ namespace gargantuan::host {
 				}
 				return true;
 			}, DiscardStart);
+			if (ClosingWrites && Session && Clock) {
+				const bool Held = App.Sessions.IsPaused() || App.Sessions.IsLeaving();
+				Clock->SetHeld(SimulationTimeline::Hold::Gameplay, Held);
+				Session->Audio->SetPlaybackHeld(Held);
+			}
+			if (!App.Sessions.IsLeaving()) ClosingWrites.reset();
 			if (App.GameplayInputReleasePending) ReleaseGameplayInput();
 			if (App.QuitRequested) return 0;
 			RenderPublicationPtr Gameplay;
 			App.FlushPresentation();
-			if (Session && !App.Sessions.IsPaused()) {
+			if (Session && !App.Sessions.IsPaused() && !App.Sessions.IsLeaving()) {
 				if (Connection) (void)Connection->Poll();
-				Session->Step();
-				if (Connection) {
-					Connection->Step(Session->GetSimulationTick());
-					const auto State = Connection->GetStatus();
-					if (State == network::GameSessionStatus::Failed || State == network::GameSessionStatus::Closed) {
+				const auto Closed = [&] {
+					return Connection && (Connection->GetStatus() == network::GameSessionStatus::Closed ||
+						Connection->GetStatus() == network::GameSessionStatus::Failed);
+				};
+				if (!Closed()) {
+					Session->Step();
+					if (Connection) Connection->Step(Session->GetSimulationTick());
+				}
+				if (Closed()) {
 						ReleaseGameplayInput();
 						StopConnection();
 						Session.reset(); Surface.reset(); Clock.reset();
 						App.Sessions.RetireDisconnected();
 						App.ReturnToMenu();
 						AppPublisher.RequestFullResync();
-						continue;
-					}
+					continue;
 				}
 				Gameplay = Surface->TakeLastPublication();
 				if (!Session->ProcessService->Alive) return Session->ProcessService->ExitCode;

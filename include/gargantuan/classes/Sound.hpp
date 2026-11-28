@@ -24,6 +24,8 @@ namespace gargantuan {
 		float RollOffMinDistance = 10.0f;
 		float RollOffMaxDistance = 100.0f;
 		std::uint64_t PlayGeneration = 0;
+		ObjectId PlaybackOwner;
+		std::uint64_t OwnerGeneration = 0;
 		std::uint64_t SeekGeneration = 0;
 
 		void AdvanceGeneration(std::uint64_t &Generation);

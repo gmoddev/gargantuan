@@ -3,6 +3,7 @@
 #include "gargantuan/audio/AudioBackend.hpp"
 #include "gargantuan/datatypes/CFrame.hpp"
 #include "gargantuan/runtime/RuntimeMode.hpp"
+#include "gargantuan/runtime/ObjectId.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -51,6 +52,7 @@ namespace gargantuan {
 		void RegisterSound(const std::shared_ptr<Sound> &SoundValue);
 		void Step(const CFrame &Listener);
 		void SetPlaybackHeld(bool Held);
+		void RetireOwner(ObjectId Owner, std::uint64_t Generation);
 		void Shutdown();
 		[[nodiscard]] bool IsAvailable() const;
 		[[nodiscard]] AudioRuntimeMetrics GetMetrics() const;

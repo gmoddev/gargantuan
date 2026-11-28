@@ -94,6 +94,8 @@ namespace gargantuan {
 		Connections.push_back({Caller.IssuingScript, Caller.ExecutionGeneration, Connection});
 	}
 
+	void ApplicationPresentation::NotifyPause(bool Held) { Run->GameplayPauseChanged->Fire(Held); }
+
 	void ApplicationPresentation::SetGameplayInput(bool Enabled) {
 		const auto &Caller = GetCurrentScriptSecurityContext();
 		if (Enabled) InputHolds.erase(Caller.IssuingScript);
@@ -109,6 +111,7 @@ namespace gargantuan {
 			const auto &Controller = Item.second;
 			if (!Replaced && Menu && Controller->GetEnabled() && Controller->Status != ScriptStatus::Idle && Controller->IsDescendantOf(Menu)) return false;
 			VM->Threads.RetireOwner(Item.first, Controller->GetExecutionGeneration());
+			if (Audio) Audio->RetireOwner(Item.first, Controller->GetExecutionGeneration());
 			Controller->RetireExecution();
 			Controller->Cleanup();
 			if (Controller->GetEnabled() && !Controller->GetDestroyed()) Controller->Status = ScriptStatus::Idle;
@@ -129,13 +132,13 @@ namespace gargantuan {
 		std::vector<std::shared_ptr<Script>> Starts;
 		for (const auto &[Id, Weak] : MenuScripts) {
 			auto Controller = Weak.lock();
-			if (!Controller || Controllers.contains(Id) || Controller->Status != ScriptStatus::Idle ||
+			if (!Controller || !Controller->GetEnabled() || Controllers.contains(Id) || Controller->Status != ScriptStatus::Idle ||
 				Controller->GetRunContext() != Enums::RunContext::Client || !Controller->IsDescendantOf(Menu)) continue;
 			Starts.push_back(Controller);
 			if (Starts.size() == 8) break;
 		}
 		for (const auto &Controller : Starts) {
-			if (Controller->Status != ScriptStatus::Idle || !Controller->IsDescendantOf(Menu)) continue;
+			if (!Controller->GetEnabled() || Controller->Status != ScriptStatus::Idle || !Controller->IsDescendantOf(Menu)) continue;
 			Controllers.emplace(Controller->GetObjectId(), Controller);
 			VM->RunBootstrapScript(Controller);
 		}

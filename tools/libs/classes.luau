@@ -22,6 +22,7 @@ export type ClassProperty = {
 
 	read readLevel: Permission?,
 	read writeLevel: Permission?,
+	read authoringOnly: boolean?,
 }
 
 export type ClassSignal = {

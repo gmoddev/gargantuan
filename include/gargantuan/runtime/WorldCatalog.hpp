@@ -11,6 +11,7 @@ namespace gargantuan {
 		std::string SaveId, WorldId, Name, Seed;
 		std::string Baseline;
 		bool Compatible = true;
+		bool Initializing = false;
 	};
 	enum class WorldCatalogAction { List, Create, Resolve };
 	void PushWorldSlot(lua_State *L, const WorldSlot &Slot);
@@ -35,7 +36,8 @@ namespace gargantuan {
 		std::string Baseline;
 		SlotProvider Open;
 		std::unique_ptr<PersistenceRuntime> SlotStorage;
-		std::optional<PersistenceRequest> PendingCommit;
+		enum class Phase { Reading, Reserving, Opening, ReadingReservation, Publishing };
+		Phase CurrentPhase = Phase::Reading;
 		std::shared_ptr<PersistenceHandle> Handle;
 		WorldCatalogAction Action{};
 		WorldSlot NewSlot;

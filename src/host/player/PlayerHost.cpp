@@ -270,7 +270,8 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 				const auto Identity = Payload->Inspection.Identity.ToString();
 				App.Sessions.ConfigureCatalog(MakeDurableLocalPersistenceProvider({
 					.Path = Profile / "world-catalog.sqlite", .ProfileId = Identity}), Graph.World,
-					Hash(Payload->ProjectJson) + "/" + Hash(Payload->Assets.CatalogJson),
+					Hash(Payload->ProjectJson) + "/" + Hash(Payload->Assets.CatalogJson) + "/" +
+						Payload->ContentManifestDigest.ToString() + "/" + Hash(Payload->PreRunSource.value_or("")),
 					[Profile, Identity](const WorldSlot &Slot, bool Create) {
 						return MakeDurableLocalPersistenceProvider({.Path = Profile / (Slot.SaveId + ".sqlite"),
 							.ProfileId = Identity + "/" + Slot.WorldId, .CreateIfMissing = Create});

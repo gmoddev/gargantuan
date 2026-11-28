@@ -48,6 +48,7 @@ namespace gargantuan {
 		std::shared_ptr<PersistenceHandle> Submit(PersistenceRequest Request, std::weak_ptr<Script> Owner = {},
 			std::chrono::milliseconds Timeout = DefaultDeadline);
 		void Pump();
+		[[nodiscard]] std::vector<std::shared_ptr<PersistenceHandle>> GetPendingWrites() const;
 		void Shutdown();
 
 	private:

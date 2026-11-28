@@ -16,6 +16,8 @@ return c({
 	},
 
 	signals = {
+		GameplayPauseChanged = { description = "Fired in presentation when the effective gameplay hold changes.",
+			args = { t.Bool } },
 		PreSimulation = {
 			description = "Fired before simulating WorldRoots. Listeners receive the delta time",
 			args = { t.Float },

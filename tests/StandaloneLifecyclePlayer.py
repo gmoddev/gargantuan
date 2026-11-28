@@ -54,7 +54,7 @@ end)
 """
 
 
-def Exercise(Options, Directory, Case):
+def PrepareProject(Options, Directory, Case):
     Project = Directory / "Project"
     shutil.copytree(Options.project, Project)
     ScenePath = Project / ".gargantuan" / "project.instance.json"
@@ -83,6 +83,11 @@ def Exercise(Options, Directory, Case):
         Scene["Properties"]["ApplicationEntry"] = {"String": SourceId}
         Scene["Children"] = [Item for Item in Scene["Children"] if Item["ClassName"] in ("Workspace", "AssetService")] + [Gameplay, Folder]
         WriteJson(ScenePath, Scene)
+    return Project
+
+
+def Exercise(Options, Directory, Case):
+    Project = PrepareProject(Options, Directory, Case)
     Stage = Directory / "Stage"
     Run([Options.packager, "build", "--project", Project, "--output", Stage,
          "--runtime", Options.runtime, "--configuration", "Release"], Directory)

@@ -356,6 +356,17 @@ namespace gargantuan {
 		State->Sounds.insert_or_assign(SoundValue->GetObjectId(), Impl::TrackedSound{SoundValue});
 	}
 
+	void AudioRuntime::RetireOwner(ObjectId Owner, std::uint64_t Generation) {
+		if (!State || State->ShutDown) return;
+		for (auto &[Id, Tracked] : State->Sounds) {
+			auto SoundValue = Tracked.Value.lock();
+			if (!SoundValue || SoundValue->PlaybackOwner != Owner || SoundValue->OwnerGeneration != Generation) continue;
+			Tracked.ActiveVoice.reset();
+			Tracked.ObservedPlayGeneration = SoundValue->PlayGeneration;
+			SoundValue->RejectRuntimePlayback();
+		}
+	}
+
 	void AudioRuntime::SetPlaybackHeld(bool Held) {
 		if (!State || State->ShutDown || State->PlaybackHeld == Held) return;
 		if (State->Backend) State->Backend->SetPlaybackHeld(Held);
