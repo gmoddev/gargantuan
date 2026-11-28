@@ -24,7 +24,7 @@ namespace gargantuan {
 			World.ApplyPendingPhysicsChanges();
 		}
 		static PhysicsOperationResult
-		Prepare(const WorldRoot &World, const RaycastParams &Params, PhysicsQueryFilter &Filter) {
+		Prepare(WorldRoot &World, const RaycastParams &Params, PhysicsQueryFilter &Filter) {
 			return World.BuildRaycastFilter(Params, Filter);
 		}
 		static PhysicsRaycastResult BackendRaycast(WorldRoot &World, const PhysicsRaycastRequest &Request) {
