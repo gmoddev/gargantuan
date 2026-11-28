@@ -1,6 +1,7 @@
 {
   "DocumentedRevision": "830f5f26ea5642c9a6d7e281db8df0fb3982e5df",
   "Availability": "Qualified unreleased candidate",
+  "LifecycleOverlay": {"Revision": "61f8520d782ea2810f168fa38d3b28027aff7a89", "ChangedDeclarations": 6, "SeparateCandidatePages": 7, "Guide": "standalone-application", "ParserCheckedSnippetsTotal": 33, "BuiltContentPages": 187, "BuiltHtmlPages": 188, "LinksChecked": 40199, "Errors": 0, "MenuExampleRuntime": "Not executed in documentation campaign; owner sample qualification retained"},
   "HistoricalInventory": {"Declarations": 79, "Members": 511},
   "CurrentInventory": {"Classes": 64, "Services": 18, "Properties": 311, "Methods": 190, "Signals": 63, "Members": 564},
   "ReferencePages": {"ClassesAndServices": 82, "NativeBindingsAndReturnedObjects": 20, "Enums": 37, "Index": 1},

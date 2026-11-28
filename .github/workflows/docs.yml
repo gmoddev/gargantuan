@@ -45,6 +45,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_ci_junit_output.py'
           python tools/docs/CheckDocumentation.py --luau-compile .docs-luau/luau-compile
           python tools/docs/GenerateReference.py --check
+          python tools/docs/GenerateLifecycleReference.py --check
           node --test tools/docs/test_repository_links.mjs
       - name: Install locked site dependencies
         working-directory: docs

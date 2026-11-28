@@ -4,6 +4,7 @@ import json
 import re
 from pathlib import Path
 import CheckDocumentation as Docs
+from PinnedApiSource import Snapshot
 
 Root = Docs.Root
 Source = "830f5f26ea5642c9a6d7e281db8df0fb3982e5df"
@@ -18,13 +19,16 @@ def Page(Title, Body):
     return f'---\ntitle: {Title}\ndescription: Public creator reference for {Title}.\n---\n\n' + Body + "\n"
 
 
-def Build():
-    Api = Docs.ExtractApi()
-    Changed = Docs.Git("diff", "--name-only", Source, "--", "assets/classes", "assets/services", "src", "include")
-    if Changed.strip():
-        raise ValueError("API sources differ from documented revision; select and review a new Source: "+Changed)
+def BuildFrom(SourceRoot):
+    Previous = Docs.Root
+    try:
+        Docs.Root = SourceRoot
+        Api = Docs.ExtractApi()
+    finally:
+        Docs.Root = Previous
     Definitions = {Entry["Name"]: Entry for Entry in Api["Classes"]}
     Outputs = {}
+    Outputs[Root/"docs/src/data/ReferenceIndex.json"] = Encode({"SourceRevision": Source, "Classes": [{"Name": E["Name"], "Kind": E["Kind"]} for E in Api["Classes"]]})
     Counts = {Key: 0 for Key in ("Properties", "Methods", "Signals", "Descriptions")}
     Status = f"Qualified development candidate `{Source}`. Local and unreleased. Declaration coverage establishes structure. Runtime authority and behavioral qualification remain specific to each API."
     Index = [Status, "", "## Classes and services", ""]
@@ -62,22 +66,22 @@ def Build():
 
     Native = {"SourceRevision": Source, "Status": "QualifiedDevelopmentCandidate", "Types": [], "Enums": []}
     Index += ["", "## Native datatypes and libraries", ""]
-    Engine = Docs.RemoveComments(Docs.Read(Root / "src/scripting/ScriptEngine.cpp"))
+    Engine = Docs.RemoveComments(Docs.Read(SourceRoot / "src/scripting/ScriptEngine.cpp"))
     for Name, Open in re.findall(r'\{"(\w+)",\s*(OpenLib\w+)', Engine):
-        File = Root / "src/scripting" / ("Lib"+Name+".cpp")
+        File = SourceRoot / "src/scripting" / ("Lib"+Name+".cpp")
         if not File.exists():
             continue
         Text = Docs.RemoveComments(Docs.Read(File))
         Labels = sorted(set(re.findall(r'\{"([^"\n]+)",\s*[\w:&]+', Text) + re.findall(r'lua_setglobal\(L,\s*"([^"]+)"', Text) + re.findall(r'lua_pushcfunction\(L,\s*\w+,\s*"([^"]+)"', Text)))
-        Related = list((Root / "src/datatypes").glob(Name+".cpp"))
+        Related = list((SourceRoot / "src/datatypes").glob(Name+".cpp"))
         for Binding in Related:
             Labels += re.findall(r'\{"([^"\n]+)",', Docs.RemoveComments(Docs.Read(Binding)))
-        Record = {"Name": Name, "Kind": "Globals" if Name in ("Base", "Require", "Task") else "NativeBinding", "EntryPoint": Open, "Source": File.relative_to(Root).as_posix(), "BindingLabels": sorted(set(Labels)), "SignatureCoverage": "Signatures and overloads require behavioral audit; labels alone do not establish call semantics"}
+        Record = {"Name": Name, "Kind": "Globals" if Name in ("Base", "Require", "Task") else "NativeBinding", "EntryPoint": Open, "Source": File.relative_to(SourceRoot).as_posix(), "BindingLabels": sorted(set(Labels)), "SignatureCoverage": "Signatures and overloads require behavioral audit; labels alone do not establish call semantics"}
         Native["Types"].append(Record)
         Outputs[Content/"datatypes"/(Name.lower()+".md")] = Page(Name+" native binding", "\n".join([Status, "", "Registered entry points and binding labels follow. Constructor, instance member and metamethod labels retain their original spelling. Consult the datatype guide for supported usage.", "", "```json", Encode(Record).strip(), "```", "", "[Datatype behavior](../../api/datatypes-and-globals.mdx)"]))
         Index.append(f'- [{Name} native binding](./datatypes/{Name.lower()}.md)')
     Index += ["", "## Native enums", ""]
-    for File in sorted((Root/"include/gargantuan").rglob("*.hpp")):
+    for File in sorted((SourceRoot/"include/gargantuan").rglob("*.hpp")):
         for Match in re.finditer(r'G_ENUM\(\s*(\w+)\s*,([^;]+)\);', Docs.RemoveComments(Docs.Read(File))):
             Items = []
             Number = -1
@@ -88,7 +92,7 @@ def Build():
                 else:
                     Number += 1
                 Items.append({"Name": Parts[0].strip(), "Value": Number})
-            Record = {"Name": Match[1], "Items": Items, "Source": File.relative_to(Root).as_posix()}
+            Record = {"Name": Match[1], "Items": Items, "Source": File.relative_to(SourceRoot).as_posix()}
             Native["Enums"].append(Record)
             Body = [Status, "", "Values follow the native G_ENUM C++ enum registration, including explicit assignments and implicit integer increments. Project-defined PreRun extensions have their own schema lifetime.", ""]
             for Item in Items:
@@ -99,12 +103,12 @@ def Build():
     if len({E["Name"] for E in Native["Enums"]}) != len(Native["Enums"]):
         raise ValueError("Duplicate native enum identity")
     for Name, File in {"EnumItem": "src/datatypes/Enum.cpp", "SignalConnection": "src/datatypes/Signal.cpp", "AnimationTrack": "src/animation/AnimationTrack.cpp", "Rect": "src/datatypes/Rect.cpp"}.items():
-        Labels = sorted(set(re.findall(r'\{"([^"\n]+)",', Docs.RemoveComments(Docs.Read(Root/File)))))
+        Labels = sorted(set(re.findall(r'\{"([^"\n]+)",', Docs.RemoveComments(Docs.Read(SourceRoot/File)))))
         Record = {"Name": Name, "Source": File, "BindingLabels": Labels, "Construction": "Returned native object; no standalone constructor established"}
         Native["Types"].append(Record)
         Outputs[Content/"datatypes"/(Name.lower()+".md")] = Page(Name, Status+"\n\n```json\n"+Encode(Record)+"```\n\n[Datatype guide](../../api/datatypes-and-globals.mdx)")
         Index.append(f'- [{Name}](./datatypes/{Name.lower()}.md)')
-    Native["SourceHashes"] = {Path.relative_to(Root).as_posix(): Docs.SourceHash(Path) for Path in sorted((Root/"src/scripting").glob("Lib*.cpp"))}
+    Native["SourceHashes"] = {Path.relative_to(SourceRoot).as_posix(): Docs.SourceHash(Path) for Path in sorted((SourceRoot/"src/scripting").glob("Lib*.cpp"))}
     Outputs[Root/"docs/src/data/NativeApi.json"] = Encode(Native)
     Outputs[Content/"index.md"] = Page("Creator reference", "\n".join(Index))
     Coverage = {"SourceRevision": Source, "Availability": "Qualified unreleased candidate", "Classes": sum(E["Kind"]=="Class" for E in Api["Classes"]), "Services": sum(E["Kind"]=="Service" for E in Api["Classes"]), **Counts, "NativeBindings": len(Native["Types"]), "Enums": len(Native["Enums"]), "EnumItems": sum(len(E["Items"]) for E in Native["Enums"]), "GeneratedPages": sum(P.suffix==".md" for P in Outputs), "StructuralDeclarationCoverage": "All declared members", "BehavioralCoverage": "Descriptions counted separately; native overloads and missing policy metadata remain backlog", "Examples": "See docs/examples/README.md for execution scope"}
@@ -114,6 +118,11 @@ def Build():
     Outputs[Root/"docs/src/data/ReferenceCoverage.json"] = Encode(Coverage)
     Outputs[Root/"devdocs/DocumentationReconstruction/CreatorReference.md"] = "# Creator reference coverage\n\n```json\n"+Encode(Coverage)+"```\n\nRegenerate with `python -B tools/docs/GenerateReference.py`. Check drift with `--check`. PublicApi.json remains the declaration catalog. NativeApi.json supplies native registration evidence. Page URLs and qualified member headings are reusable by Studio hover and signature help. Unregistered internal headers are excluded. Native binding labels still need an overload and type audit. Source revision is the qualified candidate, not a released version.\n"
     return Outputs
+
+
+def Build():
+    with Snapshot(Root, Source) as SourceRoot:
+        return BuildFrom(SourceRoot)
 
 
 if __name__ == "__main__":

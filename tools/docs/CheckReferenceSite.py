@@ -7,7 +7,13 @@ import GenerateReference as Reference
 
 Root = Reference.Root
 Dist = Root/"docs/dist"
-Api = Reference.Docs.ExtractApi()
+with Reference.Snapshot(Root, Reference.Source) as SourceRoot:
+    Previous = Reference.Docs.Root
+    try:
+        Reference.Docs.Root = SourceRoot
+        Api = Reference.Docs.ExtractApi()
+    finally:
+        Reference.Docs.Root = Previous
 for Entry in Api["Classes"]:
     Page = Dist/"reference/classes"/Entry["Name"].lower()/"index.html"
     Text = Page.read_text(encoding="utf-8")
@@ -26,4 +32,12 @@ for File in Reference.Build():
             raise SystemExit("Missing rendered page "+str(Relative))
 if not list(Dist.rglob("pagefind.js")):
     raise SystemExit("Missing search index")
+Lifecycle = json.loads((Root/"docs/src/data/LifecycleApi.json").read_text(encoding="utf-8"))
+for Entry in Lifecycle["Classes"]:
+    Text = (Dist/"lifecycle-reference"/Entry["Name"].lower()/"index.html").read_text(encoding="utf-8")
+    for Section in ("Properties", "Methods", "Signals"):
+        for Member in Entry[Section]:
+            Anchor = (Entry["Name"]+Member["Name"]).lower()
+            if f'id="{Anchor}"' not in Text:
+                raise SystemExit("Missing lifecycle member "+Anchor)
 print("[Docs:Reference] All declared member anchors, generated pages and Pagefind output verified")

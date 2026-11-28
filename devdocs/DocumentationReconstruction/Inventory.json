@@ -6766,6 +6766,19 @@
       ]
     },
     {
+      "Path": "docs/src/content/docs/guides/standalone-application.mdx",
+      "Purpose": "Standalone menus, pause and sessions",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Maintain source-linked developer entry point and validate links/examples",
+      "ObsoleteTermMentions": []
+    },
+    {
       "Path": "docs/src/content/docs/index.mdx",
       "Purpose": "Gargantuan developer documentation",
       "LastMeaningfulUpdate": null,
@@ -6774,6 +6787,97 @@
         "Date": "2026-08-06T01:31:46+07:00",
         "Subject": "feat: whole lotta work"
       },
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Maintain source-linked developer entry point and validate links/examples",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/src/content/docs/lifecycle-reference/applicationservice.md",
+      "Purpose": "ApplicationService lifecycle candidate",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Maintain source-linked developer entry point and validate links/examples",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/src/content/docs/lifecycle-reference/character.md",
+      "Purpose": "Character lifecycle candidate",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Maintain source-linked developer entry point and validate links/examples",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/src/content/docs/lifecycle-reference/datamodel.md",
+      "Purpose": "DataModel lifecycle candidate",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Maintain source-linked developer entry point and validate links/examples",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/src/content/docs/lifecycle-reference/index.md",
+      "Purpose": "Standalone lifecycle candidate reference",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Maintain source-linked developer entry point and validate links/examples",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/src/content/docs/lifecycle-reference/runservice.md",
+      "Purpose": "RunService lifecycle candidate",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Maintain source-linked developer entry point and validate links/examples",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/src/content/docs/lifecycle-reference/sessionservice.md",
+      "Purpose": "SessionService lifecycle candidate",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
+      "RelevantSourceSubsystem": [
+        "Owning source not established; consult traceability matrix"
+      ],
+      "Status": "Current",
+      "StatusLabel": "Current and authoritative",
+      "ProposedAction": "Maintain source-linked developer entry point and validate links/examples",
+      "ObsoleteTermMentions": []
+    },
+    {
+      "Path": "docs/src/content/docs/lifecycle-reference/worldsaveservice.md",
+      "Purpose": "WorldSaveService lifecycle candidate",
+      "LastMeaningfulUpdate": null,
+      "LastPathCommit": null,
       "RelevantSourceSubsystem": [
         "Owning source not established; consult traceability matrix"
       ],

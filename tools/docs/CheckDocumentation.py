@@ -242,6 +242,9 @@ def ExtractApi() -> dict:
             if Path.name.startswith("."):
                 continue
             Text = RemoveComments(Read(Path))
+            if re.search(r'local function \w+\(\w+\)', Text):
+                from DeclarationExpressions import Expand
+                Text = Expand(Text)
             Match = re.search(r"return\s+c\(\s*(\{.*\})\s*\)\s*$", Text, re.S)
             if not Match:
                 raise ValueError(f"Unsupported class declaration format: {Path}")
