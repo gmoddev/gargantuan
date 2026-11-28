@@ -23,6 +23,7 @@
 
 namespace gargantuan {
 	class IPersistenceProvider;
+	class SimulationTimeline;
 	struct PlaySessionId { std::uint64_t Value = 0; };
 	enum class PlaySessionState { Stopped, Starting, Running, Stopping, Failed };
 
@@ -141,8 +142,7 @@ namespace gargantuan {
 		std::unique_ptr<Engine> RuntimeEngine;
 		struct ExecutionProfile;
 		std::unique_ptr<ExecutionProfile> Profile;
-		struct DevelopmentTimeline;
-		std::shared_ptr<DevelopmentTimeline> DebugClock;
+		std::shared_ptr<SimulationTimeline> DebugClock;
 		std::optional<PlayScriptFailureLocation> DebugSource;
 		std::optional<WindowResizeEvent> DebugPendingResize;
 		std::uint32_t DebugPauseSerial = 0;

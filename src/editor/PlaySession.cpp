@@ -3,6 +3,7 @@
 // License, v. 2.0.
 
 #include "gargantuan/editor/PlaySession.hpp"
+#include "gargantuan/runtime/SimulationTimeline.hpp"
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Script.hpp"
@@ -51,21 +52,6 @@ namespace gargantuan {
 			Publisher.SetUiFrame(std::move(Fitted));
 		}
 	}
-
-	struct PlaySession::DevelopmentTimeline {
-		using Clock = std::chrono::steady_clock;
-		std::optional<Clock::time_point> PausedAt;
-		Clock::duration PausedTime{};
-
-		[[nodiscard]] Clock::time_point Now() const {
-			return (PausedAt ? *PausedAt : Clock::now()) - PausedTime;
-		}
-
-		void Resume() {
-			PausedTime += Clock::now() - *PausedAt;
-			PausedAt.reset();
-		}
-	};
 
 	struct PlaySession::ExecutionProfile {
 		using WorkPhase = runtime_detail::WorkPhase;
@@ -191,7 +177,7 @@ namespace gargantuan {
 		if (Sources.DebugSourceId) {
 			if (!DebugTarget || !RuntimeEngine->Script->ArmRootScriptDebug(DebugTarget))
 				throw std::invalid_argument("[Editor:PlayDebugger] Script cannot start as a managed local root");
-			DebugClock = std::make_shared<DevelopmentTimeline>();
+			DebugClock = std::make_shared<SimulationTimeline>();
 			RuntimeEngine->SetDevelopmentClock([Clock = DebugClock] { return Clock->Now(); });
 		}
 		if (!Origins.empty()) RuntimeEngine->Script->SetScriptFailureObserver(
@@ -210,7 +196,7 @@ namespace gargantuan {
 		State = PlaySessionState::Running;
 		AddDiagnostic("Information", "Runtime", "Play session is running");
 		Step();
-		if (DebugClock && !DebugClock->PausedAt)
+		if (DebugClock && !IsRootDebugPaused())
 			AddDiagnostic("Warning", "Runtime", "The selected Script produced no executable root entry pause");
 	}
 
@@ -221,7 +207,7 @@ namespace gargantuan {
 		if (Profile) Profile->Step(*RuntimeEngine);
 		else RuntimeEngine->Step();
 		if (DebugClock && RuntimeEngine->Script && RuntimeEngine->Script->GetPausedRootLine()) {
-			DebugClock->PausedAt = std::chrono::steady_clock::now();
+			DebugClock->SetHeld(SimulationTimeline::Hold::Debugger, true);
 			++DebugPauseSerial;
 		}
 		if (auto Publication = RuntimeRenderer->TakeLastPublication()) {
@@ -248,7 +234,7 @@ namespace gargantuan {
 	}
 
 	bool PlaySession::IsRootDebugPaused() const {
-		return DebugClock && DebugClock->PausedAt.has_value();
+		return DebugClock && DebugClock->IsHeld(SimulationTimeline::Hold::Debugger);
 	}
 
 	std::optional<PlayRootDebugPause> PlaySession::GetRootDebugPause() const {
@@ -271,7 +257,7 @@ namespace gargantuan {
 			++DebugPauseSerial;
 			return true;
 		}
-		DebugClock->Resume();
+		DebugClock->SetHeld(SimulationTimeline::Hold::Debugger, false);
 		DebugSource.reset();
 		if (const auto Pending = std::exchange(DebugPendingResize, std::nullopt)) Resize(Pending->Width, Pending->Height);
 		return true;

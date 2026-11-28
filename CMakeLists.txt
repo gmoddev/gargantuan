@@ -977,6 +977,9 @@ if(BUILD_TESTING)
 		add_test(NAME GlazeSerializationTests COMMAND gargantuan_glaze_serialization_tests)
 	endif()
 	add_executable(gargantuan_foundation_tests "tests/FoundationTests.cpp")
+	add_executable(gargantuan_simulation_timeline_tests "tests/SimulationTimelineTests.cpp")
+	target_include_directories(gargantuan_simulation_timeline_tests PRIVATE "include")
+	add_test(NAME gargantuan_simulation_timeline COMMAND gargantuan_simulation_timeline_tests)
 	add_executable(gargantuan_blockgrid_field_tests "tests/blockgrid/BlockGridFieldTests.cpp"
 		"src/blockgrid/Field.cpp" "src/blockgrid/Codec.cpp" "src/blockgrid/Picking.cpp" "src/blockgrid/Edit.cpp"
 		"src/blockgrid/Geometry.cpp" "src/blockgrid/Definitions.cpp" "src/blockgrid/State.cpp" "src/blockgrid/Traversal.cpp"
