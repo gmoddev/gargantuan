@@ -3,6 +3,8 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import { unified } from "@astrojs/markdown-remark";
 import RepositoryLinks from "./plugins/repository-links.mjs";
+import Api from "./src/data/PublicApi.json" with { type: "json" };
+import Native from "./src/data/NativeApi.json" with { type: "json" };
 
 export default defineConfig({
   site: "https://gmoddev.github.io",
@@ -13,6 +15,15 @@ export default defineConfig({
       title: "Gargantuan",
       social: [{ icon: "github", label: "GitHub", href: "https://github.com/gmoddev/gargantuan" }],
       sidebar: [
+        { label: "Creator reference", items: [
+          { label: "Alphabetical index", slug: "reference" },
+          { label: "Classes", items: Api.Classes.filter(Entry => Entry.Kind === "Class").map(Entry => ({ label: Entry.Name, slug: `reference/classes/${Entry.Name.toLowerCase()}` })) },
+          { label: "Services", items: Api.Classes.filter(Entry => Entry.Kind === "Service").map(Entry => ({ label: Entry.Name, slug: `reference/classes/${Entry.Name.toLowerCase()}` })) },
+          { label: "Datatypes and returned objects", items: Native.Types.filter(Entry => Entry.Kind !== "Globals").map(Entry => ({ label: Entry.Name, slug: `reference/datatypes/${Entry.Name.toLowerCase()}` })) },
+          { label: "Globals", items: Native.Types.filter(Entry => Entry.Kind === "Globals").map(Entry => ({ label: Entry.Name, slug: `reference/datatypes/${Entry.Name.toLowerCase()}` })) },
+          { label: "Enums", items: Native.Enums.map(Entry => ({ label: Entry.Name, slug: `reference/enums/${Entry.Name.toLowerCase()}` })) },
+        ] },
+        { label: "Procedural worlds", items: [{ label: "Generate a world", slug: "guides/procedural-generation" }, { label: "Creator workflows", slug: "guides/creator-workflows" }] },
         { label: "Getting started", items: [
           { label: "Capabilities and platforms", slug: "guides/getting-started" },
           { label: "Build and run", slug: "developing/working-on-gargantuan" },

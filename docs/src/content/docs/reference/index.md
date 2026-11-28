@@ -1,0 +1,154 @@
+---
+title: Creator reference
+description: Public creator reference for Creator reference.
+---
+
+Qualified development candidate `830f5f26ea5642c9a6d7e281db8df0fb3982e5df`. Local and unreleased. Declaration coverage establishes structure. Runtime authority and behavioral qualification remain specific to each API.
+
+## Classes and services
+
+- [ActionMap](./classes/actionmap.md) — Service
+- [Animator](./classes/animator.md) — Class
+- [AssetService](./classes/assetservice.md) — Service
+- [Attachment](./classes/attachment.md) — Class
+- [AttachmentMesh](./classes/attachmentmesh.md) — Class
+- [AudioMixService](./classes/audiomixservice.md) — Service
+- [BasePart](./classes/basepart.md) — Class
+- [BlockGrid](./classes/blockgrid.md) — Class
+- [Camera](./classes/camera.md) — Class
+- [Character](./classes/character.md) — Class
+- [CharacterControlService](./classes/charactercontrolservice.md) — Service
+- [Cloth](./classes/cloth.md) — Class
+- [Constraint](./classes/constraint.md) — Class
+- [DataModel](./classes/datamodel.md) — Class
+- [DataStoreService](./classes/datastoreservice.md) — Service
+- [DeformableBody](./classes/deformablebody.md) — Class
+- [EntitlementService](./classes/entitlementservice.md) — Service
+- [FileLink](./classes/filelink.md) — Class
+- [Folder](./classes/folder.md) — Class
+- [Frame](./classes/frame.md) — Class
+- [GlslSourceContainer](./classes/glslsourcecontainer.md) — Class
+- [GuiBase](./classes/guibase.md) — Class
+- [GuiBase2d](./classes/guibase2d.md) — Class
+- [GuiInputEvent](./classes/guiinputevent.md) — Class
+- [GuiObject](./classes/guiobject.md) — Class
+- [ImageButton](./classes/imagebutton.md) — Class
+- [ImageLabel](./classes/imagelabel.md) — Class
+- [InputAction](./classes/inputaction.md) — Class
+- [InputBinding](./classes/inputbinding.md) — Class
+- [InputContext](./classes/inputcontext.md) — Class
+- [InputObject](./classes/inputobject.md) — Class
+- [InputService](./classes/inputservice.md) — Service
+- [Instance](./classes/instance.md) — Class
+- [InteractionService](./classes/interactionservice.md) — Service
+- [JointConstraint](./classes/jointconstraint.md) — Class
+- [KinematicCharacter](./classes/kinematiccharacter.md) — Class
+- [LayerCollector](./classes/layercollector.md) — Class
+- [Lighting](./classes/lighting.md) — Service
+- [LocalLight](./classes/locallight.md) — Class
+- [LuaSourceContainer](./classes/luasourcecontainer.md) — Class
+- [MeshPart](./classes/meshpart.md) — Class
+- [ModuleScript](./classes/modulescript.md) — Class
+- [Part](./classes/part.md) — Class
+- [Player](./classes/player.md) — Class
+- [PlayerGui](./classes/playergui.md) — Class
+- [Players](./classes/players.md) — Service
+- [PointLight](./classes/pointlight.md) — Class
+- [ProcessService](./classes/processservice.md) — Service
+- [ProximityPrompt](./classes/proximityprompt.md) — Class
+- [ReflectionProbe](./classes/reflectionprobe.md) — Class
+- [RemoteBase](./classes/remotebase.md) — Class
+- [RemoteEvent](./classes/remoteevent.md) — Class
+- [RemoteEventBase](./classes/remoteeventbase.md) — Class
+- [RemoteFunction](./classes/remotefunction.md) — Class
+- [ReplicatedStorage](./classes/replicatedstorage.md) — Service
+- [RubberBody](./classes/rubberbody.md) — Class
+- [RunService](./classes/runservice.md) — Service
+- [ScreenGui](./classes/screengui.md) — Class
+- [Script](./classes/script.md) — Class
+- [ScrollingFrame](./classes/scrollingframe.md) — Class
+- [ServiceProvider](./classes/serviceprovider.md) — Class
+- [Sky](./classes/sky.md) — Class
+- [SoftBodyAttachment](./classes/softbodyattachment.md) — Class
+- [SoftBodyMaterial](./classes/softbodymaterial.md) — Class
+- [Sound](./classes/sound.md) — Class
+- [SpatialRegion](./classes/spatialregion.md) — Class
+- [SpotLight](./classes/spotlight.md) — Class
+- [StarterGui](./classes/startergui.md) — Service
+- [Tags](./classes/tags.md) — Service
+- [Terrain](./classes/terrain.md) — Class
+- [TextBox](./classes/textbox.md) — Class
+- [TextButton](./classes/textbutton.md) — Class
+- [TextLabel](./classes/textlabel.md) — Class
+- [TweenService](./classes/tweenservice.md) — Service
+- [UIListLayout](./classes/uilistlayout.md) — Class
+- [UnreliableRemoteEvent](./classes/unreliableremoteevent.md) — Class
+- [UnreliableSequencedRemoteEvent](./classes/unreliablesequencedremoteevent.md) — Class
+- [UserInputService](./classes/userinputservice.md) — Service
+- [ViewportFrame](./classes/viewportframe.md) — Class
+- [WeldConstraint](./classes/weldconstraint.md) — Class
+- [Workspace](./classes/workspace.md) — Service
+- [WorldRoot](./classes/worldroot.md) — Class
+
+## Native datatypes and libraries
+
+- [Axes native binding](./datatypes/axes.md)
+- [CFrame native binding](./datatypes/cframe.md)
+- [Color3 native binding](./datatypes/color3.md)
+- [Enum native binding](./datatypes/enum.md)
+- [Instance native binding](./datatypes/instance.md)
+- [Random native binding](./datatypes/random.md)
+- [RaycastParams native binding](./datatypes/raycastparams.md)
+- [UDim native binding](./datatypes/udim.md)
+- [UDim2 native binding](./datatypes/udim2.md)
+- [Signal native binding](./datatypes/signal.md)
+- [TweenInfo native binding](./datatypes/tweeninfo.md)
+- [Vector2 native binding](./datatypes/vector2.md)
+- [Vector3 native binding](./datatypes/vector3.md)
+- [Base native binding](./datatypes/base.md)
+- [Require native binding](./datatypes/require.md)
+- [Task native binding](./datatypes/task.md)
+
+## Native enums
+
+- [Enum.AnimationPlaybackState](./enums/animationplaybackstate.md)
+- [Enum.CameraType](./enums/cameratype.md)
+- [Enum.AccessibilityRole](./enums/accessibilityrole.md)
+- [Enum.GuiPointerType](./enums/guipointertype.md)
+- [Enum.GuiPointerButton](./enums/guipointerbutton.md)
+- [Enum.GuiEventPhase](./enums/guieventphase.md)
+- [Enum.GuiState](./enums/guistate.md)
+- [Enum.InputSink](./enums/inputsink.md)
+- [Enum.AutomaticSize](./enums/automaticsize.md)
+- [Enum.GuiImageScaleType](./enums/guiimagescaletype.md)
+- [Enum.UserInputState](./enums/userinputstate.md)
+- [Enum.UserInputType](./enums/userinputtype.md)
+- [Enum.KeyCode](./enums/keycode.md)
+- [Enum.ModifierKey](./enums/modifierkey.md)
+- [Enum.ZIndexBehavior](./enums/zindexbehavior.md)
+- [Enum.RunContext](./enums/runcontext.md)
+- [Enum.ScrollingDirection](./enums/scrollingdirection.md)
+- [Enum.SoundPlaybackState](./enums/soundplaybackstate.md)
+- [Enum.SoundMixCategory](./enums/soundmixcategory.md)
+- [Enum.TextXAlignment](./enums/textxalignment.md)
+- [Enum.TextYAlignment](./enums/textyalignment.md)
+- [Enum.PlaybackState](./enums/playbackstate.md)
+- [Enum.GuiFillDirection](./enums/guifilldirection.md)
+- [Enum.NormalId](./enums/normalid.md)
+- [Enum.RotationOrder](./enums/rotationorder.md)
+- [Enum.FontWeight](./enums/fontweight.md)
+- [Enum.FontStyle](./enums/fontstyle.md)
+- [Enum.RaycastFilterType](./enums/raycastfiltertype.md)
+- [Enum.SignalType](./enums/signaltype.md)
+- [Enum.InputActionType](./enums/inputactiontype.md)
+- [Enum.InputBindingType](./enums/inputbindingtype.md)
+- [Enum.EasingDirection](./enums/easingdirection.md)
+- [Enum.EasingStyle](./enums/easingstyle.md)
+- [Enum.MouseBehavior](./enums/mousebehavior.md)
+- [Enum.PreferredInput](./enums/preferredinput.md)
+- [Enum.KeyCodeStringFormat](./enums/keycodestringformat.md)
+- [Enum.SwipeDirection](./enums/swipedirection.md)
+- [EnumItem](./datatypes/enumitem.md)
+- [SignalConnection](./datatypes/signalconnection.md)
+- [AnimationTrack](./datatypes/animationtrack.md)
+- [Rect](./datatypes/rect.md)
