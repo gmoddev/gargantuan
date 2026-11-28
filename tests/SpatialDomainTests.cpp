@@ -6,6 +6,7 @@
 #include "gargantuan/classes/Camera.hpp"
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/ViewportFrame.hpp"
+#include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/render/SpatialViewportCapture.hpp"
 #include "../src/terrain/ScenePersistence.hpp"
 #include "../src/terrain/TerrainMutation.hpp"
@@ -15,6 +16,8 @@
 #include "gargantuan/services/Workspace.hpp"
 
 #include <iostream>
+#include <array>
+#include <cstddef>
 #include <stdexcept>
 
 namespace gargantuan {
@@ -45,6 +48,61 @@ namespace {
 
 	auto Ray(WorldRoot &World, float X = 5.f) {
 		return World.ResolveRaycast({X, 10, 0}, {0, -16, 0});
+	}
+
+	void PublicationIncarnation() {
+		auto Game = std::make_shared<DataModel>();
+		auto Space = Game->GetService("Workspace");
+		alignas(SpatialRegion) std::array<std::byte, sizeof(SpatialRegion)> Storage{};
+		auto MakeRegion = [&] {
+			auto *Region = std::construct_at(reinterpret_cast<SpatialRegion *>(Storage.data()));
+			return std::shared_ptr<SpatialRegion>(Region, [](SpatialRegion *Object) { std::destroy_at(Object); });
+		};
+		RenderPublisher Publisher;
+		RenderProjection Draw;
+		const auto Camera = MakeLookAtRenderCameraInput({0, 4, 12}, {0, 2, 0}, {0, 1, 0}, 50);
+		auto Region = MakeRegion();
+		Region->SetParent(Space);
+		auto OldPart = MakePart(Region, {1, 1, 1}, {1, 2, 0});
+		const auto OldId = OldPart->GetObjectId();
+		(void)Draw.Apply(*Publisher.Publish(*Region, Camera, 128, 96));
+		const auto Steady = Publisher.Publish(*Region, Camera, 128, 96);
+		Check(Draw.GetItem(OldId) && !Steady->FullResync,
+			"stable rendered realm and activation reuse the committed source");
+		(void)Draw.Apply(*Steady);
+		Region->SetParent(std::nullopt);
+		OldPart->Destroy();
+		auto NewPart = MakePart(Region, {1, 1, 1}, {2, 2, 0});
+		Region->SetParent(Space);
+		auto Restart = Publisher.Publish(*Region, Camera, 128, 96);
+		Check(Restart->FullResync, "reattaching a named world replaces its prior published activation");
+		(void)Draw.Apply(*Restart);
+		Check(!Draw.GetItem(OldId) && Draw.GetItem(NewPart->GetObjectId()), "reactivation retired prior geometry");
+
+		// Both incarnations use the exact same address in the same live DataModel.
+		const auto RetiredId = NewPart->GetObjectId();
+		const auto PriorActivation = Region->GetSpatialActivation();
+		std::weak_ptr<SpatialRegion> Retired = Region;
+		bool RejectedDuringDestruction = false;
+		auto OnDestroy = Region->Destroying->Once([&](std::monostate) {
+			try { (void)Publisher.Publish(*Region, Camera, 128, 96); }
+			catch (const std::invalid_argument &) { RejectedDuringDestruction = true; }
+		});
+		Region->Destroy();
+		Check(RejectedDuringDestruction, "the incremental renderer rejects a retiring chart inside its first observer");
+		Region.reset();
+		Check(Retired.expired(), "the renderer cannot keep a retired world alive");
+		Region = MakeRegion();
+		Region->SetParent(Space);
+		Region->SetParent(std::nullopt);
+		Region->SetParent(Space);
+		Check(Region->GetSpatialActivation() == PriorActivation, "replacement uses the same numeric activation");
+		auto Replacement = MakePart(Region, {1, 1, 1}, {3, 2, 0});
+		const auto Fresh = Publisher.Publish(*Region, Camera, 128, 96);
+		Check(Fresh->FullResync, "same-address replacement starts a fresh publication");
+		(void)Draw.Apply(*Fresh);
+		Check(!Draw.GetItem(RetiredId) && Draw.GetItem(Replacement->GetObjectId()), "replacement owns only its new geometry");
+		Game->Destroy();
 	}
 
 	std::unique_ptr<terrain::Field> MakeField(double Height, terrain::MaterialId Material) {
@@ -266,7 +324,38 @@ namespace {
 			Ray(*A, 20).Instance == NativePart && !Ray(*Space, 20).HasHit() && !Ray(*B, 20).HasHit(),
 			"nearest authored region is the only physical owner"
 		);
+		std::shared_ptr<WorldRoot> DuringRemoval;
+		auto RemovalObserver = A->ChildRemoved->Connect([&](const std::shared_ptr<Instance> &Removed) {
+			if (Removed == NativePart) DuringRemoval = WorldRoot::GetEffectiveWorld(*Removed);
+		});
 		NativePart->SetParent(B);
+		RemovalObserver->Disconnect();
+		Check(DuringRemoval == B, "the first reparent observer resolves the new route before destination admission callbacks");
+		auto Preview = std::make_shared<ViewportFrame>();
+		Preview->SetParent(A);
+		const auto PreviewPart = MakePart(Preview, {1, 1, 1}, {30, 2, 0});
+		Check(!WorldRoot::GetEffectiveWorld(*PreviewPart) && !Ray(*A, 30).HasHit(),
+			"a structural viewport stops inherited domain routing");
+		auto PreviewActor = std::make_shared<KinematicCharacter>();
+		PreviewActor->SetParent(Preview);
+		Check(PreviewActor->AdmitMotion(*Space, {}).Status == PhysicsOperationStatus::ResourceLimit,
+			"a rootless character under a viewport cannot request movement from the default world");
+		PreviewPart->SetParent(PreviewActor);
+		PreviewActor->SetRootPart(PreviewPart);
+		Check(PreviewActor->AdmitMotion(*Space, {}).Status == PhysicsOperationStatus::ResourceLimit,
+			"a character with a viewport-only root cannot resolve contacts in the default world");
+		PreviewActor->SetParent(A);
+		PreviewPart->SetSpatialRegion(B);
+		Check(PreviewActor->AdmitMotion(*Space, {}).Succeeded(),
+			"a live explicitly assigned root retains its owning character above the native domain boundary");
+		PreviewPart->SetParent(B);
+		Check(PreviewActor->AdmitMotion(*Space, {}).Status == PhysicsOperationStatus::ResourceLimit,
+			"a former root reparented outside its character cannot authorize motion");
+		PreviewPart->Destroy();
+		Check(PreviewActor->AdmitMotion(*Space, {}).Status == PhysicsOperationStatus::ResourceLimit,
+			"a destroyed controller root cannot authorize a default-world fallback");
+		PreviewActor->Destroy();
+		Preview->Destroy();
 		Check(
 			Ray(*B, 20).Instance == NativePart && !Ray(*A, 20).HasHit() && !Ray(*Space, 20).HasHit(),
 			"hierarchy transfer retires only the old owner"
@@ -328,7 +417,8 @@ namespace {
 			"target reattachment restores same-domain binding"
 		);
 		B->Destroy();
-		Check(!Wide->GetSpatialRegion() && !Ray(*Space, 6.3f).HasHit(), "retired explicit domain stays unavailable");
+		Check(!Wide->GetSpatialRegion() && !WorldRoot::GetEffectiveWorld(*Nested) && !Ray(*Space, 6.3f).HasHit(),
+			"a retired explicit boundary stays unavailable even through its live descendants");
 		Wide->SetSpatialRegion(std::nullopt);
 		Check(
 			Ray(*Space, 6.3f).Instance == Wide && Ray(*Space, 40).Instance == Nested, "explicitly clear retired binding"
@@ -339,6 +429,7 @@ namespace {
 }
 int main() try {
 	gargantuan::BootstrapNativeRuntimeSchema();
+	PublicationIncarnation();
 	Run();
 	TerrainDomains();
 	DestinationReadiness();

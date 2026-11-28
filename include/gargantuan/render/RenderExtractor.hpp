@@ -26,6 +26,7 @@ namespace gargantuan {
 	class AttachmentMesh;
 	class AnimationRuntime;
 	class AssetService;
+	class DataModel;
 	class SemanticSpatialResolver;
 	class Camera;
 	class ViewportFrame;
@@ -199,7 +200,10 @@ namespace gargantuan {
 		RenderDirtyConsumerId DirtyConsumer = InvalidRenderDirtyConsumerId;
 		RenderPublicationId LastPublicationId = InvalidRenderPublicationId;
 		ObjectId Scope;
+		std::weak_ptr<const DataModel> PublishedRealm;
+		std::weak_ptr<const Instance> PublishedWorldLifetime;
 		const WorldRoot *PublishedWorld = nullptr;
+		std::uint64_t PublishedWorldActivation = 0;
 		std::unordered_map<ObjectId, RenderItem> PublishedItems;
 		std::unordered_map<ObjectId, PublishedDeformable> PublishedDeformables;
 		std::unordered_map<RenderTextureIdentity, PublishedTexture, RenderTextureIdentityHash> PublishedTextures;

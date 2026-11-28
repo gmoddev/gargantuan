@@ -6,6 +6,7 @@
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Script.hpp"
+#include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/InputService.hpp"
@@ -261,6 +262,8 @@ namespace gargantuan {
 	bool PlaySession::ResumeRootDebug(std::uint32_t Serial, bool Step) {
 		const auto Pause = GetRootDebugPause();
 		if (!Pause || Pause->Serial != Serial || !Pause->CanResume || DebugPauseSerial == UINT32_MAX) return false;
+		const auto PreviousView = RuntimeEngine->Workspace->GetCurrentSpatialRegion().value_or(nullptr);
+		const auto PreviousActivation = PreviousView ? PreviousView->GetSpatialActivation() : 0;
 		try {
 			RuntimeEngine->Script->ResumeRootScriptDebug(Step);
 		} catch (...) {
@@ -268,6 +271,10 @@ namespace gargantuan {
 			throw;
 		}
 		if (RuntimeEngine->Script && RuntimeEngine->Script->GetPausedRootLine()) {
+			// A stepped line can switch charts while the simulation clock is held.
+			const auto View = RuntimeEngine->Workspace->GetCurrentSpatialRegion().value_or(nullptr);
+			if (View != PreviousView || (View && View->GetSpatialActivation() != PreviousActivation))
+				RequestRenderFullResync();
 			++DebugPauseSerial;
 			return true;
 		}
@@ -340,14 +347,17 @@ namespace gargantuan {
 
 	std::vector<RenderPublicationPtr> PlaySession::TakeRenderPublications() {
 		if (AwaitingRenderFullResync && IsRootDebugPaused()) {
-			// A resized or replaced presentation sink needs a new full publication.
-			// Keep the runtime clock, scripts, and resize event parked while extracting it.
+			// Project the selected chart into a new sink or after a stepped chart change.
+			// Keep the runtime clock, scripts, and resize event parked during extraction.
 			const auto [Width, Height] = RuntimeRenderer->GetViewportSize();
 			const auto Camera = RuntimeEngine->Workspace->GetCurrentCamera();
+			const auto Selected = RuntimeEngine->Workspace->GetCurrentSpatialRegion();
+			const std::shared_ptr<WorldRoot> View = Selected ? *Selected : RuntimeEngine->WorldRoot;
 			auto &Publisher = RuntimeEngine->RenderPublishing;
 			PublishPausedGui(*RuntimeEngine, Width, Height);
+			Publisher.SetTerrainRenderState(View->GetTerrainRenderState());
 			Publisher.RequestFullResync();
-			auto Publication = Publisher.Publish(*RuntimeEngine->WorldRoot, MakeRenderCameraInput(*Camera), Width, Height);
+			auto Publication = Publisher.Publish(*View, MakeRenderCameraInput(*Camera), Width, Height);
 			RuntimeRenderer->Draw(Publication);
 			PendingRenderPublications.push_back(RuntimeRenderer->TakeLastPublication());
 			AwaitingRenderFullResync = false;

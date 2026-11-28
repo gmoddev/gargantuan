@@ -53,6 +53,8 @@ retains asset mesh state for full resync. The renderer receives canonical bytes,
 vertices, indices, bounds, and revisions; it never receives source paths,
 importers, `AssetId`, or catalog authority.
 
+The publisher retains incremental state for one live WorldRoot, its spatial activation and its owning DataModel. A different owner, replacement at the same address, or region reactivation starts a full publication. The retained references are weak. A stable realm reuses its previously published ObjectId without acquiring the Instance identity mutex again.
+
 ## SDL backend ownership
 
 The explicit `SDLRenderer` public entry point uses an incomplete private

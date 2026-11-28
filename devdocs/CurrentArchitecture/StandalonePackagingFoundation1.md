@@ -267,13 +267,41 @@ executable names match. The package itself remains read-only runtime input.
 ## Development and Release
 
 Both configurations intentionally use the same format, runtime closure, strict
-integrity validation, source-free asset catalog, and atomic publication.
+integrity validation, source-free asset catalog, and validated publication.
 Foundation 1 records `Development` or `Release` in the manifest; it does not yet
 stage symbols or obfuscate content. This keeps configuration behavior explicit
 without creating divergent package authority. Symbols, richer development-only
 artifacts, and release size policy are future bounded additions.
 
 ## Atomicity, replacement, and cancellation
+
+On Windows, the packager opens every existing output-parent component before
+staging. It checks each directory handle for redirection and holds these
+handles through cleanup so a concurrent rename cannot redirect a later step.
+Packagers acquire a destination-specific, exclusive file handle
+whose lock expires when the process exits. Windows can deny a directory move
+while an application has any file open below it, including a handle opened
+with delete sharing. The publisher retries access, sharing and lock errors for
+up to two seconds per move and honors cancellation before installing the new
+directory. It never replaces an unexpected entry.
+
+When replacing an admitted directory, the publisher first records its previous
+and candidate manifest digests in an adjacent recovery directory. It moves the
+old package there, installs the verified candidate, then retires the complete
+recovery record. A fresh authorized build checks both digests, package
+audience, signatures, declared files and any redirections before recovering
+from an interrupted commit. A conflicting or unrecognized recovery entry is
+preserved for inspection. These steps cover process termination. The commit
+still consists of two same-volume directory moves, so callers can observe a
+briefly absent output between them. Concurrent publishers receive a failure
+and may retry after the owner exits. Package data and the private rollback
+record stay outside the installed product until the validated package moves
+into the requested path.
+
+Hard process termination can leave an uninstalled, uniquely named staging
+directory or a detached backup awaiting cleanup beside the destination.
+Recovery operates only on the destination's verified receipt and previous
+package. It leaves other sibling directories in place for the owner.
 
 The builder validates inputs, writes and hashes a unique sibling candidate,
 validates the complete candidate, then renames it into place. A recognized prior

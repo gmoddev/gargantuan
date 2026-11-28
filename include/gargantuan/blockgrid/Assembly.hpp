@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 #include "gargantuan/datatypes/CFrame.hpp"
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
 
 namespace gargantuan::blockgrid {
+	inline constexpr std::size_t MaximumAssemblyCells = 4'096;
+	inline constexpr float MaximumAssemblyMass = 2'048.f;
 	struct AssemblyProjection {
 		static constexpr std::uint8_t CurrentVersion=1;
 		std::uint8_t Version{CurrentVersion};

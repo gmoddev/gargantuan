@@ -182,13 +182,39 @@ namespace gargantuan {
 		return PresentationOffset ? Transform * *PresentationOffset : Transform;
 	}
 
+	bool Character::ResolveMotionWorld(std::shared_ptr<WorldRoot> &World) const {
+		World.reset();
+		if (RootPartValue && (RootPartValue->GetDestroyed() || RootPartValue->IsDestroying())) return false;
+		const Instance &Member = RootPartValue ? static_cast<const Instance &>(*RootPartValue) : *this;
+		return !WorldRoot::FindEffectiveWorld(Member, World, RootPartValue ? this : nullptr) || World;
+	}
+
 	CharacterMotionResult Character::AdmitMotion(WorldRoot &CallerWorld, const CharacterMotionRequest &Request) {
-		const auto SpatialRoot = RootPartValue ? WorldRoot::GetEffectiveWorld(*RootPartValue) : WorldRoot::GetEffectiveWorld(*this);
-		if (!SpatialRoot && RootPartValue && SpatialDomainMember::GetAssignmentRoot(*RootPartValue))
+		return AdmitRoutedMotion(std::ref(CallerWorld), Request);
+	}
+
+	CharacterMotionResult Character::AdmitRoutedMotion(
+		MotionCaller Caller, const CharacterMotionRequest &Request
+	) {
+		std::shared_ptr<WorldRoot> SpatialRoot;
+		if (!ResolveMotionWorld(SpatialRoot))
 			return {.Status = PhysicsOperationStatus::ResourceLimit};
-		if (SpatialRoot && SpatialRoot.get() != &CallerWorld && SpatialRoot->GetDataModel() != CallerWorld.GetDataModel())
-			return {.Status = PhysicsOperationStatus::InvalidDescription};
-		WorldRoot &World = SpatialRoot ? *SpatialRoot : CallerWorld;
+		WorldRoot *SelectedWorld = SpatialRoot.get();
+		if (const auto *Script = std::get_if<std::reference_wrapper<DataModel>>(&Caller)) {
+			auto &Realm = Script->get();
+			// Hierarchical and explicit routes already identify the physical world.
+			// Instances outside every world retain the script API's canonical Workspace fallback.
+			if (!SpatialRoot) SpatialRoot = std::dynamic_pointer_cast<WorldRoot>(Realm.GetService("Workspace"));
+			if (!SpatialRoot || SpatialRoot->GetDataModel().get() != &Realm)
+				return {.Status = PhysicsOperationStatus::InvalidDescription};
+			SelectedWorld = SpatialRoot.get();
+		} else {
+			auto &Host = std::get<std::reference_wrapper<WorldRoot>>(Caller).get();
+			if (SpatialRoot && SpatialRoot.get() != &Host && SpatialRoot->GetDataModel() != Host.GetDataModel())
+				return {.Status = PhysicsOperationStatus::InvalidDescription};
+			if (!SelectedWorld) SelectedWorld = &Host;
+		}
+		WorldRoot &World = *SelectedWorld;
 		CharacterMotionResult Result{
 			.RequestedTranslation = Request.Translation,
 			.Position = Transform.Position,
@@ -268,6 +294,25 @@ namespace gargantuan {
 		return Result;
 	}
 
+	int Character::GetMotionWorld(lua_State *L, Instance *InstanceValue) {
+		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::ReadDataModel))
+			throw std::runtime_error("[Character:Query] Motion world lookup requires ReadDataModel");
+		const auto *Actor = dynamic_cast<const Character *>(InstanceValue);
+		if (Actor && !Actor->GetDestroyed() && !Actor->IsDestroying()) {
+			const auto Realm = Actor->GetDataModel();
+			std::shared_ptr<WorldRoot> World;
+			if (Realm && Actor->ResolveMotionWorld(World)) {
+				if (!World)
+					World = std::dynamic_pointer_cast<WorldRoot>(Realm->FindService("Workspace").value_or(nullptr));
+				if (World && !World->GetDestroyed() && !World->IsDestroying() &&
+					World->IsSpatiallyAvailable() && World->GetDataModel() == Realm)
+					return StackValue<std::shared_ptr<Instance>>::Push(L, World);
+			}
+		}
+		lua_pushnil(L);
+		return 1;
+	}
+
 	int Character::Move(lua_State *L, Instance *InstanceValue) {
 		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::MutateDataModel))
 			throw std::runtime_error("Character movement requires MutateDataModel");
@@ -275,11 +320,10 @@ namespace gargantuan {
 		if (!CharacterValue || CharacterValue->GetDestroyed() || CharacterValue->IsDestroying())
 			throw std::runtime_error("[Character:Authority] Move requires a live Character");
 		auto DataModelValue = CharacterValue->GetDataModel();
-		auto World = DataModelValue ? std::dynamic_pointer_cast<WorldRoot>(DataModelValue->GetService("Workspace")) : nullptr;
-		if (!World) throw std::runtime_error("[Character:Authority] Move requires a live Workspace");
+		if (!DataModelValue) throw std::runtime_error("[Character:Authority] Move requires a live Workspace");
 		const auto Translation = CheckStackValue<glm::vec3>(L, 2);
 		const auto Velocity = lua_isnoneornil(L, 3) ? glm::vec3(0.0f) : CheckStackValue<glm::vec3>(L, 3);
-		auto Result = CharacterValue->AdmitMotion(*World, {
+		auto Result = CharacterValue->AdmitRoutedMotion(std::ref(*DataModelValue), {
 			.Translation = Translation,
 			.Velocity = Velocity,
 			.Source = CharacterMotionSource::Script,

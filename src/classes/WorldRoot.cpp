@@ -1082,16 +1082,35 @@ namespace gargantuan {
 		return (*State->Positions)[VertexIndex];
 	}
 
-	std::shared_ptr<WorldRoot> WorldRoot::GetEffectiveWorld(const Instance &Member) {
-		for (const Instance *Current = &Member; Current; Current = Current->ParentReference.lock().get()) {
-			if (const auto *Assigned = dynamic_cast<const SpatialDomainMember *>(Current);
-				Assigned && Assigned->HasAssignedRegion())
-				return Assigned->ResolveAssignedWorld(*Current);
-			if (dynamic_cast<const ViewportFrame *>(Current)) return {};
-			if (const auto *World = dynamic_cast<const WorldRoot *>(Current))
-				return std::static_pointer_cast<WorldRoot>(const_cast<WorldRoot *>(World)->shared_from_this());
+	bool WorldRoot::ResolveLocalSpatialWorld(std::shared_ptr<WorldRoot> &World) const {
+		World = std::static_pointer_cast<WorldRoot>(const_cast<WorldRoot *>(this)->shared_from_this());
+		return true;
+	}
+
+	bool WorldRoot::FindEffectiveWorld(
+		const Instance &Member, std::shared_ptr<WorldRoot> &World, const Instance *RequiredAncestor
+	) {
+		std::shared_ptr<Instance> Parent;
+		for (const Instance *Current = &Member; Current; Current = Parent.get()) {
+			if (Current == RequiredAncestor) RequiredAncestor = nullptr;
+			if (Current->ResolveLocalSpatialWorld(World)) {
+				// An explicit assignment can precede the character that owns a RootPart.
+				while (RequiredAncestor && (Parent = Current->ParentReference.lock())) {
+					Current = Parent.get();
+					if (Current == RequiredAncestor) RequiredAncestor = nullptr;
+				}
+				if (RequiredAncestor) World.reset();
+				return true;
+			}
+			Parent = Current->ParentReference.lock();
 		}
-		return {};
+		return RequiredAncestor != nullptr;
+	}
+
+	std::shared_ptr<WorldRoot> WorldRoot::GetEffectiveWorld(const Instance &Member) {
+		std::shared_ptr<WorldRoot> World;
+		(void)FindEffectiveWorld(Member, World);
+		return World;
 	}
 
 	WorldRoot::WorldRoot() : Physics(PhysicsWorldConfig{.Gravity = {0.0f, -Gravity, 0.0f}}) {

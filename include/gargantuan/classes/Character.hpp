@@ -5,7 +5,9 @@
 #include "gargantuan/physics/PhysicsTypes.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
+#include <variant>
 
 namespace gargantuan {
 	class WorldRoot;
@@ -58,6 +60,11 @@ namespace gargantuan {
 		void CommitSimulationTransform(const CFrame &Value);
 
 	  private:
+		// False closes movement. A successful empty route permits an unmanaged caller's fallback.
+		[[nodiscard]] bool ResolveMotionWorld(std::shared_ptr<WorldRoot> &World) const;
+		using MotionCaller = std::variant<std::reference_wrapper<WorldRoot>, std::reference_wrapper<DataModel>>;
+		[[nodiscard]] CharacterMotionResult AdmitRoutedMotion(
+			MotionCaller Caller, const CharacterMotionRequest &Request);
 		friend const char *network::InstallSpatialControllerCheckpoint(const network::SpatialTransferFrame &, WorldRoot &,
 			const network::SpatialTransferAdapters &);
 		[[nodiscard]] bool ApplyRuntimeSourceCheckpoint(const CFrame &Pose, glm::vec3 Velocity, glm::vec3 FloorNormal, bool Grounded);

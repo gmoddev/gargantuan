@@ -19,6 +19,7 @@
 
 namespace gargantuan {
 	class DataModel;
+	class WorldRoot;
 	namespace network { class ReplicaApplier; }
 	[[nodiscard]] InstanceProperty MakeCustomClassInstanceProperty(
 		SchemaId declaringClassId,
@@ -41,6 +42,9 @@ namespace gargantuan {
 		friend class MutationGateway;
 		friend class SpatialDomainMember;
 		friend class WorldRoot;
+		// A local boundary resolves the route, including a deliberately unavailable
+		// world. Other Instances inherit the current route from their parent.
+		[[nodiscard]] virtual bool ResolveLocalSpatialWorld(std::shared_ptr<WorldRoot> &) const { return false; }
 		friend class PreparedGridTransfer;
 		void ValidateAdmittedSpatialProperty(std::string_view Name,const std::any &Value) const;
 		friend class network::ReplicaApplier;

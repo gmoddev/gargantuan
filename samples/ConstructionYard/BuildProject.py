@@ -36,6 +36,11 @@ def Build(Engine, Destination):
             Revision = Host.Call("ReadBlockGridCell", **Address)["Revision"]
             return Host.Call("EditBlockGridRegion", **Address, Revision=Revision, MaxExclusive=High, Definition=Definition)
 
+        def Initial(Class, Property, Kind, Value):
+            return dict(DeclaringClassSchemaId=Schema[Class]["SchemaId"],
+                        DeclaringDefinitionVersion=Schema[Class]["DefinitionVersion"],
+                        Property=Property, Value=dict(Type=Kind, Value=Value))
+
         Outside = Create("BlockGrid", "RetainingWall", Space)
         Interior = Create("SpatialRegion", "Workshop", Space)
         Inside = Create("BlockGrid", "WorkshopBlocks", Interior)
@@ -44,6 +49,19 @@ def Build(Engine, Destination):
         Fill(Inside, [-7, 0, -7], [8, 1, 8], "Stone")
         Fill(Inside, [-7, 1, -7], [8, 6, -6], "Brick")
         Fill(Inside, [-7, 1, -6], [-6, 5, 6], "Brick")
+        Identity = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+        Platform = Create("BlockGrid", "FreightPlatform", Space, InitialProperties=[
+            Initial("BlockGrid", "CellSize", "Float", .5),
+            Initial("BlockGrid", "CFrame", "CFrame", [19, 4, 0, *Identity]),
+        ])
+        Fill(Platform, [-8, 0, -8], [8, 2, 8], "Brick")
+        Fill(Platform, [-1, 1, -1], [1, 2, 1], "Stone")
+        Create("Part", "PlatformRail", Space, InitialProperties=[
+            Initial("BasePart", "Anchored", "Bool", True),
+            Initial("BasePart", "Size", "Vector3", [22, 1, 10]),
+            Initial("BasePart", "CFrame", "CFrame", [22, 1, 0, *Identity]),
+            Initial("BasePart", "Friction", "Float", 0.),
+        ])
         State = Host.Call("GetTerrainAuthoringState")
         for X in (-5, 1, 7):
             for Z in (-5, 1, 7):
@@ -54,7 +72,7 @@ def Build(Engine, Destination):
         Script = Schema["Script"]
         Storage = next(Item["Id"] for Item in Snapshot["Objects"] if Item["ClassName"] == "ReplicatedStorage")
         Create("RemoteEvent", "YardRequest", Storage)
-        for Name, Context in (("Yard", "Server"), ("YardInput", "Client")):
+        for Name, Context in (("Yard", "Server"), ("YardPlatform", "Server"), ("YardInput", "Client")):
             Create("Script", Name, Root, InitialSource=(Sources / f"{Name}.luau").read_text(encoding="utf-8"),
                    InitialProperties=[dict(DeclaringClassSchemaId=Script["SchemaId"],
                                            DeclaringDefinitionVersion=Script["DefinitionVersion"], Property="RunContext",
@@ -62,7 +80,12 @@ def Build(Engine, Destination):
         Host.Call("SaveProject")
         Host.Call("OpenProject", Root=Destination.as_posix())
         Reopened = Host.Call("GetSnapshot")["Snapshot"]
-        for Name, Cell, Expected in (("RetainingWall", [-5, 0, -5], "Brick"), ("WorkshopBlocks", [0, 0, 0], "Stone")):
+        Deck = next(Item["EditorProperties"] for Item in Reopened["Objects"] if Item["Name"] == "FreightPlatform")
+        if (Deck["CFrame"]["Value"] != [19, 4, 0, *Identity] or Deck["CellSize"]["Value"] != .5 or
+                Deck["MotionMode"]["Value"] != "Static"):
+            raise RuntimeError("Freight platform did not reopen at its authored pose, scale and motion mode")
+        for Name, Cell, Expected in (("RetainingWall", [-5, 0, -5], "Brick"), ("WorkshopBlocks", [0, 0, 0], "Stone"),
+                                     ("FreightPlatform", [-8, 0, -8], "Brick"), ("FreightPlatform", [0, 1, 0], "Stone")):
             Grid = next(Item["Id"] for Item in Reopened["Objects"] if Item["Name"] == Name)
             Receipt = Host.Call("ReadBlockGridCell", Scope=Reopened["Cursor"]["Scope"], Object=Grid, Cell=Cell)
             if Receipt["Definition"] != Expected:

@@ -129,10 +129,13 @@ warn('{ServerProof}')
         World["Children"].append(Starter)
     GuiScript = CodeNode("RD1GuiScript", "Script", f"""
 local Procedural = require('@game/ReplicatedStorage/RD1Procedural')
-assert(Procedural.Value == 42)
+assert(Procedural.Value == require('./RD1GuiModule').Answer)
 warn('{GuiProof}')
 """, "Client")
-    Starter["Children"].append(Node("RD1Gui", "ScreenGui", Children=[GuiScript]))
+    Starter["Children"].append(Node("PrivateGuiFolder", "Folder", Children=[
+        CodeNode("PrivateGuiModule", "ModuleScript", f"-- {PrivateMarker}\nreturn '{PrivateLiteral}'")]))
+    Starter["Children"].append(Node("RD1Gui", "ScreenGui", Children=[
+        GuiScript, CodeNode("RD1GuiModule", "ModuleScript", "return {Answer = 42}")]))
     for Index in range(ExtraScripts):
         GameScripts["Children"].append(CodeNode(f"RD1Controller{Index:04}", "Script", f"""
 local State = {Index}
@@ -159,7 +162,7 @@ def WritePolicy(File, SessionIdentity, Mixed):
     if Mixed:
         AuthoringPolicy.update({
             "Groups": {"ReadableSamples": {"Members": [ResourceId("RD1Craft")], "Representation": "Source"},
-                       "HotGameplay": {"Members": [ResourceId("RD1Controller"), ResourceId("RD1GuiScript")],
+                       "HotGameplay": {"Members": [ResourceId("RD1Controller"), ResourceId("RD1GuiScript"), ResourceId("RD1GuiModule")],
                                        "Representation": "Compiled"}},
             "Overrides": {ResourceId("RD1Procedural"): {"Representation": "Protected", "Diagnostics": "PrivateSymbols"}},
         })
@@ -258,10 +261,10 @@ def CheckPrivateSymbols(Receipt, Project, Package):
 
 
 def Build(Options, Name, Target, Preset, Project, Output, PolicyFile, Reports, Enrollment,
-          Signed=False, Protected=False, Legacy=False, Deny=False):
+          Signed=False, Protected=False, Legacy=False, Deny=False, Configuration="Release"):
     Distribution = Options.ServerDistribution if Target == "DedicatedServer" else Options.PlayerDistribution
     Command = [Options.Packager, "build", "--project", Project, "--output", Output, "--runtime", Distribution,
-               "--configuration", "Release"]
+               "--configuration", Configuration]
     if not Legacy:
         Policy = {"Version": 1, "Target": Target, "Preset": Preset, "PublisherTrust": "DigestOnly", "ModLoading": "Disabled"}
         if Signed:
@@ -315,7 +318,8 @@ def CheckPackage(Output, Preset, Signed, Legacy=False, Distributed=False):
         Require(Manifest["PackageFormatVersion"] == 4, "Managed package is not format 4")
         Catalog = ReadJson(Output / "content" / "runtime-scripts.json")
         ById = {Row["Id"]: Row for Row in Catalog["Scripts"]}
-        Expected = {"RD1Craft": "Source", "RD1Controller": "Compiled", "RD1Procedural": "Protected", "RD1GuiScript": "Compiled"}
+        Expected = {"RD1Craft": "Source", "RD1Controller": "Compiled", "RD1Procedural": "Protected",
+                    "RD1GuiScript": "Compiled", "RD1GuiModule": "Compiled"}
         for Name, MixedRepresentation in Expected.items():
             Id = ResourceId(Name)
             Desired = MixedRepresentation if Preset == "Hybrid" else "Source" if Preset == "Open" else Preset
@@ -326,7 +330,7 @@ def CheckPackage(Output, Preset, Signed, Legacy=False, Distributed=False):
                 with Artifact.open("rb") as Stream:
                     Require(Stream.read(len(Prefix)) == Prefix, f"Wrong actual artifact for {Name}")
         if Distributed:
-            for Name in ("RD1AuthoritativeInventory", "RD1InventoryRules"):
+            for Name in ("RD1AuthoritativeInventory", "RD1InventoryRules", "PrivateGuiModule"):
                 Require(ResourceId(Name) not in ById, "Private script identity entered the distributed catalog")
         Require((Output / "game.package.sig").is_file() == Signed, "Signature file does not match publisher policy")
     return Found

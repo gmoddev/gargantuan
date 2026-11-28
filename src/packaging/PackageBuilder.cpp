@@ -10,6 +10,7 @@
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/content/ResidencySpatialMetadata.hpp"
 #include "gargantuan/filesystem/Project.hpp"
+#include "gargantuan/filesystem/Paths.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/gui/PlayerGuiScope.hpp"
 #include "gargantuan/reflection/PreRunRegistration.hpp"
@@ -61,6 +62,8 @@
 #if defined(max)
 #undef max
 #endif
+
+#include "WindowsPackagePublication.hpp"
 
 namespace gargantuan {
 	namespace {
@@ -1007,6 +1010,9 @@ namespace gargantuan {
 			return Destination.parent_path() / Suffix;
 		}
 
+#if defined(_WIN32)
+		using PackagePublication = windows_package_publication::Writer;
+#else
 		class PackagePublication final {
 		  public:
 			explicit PackagePublication(const std::filesystem::path &Destination) : Lease(Destination) {
@@ -1026,6 +1032,7 @@ namespace gargantuan {
 		  private:
 			std::filesystem::path Lease;
 		};
+#endif
 
 		std::string PackageGridPath(const AssetContentId& Id) { return "content/.gargantuan/blockgrid/"+blockgrid::SegmentFileName(Id); }
 		void ValidateStagingPaths(
@@ -1625,10 +1632,10 @@ namespace gargantuan {
 		AssertAuthoritativeMutation("PackageBuilder::CaptureRuntimeDistribution");
 		if (!World) throw RuntimeDistributionError("InvalidPolicy", "Runtime distribution requires a loaded project.");
 		const bool Distributed = Request.Target == RuntimeDistributionTarget::DistributedPlayer;
-		std::set<std::string, std::less<>> Public;
+		std::map<std::string, std::vector<std::string>, std::less<>> PublicPaths;
 		if (Distributed)
-			for (const auto &Script : client_package::CaptureEligibleScripts(*World))
-				Public.insert(Script.SourceId);
+			for (auto &Script : client_package::CaptureEligibleScripts(*World))
+				PublicPaths.emplace(std::move(Script.SourceId), std::move(Script.Path));
 		RuntimeDistributionPlan Plan{.Request = Request};
 		std::vector<std::shared_ptr<LuaSourceContainer>> Objects;
 		std::vector<std::string> Path;
@@ -1642,8 +1649,9 @@ namespace gargantuan {
 				if (Plan.Scripts.size() == 4096)
 					throw RuntimeDistributionError("InvalidPolicy", "The script catalog exceeds its entry bound.");
 				auto Id = Script->GetSourceId();
-				const bool Eligible = Authored && (!Distributed || Public.contains(Id));
-				Plan.Scripts.push_back({.SourceId = std::move(Id), .Path = Path,
+				const auto Public = PublicPaths.find(Id);
+				const bool Eligible = Authored && (!Distributed || Public != PublicPaths.end());
+				Plan.Scripts.push_back({.SourceId = std::move(Id), .Path = Public == PublicPaths.end() ? Path : Public->second,
 					.Class = std::string(Object->GetClassName()), .Eligible = Eligible});
 				Objects.push_back(std::move(Script));
 			}
@@ -1759,7 +1767,7 @@ namespace gargantuan {
 				Json Identity{
 					{"Domain", SpatialContent ? "GargantuanSpatialClientCodeV1" : "GargantuanClientCodeV1"}, {"Project", Result.Identity.ToString()},
 					{"Session", Result.DistributionPlan->SessionIdentity}, {"Scripts", std::move(Bindings)},
-					{"Projection", HashText(client_package::CaptureCode(*World))},
+					{"Projection", HashText(client_package::CaptureCode(*World, true))},
 				};
 				if (!Result.DistributionPlan->SharedGridAssets.empty())
 					Identity["SharedGridAssets"] = Result.DistributionPlan->SharedGridAssets;
@@ -1784,7 +1792,7 @@ namespace gargantuan {
 				SharedSnapshot = Assets->CaptureRuntimeAssets(std::span<const AssetId>(SharedAssets));
 			}
 			Result.DistributedPlayer = std::shared_ptr<const DistributedPlayerCapture>(new DistributedPlayerCapture(
-				Result.Identity, Result.AuthoritativeRevision, client_package::CaptureCode(*World),
+				Result.Identity, Result.AuthoritativeRevision, client_package::CaptureCode(*World, RuntimeDistribution.has_value()),
 				std::move(*SharedSnapshot)
 			));
 			return Result;
@@ -1823,6 +1831,9 @@ namespace gargantuan {
 			.PackagedUnsavedChanges = Request.Payload.UnsavedChanges,
 		};
 		std::filesystem::path Candidate;
+#if defined(_WIN32)
+		windows_package_publication::OutputParents OutputParents;
+#endif
 		std::filesystem::path PrivateDiagnosticsCandidate;
 		std::filesystem::path PrivateDiagnosticsTempDirectory;
 		std::filesystem::path NewPrivateDiagnosticsPath;
@@ -1907,26 +1918,38 @@ namespace gargantuan {
 			std::optional<std::string> DistributedRuntimeDigest;
 			std::optional<std::string> ManagedRuntimeDigest;
 			std::filesystem::path Destination;
-			auto CheckDestination = [&](bool VerifyExisting) {
-				const auto Parent = Destination.parent_path();
+			auto CheckDestination = [&](const std::filesystem::path &Directory, bool VerifyExisting) {
+				const auto Parent = Directory.parent_path();
 				if (!std::filesystem::is_directory(Parent) || IsReparseOrLink(Parent))
 					throw std::runtime_error("Package output parent is unavailable or redirected");
-				if (!std::filesystem::exists(Destination)) return;
-				if (!std::filesystem::is_directory(Destination) || IsReparseOrLink(Destination))
+				if (std::filesystem::symlink_status(Directory).type() == std::filesystem::file_type::not_found) return;
+				if (!std::filesystem::is_directory(Directory) || IsReparseOrLink(Directory))
 					throw std::runtime_error("Package output destination is unavailable or redirected");
-				if (std::filesystem::directory_iterator(Destination) == std::filesystem::directory_iterator{}) return;
+				if (std::filesystem::is_empty(Directory)) return;
 				if (VerifyExisting) {
-					if (!HasErrors(Validate(Destination, Audience, {
+					if (!HasErrors(Validate(Directory, Audience, {
 						.Security = Plan ? std::optional(DistributionSecurity) : std::nullopt,
 						.VerifyExecutableArtifacts = false,
 					}))) return;
 				} else {
 					std::vector<PackageDiagnostic> Diagnostics;
-					const auto Existing = Inspect(Destination, Diagnostics);
+					const auto Existing = Inspect(Directory, Diagnostics);
 					if (Existing && Existing->Audience == Audience) return;
 				}
 				throw std::runtime_error("Package output contains unrelated files or has a different audience");
 			};
+#if defined(_WIN32)
+			auto Fingerprint = [&](const std::filesystem::path &Directory) {
+				if (std::filesystem::is_empty(Directory)) return std::string("empty");
+				return HashText(ReadBoundedText(Directory / L"game.package.json", MaximumManifestBytes));
+			};
+			auto Recover = [&] {
+				windows_package_publication::Recover(Destination, [&](const std::filesystem::path &Directory) {
+					CheckDestination(Directory, true);
+					return Fingerprint(Directory);
+				}, IsReparseOrLink, UniqueSibling);
+			};
+#endif
 			RunPhase(PackagePhase::Validate, [&] {
 				InjectFailure(Request.FailurePoint, PackageFailurePoint::Validate);
 				if (!Request.RuntimeDistributionRoot.is_absolute() || !Request.OutputDirectory.is_absolute())
@@ -1934,7 +1957,10 @@ namespace gargantuan {
 				Destination = Request.OutputDirectory.lexically_normal();
 				if (Destination == Destination.root_path() || Destination.filename().empty())
 					throw std::runtime_error("Package output destination is unsafe");
-				CheckDestination(false);
+#if defined(_WIN32)
+				OutputParents.Acquire(Destination.parent_path());
+#endif
+				CheckDestination(Destination, false);
 				Distribution = ParseRuntimeDistribution(Request.RuntimeDistributionRoot, Result.Diagnostics);
 				if (!Distribution) throw std::runtime_error("Runtime distribution validation failed");
 				if (Plan) {
@@ -1959,9 +1985,17 @@ namespace gargantuan {
 						throw std::runtime_error("Distributed Player requires an Engine Player-only runtime distribution");
 					DistributedRuntimeDigest = ReadDistributedPlayerDigest(Request.RuntimeDistributionRoot);
 				}
-				Candidate = UniqueSibling(Destination, "gargantuan-package-tmp");
-				ValidateStagingPaths(Destination, Candidate, *Distribution, Request.Payload, PackageAssets);
-				std::filesystem::create_directory(Candidate);
+#if defined(_WIN32)
+				if (windows_package_publication::HasEntry(windows_package_publication::Journal(Destination))) {
+					PackagePublication Publication(Destination);
+					Recover();
+				}
+#endif
+				auto NewCandidate = UniqueSibling(Destination, "gargantuan-package-tmp");
+				ValidateStagingPaths(Destination, NewCandidate, *Distribution, Request.Payload, PackageAssets);
+				if (!std::filesystem::create_directory(NewCandidate))
+					throw std::runtime_error("Could not reserve a private package staging directory");
+				Candidate = std::move(NewCandidate);
 			});
 
 			std::vector<ContentEntry> Entries;
@@ -2182,7 +2216,10 @@ namespace gargantuan {
 				InjectFailure(Request.FailurePoint, PackageFailurePoint::Finalize);
 				if (Request.Cancellation.IsCancelled()) throw std::runtime_error("Package build cancelled");
 				PackagePublication Publication(Destination);
-				CheckDestination(true);
+#if defined(_WIN32)
+				Recover();
+#endif
+				CheckDestination(Destination, true);
 				std::filesystem::path PrivateDiagnosticsPath;
 				if (Plan && DistributionMetadata) {
 					Json Scripts = Json::array();
@@ -2203,7 +2240,7 @@ namespace gargantuan {
 						if (Symbols.size() > runtime_distribution::MaximumCatalogBytes)
 							throw RuntimeDistributionError("PrivateDiagnosticsFailed", "The private diagnostic index exceeds its bound.");
 						PrivateDiagnosticsPath = Destination.parent_path() /
-							("gargantuan-private-symbols-" + HashText(Destination.filename().generic_string()).substr(0, 16) +
+							("gargantuan-private-symbols-" + HashText(Paths::ToUtf8(Destination.filename())).substr(0, 16) +
 								"-" + Result.ManifestSha256 + ".json");
 						if (std::filesystem::exists(PrivateDiagnosticsPath)) {
 							if (IsReparseOrLink(PrivateDiagnosticsPath) ||
@@ -2239,6 +2276,13 @@ namespace gargantuan {
 						}
 					}
 				}
+#if defined(_WIN32)
+				const auto Previous = windows_package_publication::HasEntry(Destination) ? Fingerprint(Destination) : std::string{};
+				if (!windows_package_publication::Install(Destination, Candidate, Previous, Result.ManifestSha256,
+					Request.Cancellation, UniqueSibling))
+					AddDiagnostic(Result.Diagnostics, PackageDiagnosticSeverity::Warning, "Filesystem",
+						"BackupCleanup", "The validated package was installed, but prior backup cleanup did not complete.");
+#else
 				std::filesystem::path Backup;
 				if (std::filesystem::exists(Destination)) {
 					Backup = UniqueSibling(Destination, "gargantuan-package-backup");
@@ -2259,6 +2303,7 @@ namespace gargantuan {
 						AddDiagnostic(Result.Diagnostics, PackageDiagnosticSeverity::Warning, "Filesystem",
 							"BackupCleanup", "The validated package was installed, but prior backup cleanup did not complete.");
 				}
+#endif
 				Result.OutputDirectory = Destination;
 				Result.PlayerExecutable = Destination / std::filesystem::path(Distribution->Player);
 				Result.PrivateDiagnosticsPath = std::move(PrivateDiagnosticsPath);
@@ -2289,7 +2334,9 @@ namespace gargantuan {
 				PackageDiagnosticSeverity::Error,
 				"Packaging",
 				Result.Cancelled ? "Cancelled" : (DistributionError ? DistributionError->Code : "BuildFailed"),
-				Result.Cancelled ? "The package build was cancelled before finalization."
+				DistributionError && DistributionError->Code == "PublicationRecoveryRequired"
+					? "The package was not installed. The previous validated package is in the recovery directory."
+					: Result.Cancelled ? "The package build was cancelled before finalization."
 								 : "The package build failed; the previous valid destination was preserved.",
 				std::move(FailureDetail)
 			);

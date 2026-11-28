@@ -349,7 +349,7 @@
       "Name": "BasePart",
       "Kind": "Class",
       "Source": "assets/classes/BasePart.luau",
-      "SourceSha256": "6f4dc2bd7dfe1ae403d89d515321b663c8d62045f077b205351f1ffab070dcd6",
+      "SourceSha256": "9a62c7dbdf11a4310146b0e833514de2c058baf3e6e434447ea050b72df42795",
       "Description": "Abstract class for workspace objects that physically interact.",
       "Extends": "Instance",
       "Abstract": true,
@@ -540,6 +540,18 @@
           "Category": "Behavior"
         },
         {
+          "Name": "SpatialRegion",
+          "Description": "Explicit independent spatial domain for this part and its spatial descendants. An unset value uses the enclosing world.",
+          "Type": "t.Optional(t.Instance(\"SpatialRegion\", true))",
+          "Unmodified": "std::nullopt",
+          "OverrideRead": "GetSpatialRegion",
+          "OverrideWrite": "SetSpatialRegion",
+          "MaterializationDependency": "Hard",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "World"
+        },
+        {
           "Name": "Transparency",
           "Description": "The visual transparency of this instance",
           "Type": "t.Float",
@@ -629,6 +641,292 @@
           "Args": "{ t.Instance(\"BasePart\") }"
         }
       ]
+    },
+    {
+      "Name": "BlockGrid",
+      "Kind": "Class",
+      "Source": "assets/classes/BlockGrid.luau",
+      "SourceSha256": "e88de2f86ddea33ae148c272a1b547ba7165f786524dbe03b650788bbc7e935f",
+      "Description": "A discrete construction grid with native, automatically partitioned cells.",
+      "Extends": "Instance",
+      "Abstract": false,
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [
+        {
+          "Name": "BlockRevision",
+          "Type": "t.String",
+          "Unmodified": "'\"\"'",
+          "OverrideRead": "GetBlockRevision",
+          "Writable": false,
+          "Editable": false,
+          "Category": "Grid",
+          "Description": "Opaque scoped revision of this grid. Read it after a change."
+        },
+        {
+          "Name": "CFrame",
+          "Type": "t.CFrame",
+          "Unmodified": "gargantuan::CFrame()",
+          "OverrideRead": "GetCFrame",
+          "OverrideWrite": "SetCFrame",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Transform",
+          "EditorHint": "CFrameComponents",
+          "Description": "Rigid grid-local to world transform."
+        },
+        {
+          "Name": "CanCollide",
+          "Type": "t.Bool",
+          "Unmodified": "true",
+          "OverrideRead": "GetCanCollide",
+          "OverrideWrite": "SetCanCollide",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Collision",
+          "Description": "Participate in physical collision."
+        },
+        {
+          "Name": "CanQuery",
+          "Type": "t.Bool",
+          "Unmodified": "true",
+          "OverrideRead": "GetCanQuery",
+          "OverrideWrite": "SetCanQuery",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Collision",
+          "Description": "Participate in opt-in world queries."
+        },
+        {
+          "Name": "CellSize",
+          "Type": "t.Float",
+          "Unmodified": "1.0f",
+          "OverrideRead": "GetCellSize",
+          "OverrideWrite": "SetCellSize",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Grid",
+          "Description": "Uniform world units per cell. Choose 0.5, 1, or 2 while empty."
+        },
+        {
+          "Name": "MotionMode",
+          "Type": "t.String",
+          "Unmodified": "'\"Static\"'",
+          "OverrideRead": "GetMotionMode",
+          "Writable": false,
+          "Editable": false,
+          "Category": "Physics",
+          "Description": "Current authoritative Static or Dynamic simulation mode."
+        },
+        {
+          "Name": "SpatialRegion",
+          "Type": "t.Optional(t.Instance(\"SpatialRegion\", true))",
+          "Unmodified": "std::nullopt",
+          "OverrideRead": "GetSpatialRegion",
+          "OverrideWrite": "SetSpatialRegion",
+          "Serializable": true,
+          "Replicated": true,
+          "MaterializationDependency": "Hard",
+          "Category": "World",
+          "Description": "Optional independent spatial domain. Without an assignment the grid uses its enclosing world."
+        },
+        {
+          "Name": "Visible",
+          "Type": "t.Bool",
+          "Unmodified": "true",
+          "OverrideRead": "GetVisible",
+          "OverrideWrite": "SetVisible",
+          "Serializable": true,
+          "Replicated": true,
+          "Category": "Appearance",
+          "Description": "Participate in rendering."
+        }
+      ],
+      "Methods": [
+        {
+          "Name": "BeginEdit",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Expected: string?) -> { SetBlock: (unknown, Vector3, string, { Up: string, Front: string }?) -> (), RemoveBlock: (unknown, Vector3) -> (), Fill: (unknown, Vector3, Vector3, string, { Up: string, Front: string }?) -> (), Clear: (unknown, Vector3, Vector3) -> (), SetValue: (unknown, Vector3, string, boolean | number) -> (), CopyRegion: (unknown, Vector3, Vector3, Vector3) -> (), MoveRegion: (unknown, Vector3, Vector3, Vector3) -> (), WritePacked: (unknown, Vector3, Vector3, { Size: Vector3, Bindings: {[string]: string}, Palette: {{ Definition: string, Orientation: { Up: string, Front: string } }}, Cells: buffer }) -> (), Commit: (unknown) -> string, Cancel: (unknown) -> () }",
+          "Description": "Starts a bounded edit guarded by the current or supplied revision.",
+          "RequiredCapability": "MutateDataModel"
+        },
+        {
+          "Name": "CellToWorld",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Cell: Vector3) -> Vector3",
+          "Description": "Returns the world position of a cell center.",
+          "RequiredCapability": "ReadDataModel"
+        },
+        {
+          "Name": "Clear",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Min: Vector3, MaxExclusive: Vector3) -> string",
+          "Description": "Clears a half-open grid-local box atomically.",
+          "RequiredCapability": "MutateDataModel"
+        },
+        {
+          "Name": "DefineBlock",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Key: string, Spec: { Shape: (\"Cube\" | \"Slab\" | \"Wedge\" | \"Stairs\" | \"Mesh\")?, Color: Color3?, Material: string?, Mesh: string?, Collision: (\"Shape\" | \"None\" | \"Asset\")?, CollisionAsset: string?, Queryable: boolean?, Ports: {string}? }) -> string",
+          "Description": "Registers a project definition and returns the current grid revision.",
+          "RequiredCapability": "MutateDataModel"
+        },
+        {
+          "Name": "DefineChannel",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Name: string, Spec: { Kind: \"Bool\" | \"UInt8\" | \"Int32\" | \"Float32\", Default: boolean | number, Persistent: boolean?, Audience: (\"Server\" | \"RelevantPeers\")?, Indexed: boolean?, OnCopy: (\"Default\" | \"Value\")? }) -> string",
+          "Description": "Declares a typed channel with an implicit shared default.",
+          "RequiredCapability": "MutateDataModel"
+        },
+        {
+          "Name": "ExtractRegion",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Min: Vector3, MaxExclusive: Vector3, Expected: string) -> BlockGrid",
+          "Description": "Transfers up to 4096 cells into a new static sibling and preserves world positions and channel values.",
+          "RequiredCapability": "MutateDataModel"
+        },
+        {
+          "Name": "Fill",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Min: Vector3, MaxExclusive: Vector3, Definition: string, Rotation: { Up: string, Front: string }?) -> string",
+          "Description": "Fills a half-open grid-local box atomically.",
+          "RequiredCapability": "MutateDataModel"
+        },
+        {
+          "Name": "FindActive",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Channel: string, Bounds: { Min: Vector3, MaxExclusive: Vector3 }) -> { Step: (unknown, number) -> { Status: \"More\" | \"Complete\" | \"Found\" | \"Limit\" | \"Unavailable\" | \"Expired\" | \"Cancelled\", Cells: {Vector3}, Revision: string, Match: Vector3? }, Cancel: (unknown) -> () }",
+          "Description": "Traverses nondefault members of an indexed channel.",
+          "RequiredCapability": "ReadDataModel"
+        },
+        {
+          "Name": "FindConnected",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Starts: {Vector3}, Options: {Bounds: { Min: Vector3, MaxExclusive: Vector3 }, Filter: { Definitions: {string}?, Where: { Channel: string, Equals: boolean | number }? }?, Adjacency: (\"Face\" | \"Edge\" | \"Corner\")?, UsePorts: boolean?, StopAt: {string}?, MaxVisited: number?}) -> { Step: (unknown, number) -> { Status: \"More\" | \"Complete\" | \"Found\" | \"Limit\" | \"Unavailable\" | \"Expired\" | \"Cancelled\", Cells: {Vector3}, Revision: string, Match: Vector3? }, Cancel: (unknown) -> () }",
+          "Description": "Starts incremental native traversal of a pinned grid view.",
+          "RequiredCapability": "ReadDataModel"
+        },
+        {
+          "Name": "GetAssemblyState",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid) -> { Mode: \"Static\" | \"Dynamic\", CFrame: CFrame, LinearVelocity: Vector3, AngularVelocity: Vector3, Mass: number, CenterOfMass: Vector3, LocalCenterOfMass: Vector3, LocalInertia: {Vector3} }",
+          "Description": "Reads current native mass, center, inertia columns, pose and velocity.",
+          "RequiredCapability": "ReadDataModel"
+        },
+        {
+          "Name": "GetBlock",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Cell: Vector3) -> { Definition: string, Orientation: { Up: string, Front: string } }?",
+          "Description": "Returns a block or nil for verified air. Unavailable replica cells raise an error.",
+          "RequiredCapability": "ReadDataModel"
+        },
+        {
+          "Name": "GetDefinitionDigest",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Key: string) -> string",
+          "Description": "Returns the canonical SHA-256 digest of a definition.",
+          "RequiredCapability": "ReadDataModel"
+        },
+        {
+          "Name": "GetRevision",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid) -> string",
+          "Description": "Returns an opaque scoped grid revision.",
+          "RequiredCapability": "ReadDataModel"
+        },
+        {
+          "Name": "GetValue",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Cell: Vector3, Channel: string) -> (boolean | number)",
+          "Description": "Reads a typed value from an occupied cell.",
+          "RequiredCapability": "ReadDataModel"
+        },
+        {
+          "Name": "IsRegionAvailable",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Min: Vector3, MaxExclusive: Vector3) -> boolean",
+          "Description": "Reports whether every cell in a half-open local region has installed content, including verified air.",
+          "RequiredCapability": "ReadDataModel"
+        },
+        {
+          "Name": "MergeFrom",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Source: BlockGrid, Expected: string, ExpectedSource: string) -> string",
+          "Description": "Moves an aligned sibling's occupied cells, preserving grid identity and conserving momentum when both are dynamic.",
+          "RequiredCapability": "MutateDataModel"
+        },
+        {
+          "Name": "Raycast",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Origin: Vector3, Direction: Vector3) -> { Cell: Vector3, Block: { Definition: string, Orientation: { Up: string, Front: string } }, Position: Vector3, Normal: Vector3, Revision: string }?",
+          "Description": "Returns the closest exact current cell hit on the world segment.",
+          "RequiredCapability": "ReadDataModel"
+        },
+        {
+          "Name": "ReadPacked",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Min: Vector3, MaxExclusive: Vector3) -> ({ Size: Vector3, Bindings: {[string]: string}, Palette: {{ Definition: string, Orientation: { Up: string, Front: string } }}, Cells: buffer } & { Revision: string })",
+          "Description": "Reads a bounded X-fastest uint16 geometry buffer with pinned definition digests. The buffer excludes channel overrides.",
+          "RequiredCapability": "ReadDataModel"
+        },
+        {
+          "Name": "ReadRegion",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Min: Vector3, MaxExclusive: Vector3, Selector: { Definitions: {string}?, Where: { Channel: string, Equals: boolean | number }? }?) -> { Revision: string, Cells: {{ Position: Vector3, Block: { Definition: string, Orientation: { Up: string, Front: string } } }} }",
+          "Description": "Returns matching occupied cells in Z, Y, X order with X varying fastest.",
+          "RequiredCapability": "ReadDataModel"
+        },
+        {
+          "Name": "RemoveBlock",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Cell: Vector3) -> string",
+          "Description": "Clears one cell.",
+          "RequiredCapability": "MutateDataModel"
+        },
+        {
+          "Name": "ReplaceDefinition",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Key: string, Spec: { Shape: (\"Cube\" | \"Slab\" | \"Wedge\" | \"Stairs\" | \"Mesh\")?, Color: Color3?, Material: string?, Mesh: string?, Collision: (\"Shape\" | \"None\" | \"Asset\")?, CollisionAsset: string?, Queryable: boolean?, Ports: {string}? }, Expected: string) -> string",
+          "Description": "Replaces a registered definition at the expected grid revision.",
+          "RequiredCapability": "MutateDataModel"
+        },
+        {
+          "Name": "SetAssemblyVelocity",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Linear: Vector3, Angular: Vector3, Expected: string) -> string",
+          "Description": "Sets world-space linear and angular velocity on a dynamic construction.",
+          "RequiredCapability": "MutateDataModel"
+        },
+        {
+          "Name": "SetBlock",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Cell: Vector3, Definition: string, Rotation: { Up: string, Front: string }?) -> string",
+          "Description": "Places a built-in or registered definition at an integer cell.",
+          "RequiredCapability": "MutateDataModel"
+        },
+        {
+          "Name": "SetMotionMode",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Mode: \"Static\" | \"Dynamic\", Expected: string) -> string",
+          "Description": "Switches between static construction and a bounded dynamic convex assembly.",
+          "RequiredCapability": "MutateDataModel"
+        },
+        {
+          "Name": "SplitRegion",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Min: Vector3, MaxExclusive: Vector3, Expected: string) -> BlockGrid",
+          "Description": "Splits a moving convex grid into two nonempty moving siblings with inherited rigid-body velocities.",
+          "RequiredCapability": "MutateDataModel"
+        },
+        {
+          "Name": "WorldToCell",
+          "AsLuau": true,
+          "LuauSignature": "(self: BlockGrid, Position: Vector3) -> Vector3",
+          "Description": "Returns the local cell containing the world point.",
+          "RequiredCapability": "ReadDataModel"
+        }
+      ],
+      "Signals": []
     },
     {
       "Name": "Camera",
@@ -739,7 +1037,7 @@
       "Name": "Character",
       "Kind": "Class",
       "Source": "assets/classes/Character.luau",
-      "SourceSha256": "10ab138ee837187498915ed13dd69d9b6cebe75feae5a700ea3fc135d68a5e7f",
+      "SourceSha256": "92e600db580cbbf1d35c685b4f692faba91c05c956cf9057edaefe2f69ff2260",
       "Description": "A movable character semantic root with one authoritative motion-admission boundary.",
       "Extends": "Folder",
       "Abstract": false,
@@ -781,6 +1079,13 @@
         }
       ],
       "Methods": [
+        {
+          "Name": "GetMotionWorld",
+          "Description": "Returns the live collision world of this Character's spatial root for read-only motion previews, or nil when unavailable.",
+          "AsLuau": true,
+          "RequiredCapability": "ReadDataModel",
+          "LuauSignature": "(self: Character) -> WorldRoot?"
+        },
         {
           "Name": "Move",
           "Description": "Requests bounded collision-authoritative world movement and returns the accepted result.",
@@ -3040,7 +3345,7 @@
       "Name": "Player",
       "Kind": "Class",
       "Source": "assets/classes/Player.luau",
-      "SourceSha256": "2e9a68bf8f123300c321f3fef873505972acde44701a8bbfe8e7a112230e0427",
+      "SourceSha256": "f8c22850f518d438d6e019f3155849451ed93727df2f26ae79795d841f68d5dc",
       "Description": "A gameplay player identity whose lifetime is independent from transport connections.",
       "Extends": "Instance",
       "Abstract": false,
@@ -3096,6 +3401,13 @@
         {
           "Name": "RemoveCharacter",
           "Description": "Clears and deterministically destroys the current character."
+        },
+        {
+          "Name": "RequestSpatialTransfer",
+          "Description": "Requests admission for the player's controlled root to a destination WorldRoot. A running server Script owns the resulting status handle.",
+          "AsLuau": true,
+          "RequiredCapability": "MutateDataModel",
+          "LuauSignature": "[=[(self: Player, Destination: WorldRoot, DestinationPose: CFrame, Minimum: Vector3, Maximum: Vector3) -> ({ GetStatus: (self: unknown) -> (\"Pending\" | \"Applied\" | \"CommittedUnconfirmed\" | \"Canceled\" | \"Stale\" | \"Denied\" | \"Busy\" | \"Expired\"), Cancel: (self: unknown) -> (\"Pending\" | \"Applied\" | \"CommittedUnconfirmed\" | \"Canceled\" | \"Stale\" | \"Denied\" | \"Busy\" | \"Expired\") }?, string?)]=]"
         },
         {
           "Name": "ResetCharacter",
@@ -4302,6 +4614,32 @@
       ]
     },
     {
+      "Name": "SpatialRegion",
+      "Kind": "Class",
+      "Source": "assets/classes/SpatialRegion.luau",
+      "SourceSha256": "158fff8a4a3440a36132855476ebdb1b6c4407faaa2f1c8ffb9519793bfc0c61",
+      "Description": "An independent spatial domain. Positions, physics, and inherited world queries are local to this domain.",
+      "Extends": "WorldRoot",
+      "Abstract": false,
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [
+        {
+          "Name": "Terrain",
+          "Description": "The terrain field owned by this spatial domain.",
+          "Type": "t.Instance(\"Terrain\")",
+          "Unmodified": "nullptr",
+          "OverrideRead": "GetTerrain",
+          "Writable": false,
+          "WriteLevel": "Never",
+          "Category": "World",
+          "Editable": false
+        }
+      ],
+      "Methods": [],
+      "Signals": []
+    },
+    {
       "Name": "SpotLight",
       "Kind": "Class",
       "Source": "assets/classes/SpotLight.luau",
@@ -4388,6 +4726,95 @@
           "Description": "Removes a tag through authoritative mutation.",
           "AsLuau": true,
           "LuauSignature": "(self: Tags, instance: Instance, tag: string) -> ()"
+        }
+      ],
+      "Signals": []
+    },
+    {
+      "Name": "Terrain",
+      "Kind": "Class",
+      "Source": "assets/classes/Terrain.luau",
+      "SourceSha256": "1505d14dccc994836f089a6a152b62330a80a3027347881d9e674a9458e07f33",
+      "Description": "The protected volumetric terrain of the Workspace.",
+      "Extends": "Instance",
+      "Abstract": true,
+      "ServicePolicy": "Default",
+      "ImplementationStatus": "Declared; consult native binding, capability checks and tests for behavior",
+      "Properties": [],
+      "Methods": [
+        {
+          "Name": "CancelEdit",
+          "Description": "Requests cancellation of a pending edit ticket before commit.",
+          "AsLuau": true,
+          "RequiredCapability": "MutateDataModel",
+          "LuauSignature": "(self: Terrain, Ticket: string) -> boolean"
+        },
+        {
+          "Name": "ClearRegion",
+          "Description": "Admits the replacement of a bounded lattice region with air.",
+          "AsLuau": true,
+          "RequiredCapability": "MutateDataModel",
+          "LuauSignature": "(self: Terrain, Min: Vector3, MaxExclusive: Vector3) -> string"
+        },
+        {
+          "Name": "FillBall",
+          "Description": "Admits an asynchronous solid sphere brush and returns a ticket.",
+          "AsLuau": true,
+          "RequiredCapability": "MutateDataModel",
+          "LuauSignature": "(self: Terrain, Center: Vector3, Radius: number, Material: number) -> string"
+        },
+        {
+          "Name": "FillBlock",
+          "Description": "Admits an axis-aligned solid box brush and returns a ticket.",
+          "AsLuau": true,
+          "RequiredCapability": "MutateDataModel",
+          "LuauSignature": "(self: Terrain, Center: Vector3, Size: Vector3, Material: number) -> string"
+        },
+        {
+          "Name": "GetEditStatus",
+          "Description": "Returns the pending or terminal receipt of a recent edit ticket.",
+          "AsLuau": true,
+          "LuauSignature": "(self: Terrain, Ticket: string) -> { Status: string, Revision: string?, CollisionReady: boolean }?"
+        },
+        {
+          "Name": "GetGridInfo",
+          "Description": "Returns the sampling configuration and committed field revision of this world.",
+          "AsLuau": true,
+          "LuauSignature": "(self: Terrain) -> { SampleSpacing: number?, Revision: string?, FieldAvailable: boolean, EditingAvailable: boolean, MaximumSampleCoordinate: number, MaximumRegionSamples: number }"
+        },
+        {
+          "Name": "PaintBall",
+          "Description": "Admits an asynchronous material brush and returns a ticket.",
+          "AsLuau": true,
+          "RequiredCapability": "MutateDataModel",
+          "LuauSignature": "(self: Terrain, Center: Vector3, Radius: number, Material: number) -> string"
+        },
+        {
+          "Name": "ReadRegion",
+          "Description": "Reads a bounded half-open region addressed by integer lattice coordinates. Samples are packed in X, Y, Z order with X varying fastest.",
+          "AsLuau": true,
+          "LuauSignature": "(self: Terrain, Min: Vector3, MaxExclusive: Vector3) -> (buffer, string)"
+        },
+        {
+          "Name": "RemoveBall",
+          "Description": "Admits an asynchronous excavation brush and returns a ticket.",
+          "AsLuau": true,
+          "RequiredCapability": "MutateDataModel",
+          "LuauSignature": "(self: Terrain, Center: Vector3, Radius: number) -> string"
+        },
+        {
+          "Name": "SmoothRegion",
+          "Description": "Admits one bounded signed-field smoothing pass at the given strength.",
+          "AsLuau": true,
+          "RequiredCapability": "MutateDataModel",
+          "LuauSignature": "(self: Terrain, Min: Vector3, MaxExclusive: Vector3, Strength: number) -> string"
+        },
+        {
+          "Name": "WriteRegion",
+          "Description": "Admits a bounded lattice region replacement from a packed buffer.",
+          "AsLuau": true,
+          "RequiredCapability": "MutateDataModel",
+          "LuauSignature": "(self: Terrain, Min: Vector3, MaxExclusive: Vector3, Samples: buffer, ExpectedRevision: string?) -> string"
         }
       ],
       "Signals": []
@@ -4916,7 +5343,7 @@
       "Name": "ViewportFrame",
       "Kind": "Class",
       "Source": "assets/classes/ViewportFrame.luau",
-      "SourceSha256": "4114197792eaf2c19c1edfe208016b54236692374be6ad6ec5c1e8e6c90414e4",
+      "SourceSha256": "5ca5d7b7a8e4501a25b42f58c6469178be280c31a35c1a082f65d7a320d10485",
       "Description": "Composes a local 3D presentation scene into a GUI rectangle.",
       "Extends": "GuiObject",
       "Abstract": false,
@@ -4953,6 +5380,17 @@
           "Serializable": true,
           "Replicated": true,
           "Category": "Appearance"
+        },
+        {
+          "Name": "SpatialRegion",
+          "Description": "Live spatial domain shown by this camera. Unset uses this frame's local presentation children.",
+          "Type": "t.Optional(t.Instance(\"SpatialRegion\", true))",
+          "Unmodified": "std::nullopt",
+          "OverrideRead": "GetSpatialRegion",
+          "OverrideWrite": "SetSpatialRegion",
+          "Serializable": false,
+          "Replicated": false,
+          "Category": "Camera"
         }
       ],
       "Methods": [],
@@ -4993,7 +5431,7 @@
       "Name": "Workspace",
       "Kind": "Service",
       "Source": "assets/services/Workspace.luau",
-      "SourceSha256": "84dcb8c984784cbbc9ed31c5b81c129e651e2b9df7d6c49d3dbe3cd814dd02cc",
+      "SourceSha256": "f2ef4501c3c882fb9f599cf2fd181f8b1076522119272efd6b65da202fb8f1b6",
       "Description": "Provides a physical 3D workspace",
       "Extends": "WorldRoot",
       "Abstract": false,
@@ -5008,6 +5446,28 @@
           "WriteLevel": "Never",
           "Category": "Camera",
           "Editable": false
+        },
+        {
+          "Name": "CurrentSpatialRegion",
+          "Description": "SpatialRegion shown by the main camera. Leave unset for the ordinary Workspace.",
+          "Type": "t.Optional(t.Instance(\"SpatialRegion\"))",
+          "Unmodified": "std::nullopt",
+          "OverrideRead": "GetCurrentSpatialRegion",
+          "OverrideWrite": "SetCurrentSpatialRegion",
+          "Serializable": false,
+          "Replicated": false,
+          "Category": "Camera"
+        },
+        {
+          "Name": "Terrain",
+          "Description": "The world-owned terrain object.",
+          "Type": "t.Instance(\"Terrain\")",
+          "Unmodified": "nullptr",
+          "OverrideRead": "GetTerrain",
+          "Writable": false,
+          "WriteLevel": "Never",
+          "Category": "World",
+          "Editable": false
         }
       ],
       "Methods": [],
@@ -5017,7 +5477,7 @@
       "Name": "WorldRoot",
       "Kind": "Class",
       "Source": "assets/classes/WorldRoot.luau",
-      "SourceSha256": "197cba029075ed325a1b142e29f442bcb26b26e4edb3e8eb193aae20e5f9be5c",
+      "SourceSha256": "8e246ff69adc3571b5a9fc55955dbf59cfa7004c616373ff4e329b64989a8383",
       "Description": "Abstract class for a physical 3D world.",
       "Extends": "Instance",
       "Abstract": true,
@@ -5036,13 +5496,13 @@
           "Name": "BoxCast",
           "Description": "Sweeps an oriented box along Direction.",
           "AsLuau": true,
-          "LuauSignature": "(self: WorldRoot, Transform: CFrame, Size: Vector3, Direction: Vector3, Params: RaycastParams?) -> { Instance: BasePart, Position: Vector3, Normal: Vector3, Distance: number }?"
+          "LuauSignature": "(self: WorldRoot, Transform: CFrame, Size: Vector3, Direction: Vector3, Params: RaycastParams?) -> { Instance: BasePart | Terrain | BlockGrid, GridHit: { Cell: Vector3, Block: { Definition: string, Orientation: { Up: string, Front: string } }, Position: Vector3, Normal: Vector3, Revision: string }?, Position: Vector3, Normal: Vector3, Distance: number }?"
         },
         {
           "Name": "CapsuleCast",
           "Description": "Sweeps a capsule along Direction. Height includes both caps; the local axis is Y.",
           "AsLuau": true,
-          "LuauSignature": "(self: WorldRoot, Transform: CFrame, Radius: number, Height: number, Direction: Vector3, Params: RaycastParams?) -> { Instance: BasePart, Position: Vector3, Normal: Vector3, Distance: number }?"
+          "LuauSignature": "(self: WorldRoot, Transform: CFrame, Radius: number, Height: number, Direction: Vector3, Params: RaycastParams?) -> { Instance: BasePart | Terrain | BlockGrid, GridHit: { Cell: Vector3, Block: { Definition: string, Orientation: { Up: string, Front: string } }, Position: Vector3, Normal: Vector3, Revision: string }?, Position: Vector3, Normal: Vector3, Distance: number }?"
         },
         {
           "Name": "GetDeformableInfo",
@@ -5060,19 +5520,19 @@
           "Name": "GetPartsInBox",
           "Description": "Returns overlaps for an oriented box, with bounded immutable results.",
           "AsLuau": true,
-          "LuauSignature": "(self: WorldRoot, Transform: CFrame, Size: Vector3, Params: RaycastParams?, MaxResults: number?) -> { Parts: {BasePart}, Truncated: boolean }"
+          "LuauSignature": "(self: WorldRoot, Transform: CFrame, Size: Vector3, Params: RaycastParams?, MaxResults: number?) -> { Parts: {BasePart}, Truncated: boolean, Terrain: Terrain?, BlockGrids: {BlockGrid}?, GridCells: {{ Grid: BlockGrid, Cell: Vector3, Revision: string }}? }"
         },
         {
           "Name": "GetPartsInCapsule",
           "Description": "Returns overlaps for a local-Y capsule; Height includes both caps.",
           "AsLuau": true,
-          "LuauSignature": "(self: WorldRoot, Transform: CFrame, Radius: number, Height: number, Params: RaycastParams?, MaxResults: number?) -> { Parts: {BasePart}, Truncated: boolean }"
+          "LuauSignature": "(self: WorldRoot, Transform: CFrame, Radius: number, Height: number, Params: RaycastParams?, MaxResults: number?) -> { Parts: {BasePart}, Truncated: boolean, Terrain: Terrain?, BlockGrids: {BlockGrid}?, GridCells: {{ Grid: BlockGrid, Cell: Vector3, Revision: string }}? }"
         },
         {
           "Name": "GetPartsInSphere",
           "Description": "Returns collidable overlapping parts in stable identity order with explicit truncation; MaxResults is 1 through 256.",
           "AsLuau": true,
-          "LuauSignature": "(self: WorldRoot, Origin: Vector3, Radius: number, Params: RaycastParams?, MaxResults: number?) -> { Parts: {BasePart}, Truncated: boolean }"
+          "LuauSignature": "(self: WorldRoot, Origin: Vector3, Radius: number, Params: RaycastParams?, MaxResults: number?) -> { Parts: {BasePart}, Truncated: boolean, Terrain: Terrain?, BlockGrids: {BlockGrid}?, GridCells: {{ Grid: BlockGrid, Cell: Vector3, Revision: string }}? }"
         },
         {
           "Name": "GetSoftBodyStepInfo",
@@ -5090,13 +5550,19 @@
           "Name": "Raycast",
           "Description": "Casts a bounded rigid-physics ray whose Direction magnitude is its maximum distance.",
           "AsLuau": true,
-          "LuauSignature": "(self: WorldRoot, Origin: Vector3, Direction: Vector3, Params: RaycastParams?) -> { Instance: BasePart, Position: Vector3, Normal: Vector3, Distance: number }?"
+          "LuauSignature": "(self: WorldRoot, Origin: Vector3, Direction: Vector3, Params: RaycastParams?) -> { Instance: BasePart | Terrain | BlockGrid, GridHit: { Cell: Vector3, Block: { Definition: string, Orientation: { Up: string, Front: string } }, Position: Vector3, Normal: Vector3, Revision: string }?, Position: Vector3, Normal: Vector3, Distance: number }?"
+        },
+        {
+          "Name": "RequestCollisionArea",
+          "Description": "Holds an observation of applied collision for this world in an authorized running server Script. Each Script execution owns its handles. Seconds defaults to five.",
+          "AsLuau": true,
+          "LuauSignature": "[=[(self: WorldRoot, Minimum: Vector3, Maximum: Vector3, Seconds: number?, Priority: (\"Background\" | \"Normal\" | \"Interactive\")?) -> ({ GetStatus: (self: unknown) -> { Life: \"Active\" | \"Released\" | \"Expired\" | \"Stale\", Collision: \"Pending\" | \"Ready\" | \"Unavailable\", Revision: string }, SetArea: (self: unknown, Minimum: Vector3, Maximum: Vector3) -> boolean, SetPriority: (self: unknown, Priority: \"Background\" | \"Normal\" | \"Interactive\") -> boolean, Renew: (self: unknown, Seconds: number) -> boolean, Release: (self: unknown) -> () }?, string?)]=]"
         },
         {
           "Name": "SphereCast",
           "Description": "Sweeps a sphere; Direction magnitude is distance. Initial overlaps are ignored.",
           "AsLuau": true,
-          "LuauSignature": "(self: WorldRoot, Origin: Vector3, Radius: number, Direction: Vector3, Params: RaycastParams?) -> { Instance: BasePart, Position: Vector3, Normal: Vector3, Distance: number }?"
+          "LuauSignature": "(self: WorldRoot, Origin: Vector3, Radius: number, Direction: Vector3, Params: RaycastParams?) -> { Instance: BasePart | Terrain | BlockGrid, GridHit: { Cell: Vector3, Block: { Definition: string, Orientation: { Up: string, Front: string } }, Position: Vector3, Normal: Vector3, Revision: string }?, Position: Vector3, Normal: Vector3, Distance: number }?"
         }
       ],
       "Signals": []
@@ -5268,6 +5734,134 @@
       ]
     },
     {
+      "Path": "include/gargantuan/blockgrid/Assembly.hpp",
+      "Types": [
+        "AssemblyProjection",
+        "Instance",
+        "WorldRoot"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/blockgrid/AssetAudience.hpp",
+      "Types": [
+        "Field"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/blockgrid/Assets.hpp",
+      "Types": [
+        "AssetService",
+        "ResolvedBlockAssets"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/blockgrid/Edit.hpp",
+      "Types": [
+        "BindingDelta",
+        "BindingEdit",
+        "CellDelta",
+        "EditRequest",
+        "GridTransferEdit",
+        "MotionEdit",
+        "Patch"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/blockgrid/Field.hpp",
+      "Types": [
+        "Block",
+        "Candidate",
+        "Catalog",
+        "Cell",
+        "CellOrder",
+        "CellState",
+        "ChannelData",
+        "ChannelKind",
+        "ChannelSpec",
+        "ChannelState",
+        "DataProfile",
+        "Entry",
+        "Field",
+        "Leaf",
+        "Link",
+        "LinkOrder",
+        "PackedStateWrite",
+        "PackedWrite",
+        "Region",
+        "ReplicaCoverage",
+        "ReplicaPageRange",
+        "ReplicaPages",
+        "StateChange",
+        "Transfer",
+        "ValueWrite",
+        "Write"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/blockgrid/Geometry.hpp",
+      "Types": [
+        "AssetBinding",
+        "Definition",
+        "Face",
+        "Geometry",
+        "Piece",
+        "PieceKind",
+        "ResolvedBlockAssets",
+        "ResourcePin",
+        "Shape"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/blockgrid/Momentum.hpp",
+      "Types": [
+        "RigidMass",
+        "RigidVelocity"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/blockgrid/Persistence.hpp",
+      "Types": [
+        "Segment",
+        "SegmentCapture",
+        "SegmentManifest",
+        "SegmentRequirements"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/blockgrid/Picking.hpp",
+      "Types": [
+        "CellHit"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/blockgrid/RuntimeHandles.hpp",
+      "Types": [
+        "Handle",
+        "HandleSet"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/blockgrid/Transfer.hpp",
+      "Types": [
+        "GridLattice",
+        "TransferFields",
+        "TransferMotion"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/blockgrid/Traversal.hpp",
+      "Types": [
+        "Adjacency",
+        "Filter",
+        "Offset",
+        "Page",
+        "PageStatus",
+        "Traversal",
+        "TraversalOptions",
+        "ValueTest"
+      ]
+    },
+    {
       "Path": "include/gargantuan/classes/Animator.hpp",
       "Types": [
         "AnimationRuntime",
@@ -5295,6 +5889,15 @@
       ]
     },
     {
+      "Path": "include/gargantuan/classes/BlockGrid.hpp",
+      "Types": [
+        "AssetService",
+        "BlockGrid",
+        "BlockGridTransferStamp",
+        "MutationGateway"
+      ]
+    },
+    {
       "Path": "include/gargantuan/classes/Camera.hpp",
       "Types": [
         "Camera"
@@ -5307,6 +5910,8 @@
         "CharacterMotionRequest",
         "CharacterMotionResult",
         "CharacterMotionSource",
+        "SpatialTransferAdapters",
+        "SpatialTransferFrame",
         "WorldRoot"
       ]
     },
@@ -5327,7 +5932,10 @@
       "Types": [
         "AssetService",
         "DataModel",
-        "ScopedAuthoritativeRevisionDeferral"
+        "DefaultNetworkSpatialProfile",
+        "PackageBuilder",
+        "ScopedAuthoritativeRevisionDeferral",
+        "SpatialRegion"
       ]
     },
     {
@@ -5429,7 +6037,8 @@
       "Types": [
         "DataModel",
         "Instance",
-        "StackValue"
+        "StackValue",
+        "WorldRoot"
       ]
     },
     {
@@ -5559,7 +6168,9 @@
     {
       "Path": "include/gargantuan/classes/Script.hpp",
       "Types": [
+        "GameplayResumeBudget",
         "Script",
+        "ScriptSecurityContext",
         "ScriptStatus"
       ]
     },
@@ -5602,9 +6213,24 @@
       ]
     },
     {
+      "Path": "include/gargantuan/classes/SpatialRegion.hpp",
+      "Types": [
+        "SpatialRegion"
+      ]
+    },
+    {
       "Path": "include/gargantuan/classes/SpotLight.hpp",
       "Types": [
         "SpotLight"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/classes/Terrain.hpp",
+      "Types": [
+        "Field",
+        "Terrain",
+        "Workspace",
+        "WorldRoot"
       ]
     },
     {
@@ -5669,12 +6295,29 @@
       "Path": "include/gargantuan/classes/WorldRoot.hpp",
       "Types": [
         "AssetService",
+        "BlockGrid",
+        "BlockGridParticipant",
+        "BlockGridWorldState",
         "CFrameDirtyCallbackProfile",
+        "ChunkPublicationCandidate",
         "DynamicReadbackPolicy",
         "DynamicReadbackRecord",
+        "EditStatus",
+        "Field",
+        "GameSession",
+        "GridCell",
         "LocalLight",
         "OverlapResult",
+        "PhysicsStage",
         "ReflectionProbe",
+        "RenderCameraInput",
+        "RenderState",
+        "Terrain",
+        "TerrainMaterialPalette",
+        "TerrainMutation",
+        "TerrainRuntime",
+        "TerrainTicketInfo",
+        "TerrainTickets",
         "WorldRaycastResult",
         "WorldRoot",
         "WorldRootTestAccess"
@@ -5851,10 +6494,15 @@
       "Path": "include/gargantuan/editor/EditorHost.hpp",
       "Types": [
         "AnimationPreviewJob",
+        "EditViewportSource",
         "EditorHost",
+        "EditorNodeDevelopmentPersistence",
+        "GridClipboardState",
         "GuiPreviewState",
         "PackageJob",
+        "PresentedEditFrame",
         "SemanticSpatialResolver",
+        "TerrainAuthoringState",
         "Workspace"
       ]
     },
@@ -5866,7 +6514,8 @@
         "EditorViewportFrame",
         "EditorViewportPick",
         "EditorViewportRenderer",
-        "SDLRendererMetrics"
+        "SDLRendererMetrics",
+        "WorldRoot"
       ]
     },
     {
@@ -5881,11 +6530,20 @@
     {
       "Path": "include/gargantuan/editor/PlaySession.hpp",
       "Types": [
+        "DevelopmentTimeline",
+        "ExecutionProfile",
         "IPersistenceProvider",
+        "Phase",
         "PlayDiagnostic",
+        "PlayExecutionDiagnostics",
+        "PlayRootDebugPause",
+        "PlayScriptBinding",
+        "PlayScriptFailureLocation",
+        "PlayScriptSources",
         "PlaySession",
         "PlaySessionId",
-        "PlaySessionState"
+        "PlaySessionState",
+        "PlayStreamingDiagnostics"
       ]
     },
     {
@@ -5946,7 +6604,9 @@
     {
       "Path": "include/gargantuan/filesystem/Project.hpp",
       "Types": [
+        "DurableTerrainState",
         "PersistenceSnapshot",
+        "PreparedGame",
         "Project"
       ]
     },
@@ -6041,7 +6701,9 @@
         "Instance",
         "LuaSourceContainer",
         "Player",
-        "PlayerGui"
+        "PlayerGui",
+        "ScreenGui",
+        "StarterGuiTemplate"
       ]
     },
     {
@@ -6093,6 +6755,19 @@
       "Types": [
         "GameBinaryReader",
         "GameBinaryWriter"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/network/BlockGridStream.hpp",
+      "Types": [
+        "GridReplicaContent",
+        "GridReuseRange",
+        "GridStreamKind",
+        "GridStreamMessage",
+        "GridStreamReceiver",
+        "GridStreamScope",
+        "GridTransferFence",
+        "Result"
       ]
     },
     {
@@ -6167,7 +6842,8 @@
         "GameSessionTestAccess",
         "Implementation",
         "LuaSourceContainer",
-        "Player"
+        "Player",
+        "TerrainSessionData"
       ]
     },
     {
@@ -6365,7 +7041,8 @@
         "PeerRelevanceSelection",
         "ReplicationRelevance",
         "ReplicationRelevanceConfiguration",
-        "ReplicationRelevanceMetrics"
+        "ReplicationRelevanceMetrics",
+        "SpatialStagingGrant"
       ]
     },
     {
@@ -6415,9 +7092,50 @@
       ]
     },
     {
+      "Path": "include/gargantuan/network/SpatialTransfer.hpp",
+      "Types": [
+        "BasePart",
+        "SpatialAppliedBinding",
+        "SpatialTransferAdapters",
+        "SpatialTransferFrame",
+        "SpatialTransferPhase",
+        "SpatialTransferReplica",
+        "SpatialTransferReservations",
+        "SpatialTransferScope",
+        "SpatialTransferServer",
+        "SpatialTransferStatus",
+        "SpatialTransferStep",
+        "SpatialWireProvider",
+        "State",
+        "Table",
+        "WorldRoot"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/network/SpatialTransferProtection.hpp",
+      "Types": [
+        "DataModel",
+        "Instance",
+        "Player",
+        "SpatialTransferProtection",
+        "SpatialTransferTicket"
+      ]
+    },
+    {
       "Path": "include/gargantuan/network/Statistics.hpp",
       "Types": [
         "NetworkStatistics"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/network/TerrainSession.hpp",
+      "Types": [
+        "ArtifactRange",
+        "TerrainFragmentView",
+        "TerrainSessionData",
+        "TerrainSessionWindow",
+        "TerrainWindowIdentity",
+        "TerrainWindowOffer"
       ]
     },
     {
@@ -6438,8 +7156,10 @@
       "Types": [
         "ContentUnit",
         "DataModel",
+        "DistributedPlayerCapture",
         "GamePayload",
         "LuaSourceContainer",
+        "PackageAudience",
         "PackageBuildRequest",
         "PackageBuildResult",
         "PackageBuilder",
@@ -6451,10 +7171,45 @@
         "PackageInspection",
         "PackagePhase",
         "PackagePhaseTiming",
+        "PackageRuntimeLoadMode",
         "PackageSizeBreakdown",
         "Project",
+        "RuntimeDistributionAdmission",
+        "RuntimeDistributionCodeCatalog",
         "RuntimePackagePayload",
-        "RuntimeSchemaRegistry"
+        "RuntimeSchemaRegistry",
+        "RuntimeScriptCode"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/packaging/RuntimeDistribution.hpp",
+      "Types": [
+        "BaseFilesystem",
+        "RuntimeDistributionDiagnostics",
+        "RuntimeDistributionError",
+        "RuntimeDistributionKeyAccess",
+        "RuntimeDistributionPlan",
+        "RuntimeDistributionPreset",
+        "RuntimeDistributionRepresentation",
+        "RuntimeDistributionRequest",
+        "RuntimeDistributionScript",
+        "RuntimeDistributionTarget"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/packaging/RuntimePackageCrypto.hpp",
+      "Types": [
+        "IRuntimePackageKeyProvider",
+        "IRuntimePackageSigner",
+        "IRuntimePackageTrustProvider",
+        "RuntimePackageCryptoStatus",
+        "RuntimePackageKeyRequest",
+        "RuntimePackageKeyScope",
+        "RuntimePackagePlaintext",
+        "RuntimePackageProvisionedSecurity",
+        "RuntimePackageProvisioningMode",
+        "RuntimePackageProvisioningUse",
+        "RuntimePackageSecret"
       ]
     },
     {
@@ -6512,6 +7267,12 @@
       ]
     },
     {
+      "Path": "include/gargantuan/physics/PhysicsTriangleMesh.hpp",
+      "Types": [
+        "PhysicsTriangleMesh"
+      ]
+    },
+    {
       "Path": "include/gargantuan/physics/PhysicsTypes.hpp",
       "Types": [
         "PhysicsBodyDesc",
@@ -6525,8 +7286,10 @@
         "PhysicsConstraintKind",
         "PhysicsContactEvent",
         "PhysicsContactPhase",
+        "PhysicsConvexChild",
         "PhysicsKinematicMotionRequest",
         "PhysicsKinematicMotionResult",
+        "PhysicsMassProperties",
         "PhysicsOperationResult",
         "PhysicsOperationStatus",
         "PhysicsQueryFilter",
@@ -6538,7 +7301,6 @@
         "PhysicsShapeKind",
         "PhysicsStepConfig",
         "PhysicsStepResult",
-        "PhysicsTriangleMesh",
         "PhysicsWorldConfig"
       ]
     },
@@ -6617,6 +7379,12 @@
       "Types": []
     },
     {
+      "Path": "include/gargantuan/reflection/PreRunCollection.hpp",
+      "Types": [
+        "PreRunChunk"
+      ]
+    },
+    {
       "Path": "include/gargantuan/reflection/PreRunRegistration.hpp",
       "Types": [
         "PreRunDiagnostic",
@@ -6630,6 +7398,7 @@
     {
       "Path": "include/gargantuan/reflection/RuntimeSchema.hpp",
       "Types": [
+        "ClassNameHash",
         "CustomSubclassPolicy",
         "Instance",
         "RuntimeSchemaRegistry",
@@ -6719,8 +7488,10 @@
         "AssetService",
         "AttachmentMesh",
         "Camera",
+        "DataModel",
         "PublishedAssetMesh",
         "PublishedDeformable",
+        "PublishedGrid",
         "PublishedSky",
         "PublishedTexture",
         "RenderCameraInput",
@@ -6758,6 +7529,7 @@
         "RenderMaterialState",
         "RenderMaterialTextureSlot",
         "RenderMeshCreate",
+        "RenderMeshDomain",
         "RenderMeshIdentity",
         "RenderMeshIdentityHash",
         "RenderMeshRemove",
@@ -6786,6 +7558,7 @@
         "RenderUiVertex",
         "RenderUpdateDomain",
         "RenderVertex",
+        "RenderViewportGeometry",
         "RenderViewportObject",
         "RenderViewportScene",
         "alignas"
@@ -6822,6 +7595,16 @@
       ]
     },
     {
+      "Path": "include/gargantuan/render/SpatialViewportCapture.hpp",
+      "Types": [
+        "AnimationRuntime",
+        "SpatialRegion",
+        "SpatialViewportCapture",
+        "State",
+        "ViewportFrame"
+      ]
+    },
+    {
       "Path": "include/gargantuan/runtime/AttributeValidation.hpp",
       "Types": []
     },
@@ -6830,9 +7613,11 @@
       "Types": [
         "AttributeTransactionChange",
         "AuthoritativeTransactionHistory",
+        "BlockGridTransactionChange",
         "CommittedTransaction",
         "DataModel",
         "ExtensionTransactionChange",
+        "GridTransferHistory",
         "OpenTransaction",
         "PropertyTransactionChange",
         "ReparentTransactionChange",
@@ -6921,6 +7706,7 @@
       "Path": "include/gargantuan/runtime/MutationGateway.hpp",
       "Types": [
         "AddTagCommand",
+        "CancelTerrainEditCommand",
         "CreateObjectCommand",
         "DestroyObjectCommand",
         "DuplicateObjectCommand",
@@ -6936,6 +7722,8 @@
         "RemoveTagCommand",
         "ReparentObjectCommand",
         "RestoreSubtreeCommand",
+        "SubmitBlockGridEditCommand",
+        "SubmitTerrainEditCommand",
         "UpdateAttributeCommand",
         "UpdateExtensionPropertyCommand",
         "UpdatePropertyCommand",
@@ -6988,12 +7776,36 @@
       "Types": [
         "Instance",
         "Snapshot",
+        "SnapshotAudience",
         "SnapshotCustomClassState",
         "SnapshotExtensionState",
         "SnapshotLoadProfile",
         "SnapshotLoadResult",
         "SnapshotObject",
         "SnapshotParseResult"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/runtime/SpatialDestination.hpp",
+      "Types": [
+        "SpatialCollisionProvider",
+        "SpatialDestinationBounds",
+        "SpatialDestinationReceipt",
+        "SpatialInstalledCollider",
+        "SpatialMovementProfile",
+        "SpatialMovementRequest",
+        "SpatialProviderReceipt"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/runtime/SpatialDomainMember.hpp",
+      "Types": [
+        "CFrame",
+        "Instance",
+        "SpatialDomainMember",
+        "SpatialRegion",
+        "State",
+        "WorldRoot"
       ]
     },
     {
@@ -7007,6 +7819,24 @@
         "SpatialRegionQueryScratch",
         "SpatialRegionQueryVolume",
         "SpatialRegionStatus"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/runtime/SpatialResidency.hpp",
+      "Types": [
+        "SpatialCollisionCondition",
+        "SpatialCollisionLease",
+        "SpatialCollisionQueue",
+        "SpatialCollisionSnapshot",
+        "SpatialCollisionWork",
+        "SpatialDemandPriority",
+        "SpatialDemandStatistics",
+        "SpatialLeaseLife",
+        "SpatialRequestFailure",
+        "SpatialResidencyAudience",
+        "State",
+        "WorldRoot",
+        "lua_State"
       ]
     },
     {
@@ -7069,7 +7899,9 @@
     },
     {
       "Path": "include/gargantuan/scripting/ExecutionBudget.hpp",
-      "Types": []
+      "Types": [
+        "GameplayResumeBudget"
+      ]
     },
     {
       "Path": "include/gargantuan/scripting/ModuleResolution.hpp",
@@ -7083,12 +7915,28 @@
       "Types": []
     },
     {
+      "Path": "include/gargantuan/scripting/RootScriptDebug.hpp",
+      "Types": [
+        "RootScriptDebugTurn"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/scripting/RuntimeScriptCode.hpp",
+      "Types": [
+        "LuaSourceContainer",
+        "RuntimeScriptCode",
+        "RuntimeScriptCompilation",
+        "RuntimeScriptDiagnostics"
+      ]
+    },
+    {
       "Path": "include/gargantuan/scripting/ScriptEngine.hpp",
       "Types": [
         "IPersistenceProvider",
         "ModuleScript",
         "PersistenceRuntime",
         "RemoteFunction",
+        "RootDebugState",
         "Script",
         "ScriptEngine",
         "SignalConnection",
@@ -7319,7 +8167,99 @@
     {
       "Path": "include/gargantuan/services/Workspace.hpp",
       "Types": [
+        "ServiceProvider",
+        "Terrain",
         "Workspace"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/terrain/ActiveChunkRegistry.hpp",
+      "Types": [
+        "ActiveChunkRegistry",
+        "ChunkWorkTicket",
+        "KeyHash"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/terrain/ChunkCodec.hpp",
+      "Types": [
+        "ChunkCodecError",
+        "DecodedChunk"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/terrain/DomainTerrainBindings.hpp",
+      "Types": []
+    },
+    {
+      "Path": "include/gargantuan/terrain/Field.hpp",
+      "Types": [
+        "BoxBrush",
+        "BrickStorageMode",
+        "BrushMode",
+        "ChangedChunk",
+        "ChunkInfo",
+        "ChunkVersion",
+        "CommitResult",
+        "CommittedFieldCapture",
+        "Entry",
+        "Field",
+        "FieldError",
+        "FieldLimits",
+        "FieldStats",
+        "Page",
+        "PreparedEdit",
+        "SampleWrite",
+        "Snapshot",
+        "SnapshotLease",
+        "SphereBrush"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/terrain/Manifest.hpp",
+      "Types": [
+        "TerrainArtifactDigest",
+        "TerrainChunkRef",
+        "TerrainDatasetId",
+        "TerrainManifest",
+        "TerrainManifestError"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/terrain/Persistence.hpp",
+      "Types": [
+        "TerrainArtifact",
+        "TerrainArtifactId",
+        "TerrainArtifactPurpose",
+        "TerrainCapture",
+        "TerrainCaptureIndex",
+        "TerrainCapturedChunk",
+        "TerrainPersistenceError",
+        "TerrainPersistenceLimits"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/terrain/Surface.hpp",
+      "Types": [
+        "CollisionSurfaceMesh",
+        "CollisionSurfacePolicy",
+        "SurfaceInput",
+        "SurfaceLimits",
+        "SurfaceMesh",
+        "SurfacePoint",
+        "SurfaceStatus",
+        "SurfaceVertex"
+      ]
+    },
+    {
+      "Path": "include/gargantuan/terrain/Types.hpp",
+      "Types": [
+        "ChunkKey",
+        "GridSpec",
+        "Sample",
+        "SampleBox",
+        "SamplePoint",
+        "WorldPoint"
       ]
     }
   ]

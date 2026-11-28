@@ -647,6 +647,15 @@ namespace gargantuan {
 		if (State != RuntimeSchemaRegistryState::Validated)
 			throw std::logic_error("Runtime schema registry cannot freeze while " +
 				std::string(GetRuntimeSchemaRegistryStateName(State)));
+		ShortClassIndex Names;
+		Names.reserve(ClassIdsByType.size());
+		for (const auto &[Id, Definition] : DefinitionsById) {
+			const auto *Class = std::get_if<SchemaClassDefinition>(&Definition);
+			if (!Class) continue;
+			const auto [Position, Inserted] = Names.try_emplace(Class->ClassName, Id);
+			if (!Inserted) Position->second = {}; // Multiple qualified classes share this short name.
+		}
+		ClassIdsByShortName.swap(Names);
 		State = RuntimeSchemaRegistryState::Frozen;
 	}
 
@@ -688,14 +697,8 @@ namespace gargantuan {
 			auto id = IdsByCanonicalName.find(std::string(name));
 			return id == IdsByCanonicalName.end() ? nullptr : FindClassById(id->second);
 		}
-		const SchemaClassDefinition *match = nullptr;
-		for (const auto &[id, definition] : DefinitionsById) {
-			const auto *typed = std::get_if<SchemaClassDefinition>(&definition);
-			if (!typed || typed->ClassName != name) continue;
-			if (match) return nullptr;
-			match = typed;
-		}
-		return match;
+		const auto Match = ClassIdsByShortName.find(name);
+		return Match != ClassIdsByShortName.end() && Match->second.IsValid() ? FindClassById(Match->second) : nullptr;
 	}
 
 	const SchemaEnumDefinition *RuntimeSchemaRegistry::FindEnumById(SchemaId id) const {

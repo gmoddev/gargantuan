@@ -16,6 +16,8 @@ The wire form is 32 lowercase hexadecimal characters and zero is invalid.
 
 Classes retain inheritance and reflected property/method metadata. A custom
 class inherits native method capability requirements through that metadata.
+
+Each frozen registry indexes unqualified class names for reflection and `IsA`. A short name identifies a class only if exactly one registered class uses that name across namespaces. Enums and extensions do not participate in class-name ambiguity. Fully qualified names identify each class independently. A replacement registry builds its own index before publication.
 Generated native methods may require a script capability: the inherited
 `Instance:Destroy()` and `Instance:ClearAllChildren()` methods require
 `MutateDataModel` at Luau dispatch, including on derived classes.

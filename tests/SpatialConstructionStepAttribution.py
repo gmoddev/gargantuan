@@ -75,6 +75,7 @@ def Inspect(PathValue, Native):
                 R["SwitchedTick"]=int(R["ContextSwitches"]>0)
                 R["MainWaitReported"]=int(int(Source["WaitReasons"])!=0)
                 R["LuauNetBytes"]=R["LuauHeapAfterBytes"]-R["LuauHeapBeforeBytes"]
+                R["ClassLookupNs"]=R["ShortClassLookupNs"]+R["QualifiedClassLookupNs"]
                 # The prescribed ordinary scene issues exactly one script Move and its
                 # sole nested admission/world-query call. Reject a different call topology.
                 if not (R["ScriptCharacterMoveCalls"]==R["CharacterAdmitMotionCalls"]==R["KinematicResolveCalls"]==1):

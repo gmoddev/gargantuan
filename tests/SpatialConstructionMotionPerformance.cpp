@@ -9,11 +9,14 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "../src/runtime/RuntimeWorkDiagnostics.hpp"
+#include <box3d/box3d.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <iostream>
+#include <map>
 #include <nlohmann/json.hpp>
 #include <vector>
 
@@ -155,10 +158,12 @@ namespace {
 		Result["DestroyTreeUs"] = TimeUs([&] { Game->Destroy(); });
 		return Result;
 	}
+#include "SpatialConstructionCompoundScale.inl"
 }
-int main() try {
+int main(int Argc, char** Argv) try {
 	gargantuan::BootstrapNativeRuntimeSchema();
 	gargantuan::ScriptSecurityScope Authority(gargantuan::ScriptSecurityContext::CoreTrusted());
+	if (Argc > 1) return RunCompoundScale(Argc, Argv);
 	for (unsigned Trial = 1; Trial <= 9; ++Trial)
 		for (unsigned Count : {2u, 8u, 32u})
 			for (bool Grid : {Trial % 2 != 0, Trial % 2 == 0})

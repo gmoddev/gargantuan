@@ -189,6 +189,52 @@ def Value(Expression: str) -> object:
     return re.sub(r"\s+", " ", Expression).strip()
 
 
+def SignatureText(Expression: str, Constants: dict[str, str]) -> str:
+    """Read strings, references and concatenation in declarative type signatures."""
+    Parts = []
+    Token = r"""\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[A-Za-z_]\w*)\s*"""
+    while True:
+        Match = re.match(Token, Expression)
+        if not Match:
+            raise ValueError(f"Unsupported signature expression: {Expression}")
+        Word = Match[1]
+        if Word.startswith("'") and "\\" not in Word:
+            Parts.append(Word[1:-1])
+        elif Word.startswith('"'):
+            Parts.append(json.loads(Word))
+        elif Word in Constants:
+            Parts.append(Constants[Word])
+        else:
+            raise ValueError(f"Unsupported signature token: {Word}")
+        Expression = Expression[Match.end():]
+        if not Expression:
+            return "".join(Parts)
+        if not Expression.startswith(".."):
+            raise ValueError(f"Expected Luau concatenation: {Expression}")
+        Expression = Expression[2:]
+
+
+def MethodFields(Body: str, Helper: dict[str, str], Constants: dict[str, str]) -> dict[str, str]:
+    if Body.startswith("{"):
+        return Fields(Body)
+    if not Helper or not Body.startswith("Native(") or not Body.endswith(")"):
+        raise ValueError(f"Unsupported method declaration: {Body[:100]}")
+    Args = SplitExpressions(Body[7:-1])
+    if len(Args) not in (2, 3) or (len(Args) == 3 and Args[2] not in ("true", "false")):
+        raise ValueError(f"Unsupported Native arguments: {Body[:100]}")
+    Values = {"Signature": json.dumps(SignatureText(Args[0], Constants)), "Description": Args[1]}
+    Result = {}
+    for Key, Expression in Helper.items():
+        Choice = re.fullmatch(r'if Edit then ("[^"]*") else ("[^"]*")', Expression)
+        if Choice:
+            Result[Key] = Choice[1] if len(Args) == 3 and Args[2] == "true" else Choice[2]
+        elif Expression in Values or Expression in {"true", "false"}:
+            Result[Key] = Values.get(Expression, Expression)
+        else:
+            raise ValueError(f"Unsupported Native helper field: {Expression}")
+    return Result
+
+
 def ExtractApi() -> dict:
     Classes = []
     for Folder in (Root / "assets/classes", Root / "assets/services"):
@@ -200,6 +246,11 @@ def ExtractApi() -> dict:
             if not Match:
                 raise ValueError(f"Unsupported class declaration format: {Path}")
             Definition = Fields(Match[1])
+            Constants = {}
+            for Name, Expression in re.findall(r"""(?m)^const (\w+) = (['"].*)$""", Text[:Match.start()]):
+                Constants[Name] = SignatureText(Expression, Constants)
+            Function = re.search(r"const function Native\(Signature: string, Description: string, Edit: boolean\?\)\s*return (\{[^\n]*\})\s*end", Text)
+            Helper = Fields(Function[1]) if Function else {}
             Record = {"Name": Value(Definition["name"]), "Kind": "Service" if Folder.name == "services" else "Class",
                       "Source": Path.relative_to(Root).as_posix(), "SourceSha256": SourceHash(Path),
                       "Description": Value(Definition.get("description", '""')),
@@ -211,7 +262,8 @@ def ExtractApi() -> dict:
                 Members = []
                 for Name, Body in Fields(Definition.get(Section, "{}")).items():
                     Entry = {"Name": Name}
-                    for Key, Expression in Fields(Body).items():
+                    Member = MethodFields(Body, Helper, Constants) if Section == "methods" else Fields(Body)
+                    for Key, Expression in Member.items():
                         Entry[Key[0].upper() + Key[1:]] = Value(Expression)
                     Members.append(Entry)
                 Record[Section.capitalize()] = sorted(Members, key=lambda Item: Item["Name"])

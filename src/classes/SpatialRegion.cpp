@@ -2,6 +2,7 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/BlockGrid.hpp"
 #include "gargantuan/classes/ViewportFrame.hpp"
+#include "gargantuan/datatypes/Signal.hpp"
 
 namespace gargantuan {
 	SpatialRegion::SpatialRegion() {
@@ -32,6 +33,8 @@ namespace gargantuan {
 		const auto Previous = RegisteredWorld.lock();
 		const auto Current = FindAttachedWorld(*this);
 		if (Previous == Current) return;
+		// A retirement observer may reattach this same chart immediately.
+		ScopedSignalDeferral Signals;
 		if (Previous) {
 			Previous->SpatialRegions.erase(GetObjectId());
 			if (SpatialActivation) ++SpatialActivation;
@@ -48,5 +51,6 @@ namespace gargantuan {
 			);
 		}
 		RegisteredWorld = Current;
+		Signals.Commit();
 	}
 }

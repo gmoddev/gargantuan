@@ -22,6 +22,13 @@ namespace gargantuan {
 		[[nodiscard]] std::shared_ptr<WorldRoot> ResolveAssignedWorld(const Instance &Root) const;
 		[[nodiscard]] static const Instance *GetAssignmentRoot(const Instance &Value);
 
+	  protected:
+		[[nodiscard]] bool ResolveExplicitSpatialWorld(const Instance &Owner, std::shared_ptr<WorldRoot> &World) const {
+			if (!Binding) return false;
+			World = ResolveAssignedWorld(Owner);
+			return true;
+		}
+
 	  private:
 		friend class WorldRoot;
 		void ChangeAssignedRegion(Instance &Root, std::optional<std::shared_ptr<SpatialRegion>> Value,

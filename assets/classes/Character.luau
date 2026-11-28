@@ -40,6 +40,12 @@ return c({
 	},
 
 	methods = {
+		GetMotionWorld = {
+			description = "Returns the live collision world of this Character's spatial root for read-only motion previews, or nil when unavailable.",
+			asLuau = true,
+			requiredCapability = "ReadDataModel",
+			luauSignature = "(self: Character) -> WorldRoot?",
+		},
 		Move = {
 			description = "Requests bounded collision-authoritative world movement and returns the accepted result.",
 			asLuau = true,

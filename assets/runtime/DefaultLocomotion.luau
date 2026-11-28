@@ -73,13 +73,14 @@ return function(LocalPlayer, ActionMap, Workspace, RunService)
 		-- sole transform owner and the native primitive remains game-neutral.
 		local DesiredHorizontal = Vector3.new(Translation.X, 0, Translation.Z)
 		local AppliedHorizontal = Vector3.new(Motion.AppliedTranslation.X, 0, Motion.AppliedTranslation.Z)
-		if WasGrounded
+		local StepWorld = WasGrounded
 			and DesiredHorizontal.Magnitude > 0
 			and Motion.Collided
 			and AppliedHorizontal.Magnitude + 0.01 < DesiredHorizontal.Magnitude
-		then
+			and Character:GetMotionWorld()
+		if StepWorld then
 			local StepOrigin = Character.Position
-			local StepUp = Workspace:MoveKinematicCapsule(
+			local StepUp = StepWorld:MoveKinematicCapsule(
 				StepOrigin,
 				Character.CapsuleRadius,
 				Character.CapsuleHeight,
@@ -88,14 +89,14 @@ return function(LocalPlayer, ActionMap, Workspace, RunService)
 			)
 			if StepUp.AppliedTranslation.Y >= StepHeight * 0.8 then
 				local StepTranslation = DesiredHorizontal + DesiredHorizontal.Unit * StepForwardInset
-				local StepForward = Workspace:MoveKinematicCapsule(
+				local StepForward = StepWorld:MoveKinematicCapsule(
 					StepUp.Position,
 					Character.CapsuleRadius,
 					Character.CapsuleHeight,
 					StepTranslation,
 					Velocity
 				)
-				local StepDown = Workspace:MoveKinematicCapsule(
+				local StepDown = StepWorld:MoveKinematicCapsule(
 					StepForward.Position,
 					Character.CapsuleRadius,
 					Character.CapsuleHeight,

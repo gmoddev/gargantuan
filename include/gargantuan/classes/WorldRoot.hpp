@@ -208,6 +208,9 @@ namespace gargantuan {
 		[[nodiscard]] bool IsTerrainCollisionReady() const noexcept { return HasTerrainRuntime(); }
 
 	  private:
+		[[nodiscard]] static bool FindEffectiveWorld(
+			const Instance &Member, std::shared_ptr<WorldRoot> &World, const Instance *RequiredAncestor = nullptr);
+		[[nodiscard]] bool ResolveLocalSpatialWorld(std::shared_ptr<WorldRoot> &World) const override;
 		friend class Engine;
 		friend class BlockGrid;
 		friend class PreparedGridTransfer;

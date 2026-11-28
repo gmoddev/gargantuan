@@ -355,6 +355,16 @@ namespace {
 		});
 		auto AtlasPatch = std::make_shared<const std::vector<std::uint8_t>>(std::vector<std::uint8_t>(2 * 2 * 4, 127));
 		Delta.TextureUpdates.push_back({{7, 1}, 2, 1, 1, 2, 2, AtlasPatch});
+		auto ConflictingMesh = Delta;
+		ConflictingMesh.MeshRemoves.push_back({{1, 1}});
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(ConflictingMesh); },
+			"one publication cannot update and retire the same mesh");
+		auto ConflictingTexture = Delta;
+		ConflictingTexture.TextureRemoves.push_back({{7, 1}});
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(ConflictingTexture); },
+			"one publication cannot update and retire the same texture");
+		Check(Projection.GetLastPublicationId() == 2 && Projection.GetMeshCount() == 1 && Projection.GetTextureCount() == 1,
+			"conflicting resource operations preserve the last accepted projection");
 		RenderUiBatch Batch;
 		Batch.Texture = RenderTextureIdentity{7, 1};
 		Batch.Clip = RenderUiClipRect{0.0f, 0.0f, 100.0f, 50.0f};

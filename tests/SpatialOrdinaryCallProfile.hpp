@@ -10,10 +10,14 @@
 
 namespace gargantuan::ordinary_benchmark {
 	enum class Function { ShortClassLookup, QualifiedClassLookup, ScriptCharacterMove, CharacterAdmitMotion,
-		CharacterCommit, CharacterRootSync, PendingImpulses, DynamicReadback, KinematicResolve, EffectiveWorld, Count };
+		CharacterCommit, CharacterRootSync, PendingImpulses, DynamicReadback, KinematicResolve, EffectiveWorld,
+		Publish, ProjectionApply, CameraBuild, VisualAssetRead, DirtyCapture, DirtyExpansion, FinalExtraction,
+		PublicationBuild, PublisherReconcile, ProjectionValidation, ProjectionMutation, Count };
 	inline constexpr std::array FunctionNames{"ShortClassLookup","QualifiedClassLookup","ScriptCharacterMove",
 		"CharacterAdmitMotion","CharacterCommit","CharacterRootSync","PendingImpulses","DynamicReadback",
-		"KinematicResolve","EffectiveWorld"};
+		"KinematicResolve","EffectiveWorld","Publish","ProjectionApply","CameraBuild","VisualAssetRead","DirtyCapture",
+		"DirtyExpansion","FinalExtraction","PublicationBuild","PublisherReconcile","ProjectionValidation","ProjectionMutation"};
+	static_assert(FunctionNames.size() == static_cast<std::size_t>(Function::Count));
 	struct FunctionValue { std::uint64_t Calls=0,Nanoseconds=0,Allocations=0,Bytes=0; };
 	struct MotionSample {
 		std::uint32_t Calls=0,NegativeVelocity=0,HasFloor=0,Collided=0;
@@ -22,6 +26,12 @@ namespace gargantuan::ordinary_benchmark {
 	using Functions=std::array<FunctionValue,static_cast<std::size_t>(Function::Count)>;
 	inline thread_local Functions *ActiveFunctions=nullptr;
 	inline thread_local MotionSample *ActiveMotion=nullptr;
+	inline void RecordPhase(Function Id, std::uint64_t Nanoseconds) {
+		if (!ActiveFunctions) return;
+		auto &Value = (*ActiveFunctions)[static_cast<std::size_t>(Id)];
+		++Value.Calls;
+		Value.Nanoseconds += Nanoseconds;
+	}
 	inline void RecordMotion(float RequestedY,float InputY,float OutputY,float AppliedY,float PositionY,bool Floor,bool Collided) {
 		if (!ActiveMotion) return;
 		++ActiveMotion->Calls;

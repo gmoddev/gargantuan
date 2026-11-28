@@ -8,6 +8,6 @@ namespace gargantuan::Paths {
 		if (!baseDirectory) {
 			return std::filesystem::current_path();
 		};
-		return baseDirectory;
+		return std::filesystem::u8path(baseDirectory);
 	}
 }

@@ -4,6 +4,7 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/SpatialRegion.hpp"
 #include "gargantuan/classes/ViewportFrame.hpp"
+#include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
 
 #include <stdexcept>
@@ -53,10 +54,14 @@ namespace gargantuan {
 		const auto Before = Binding->Active.lock();
 		const auto After = ResolveAssignedWorld(*Root);
 		if (Before == After) return;
+		// Retiring a provider can notify its owner. Let a callback change the assignment
+		// after both native registries agree with the binding it will observe.
+		ScopedSignalDeferral Signals;
 		WorldRoot::MoveSpatialMembers(Root, Before, After);
 		if (Before) Before->ExplicitSpatialRoots.erase(Root->GetObjectId());
 		if (After) After->ExplicitSpatialRoots.insert_or_assign(Root->GetObjectId(), Root);
 		Binding->Active = After;
+		Signals.Commit();
 	}
 
 	void SpatialDomainMember::SetAssignedRegion(Instance &Owner, std::optional<std::shared_ptr<SpatialRegion>> Value) {

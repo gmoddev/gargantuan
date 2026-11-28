@@ -1848,6 +1848,23 @@ namespace gargantuan {
 			auto HasRevisionConflict = [&] {
 				return ExpectedRevision && World && World->GetAuthoritativeRevision() != *ExpectedRevision;
 			};
+			const auto CheckPresentedFrame = [&](const Json &Identity, const WorldRoot &ViewWorld) -> std::optional<std::string> {
+				if (!Identity.contains("Mailbox") || !Identity["Mailbox"].is_string() ||
+					!Identity.contains("FrameNumber") || !Identity["FrameNumber"].is_number_unsigned() ||
+					!Identity.contains("Generation") || !Identity["Generation"].is_number_unsigned() ||
+					!Identity.contains("CameraRevision") || !Identity["CameraRevision"].is_number_unsigned())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Presented frame identity is required"));
+				const auto Sequence = Identity["FrameNumber"].get<std::uint64_t>();
+				const auto &Frame = PresentedEditFrames[Sequence % PresentedEditFrames.size()];
+				if (!ViewportPresentationActive || !ViewportLatestFrameMailbox ||
+					Identity["Mailbox"] != ViewportLatestFrameMailbox->GetName() ||
+					Sequence == 0 || Frame.Sequence != Sequence || Frame.Generation != ViewportGeneration ||
+					Identity["Generation"] != Frame.Generation || Frame.CameraRevision != ViewportCameraRevision ||
+					Identity["CameraRevision"] != Frame.CameraRevision || Frame.Source.WorldRevision != World->GetAuthoritativeRevision() ||
+					Frame.Source.Domain != ViewWorld.GetObjectId() || Frame.Source.Activation != ViewWorld.GetSpatialActivation())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleFrame", "The displayed frame is no longer current"));
+				return std::nullopt;
+			};
 			const bool viewportMethod = method == "OpenViewportTransport" || method == "CloseViewportTransport" ||
 				method == "ConfigureViewport" || method == "SetViewportCamera" ||
 				method == "StartViewportPresentation" || method == "StopViewportPresentation" ||
@@ -1918,6 +1935,7 @@ namespace gargantuan {
 				if (LatestFrameMailbox::IsSupported()) {
 					capabilities.push_back("SharedMemoryViewportV2");
 					capabilities.push_back("PickPresentedViewportV1");
+					capabilities.push_back("RaycastPresentedTerrainV1");
 					viewportTransports.push_back({
 						{"Name", "LatestFrameMailbox"},
 						{"Version", LatestFrameMailboxLayout::Version},
@@ -2161,7 +2179,7 @@ namespace gargantuan {
 				Job->CapturedRevision = Payload.AuthoritativeRevision;
 				Job->CapturedUnsavedChanges = Payload.UnsavedChanges;
 				auto *JobPointer = Job.get();
-				auto OutputDirectory = std::filesystem::path(parameters["OutputDirectory"].get<std::string>());
+				auto OutputDirectory = std::filesystem::u8path(parameters["OutputDirectory"].get<std::string>());
 				auto RuntimeDistribution = Paths::GetExecutableDirectory() /
 					(DistributionRequest && DistributionRequest->Target == RuntimeDistributionTarget::DedicatedServer ?
 						"ServerRuntimeDistribution" : "RuntimeDistribution");
@@ -2245,9 +2263,9 @@ namespace gargantuan {
 						});
 						Result["Ok"] = BuildResult.Ok;
 						Result["Cancelled"] = BuildResult.Cancelled;
-						Result["OutputDirectory"] = BuildResult.OutputDirectory.generic_string();
+						Result["OutputDirectory"] = Paths::ToGenericUtf8(BuildResult.OutputDirectory);
 						Result["PlayerExecutable"] = BuildResult.PlayerExecutable.empty()
-							? Json(nullptr) : Json(BuildResult.PlayerExecutable.generic_string());
+							? Json(nullptr) : Json(Paths::ToGenericUtf8(BuildResult.PlayerExecutable));
 						if (BuildResult.Target) {
 							Result["Target"] = GetRuntimeDistributionName(*BuildResult.Target);
 							Result["ManifestSha256"] = BuildResult.ManifestSha256;
@@ -2257,7 +2275,7 @@ namespace gargantuan {
 								Result["PlayerExecutable"] = nullptr;
 							}
 							if (!BuildResult.PrivateDiagnosticsPath.empty())
-								Result["PrivateDiagnosticsPath"] = BuildResult.PrivateDiagnosticsPath.generic_string();
+								Result["PrivateDiagnosticsPath"] = Paths::ToGenericUtf8(BuildResult.PrivateDiagnosticsPath);
 						}
 						Result["Size"] = {
 							{"TotalBytes", BuildResult.Size.TotalBytes}, {"RuntimeBytes", BuildResult.Size.RuntimeBytes},
@@ -3815,8 +3833,17 @@ namespace gargantuan {
 					}
 					definitions.push_back(std::move(encoded));
 				}
+				Json nativeEnums = Json::object();
+				if (*DiscoveryVersion >= 7) {
+					for (const auto &[Name, Type] : Enums::GetEnums()) {
+						auto &Items = nativeEnums[std::string(Name)] = Json::array();
+						for (const auto &Item : Type->Items)
+							Items.push_back({{"Name", Item.Name}, {"Value", Item.Value}});
+					}
+				}
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"SchemaDiscoveryVersion", *DiscoveryVersion},
+					{"NativeEnums", std::move(nativeEnums)},
 					{"RegistryGeneration", GetRuntimeSchemaLifecycle().GetActiveGeneration()},
 					{"Definitions", std::move(definitions)},
 					{"Classes", std::move(classes)},
@@ -4179,11 +4206,17 @@ namespace gargantuan {
 					}
 				};
 				if (Query) {
-					if (!HasOnlyFields(parameters, {"Scope", "ExpectedTerrainRevision", "Origin", "Direction"}) ||
+					if (!HasOnlyFields(parameters, {"Scope", "ExpectedTerrainRevision", "Origin", "Direction", "DisplayedFrame"}) ||
 						!parameters.contains("Origin") || !parameters.contains("Direction"))
 						return Fail("MalformedRequest", "Terrain raycast needs Origin and Direction");
 					if (ActivePlaySession || ActiveAnimationPreview || GuiPreview)
 						return Fail("ViewportUnavailable", "Terrain surface targeting requires the edit viewport");
+					if (parameters.contains("DisplayedFrame")) {
+						const auto &Frame = parameters["DisplayedFrame"];
+						if (!Frame.is_object() || !HasOnlyFields(Frame, {"Mailbox", "FrameNumber", "Generation", "CameraRevision"}))
+							return Fail("MalformedRequest", "Invalid displayed terrain frame");
+						if (auto Rejected = CheckPresentedFrame(Frame, *Space)) return *Rejected;
+					}
 					const auto Origin = DecodeVector3(parameters["Origin"]);
 					const auto Direction = DecodeVector3(parameters["Direction"]);
 					const auto Distance = Direction ? glm::length(*Direction) : 0.f;
@@ -4744,20 +4777,7 @@ namespace gargantuan {
 				const auto SelectedDomain = workspace->GetCurrentSpatialRegion();
 				const WorldRoot &ViewWorld = SelectedDomain ? static_cast<const WorldRoot &>(**SelectedDomain) : *workspace;
 				if (Presented) {
-					if (!parameters.contains("Mailbox") || !parameters["Mailbox"].is_string() ||
-						!parameters.contains("FrameNumber") || !parameters["FrameNumber"].is_number_unsigned() ||
-						!parameters.contains("Generation") || !parameters["Generation"].is_number_unsigned() ||
-						!parameters.contains("CameraRevision") || !parameters["CameraRevision"].is_number_unsigned())
-						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Presented frame identity is required"));
-					const auto Sequence = parameters["FrameNumber"].get<std::uint64_t>();
-					const auto &Frame = PresentedEditFrames[Sequence % PresentedEditFrames.size()];
-					if (!ViewportPresentationActive || !ViewportLatestFrameMailbox ||
-						parameters["Mailbox"] != ViewportLatestFrameMailbox->GetName() ||
-						Sequence == 0 || Frame.Sequence != Sequence || Frame.Generation != ViewportGeneration ||
-						parameters["Generation"] != Frame.Generation || Frame.CameraRevision != ViewportCameraRevision ||
-						parameters["CameraRevision"] != Frame.CameraRevision || Frame.Source.WorldRevision != World->GetAuthoritativeRevision() ||
-						Frame.Source.Domain != ViewWorld.GetObjectId() || Frame.Source.Activation != ViewWorld.GetSpatialActivation())
-						return SerializeBoundedResponse(ErrorResponse(requestId, "StaleFrame", "The displayed frame is no longer current"));
+					if (auto Rejected = CheckPresentedFrame(parameters, ViewWorld)) return *Rejected;
 				}
 				if (!LastViewportPublication || LastEditViewportSource.Domain != ViewWorld.GetObjectId() ||
 					LastEditViewportSource.Activation != ViewWorld.GetSpatialActivation() || (!Presented && ViewWorld.HasBlockGrids())) {

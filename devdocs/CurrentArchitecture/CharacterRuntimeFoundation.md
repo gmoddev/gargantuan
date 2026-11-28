@@ -83,8 +83,10 @@ The shipped Luau layer owns all replaceable default behavior:
   non-colliding visual RootPart, handles the Player spawn signal, and owns
   teardown;
 - `DefaultLocomotion.luau` maps semantic actions to camera-relative movement,
-  integrates gravity, decides jump/ground/slope state, previews bounded step
-  queries, and commits every accepted segment through `Character:Move`;
+  integrates gravity, decides jump/ground/slope state, previews bounded steps in
+  `Character:GetMotionWorld()`, and commits each segment through `Character:Move`.
+  The preview resolves the spatial root's current effective world independently of
+  the camera. A missing live world skips the preview;
 - `DefaultActionMap.luau` names the default physical bindings; and
 - `DefaultCamera.luau` follows `Player.Character` and owns orbit policy.
 

@@ -16,6 +16,40 @@ from unittest.mock import patch
 import SpatialConstructionPrecision as Precision
 
 
+DisplayScene = '''
+local Displays = {}
+for Row = 1, 6 do
+    local Aisle = Instance.new("Folder")
+    Aisle.Name = "DisplayAisle"
+    Aisle.Parent = Space
+    for Column = 1, 12 do
+        local Display = Instance.new("Part")
+        Display.Anchored = true
+        Display.CanCollide = false
+        Display.Size = Vector3.new(1, 2, 1)
+        Display.Position = Vector3.new(Row * 4, 3, -Column * 3)
+        if Column % 3 == 1 then Display.Shape = Enum.PartType.Ball end
+        if Column % 3 == 2 then Display.Shape = Enum.PartType.Wedge end
+        Display.Parent = Aisle
+        if Column == 1 or Column == 7 then
+            table.insert(Displays, {Display, Display.Position})
+        end
+    end
+end
+local DisplayTick = 0
+Run.PreSimulation:Connect(function()
+    DisplayTick += 1
+    local Height = math.sin(DisplayTick * .08) * .5
+    for Index, Entry in Displays do
+        Entry[1].Position = Entry[2] + Vector3.new(0, Height, 0)
+        if DisplayTick % 16 == 0 then
+            Entry[1].Transparency = if (Index + DisplayTick / 16) % 2 == 0 then .25 else 0
+        end
+    end
+end)
+'''
+
+
 class RecordingHost(Precision.EditorHost):
     def __init__(self, Binary, Win):
         super().__init__(Binary)
@@ -64,7 +98,8 @@ def Capture(Win, Binary, Project, Args):
     Recorder = RecordingHost(Binary,Win)
     # Wrap the released acquisition's existing EditorHost calls. Its scene, warmup,
     # counter bounds and pacing remain identical; the wrapper sends no extra RPCs.
-    with patch.object(Precision,"EditorHost",return_value=Recorder):
+    Scene = Precision.Probe + DisplayScene if Args.scene == "displays" else Precision.Probe
+    with patch.object(Precision,"EditorHost",return_value=Recorder), patch.object(Precision,"Probe",Scene):
         Summary,Steps,_,_ = Precision.Measure(Win,Binary,Project,Args)
     Rows = [R for R in Recorder.Rows if Summary["StartSimulationTick"]<=R[0] and R[1]<=Summary["EndSimulationTick"]]
     if [R[3] for R in Rows if R[2]==1]!=Steps or sum(R[2] for R in Rows)!=Summary["RingTicks"]:
@@ -82,7 +117,7 @@ def Main():
     Parser.add_argument("--blocks",type=int,default=8)
     Parser.add_argument("--frames",type=int,default=384)
     Parser.add_argument("--warmup",type=int,default=192)
-    Parser.add_argument("--scene",choices=("ordinary","rigid"),default="ordinary")
+    Parser.add_argument("--scene",choices=("ordinary","rigid","displays"),default="ordinary")
     Parser.add_argument("--engine-mask",type=lambda Text:int(Text,0),default=0xffff0000)
     Parser.add_argument("--main-cpu",type=int,default=24)
     Parser.add_argument("--sampler-cpu",type=int,default=8)

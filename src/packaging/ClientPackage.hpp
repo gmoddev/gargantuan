@@ -22,7 +22,7 @@ namespace gargantuan {
 		using CodeMap = std::map<CodeKey, std::string>;
 
 		[[nodiscard]] std::vector<AssetId> ReadSharedAssets(BaseFilesystem &Filesystem);
-		[[nodiscard]] std::string CaptureCode(const DataModel &World);
+		[[nodiscard]] std::string CaptureCode(const DataModel &World, bool IncludePlayerGuiTemplates);
 		[[nodiscard]] std::vector<RuntimeDistributionScript> CaptureEligibleScripts(const DataModel &World);
 		[[nodiscard]] bool ValidCodePathSegment(std::string_view Value);
 		[[nodiscard]] CodeMap DecodeCode(std::string_view Bytes);

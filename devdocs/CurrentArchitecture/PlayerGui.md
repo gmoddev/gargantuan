@@ -113,6 +113,15 @@ scope, source digest, and projected SourceVersion before attaching code. GRPL
 carries bounded provenance and structural properties. The source bytes live
 in the trusted package. A later unmatched SourceVersion clears attached
 source bytes from the replica. Code executes locally after successful hydration.
+The format-4 runtime-distribution planner and Player provisioning use the same
+bounded set of clonable direct ScreenGui templates. The package includes only
+eligible client Script and ModuleScript bindings from those templates. The
+two endpoints bind the projected code identity into the existing session
+contract. Distributed bindings identify the canonical service by
+`StarterGui` even when the author renames it. A client Script or ModuleScript
+inside a clonable ScreenGui can sit beneath another Script. The enclosing
+server Script's source stays in the trusted package. A source-only legacy
+distributed package keeps its original projection.
 Server-created structural content without matching package provenance remains presentation
 data. Existing action, input, and remote authority policies apply to gameplay
 requests made from UI.

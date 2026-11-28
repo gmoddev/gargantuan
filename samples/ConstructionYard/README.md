@@ -22,7 +22,11 @@ The Yard server Script chooses the destination and landing position. It calls `P
 
 For player-built courses and excavations to survive a fresh Play session, select Persistent Play storage on a build with local SQLite support. The Yard script stores up to 128 edits in a versioned document under `ConstructionYard/YardV1`. On startup it replays those edits over the authored scene and waits for excavation collision to commit. An already applied edit is part of the stored prefix. Concurrent writers use the document revision, and a conflict reloads the authoritative document. With disabled storage, changes last for the current session.
 
+The 512-cell freight platform travels on a rail east of the outdoor yard. Its deck uses half-unit brick cells and a stone marker on top. The saved project opens with the deck at its authored pose. The server's `YardPlatform` script starts its native compound and reverses its drive at each end of the rail. Both the marker and individual deck cells remain selectable while it moves.
+
 ## Package a multiplayer Yard
+
+When a player requests an outdoor landing, the server parks the freight deck during the collision reservation. An overlapping request keeps the deck parked until the last reservation finishes or expires. The train then resumes its route. Clients can inspect individual deck cells when their controlled character or vehicle has received those pages. A distant client can call `IsRegionAvailable` before reading a cell.
 
 The builder writes the common session identity and shared-asset policy under the project's `.gargantuan` directory. Use the Engine packager from the same build as the Player and Server runtimes. From the repository root, replace the project and runtime paths below and choose fresh output directories.
 
